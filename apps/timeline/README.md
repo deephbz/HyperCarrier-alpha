@@ -68,6 +68,12 @@ Open `http://127.0.0.1:4318/?demo=1` to force a local, metadata-only stress fixt
 It contains 60 sessions and one 240-turn, 10M+ token session so dense timeline rendering can be
 inspected without replacing or mixing with canonical Pi session data.
 
+When diagnosing slowness, append `&diagnostics=1` to an existing URL (or use
+`http://127.0.0.1:4318/?diagnostics=1`). This opt-in panel exposes only local operational metadata:
+snapshot/session counts, collector duration and refresh reason, incremental JSONL cache counters,
+and browser fetch/invalidation timing. It never exposes prompt, completion, tool, or terminal
+content; copy those values into a bug report together with the relevant time window.
+
 The **Search sessions** box performs a case-insensitive partial match against session ID, session
 name, and cwd. An empty or whitespace-only query leaves all sessions visible.
 

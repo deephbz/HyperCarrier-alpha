@@ -1,9 +1,16 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
+import { demoSnapshot } from "./demo";
 
 afterEach(cleanup);
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  window.history.replaceState({}, "", "/?demo=1");
+});
 
 describe("dashboard controls", () => {
   it("renders the demo fleet and composes alive, field, and value filters", async () => {
@@ -28,5 +35,59 @@ describe("dashboard controls", () => {
     expect(screen.getByRole("heading", { name: "timeline-lead" })).toBeTruthy();
     expect(screen.getByText("Session ID")).toBeTruthy();
     expect(screen.getAllByText("demo-0").length).toBeGreaterThan(0);
+  });
+
+  it("coalesces live invalidations while a snapshot is in flight", async () => {
+    vi.useFakeTimers();
+    window.history.replaceState({}, "", "/");
+    vi.resetModules();
+
+    const listeners = new Map<string, () => void>();
+    class FakeEventSource {
+      addEventListener(type: string, listener: () => void) {
+        listeners.set(type, listener);
+      }
+      close() {}
+    }
+    let resolveFirst!: (value: unknown) => void;
+    const first = new Promise((resolve) => {
+      resolveFirst = resolve;
+    });
+    const response = { ok: true, json: async () => demoSnapshot() };
+    const fetch = vi
+      .fn()
+      .mockReturnValueOnce(first.then(() => response))
+      .mockResolvedValue(response);
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("fetch", fetch);
+
+    const { App: LiveApp } = await import("./App");
+    render(<LiveApp />);
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      listeners.get("ready")?.();
+      listeners.get("invalidate")?.();
+      vi.advanceTimersByTime(100);
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveFirst(undefined);
+      await Promise.resolve();
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("reveals only opt-in local collection diagnostics", async () => {
+    window.history.replaceState({}, "", "/?demo=1&diagnostics=1");
+    vi.resetModules();
+
+    const { App: DiagnosticApp } = await import("./App");
+    render(<DiagnosticApp />);
+
+    expect(screen.getByText(/Local diagnostics/)).toBeTruthy();
+    expect(screen.getByText("JSONL cache")).toBeTruthy();
+    expect(screen.getByText(/60 sessions · 60 lanes/)).toBeTruthy();
   });
 });
