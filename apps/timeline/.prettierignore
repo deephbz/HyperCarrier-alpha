@@ -1,0 +1,11 @@
+node_modules
+dist
+coverage
+crap-report
+.beads
+.agents
+.claude
+.codex
+AGENTS.md
+CLAUDE.md
+package-lock.json

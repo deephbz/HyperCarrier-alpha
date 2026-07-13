@@ -1,0 +1,172 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import { createTimelineServer } from "../app.js";
+
+test("snapshot, trace, health and filesystem-driven SSE expose one state model", async (t) => {
+  let generation = 0;
+  let notify;
+  let watcherClosed = false;
+  const collect = () => ({
+    generatedAt: `g${++generation}`,
+    sessions: [],
+    turns: [],
+    requests: [],
+    liveAgents: [],
+    trace: { rejected: [] },
+  });
+  const watchSources = (callback) => {
+    notify = callback;
+    return {
+      close: () => {
+        watcherClosed = true;
+      },
+    };
+  };
+  const server = createTimelineServer({ collect, reconciliationMs: 60_000, watchSources });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => {
+    if (server.listening) server.close();
+  });
+  const { port } = server.address();
+  const base = `http://127.0.0.1:${port}`;
+  const snapshot = await (await fetch(`${base}/api/snapshot`)).json();
+  assert.equal(snapshot.generatedAt, "g1");
+  assert.deepEqual(await (await fetch(`${base}/api/trace`)).json(), {
+    rejected: [],
+    refresh: { at: "g1", reason: "request", paths: [] },
+  });
+  assert.equal((await (await fetch(`${base}/api/health`)).json()).ok, true);
+  assert.equal((await fetch(`${base}/missing`)).status, 404);
+
+  const controller = new AbortController();
+  const response = await fetch(`${base}/api/events`, { signal: controller.signal });
+  const reader = response.body.getReader();
+  const first = new TextDecoder().decode((await reader.read()).value);
+  assert.match(first, /event: ready/);
+  notify({ reason: "filesystem", paths: ["/tmp/session.jsonl"] });
+  const invalidation = new TextDecoder().decode((await reader.read()).value);
+  assert.match(invalidation, /event: invalidate/);
+  assert.match(invalidation, /g2/);
+  const refreshed = await (await fetch(`${base}/api/snapshot`)).json();
+  assert.equal(refreshed.trace.refresh.reason, "filesystem");
+  assert.deepEqual(refreshed.trace.refresh.paths, ["/tmp/session.jsonl"]);
+  controller.abort();
+  await new Promise((resolve) => server.close(resolve));
+  assert.equal(watcherClosed, true);
+});
+
+test("serves built assets and SPA routes without shadowing APIs or allowing traversal", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "pi-web-"));
+  mkdirSync(join(root, "assets"));
+  writeFileSync(join(root, "index.html"), "<!doctype html><title>Pi Timeline</title>");
+  writeFileSync(join(root, "assets", "app.js"), "globalThis.PI_TIMELINE=true");
+  const collect = () => ({
+    generatedAt: "g1",
+    sessions: [],
+    turns: [],
+    requests: [],
+    liveAgents: [],
+    trace: {},
+  });
+  const server = createTimelineServer({
+    collect,
+    staticDir: root,
+    reconciliationMs: 60_000,
+    watchSources: () => ({ close() {} }),
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  const index = await fetch(`${base}/`);
+  assert.equal(index.status, 200);
+  assert.match(index.headers.get("content-type"), /text\/html/);
+  const asset = await fetch(`${base}/assets/app.js`);
+  assert.equal(await asset.text(), "globalThis.PI_TIMELINE=true");
+  assert.match(asset.headers.get("cache-control"), /immutable/);
+  const spa = await fetch(`${base}/sessions/one`, { headers: { accept: "text/html" } });
+  assert.match(await spa.text(), /Pi Timeline/);
+  assert.equal(
+    (await fetch(`${base}/api/not-real`, { headers: { accept: "text/html" } })).status,
+    404,
+  );
+  assert.equal(
+    (await fetch(`${base}/%2e%2e%2fsecret`, { headers: { accept: "text/html" } })).status,
+    400,
+  );
+  const head = await fetch(`${base}/assets/app.js`, { method: "HEAD" });
+  assert.equal(head.status, 200);
+  assert.equal(await head.text(), "");
+});
+
+test("Alpha API and SSE are additive and isolated from the legacy metadata snapshot", async (t) => {
+  let legacyNotify;
+  let alphaNotify;
+  let alphaCalls = 0;
+  const server = createTimelineServer({
+    reconciliationMs: 60_000,
+    collect: () => ({
+      generatedAt: "legacy-1",
+      sessions: [],
+      turns: [],
+      requests: [],
+      liveAgents: [],
+      secretSentinel: "legacy-only-secret",
+      trace: { rejected: [] },
+    }),
+    collectAlpha: ({ baseSnapshot }) => {
+      alphaCalls += 1;
+      return {
+        schemaVersion: 1,
+        generatedAt: `alpha-${alphaCalls}`,
+        projects: [
+          {
+            projectRef: { id: "p1", name: "Project", provenance: {} },
+            runtime: {},
+            recentOutput: { summary: "safe-derived-summary" },
+            intervention: {},
+            eventDelta: {},
+            evergreenDelta: {},
+            workLedger: {},
+            delivery: {},
+          },
+        ],
+        trace: { baseGeneratedAt: baseSnapshot.generatedAt },
+      };
+    },
+    watchSources: (callback) => {
+      legacyNotify = callback;
+      return { close() {} };
+    },
+    watchAlphaSources: (callback) => {
+      alphaNotify = callback;
+      return { close() {} };
+    },
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const legacy = await (await fetch(`${base}/api/snapshot`)).json();
+  assert.equal("secretSentinel" in legacy, true);
+  const alpha = await (await fetch(`${base}/api/alpha/snapshot`)).json();
+  assert.equal(alpha.projects[0].recentOutput.summary, "safe-derived-summary");
+  assert.equal("secretSentinel" in alpha, false);
+  assert.deepEqual(await (await fetch(`${base}/api/alpha/trace`)).json(), {
+    baseGeneratedAt: "legacy-1",
+    refresh: { at: "alpha-1", reason: "request", paths: [], sources: [] },
+  });
+
+  const controller = new AbortController();
+  const response = await fetch(`${base}/api/alpha/events`, { signal: controller.signal });
+  const reader = response.body.getReader();
+  await reader.read();
+  alphaNotify({ reason: "alpha-filesystem", sourceKinds: ["summary"], paths: ["summary.jsonl"] });
+  const invalidation = new TextDecoder().decode((await reader.read()).value);
+  assert.match(invalidation, /"summary"/);
+  assert.match(invalidation, /alpha-2/);
+  controller.abort();
+  assert.equal(typeof legacyNotify, "function");
+});

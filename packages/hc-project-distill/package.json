@@ -1,0 +1,27 @@
+{
+  "name": "@hypercarrier/hc-project-distill",
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "Explicit-registry Project evidence distiller with append-only events and proposed Evergreen artifacts.",
+  "keywords": [
+    "hypercarrier",
+    "evergreen",
+    "project-evidence"
+  ],
+  "type": "module",
+  "bin": {
+    "hc-project-distill": "./bin/hc-project-distill.mjs"
+  },
+  "exports": {
+    ".": "./src/index.mjs",
+    "./types": "./src/types.d.ts"
+  },
+  "files": [
+    "src",
+    "bin",
+    "schemas",
+    "examples",
+    "README.md",
+    "RUNBOOK.md"
+  ]
+}

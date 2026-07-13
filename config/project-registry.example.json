@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "registryVersion": "example-v1",
+  "correctionProvenance": {
+    "reason": "Synthetic example. Copy to project-registry.local.json before editing."
+  },
+  "projects": [
+    {
+      "id": "example-project",
+      "name": "Example Project",
+      "locations": {
+        "repos": ["../example-workspace"],
+        "evergreen": "../example-workspace/Evergreen.md",
+        "beadsRoot": null,
+        "summaries": ["../example-state/recent-output.jsonl"],
+        "events": "../example-state/project-events.jsonl",
+        "proposalDir": "../example-state/proposals",
+        "sourceDocs": ["../example-workspace/README.md"]
+      },
+      "associations": {
+        "sessionIds": [],
+        "taskIds": []
+      },
+      "evergreen": {}
+    }
+  ]
+}
+

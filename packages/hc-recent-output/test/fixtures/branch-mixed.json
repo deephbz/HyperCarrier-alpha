@@ -1,0 +1,117 @@
+[
+  {
+    "type": "message",
+    "id": "u-1",
+    "message": { "role": "user", "content": "Continue", "timestamp": 1 }
+  },
+  {
+    "type": "message",
+    "id": "a-tool",
+    "message": {
+      "role": "assistant",
+      "stopReason": "toolUse",
+      "content": [
+        { "type": "text", "text": "not final" },
+        { "type": "toolCall", "id": "tc-1", "name": "rg", "arguments": {} }
+      ],
+      "timestamp": 2
+    }
+  },
+  {
+    "type": "message",
+    "id": "tool-result",
+    "message": {
+      "role": "toolResult",
+      "content": [{ "type": "text", "text": "result must not enter summary" }],
+      "timestamp": 3
+    }
+  },
+  {
+    "type": "compaction",
+    "id": "compact-1",
+    "summary": "compacted context",
+    "timestamp": "2026-07-12T00:00:04Z"
+  },
+  {
+    "type": "message",
+    "id": "a-1",
+    "message": {
+      "role": "assistant",
+      "stopReason": "stop",
+      "content": [
+        { "type": "thinking", "thinking": "hidden" },
+        { "type": "text", "text": "Progress one" }
+      ],
+      "timestamp": 5
+    }
+  },
+  {
+    "type": "custom",
+    "id": "custom-1",
+    "customType": "runtime",
+    "data": { "text": "ignore" }
+  },
+  {
+    "type": "message",
+    "id": "a-length",
+    "message": {
+      "role": "assistant",
+      "stopReason": "length",
+      "content": [{ "type": "text", "text": "not final length" }],
+      "timestamp": 6
+    }
+  },
+  {
+    "type": "message",
+    "id": "a-2",
+    "message": {
+      "role": "assistant",
+      "stopReason": "stop",
+      "content": [
+        { "type": "text", "text": "Progress two" },
+        { "type": "thinking", "thinking": "also hidden" }
+      ],
+      "timestamp": 7
+    }
+  },
+  {
+    "type": "message",
+    "id": "a-error",
+    "message": {
+      "role": "assistant",
+      "stopReason": "error",
+      "content": [{ "type": "text", "text": "not final error" }],
+      "timestamp": 8
+    }
+  },
+  {
+    "type": "message",
+    "id": "a-empty",
+    "message": {
+      "role": "assistant",
+      "stopReason": "stop",
+      "content": [{ "type": "thinking", "thinking": "no text" }],
+      "timestamp": 9
+    }
+  },
+  {
+    "type": "message",
+    "id": "a-3",
+    "message": {
+      "role": "assistant",
+      "stopReason": "stop",
+      "content": [{ "type": "text", "text": "Findings three" }],
+      "timestamp": 10
+    }
+  },
+  {
+    "type": "message",
+    "id": "a-3-duplicate-hook-view",
+    "message": {
+      "role": "assistant",
+      "stopReason": "stop",
+      "content": [{ "type": "text", "text": "Findings three" }],
+      "timestamp": 10
+    }
+  }
+]

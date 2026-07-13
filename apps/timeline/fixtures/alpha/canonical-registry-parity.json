@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "registryVersion": "parity-fixture-v1",
+  "projects": [
+    {
+      "id": "parity-project",
+      "name": "Parity Project",
+      "locations": {
+        "repos": ["../repo"],
+        "evergreen": "../Evergreen.md",
+        "beadsRoot": null,
+        "summaries": ["../recent-output.jsonl"],
+        "events": null,
+        "proposalDir": "../proposals",
+        "sourceDocs": ["../README.md"]
+      },
+      "associations": {
+        "sessionIds": ["session-1"],
+        "taskIds": ["task-1"],
+        "rules": []
+      },
+      "evergreen": {}
+    }
+  ]
+}
