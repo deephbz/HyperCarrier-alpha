@@ -1,0 +1,29 @@
+{
+  "name": "@hypercarrier/hc-recent-output",
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "A narrow, provenance-bearing recent Pi assistant-output summary projection.",
+  "keywords": [
+    "pi-package"
+  ],
+  "type": "module",
+  "dependencies": {
+    "@earendil-works/pi-ai": "0.80.6"
+  },
+  "pi": {
+    "extensions": [
+      "./src/extension.mjs"
+    ]
+  },
+  "exports": {
+    ".": "./src/index.mjs",
+    "./extension": "./src/extension.mjs",
+    "./types": "./src/types.d.ts"
+  },
+  "files": [
+    "src",
+    "schemas",
+    "README.md",
+    "RUNBOOK.md"
+  ]
+}

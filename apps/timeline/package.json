@@ -1,0 +1,63 @@
+{
+  "name": "pi-session-timeline",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "start:timeline": "node server/index.js",
+    "start:live": "node server/live-detail.js",
+    "start:tps": "node server/tps-adapter.js",
+    "start:stack": "concurrently -k -n timeline,live,tps \"npm run start:timeline\" \"npm run start:live\" \"npm run start:tps\"",
+    "start:proxy": "node server/local-proxy.js",
+    "start:better-url": "PI_LIVE_DETAIL_BASE_URL=http://live.pi.localhost:1355 PI_TPS_WEB_BASE_URL=http://tps.pi.localhost:1355 concurrently -k -n proxy,timeline,live,tps \"npm run start:proxy\" \"PORT=4330 npm run start:timeline\" \"PORT=4319 npm run start:live\" \"PORT=4320 npm run start:tps\"",
+    "dev": "concurrently \"node server/index.js\" \"vite --config web/vite.config.js\"",
+    "build:web": "vite build --config web/vite.config.js",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "duplicates": "jscpd server web/src extensions --min-lines 8 --min-tokens 60 --threshold 3 --reporters console",
+    "coverage:node": "c8 --all --src server --src extensions --reporter=text --reporter=json --reports-dir=coverage/node node --test server/test/*.test.js test/*.test.mjs",
+    "coverage:web": "vitest run --config web/vitest.config.js --coverage.enabled --coverage.provider=v8 --coverage.reporter=text --coverage.reporter=json --coverage.reportsDirectory=coverage/web",
+    "coverage": "npm run coverage:node && npm run coverage:web",
+    "crap:node": "crap4ts --coverage coverage/node/coverage-final.json --src . --include 'server/**/*.js' 'extensions/**/*.mjs' --exclude '**/*.test.*' --threshold 30 --top 20",
+    "crap:web": "crap4ts --coverage coverage/web/coverage-final.json --src web/src --exclude '**/*.test.*' --threshold 30 --top 20",
+    "crap": "npm run crap:node && npm run crap:web",
+    "quality": "npm run format:check && npm run lint && npm run duplicates && npm run coverage && npm run crap && npm test && npm run build:web",
+    "serve:web": "vite preview --config web/vite.config.js --host 127.0.0.1",
+    "test:web": "vitest run --config web/vitest.config.js",
+    "test": "node --test server/test/*.test.js test/*.test.mjs && npm run test:web"
+  },
+  "dependencies": {
+    "@hypercarrier/hc-project-distill": "0.1.0",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.3",
+    "concurrently": "10.0.3",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "typescript": "6.0.3",
+    "vite": "8.1.4",
+    "vitest": "4.1.10"
+  },
+  "engines": {
+    "node": ">=22.19"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@testing-library/react": "16.3.2",
+    "@testing-library/user-event": "14.6.1",
+    "@vitest/coverage-v8": "4.1.10",
+    "c8": "11.0.0",
+    "crap4ts": "1.0.1",
+    "eslint": "10.7.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "eslint-plugin-sonarjs": "4.1.0",
+    "globals": "17.7.0",
+    "happy-dom": "20.10.6",
+    "jscpd": "5.0.12",
+    "prettier": "3.9.5",
+    "typescript-eslint": "8.63.0"
+  }
+}

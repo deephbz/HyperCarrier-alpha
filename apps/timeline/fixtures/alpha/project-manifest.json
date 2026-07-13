@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "projects": [
+    {
+      "id": "alpha-review",
+      "name": "Alpha review",
+      "repoRoots": ["../../"],
+      "sessionIds": ["fixture-session-review"],
+      "summaryPath": "summary.jsonl",
+      "eventsPath": "events.jsonl",
+      "evergreenProposalsPath": "evergreen-proposals.jsonl",
+      "evergreenPath": "evergreen.md",
+      "beadsRoot": "../../"
+    },
+    {
+      "id": "alpha-watchdog",
+      "name": "Alpha watchdog",
+      "repoRoots": ["../../"],
+      "sessionIds": ["fixture-session-watchdog"],
+      "summaryPath": "summary.jsonl",
+      "eventsPath": "events.jsonl",
+      "evergreenProposalsPath": "evergreen-proposals.jsonl",
+      "evergreenPath": "evergreen.md",
+      "beadsRoot": "../../"
+    },
+    {
+      "id": "alpha-cross-repo",
+      "name": "Cross-repo delivery",
+      "repoRoots": ["/work/hypercarrier-core", "/work/hypercarrier-docs"],
+      "sessionIds": [],
+      "summaryPath": "missing-summary.jsonl",
+      "eventsPath": "missing-events.jsonl",
+      "evergreenPath": "missing-evergreen.md",
+      "beadsRoot": "/work/hypercarrier-core"
+    }
+  ]
+}

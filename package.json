@@ -1,0 +1,21 @@
+{
+  "name": "hypercarrier-alpha",
+  "version": "0.1.0-alpha.1",
+  "description": "A local-first control plane for Pi, tmux, Project evidence, and agent-assisted work.",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "start": "npm --workspace pi-session-timeline start",
+    "test": "npm run test:packages && npm run test:timeline",
+    "test:packages": "node --test packages/*/test/*.test.mjs",
+    "test:timeline": "npm --workspace pi-session-timeline test",
+    "build:timeline": "npm --workspace pi-session-timeline run build:web"
+  }
+}
