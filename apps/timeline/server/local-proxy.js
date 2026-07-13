@@ -1,11 +1,8 @@
 import { createServer, request } from "node:http";
 import { fileURLToPath } from "node:url";
+import { namedUpstreamsFromEnv } from "./service-config.js";
 
-export const NAMED_UPSTREAMS = new Map([
-  ["pi.localhost", 4330],
-  ["live.pi.localhost", 4319],
-  ["tps.pi.localhost", 4320],
-]);
+export const NAMED_UPSTREAMS = namedUpstreamsFromEnv();
 
 export function createNamedProxy({ upstreams = NAMED_UPSTREAMS } = {}) {
   return createServer((incoming, outgoing) => {

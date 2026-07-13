@@ -3,11 +3,15 @@
 This package is a deliberately narrow Pi projection. It listens to
 `agent_settled`, reads the active `ctx.sessionManager.getBranch()`, selects the
 last `N` assistant messages with `stopReason: "stop"`, at least one text block,
-and no `toolCall` block, and sends only extracted text to a configurable cheap
+and no `toolCall` block, and sends only extracted text to a configured cheap
 model. It never writes into the Pi Session.
 
-The default model is `openrouter/z-ai/glm-5.2`, but the model client is
-injectable. The Pi extension statically resolves Pi 0.80.6's
+There is no package-owned model default and it never inherits `ctx.model`.
+Supply `config.model` for a direct/injected caller, or configure
+`hcRecentOutput.model` in global Pi settings; a trusted Project's
+`.pi/settings.json` may override that global setting. Missing or invalid
+configuration writes one durable, nonretryable failure per unchanged input
+without calling a provider. The Pi extension statically resolves Pi 0.80.6's
 `@earendil-works/pi-ai/compat` contract, and the package manifest declares
 that exact runtime dependency plus its `pi.extensions` entry. Direct library
 callers should inject `modelClient` or the `piAi` contract.

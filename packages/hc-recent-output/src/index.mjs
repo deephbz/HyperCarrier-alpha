@@ -18,10 +18,6 @@ import { homedir } from "node:os";
 export const IMPLEMENTATION_VERSION = "hc-recent-output-v2";
 export const DEFAULT_PROMPT_VERSION = "recent-output-v2";
 export const MAX_SUMMARY_SECTION_CHARS = 240;
-export const DEFAULT_MODEL = Object.freeze({
-  provider: "openrouter",
-  id: "z-ai/glm-5.2",
-});
 export const LEASE_VERSION = 1;
 export const DEFAULT_LEASE_MS = 180000;
 export const DEFAULT_OUTPUT_ROOT = join(
@@ -124,12 +120,66 @@ function branchIdentity(branch) {
   return { leafId: ids.at(-1) ?? null, entryIdsHash: sha256(ids) };
 }
 
-function modelIdentity(config) {
-  if (config.model && typeof config.model === "object")
-    return { ...config.model };
+function nonEmptyString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+export function resolveModelConfiguration(config = {}) {
+  if (config.modelConfigurationError) {
+    return {
+      ok: false,
+      model: null,
+      provenance: {
+        source: "configuration",
+        settingsKey: "hcRecentOutput.model",
+        status: "invalid",
+        ...config.modelProvenance,
+      },
+      error: String(config.modelConfigurationError),
+    };
+  }
+  // The model is an explicit policy/configuration input. Do not accept
+  // historical provider/id aliases or inspect ctx.model: either would make
+  // outbound routing depend on ambient runtime state rather than this record's
+  // declared model provenance.
+  const candidate = config.model;
+  if (candidate === undefined) {
+    return {
+      ok: false,
+      model: null,
+      provenance: {
+        source: "configuration",
+        settingsKey: "hcRecentOutput.model",
+        status: "missing",
+        ...config.modelProvenance,
+      },
+      error:
+        "No recent-output model configured; set hcRecentOutput.model in Pi settings or inject config.model",
+    };
+  }
+  const provider = nonEmptyString(candidate?.provider);
+  const id = nonEmptyString(candidate?.id);
+  if (!provider || !id) {
+    return {
+      ok: false,
+      model: null,
+      provenance: {
+        source: "configuration",
+        settingsKey: "hcRecentOutput.model",
+        status: "invalid",
+        ...config.modelProvenance,
+      },
+      error: "Recent-output model requires non-empty provider and id",
+    };
+  }
   return {
-    provider: config.provider ?? config.modelProvider ?? DEFAULT_MODEL.provider,
-    id: config.modelId ?? DEFAULT_MODEL.id,
+    ok: true,
+    model: { provider, id },
+    provenance: {
+      source: "explicit_config",
+      status: "resolved",
+      ...config.modelProvenance,
+    },
   };
 }
 
@@ -247,20 +297,24 @@ function extractModelText(response) {
 
 export async function createPiModelClient(ctx, config = {}) {
   const { complete, getModel } = config.piAi ?? {};
-  if (typeof complete !== "function" || typeof getModel !== "function")
+  if (typeof complete !== "function")
     throw new Error(
       "Pi AI contract is unavailable; load src/extension.mjs inside Pi or provide modelClient/piAi",
     );
-  const modelSpec = modelIdentity(config);
-  const model = getModel(modelSpec.provider, modelSpec.id);
+  const resolution = resolveModelConfiguration(config);
+  if (!resolution.ok) throw new Error(resolution.error);
+  const modelSpec = resolution.model;
+  const model =
+    ctx?.modelRegistry?.find?.(modelSpec.provider, modelSpec.id) ??
+    (typeof getModel === "function" ? getModel(modelSpec.provider, modelSpec.id) : undefined);
   if (!model)
     throw new Error(
       `Pi model not found: ${modelSpec.provider}/${modelSpec.id}`,
     );
   const auth = await ctx?.modelRegistry?.getApiKeyAndHeaders?.(model);
-  if (!auth?.ok || !auth.apiKey)
+  if (!auth?.ok)
     throw new Error(
-      auth?.error ?? `No API key for ${modelSpec.provider}/${modelSpec.id}`,
+      auth?.error ?? `No request auth for ${modelSpec.provider}/${modelSpec.id}`,
     );
   return {
     async complete(request) {
@@ -503,6 +557,7 @@ function completedRecord(records) {
   return records.find(
     (record) =>
       ["ok", "insufficient_window", "conflict"].includes(record.status) ||
+      (record.status === "failure" && record.retryable === false) ||
       (typeof record.outputHash === "string" && record.status !== "failure"),
   );
 }
@@ -661,7 +716,8 @@ export async function processSettlement(ctx, config = {}) {
   const promptVersion = config.promptVersion ?? DEFAULT_PROMPT_VERSION;
   const implementationVersion =
     config.implementationVersion ?? IMPLEMENTATION_VERSION;
-  const model = modelIdentity(config);
+  const modelResolution = resolveModelConfiguration(config);
+  const model = modelResolution.model;
   const projectId = projectIdFrom(config);
   const branch = ctx?.sessionManager?.getBranch?.() ?? [];
   const selection = selectFinalMessages(branch, n);
@@ -694,6 +750,11 @@ export async function processSettlement(ctx, config = {}) {
     promptVersion,
     config: config.config ?? {},
     model,
+    modelResolution: {
+      status: modelResolution.ok ? "resolved" : "failed",
+      provenance: modelResolution.provenance,
+      error: modelResolution.ok ? null : modelResolution.error,
+    },
     implementationVersion,
   });
   const base = {
@@ -718,6 +779,7 @@ export async function processSettlement(ctx, config = {}) {
       complete: selection.eligibleCount >= n,
     },
     model,
+    modelProvenance: modelResolution.provenance,
     promptVersion,
     derivationVersion: implementationVersion,
     inputHash,
@@ -753,7 +815,19 @@ export async function processSettlement(ctx, config = {}) {
       materializationId: randomUUID(),
       status: "insufficient_window",
     };
-    if (selection.selected.length > 0) {
+    if (!modelResolution.ok) {
+      record = {
+        ...base,
+        attemptId: reservation.claim.attemptId,
+        materializationId: randomUUID(),
+        status: "failure",
+        retryable: false,
+        error: {
+          name: "ModelConfigurationError",
+          message: modelResolution.error,
+        },
+      };
+    } else if (selection.selected.length > 0) {
       try {
         const client =
           config.modelClient ?? (await createPiModelClient(ctx, config));

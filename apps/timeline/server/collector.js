@@ -1,5 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import {
+  closeSync,
+  openSync,
+  readFileSync,
+  readSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { readPiTeams } from "./pi-teams.js";
@@ -574,86 +582,254 @@ function sumUsage(usage = {}) {
   };
 }
 
-export function parseSessionJsonl(text, source = "unknown") {
-  let session;
-  const turns = [];
-  const requests = [];
-  const rejected = [];
-  let currentTurn;
-  for (const [index, line] of text.split("\n").entries()) {
-    if (!line.trim()) continue;
-    let entry;
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      rejected.push({ source, line: index + 1, reason: "malformed_jsonl" });
-      continue;
-    }
-    if (entry.type === "session")
-      session = { id: entry.id, startedAt: entry.timestamp, cwd: entry.cwd, source };
-    else if (entry.type === "session_info" || entry.type === "session_name") {
-      if (session && typeof entry.name === "string") session.name = entry.name;
-    } else if (entry.type === "message" && entry.message?.role === "user") {
-      currentTurn = {
-        id: entry.id,
-        sessionId: session?.id,
-        startedAt: entry.timestamp,
-        confidence: "inferred",
-        requestCount: 0,
-        cost: 0,
-        totalTokens: 0,
-      };
-      turns.push(currentTurn);
-    } else if (entry.type === "message" && entry.message?.role === "assistant") {
-      const usage = sumUsage(entry.message.usage);
-      const request = {
-        id: entry.id,
-        sessionId: session?.id,
-        turnId: currentTurn?.id,
-        at: entry.timestamp,
-        model: entry.message.model,
-        provider: entry.message.provider,
-        stopReason: entry.message.stopReason,
-        ...usage,
-      };
-      requests.push(request);
-      if (currentTurn) {
-        currentTurn.endedAt = entry.timestamp;
-        currentTurn.requestCount += 1;
-        currentTurn.cost += usage.cost;
-        currentTurn.totalTokens += usage.totalTokens;
-      }
-    }
+function createSessionParseState(source) {
+  return {
+    source,
+    session: undefined,
+    turns: [],
+    requests: [],
+    rejected: [],
+    currentTurnIndex: undefined,
+    lastMessageAt: undefined,
+    lastMessageAtMs: undefined,
+    lineNumber: 0,
+  };
+}
+
+function cloneSessionParseState(state) {
+  return {
+    ...state,
+    session: state.session ? { ...state.session } : undefined,
+    turns: state.turns.map((turn) => ({ ...turn })),
+    requests: state.requests.map((request) => ({ ...request })),
+    rejected: state.rejected.map((rejection) => ({ ...rejection })),
+  };
+}
+
+function recordLastMessageAt(state, timestamp) {
+  if (typeof timestamp !== "string") return;
+  const millis = Date.parse(timestamp);
+  if (!Number.isFinite(millis) || millis <= (state.lastMessageAtMs ?? -Infinity)) return;
+  state.lastMessageAt = timestamp;
+  state.lastMessageAtMs = millis;
+}
+
+function parseSessionLine(state, line) {
+  if (!line.trim()) return false;
+  let entry;
+  try {
+    entry = JSON.parse(line);
+  } catch {
+    state.rejected.push({
+      source: state.source,
+      line: state.lineNumber,
+      reason: "malformed_jsonl",
+    });
+    return true;
   }
-  if (!session) rejected.push({ source, reason: "missing_session_header" });
-  if (session) {
-    session.turnCount = turns.length;
-    session.requestCount = requests.length;
-    session.cost = requests.reduce((sum, item) => sum + item.cost, 0);
-    session.totalTokens = requests.reduce((sum, item) => sum + item.totalTokens, 0);
-    session.endedAt = requests.at(-1)?.at ?? session.startedAt;
-    const liveBase = process.env.PI_LIVE_DETAIL_BASE_URL ?? "http://127.0.0.1:4319";
-    const tpsBase = process.env.PI_TPS_WEB_BASE_URL ?? "http://127.0.0.1:4320";
-    session.links = {
-      live: `${liveBase.replace(/\/$/, "")}/session/${encodeURIComponent(session.id)}`,
-      tps: `${tpsBase.replace(/\/$/, "")}/?auto=1&session=${encodeURIComponent(session.id)}`,
+  if (!entry || typeof entry !== "object") return true;
+  if (entry.type === "session") {
+    state.session = {
+      id: entry.id,
+      startedAt: entry.timestamp,
+      cwd: entry.cwd,
+      source: state.source,
     };
+  } else if (entry.type === "session_info" || entry.type === "session_name") {
+    if (state.session && typeof entry.name === "string") state.session.name = entry.name;
+  } else if (entry.type === "message" && entry.message?.role === "user") {
+    recordLastMessageAt(state, entry.timestamp);
+    state.currentTurnIndex = state.turns.length;
+    state.turns.push({
+      id: entry.id,
+      sessionId: state.session?.id,
+      startedAt: entry.timestamp,
+      confidence: "inferred",
+      requestCount: 0,
+      cost: 0,
+      totalTokens: 0,
+    });
+  } else if (entry.type === "message" && entry.message?.role === "assistant") {
+    recordLastMessageAt(state, entry.timestamp);
+    const currentTurn = state.turns[state.currentTurnIndex];
+    const usage = sumUsage(entry.message.usage);
+    state.requests.push({
+      id: entry.id,
+      sessionId: state.session?.id,
+      turnId: currentTurn?.id,
+      at: entry.timestamp,
+      model: entry.message.model,
+      provider: entry.message.provider,
+      stopReason: entry.message.stopReason,
+      ...usage,
+    });
+    if (currentTurn) {
+      currentTurn.endedAt = entry.timestamp;
+      currentTurn.requestCount += 1;
+      currentTurn.cost += usage.cost;
+      currentTurn.totalTokens += usage.totalTokens;
+    }
   }
+  return true;
+}
+
+function materializeSessionParseState(state) {
+  const { session, turns, requests, rejected } = state;
+  if (!session)
+    return {
+      session,
+      turns,
+      requests,
+      rejected: [...rejected, { source: state.source, reason: "missing_session_header" }],
+    };
+  session.turnCount = turns.length;
+  session.requestCount = requests.length;
+  session.cost = requests.reduce((sum, item) => sum + item.cost, 0);
+  session.totalTokens = requests.reduce((sum, item) => sum + item.totalTokens, 0);
+  session.endedAt = requests.at(-1)?.at ?? session.startedAt;
+  session.lastMessageAt = state.lastMessageAt;
+  const liveBase = process.env.PI_LIVE_DETAIL_BASE_URL ?? "http://127.0.0.1:4319";
+  const tpsBase = process.env.PI_TPS_WEB_BASE_URL ?? "http://127.0.0.1:4320";
+  session.links = {
+    live: `${liveBase.replace(/\/$/, "")}/session/${encodeURIComponent(session.id)}`,
+    tps: `${tpsBase.replace(/\/$/, "")}/?auto=1&session=${encodeURIComponent(session.id)}`,
+  };
   return { session, turns, requests, rejected };
+}
+
+function parseCompleteJsonl(state, text) {
+  let linesParsed = 0;
+  for (const line of text.split("\n")) {
+    state.lineNumber += 1;
+    if (parseSessionLine(state, line)) linesParsed += 1;
+  }
+  return linesParsed;
+}
+
+function parseCommittedJsonl(bytes, source, state = createSessionParseState(source)) {
+  const newline = bytes.lastIndexOf(0x0a);
+  if (newline < 0) return { state, tail: bytes, linesParsed: 0 };
+  const committed = bytes.subarray(0, newline).toString("utf8");
+  return {
+    state,
+    tail: bytes.subarray(newline + 1),
+    linesParsed: parseCompleteJsonl(state, committed),
+  };
+}
+
+function visibleSessionParseState(state, tail) {
+  if (!tail.length) return { state, linesParsed: 0 };
+  const line = tail.toString("utf8");
+  try {
+    JSON.parse(line);
+  } catch {
+    return { state, linesParsed: 0 };
+  }
+  const visible = cloneSessionParseState(state);
+  visible.lineNumber += 1;
+  parseSessionLine(visible, line);
+  return { state: visible, linesParsed: 1 };
+}
+
+function readAppendedBytes(path, start, end) {
+  const length = end - start;
+  if (length <= 0) return Buffer.alloc(0);
+  const buffer = Buffer.allocUnsafe(length);
+  const descriptor = openSync(path, "r");
+  try {
+    const bytesRead = readSync(descriptor, buffer, 0, length, start);
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+const SESSION_CACHE_VERSION = 2;
+
+function cacheStamp(stat) {
+  return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${SESSION_CACHE_VERSION}`;
+}
+
+export function parseSessionJsonl(text, source = "unknown") {
+  const state = createSessionParseState(source);
+  parseCompleteJsonl(state, text);
+  return materializeSessionParseState(state);
 }
 
 export class SessionCache {
   constructor() {
     this.files = new Map();
   }
+  rebuild(path, stat) {
+    const bytes = readFileSync(path);
+    const parsed = parseCommittedJsonl(bytes, path);
+    const visible = visibleSessionParseState(parsed.state, parsed.tail);
+    const entry = {
+      stamp: cacheStamp(stat),
+      dev: stat.dev,
+      ino: stat.ino,
+      size: stat.size,
+      tail: parsed.tail,
+      state: parsed.state,
+      visibleState: visible.state,
+    };
+    this.files.set(path, entry);
+    return {
+      ...materializeSessionParseState(entry.visibleState),
+      cacheHit: false,
+      cacheTrace: {
+        bytesRead: bytes.length,
+        linesParsed: parsed.linesParsed + visible.linesParsed,
+        appendCount: 0,
+        rebuildCount: 1,
+      },
+    };
+  }
   read(path) {
     const stat = statSync(path);
-    const key = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:1`;
     const cached = this.files.get(path);
-    if (cached?.key === key) return { ...cached.value, cacheHit: true };
-    const value = parseSessionJsonl(readFileSync(path, "utf8"), path);
-    this.files.set(path, { key, value });
-    return { ...value, cacheHit: false };
+    if (cached?.stamp === cacheStamp(stat)) {
+      return {
+        ...materializeSessionParseState(cached.visibleState),
+        cacheHit: true,
+        cacheTrace: { bytesRead: 0, linesParsed: 0, appendCount: 0, rebuildCount: 0 },
+      };
+    }
+    const canAppend =
+      cached && stat.dev === cached.dev && stat.ino === cached.ino && stat.size > cached.size;
+    if (!canAppend) return this.rebuild(path, stat);
+
+    const appended = readAppendedBytes(path, cached.size, stat.size);
+    const candidateState = cloneSessionParseState(cached.state);
+    const parsed = parseCommittedJsonl(
+      Buffer.concat([cached.tail, appended]),
+      path,
+      candidateState,
+    );
+    const malformedAppend = candidateState.rejected.length > cached.state.rejected.length;
+    if (malformedAppend) return this.rebuild(path, stat);
+
+    const visible = visibleSessionParseState(candidateState, parsed.tail);
+    const entry = {
+      stamp: cacheStamp(stat),
+      dev: stat.dev,
+      ino: stat.ino,
+      size: stat.size,
+      tail: parsed.tail,
+      state: candidateState,
+      visibleState: visible.state,
+    };
+    this.files.set(path, entry);
+    return {
+      ...materializeSessionParseState(entry.visibleState),
+      cacheHit: false,
+      cacheTrace: {
+        bytesRead: appended.length,
+        linesParsed: parsed.linesParsed + visible.linesParsed,
+        appendCount: 1,
+        rebuildCount: 0,
+      },
+    };
   }
 }
 
@@ -693,10 +869,13 @@ export function collectSnapshot(options = {}) {
     turns = [],
     requests = [];
   let cacheHits = 0;
+  const sessionCacheTrace = { bytesRead: 0, linesParsed: 0, appendCount: 0, rebuildCount: 0 };
   for (const path of sessionFiles) {
     try {
       const parsed = cache.read(path);
       if (parsed.cacheHit) cacheHits++;
+      for (const key of Object.keys(sessionCacheTrace))
+        sessionCacheTrace[key] += parsed.cacheTrace?.[key] ?? 0;
       if (parsed.session) sessions.push(parsed.session);
       turns.push(...parsed.turns);
       requests.push(...parsed.requests);
@@ -804,6 +983,7 @@ export function collectSnapshot(options = {}) {
       },
       sessionFiles: sessionFiles.length,
       cacheHits,
+      sessionCache: sessionCacheTrace,
       rejected: [...rejected, ...sidecars.rejected, ...lifecycle.rejected, ...piTeams.rejected],
     },
   };

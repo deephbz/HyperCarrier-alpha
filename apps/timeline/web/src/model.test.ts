@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   extent,
+  filterLanesByBoundedTime,
   position,
   filterKey,
   groupKey,
@@ -58,6 +59,229 @@ describe("timeline model", () => {
     expect(lanes).toHaveLength(1);
     expect(lanes[0].session.id).toBe("live:p1");
     expect(lanes[0].live?.processInstanceId).toBe("p1");
+  });
+});
+
+describe("bounded timeline filtering", () => {
+  const now = Date.parse("2026-01-01T12:00:00Z");
+  const snapshot = {
+    generatedAt: "2026-01-01T12:00:00Z",
+    sourceVersion: 1,
+    sessions: [
+      {
+        id: "old-recent-message",
+        startedAt: "2025-01-01T00:00:00Z",
+        endedAt: "2025-01-01T00:01:00Z",
+        lastMessageAt: "2026-01-01T11:30:00Z",
+        cwd: "/work/old-recent",
+        source: "pi-jsonl",
+        turnCount: 1,
+        requestCount: 1,
+        cost: 0,
+        totalTokens: 1,
+      },
+      {
+        id: "recent-start-stale-message",
+        startedAt: "2026-01-01T11:45:00Z",
+        endedAt: "2026-01-01T11:50:00Z",
+        lastMessageAt: "2026-01-01T08:00:00Z",
+        cwd: "/work/recent-start",
+        source: "pi-jsonl",
+        turnCount: 1,
+        requestCount: 1,
+        cost: 0,
+        totalTokens: 1,
+      },
+      {
+        id: "live-stale-message",
+        startedAt: "2026-01-01T11:45:00Z",
+        endedAt: "2026-01-01T11:50:00Z",
+        lastMessageAt: "2026-01-01T08:00:00Z",
+        cwd: "/work/live-stale",
+        source: "pi-jsonl",
+        turnCount: 1,
+        requestCount: 1,
+        cost: 0,
+        totalTokens: 1,
+      },
+      {
+        id: "missing-message-time",
+        startedAt: "2026-01-01T11:45:00Z",
+        endedAt: "2026-01-01T11:50:00Z",
+        lastMessageAt: null,
+        cwd: "/work/missing",
+        source: "pi-jsonl",
+        turnCount: 1,
+        requestCount: 1,
+        cost: 0,
+        totalTokens: 1,
+      },
+    ],
+    turns: [],
+    requests: [],
+    liveAgents: [
+      {
+        processInstanceId: "p-live-stale",
+        pid: 1,
+        sessionId: "live-stale-message",
+        cwd: "/work/live-stale",
+        state: "thinking",
+        heartbeatAt: "2026-01-01T11:59:00Z",
+        confidence: "exact",
+      },
+      {
+        processInstanceId: "p-live-only",
+        pid: 2,
+        cwd: "/work/live-only",
+        state: "thinking",
+        heartbeatAt: "2026-01-01T11:59:00Z",
+        confidence: "exact",
+      },
+    ],
+    trace: { durationMs: 1, sessionFiles: 4, rejected: [] },
+  } satisfies Snapshot;
+
+  it("uses recorded message time for historical sessions, not start, end, or heartbeat", () => {
+    const lanes = lanesFromSnapshot(snapshot);
+    const visible = filterLanesByBoundedTime(lanes, now - 60 * 60_000, null);
+
+    expect(visible.map((lane) => lane.session.id)).toEqual([
+      "old-recent-message",
+      "live:p-live-only",
+    ]);
+    expect(
+      lanes.find((lane) => lane.session.id === "live-stale-message")?.boundedTimeAnchor,
+    ).toEqual({
+      at: Date.parse("2026-01-01T08:00:00Z"),
+      source: "message",
+    });
+    expect(
+      lanes.find((lane) => lane.session.id === "live:p-live-only")?.boundedTimeAnchor?.source,
+    ).toBe("runtime-observation");
+  });
+
+  it("applies custom lower and upper bounds to the same message-time evidence", () => {
+    const lanes = lanesFromSnapshot(snapshot);
+
+    expect(
+      filterLanesByBoundedTime(lanes, Date.parse("2026-01-01T11:30:00Z"), null).map(
+        (lane) => lane.session.id,
+      ),
+    ).toEqual(["old-recent-message", "live:p-live-only"]);
+    expect(
+      filterLanesByBoundedTime(lanes, null, Date.parse("2026-01-01T11:30:00Z")).map(
+        (lane) => lane.session.id,
+      ),
+    ).toEqual(["old-recent-message", "recent-start-stale-message", "live-stale-message"]);
+  });
+
+  it("leaves the All view unfiltered when no time bounds are supplied", () => {
+    const lanes = lanesFromSnapshot(snapshot);
+    expect(filterLanesByBoundedTime(lanes, null, null)).toBe(lanes);
+  });
+});
+
+describe("event indexes", () => {
+  it("associates turns, requests, and per-turn request markers without repeated scans", () => {
+    const snapshot = {
+      generatedAt: "2026-01-01T12:00:00Z",
+      sourceVersion: 1,
+      sessions: [
+        {
+          id: "a",
+          startedAt: "2026-01-01T10:00:00Z",
+          endedAt: "2026-01-01T10:01:00Z",
+          lastMessageAt: "2026-01-01T10:01:00Z",
+          cwd: "/work/a",
+          source: "pi-jsonl",
+          turnCount: 1,
+          requestCount: 1,
+          cost: 0,
+          totalTokens: 1,
+        },
+        {
+          id: "b",
+          startedAt: "2026-01-01T10:00:00Z",
+          endedAt: "2026-01-01T10:01:00Z",
+          lastMessageAt: "2026-01-01T10:01:00Z",
+          cwd: "/work/b",
+          source: "pi-jsonl",
+          turnCount: 1,
+          requestCount: 1,
+          cost: 0,
+          totalTokens: 1,
+        },
+      ],
+      turns: [
+        {
+          id: "turn-a",
+          sessionId: "a",
+          startedAt: "2026-01-01T10:00:00Z",
+          confidence: "exact",
+          requestCount: 2,
+          cost: 0,
+          totalTokens: 1,
+        },
+        {
+          id: "turn-b",
+          sessionId: "b",
+          startedAt: "2026-01-01T10:00:00Z",
+          confidence: "exact",
+          requestCount: 1,
+          cost: 0,
+          totalTokens: 1,
+        },
+      ],
+      requests: [
+        {
+          id: "request-a-1",
+          sessionId: "a",
+          turnId: "turn-a",
+          at: "2026-01-01T10:00:00Z",
+          cost: 0,
+          totalTokens: 1,
+          output: 0,
+          input: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+        {
+          id: "request-a-2",
+          sessionId: "a",
+          turnId: "turn-a",
+          at: "2026-01-01T10:00:30Z",
+          cost: 0,
+          totalTokens: 1,
+          output: 0,
+          input: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+        {
+          id: "request-b-1",
+          sessionId: "b",
+          turnId: "turn-b",
+          at: "2026-01-01T10:00:00Z",
+          cost: 0,
+          totalTokens: 1,
+          output: 0,
+          input: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+      ],
+      liveAgents: [],
+      trace: { durationMs: 1, sessionFiles: 2, rejected: [] },
+    } satisfies Snapshot;
+    const [a, b] = lanesFromSnapshot(snapshot);
+
+    expect(a.turns.map((turn) => turn.id)).toEqual(["turn-a"]);
+    expect(a.requests.map((request) => request.id)).toEqual(["request-a-1", "request-a-2"]);
+    expect(a.requestsByTurn.get("turn-a")?.map((request) => request.id)).toEqual([
+      "request-a-1",
+      "request-a-2",
+    ]);
+    expect(b.requestsByTurn.get("turn-b")?.map((request) => request.id)).toEqual(["request-b-1"]);
   });
 });
 

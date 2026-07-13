@@ -54,6 +54,7 @@ export function demoSnapshot(): Snapshot {
       id,
       startedAt: new Date(started).toISOString(),
       endedAt: new Date(cursor).toISOString(),
+      lastMessageAt: new Date(cursor).toISOString(),
       cwd: `/work/${project}`,
       source: "demo",
       name: i === 0 ? "timeline-lead" : i < 5 ? `timeline-worker-${i}` : `${project}-${i + 1}`,

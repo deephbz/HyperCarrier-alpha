@@ -1,4 +1,4 @@
-import type { AgentState, FilterMode, GroupMode, Lane, Session, Snapshot } from "./types";
+import type { AgentState, FilterMode, GroupMode, Lane, Request, Session, Snapshot } from "./types";
 
 export const statePresentation: Record<AgentState, { label: string; className: string }> = {
   idle: { label: "Idle", className: "state-idle" },
@@ -31,15 +31,71 @@ export function sessionMatchesQuery(session: Session, query: string) {
   );
 }
 
+function indexBy<T>(items: T[], keyFor: (item: T) => string) {
+  const index = new Map<string, T[]>();
+  for (const item of items) {
+    const key = keyFor(item);
+    const group = index.get(key);
+    if (group) group.push(item);
+    else index.set(key, [item]);
+  }
+  return index;
+}
+
+function indexRequests(requests: Request[]) {
+  const bySession = new Map<string, Request[]>();
+  const bySessionTurn = new Map<string, Map<string, Request[]>>();
+  for (const request of requests) {
+    const sessionRequests = bySession.get(request.sessionId);
+    if (sessionRequests) sessionRequests.push(request);
+    else bySession.set(request.sessionId, [request]);
+
+    if (!request.turnId) continue;
+    let turns = bySessionTurn.get(request.sessionId);
+    if (!turns) {
+      turns = new Map();
+      bySessionTurn.set(request.sessionId, turns);
+    }
+    const turnRequests = turns.get(request.turnId);
+    if (turnRequests) turnRequests.push(request);
+    else turns.set(request.turnId, [request]);
+  }
+  return { bySession, bySessionTurn };
+}
+
+function messageTime(session: Session) {
+  if (!session.lastMessageAt) return undefined;
+  const at = Date.parse(session.lastMessageAt);
+  return Number.isNaN(at) ? undefined : at;
+}
+
+/**
+ * Filters only when the caller supplies a bound. A logged Session must have
+ * explicit message evidence; the sole fallback is a runtime observation for a
+ * live-only lane whose session log is not yet available.
+ */
+export function filterLanesByBoundedTime(lanes: Lane[], from: number | null, to: number | null) {
+  if (from === null && to === null) return lanes;
+  return lanes.filter((lane) => {
+    const at = lane.boundedTimeAnchor?.at;
+    return at !== undefined && (from === null || at >= from) && (to === null || at <= to);
+  });
+}
+
 export function lanesFromSnapshot(snapshot: Snapshot): Lane[] {
   const liveBySession = new Map(
     snapshot.liveAgents.filter((a) => a.sessionId).map((a) => [a.sessionId!, a]),
   );
   const sessionIds = new Set(snapshot.sessions.map((session) => session.id));
+  const turnsBySession = indexBy(snapshot.turns, (turn) => turn.sessionId);
+  const requests = indexRequests(snapshot.requests);
   const liveOnly = snapshot.liveAgents
     .filter((live) => !live.sessionId || !sessionIds.has(live.sessionId))
     .map((live) => {
       const at = live.processStartedAt ?? live.heartbeatAt ?? snapshot.generatedAt;
+      const runtimeObservedAt = Date.parse(
+        live.heartbeatAt ?? live.processStartedAt ?? snapshot.generatedAt,
+      );
       return {
         session: {
           id: live.sessionId ?? `live:${live.processInstanceId}`,
@@ -55,20 +111,28 @@ export function lanesFromSnapshot(snapshot: Snapshot): Lane[] {
         },
         turns: [],
         requests: [],
+        requestsByTurn: new Map(),
         live,
+        boundedTimeAnchor: { at: runtimeObservedAt, source: "runtime-observation" as const },
         start: Date.parse(at),
         end: Date.parse(live.heartbeatAt ?? snapshot.generatedAt),
       };
     });
   return [
     ...snapshot.sessions.map((session) => {
-      const turns = snapshot.turns.filter((t) => t.sessionId === session.id);
-      const requests = snapshot.requests.filter((r) => r.sessionId === session.id);
+      const turns = turnsBySession.get(session.id) ?? [];
+      const sessionRequests = requests.bySession.get(session.id) ?? [];
+      const lastMessageAt = messageTime(session);
       return {
         session,
         turns,
-        requests,
+        requests: sessionRequests,
+        requestsByTurn: requests.bySessionTurn.get(session.id) ?? new Map(),
         live: liveBySession.get(session.id),
+        boundedTimeAnchor:
+          lastMessageAt === undefined
+            ? undefined
+            : { at: lastMessageAt, source: "message" as const },
         start: Date.parse(session.startedAt),
         end: Date.parse(session.endedAt),
       };
