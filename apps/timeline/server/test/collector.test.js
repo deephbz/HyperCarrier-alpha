@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -493,6 +500,34 @@ test("JSONL parsing emits metadata only and reconciles turn cost", () => {
   assert.equal(parseSessionJsonl(nativeUsage, "native").requests[0].totalTokens, 20);
 });
 
+test("lastMessageAt uses the latest valid persisted user or assistant message timestamp", () => {
+  const parsed = parseSessionJsonl(
+    [
+      { type: "session", id: "s1", timestamp: "2026-01-01T00:00:00Z", cwd: "/repo" },
+      { type: "message", id: "u1", timestamp: "2026-01-01T00:01:00Z", message: { role: "user" } },
+      {
+        type: "message",
+        id: "a1",
+        timestamp: "2026-01-01T00:01:02Z",
+        message: { role: "assistant", usage: {} },
+      },
+      { type: "heartbeat", timestamp: "2030-01-01T00:00:00Z" },
+      { type: "message", id: "u2", timestamp: "not-a-date", message: { role: "user" } },
+      {
+        type: "message",
+        id: "a2",
+        timestamp: "2026-01-01T00:01:01Z",
+        message: { role: "assistant", usage: {} },
+      },
+    ]
+      .map(JSON.stringify)
+      .join("\n"),
+    "fixture",
+  );
+  assert.equal(parsed.session.lastMessageAt, "2026-01-01T00:01:02Z");
+  assert.equal(parsed.session.endedAt, "2026-01-01T00:01:01Z");
+});
+
 test("session cache is keyed by source stat identity", () => {
   const root = mkdtempSync(join(tmpdir(), "pi-cache-"));
   const path = join(root, "s.jsonl");
@@ -503,6 +538,134 @@ test("session cache is keyed by source stat identity", () => {
   const cache = new SessionCache();
   assert.equal(cache.read(path).cacheHit, false);
   assert.equal(cache.read(path).cacheHit, true);
+});
+
+test("session cache appends a large JSONL file without rereading its committed prefix", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-cache-append-"));
+  const path = join(root, "s.jsonl");
+  const lines = [
+    { type: "session", id: "s1", timestamp: "2026-01-01T00:00:00Z", cwd: "/repo" },
+    ...Array.from({ length: 4_000 }, (_, index) => ({
+      type: "session_name",
+      name: `agent-${index}`,
+    })),
+    { type: "message", id: "u1", timestamp: "2026-01-01T00:01:00Z", message: { role: "user" } },
+  ];
+  writeFileSync(path, `${lines.map(JSON.stringify).join("\n")}\n`);
+  const cache = new SessionCache();
+  const initial = cache.read(path);
+  assert.equal(initial.cacheTrace.rebuildCount, 1);
+  const appended = [
+    {
+      type: "message",
+      id: "a1",
+      timestamp: "2026-01-01T00:01:02Z",
+      message: { role: "assistant", usage: { input: 3, output: 5 } },
+    },
+    { type: "message", id: "u2", timestamp: "2026-01-01T00:02:00Z", message: { role: "user" } },
+  ]
+    .map(JSON.stringify)
+    .join("\n");
+  appendFileSync(path, `${appended}\n`);
+  const updated = cache.read(path);
+  assert.equal(updated.cacheTrace.appendCount, 1);
+  assert.equal(updated.cacheTrace.rebuildCount, 0);
+  assert.equal(updated.cacheTrace.bytesRead, Buffer.byteLength(`${appended}\n`));
+  assert.equal(updated.cacheTrace.linesParsed, 2);
+  assert.equal(updated.session.turnCount, 2);
+  assert.equal(updated.session.requestCount, 1);
+  assert.equal(updated.session.lastMessageAt, "2026-01-01T00:02:00Z");
+  assert.deepEqual(
+    { session: updated.session, turns: updated.turns, requests: updated.requests },
+    (() => {
+      const parsed = parseSessionJsonl(readFileSync(path, "utf8"), path);
+      return { session: parsed.session, turns: parsed.turns, requests: parsed.requests };
+    })(),
+  );
+  const hit = cache.read(path);
+  assert.equal(hit.cacheHit, true);
+  assert.deepEqual(hit.cacheTrace, {
+    bytesRead: 0,
+    linesParsed: 0,
+    appendCount: 0,
+    rebuildCount: 0,
+  });
+});
+
+test("session cache carries a split trailing JSONL line into the next append", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-cache-tail-"));
+  const path = join(root, "s.jsonl");
+  const header = JSON.stringify({
+    type: "session",
+    id: "s1",
+    timestamp: "2026-01-01T00:00:00Z",
+    cwd: "/repo",
+  });
+  const user = JSON.stringify({
+    type: "message",
+    id: "u1",
+    timestamp: "2026-01-01T00:01:00Z",
+    message: { role: "user" },
+  });
+  const assistant = JSON.stringify({
+    type: "message",
+    id: "a1",
+    timestamp: "2026-01-01T00:01:02Z",
+    message: { role: "assistant", usage: { totalTokens: 8 } },
+  });
+  writeFileSync(path, `${header}\n${user.slice(0, -2)}`);
+  const cache = new SessionCache();
+  const before = cache.read(path);
+  assert.equal(before.session.turnCount, 0);
+  appendFileSync(path, `${user.slice(-2)}\n${assistant}\n`);
+  const after = cache.read(path);
+  assert.equal(after.cacheTrace.appendCount, 1);
+  assert.equal(after.cacheTrace.linesParsed, 2);
+  assert.equal(after.session.turnCount, 1);
+  assert.equal(after.session.requestCount, 1);
+  assert.deepEqual(
+    { session: after.session, turns: after.turns, requests: after.requests },
+    (() => {
+      const parsed = parseSessionJsonl(readFileSync(path, "utf8"), path);
+      return { session: parsed.session, turns: parsed.turns, requests: parsed.requests };
+    })(),
+  );
+});
+
+test("session cache rebuilds after truncation, replacement, or a malformed completed append", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-cache-rebuild-"));
+  const path = join(root, "s.jsonl");
+  const valid = (id) =>
+    `${JSON.stringify({ type: "session", id, timestamp: "2026-01-01T00:00:00Z", cwd: "/repo" })}\n`;
+  writeFileSync(path, `${valid("old")}${" ".repeat(1_000)}`);
+  const cache = new SessionCache();
+  cache.read(path);
+  writeFileSync(path, valid("truncated"));
+  const truncated = cache.read(path);
+  assert.equal(truncated.session.id, "truncated");
+  assert.deepEqual(truncated.cacheTrace, {
+    bytesRead: Buffer.byteLength(valid("truncated")),
+    linesParsed: 1,
+    appendCount: 0,
+    rebuildCount: 1,
+  });
+
+  const replacement = join(root, "replacement.jsonl");
+  writeFileSync(replacement, valid("replaced"));
+  renameSync(replacement, path);
+  const replaced = cache.read(path);
+  assert.equal(replaced.session.id, "replaced");
+  assert.equal(replaced.cacheTrace.rebuildCount, 1);
+
+  appendFileSync(path, "not-json\n");
+  const malformed = cache.read(path);
+  assert.equal(malformed.cacheTrace.rebuildCount, 1);
+  assert.equal(malformed.cacheTrace.appendCount, 0);
+  assert.deepEqual(malformed.rejected.at(-1), {
+    source: path,
+    line: 2,
+    reason: "malformed_jsonl",
+  });
 });
 
 test("snapshot never exposes process argv or raw command errors", () => {

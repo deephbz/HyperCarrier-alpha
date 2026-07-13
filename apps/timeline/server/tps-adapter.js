@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { createSourceWatcher } from "./watcher.js";
 import { SessionRegistry } from "./session-registry.js";
+import { resolveCoreHost, resolveServicePort } from "./service-config.js";
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -27,7 +28,7 @@ function sessionFromRequest(req, url) {
 
 export function createTpsAdapterServer({
   sessionsRoot,
-  staticDir = process.env.PI_TPS_WEB_DIST ?? resolve(process.cwd(), "../pi-tps-web/dist"),
+  staticDir = process.env.PI_TPS_WEB_DIST,
   watchSources = createSourceWatcher,
 } = {}) {
   const registry = new SessionRegistry({ sessionsRoot }).refresh();
@@ -55,7 +56,6 @@ export function createTpsAdapterServer({
       res.writeHead(200, {
         "content-type": "text/plain; charset=utf-8",
         "cache-control": "no-store",
-        "access-control-allow-origin": "*",
       });
       return createReadStream(path).pipe(res);
     }
@@ -85,9 +85,13 @@ export function createTpsAdapterServer({
         JSON.stringify({
           ok: true,
           sessions: registry.byId.size,
-          renderer: existsSync(join(staticDir, "index.html")),
+          renderer: Boolean(staticDir && existsSync(join(staticDir, "index.html"))),
         }),
       );
+    }
+    if (!staticDir) {
+      res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+      return res.end("Set PI_TPS_WEB_DIST to the pinned pi-tps-web dist artifact");
     }
     const root = resolve(staticDir);
     let requested = url.pathname === "/" ? "index.html" : url.pathname.replace(/^\/+/, "");
@@ -118,8 +122,8 @@ export function createTpsAdapterServer({
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const port = Number(process.env.PORT ?? process.env.PI_TPS_ADAPTER_PORT ?? 4320),
-    host = process.env.HOST ?? "127.0.0.1";
+  const port = resolveServicePort("tps"),
+    host = resolveCoreHost();
   createTpsAdapterServer().listen(port, host, () =>
     console.log(`Pi TPS adapter at http://${host}:${port}`),
   );

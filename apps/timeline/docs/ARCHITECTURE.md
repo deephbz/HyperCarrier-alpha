@@ -36,11 +36,12 @@ logs.
 
 ### Named local URL layer
 
-The named proxy is a routing layer, not part of collection or rendering. Each service accepts the
-conventional `PORT` environment variable and the proxy and upstreams all bind explicitly to
-`127.0.0.1`. The proxy runs as the login user on unprivileged port 1355, allows exactly three
-`.localhost` Host values, and uses plain HTTP. It installs neither a local CA nor a root-owned
-service:
+The named proxy is an opt-in routing layer, not part of collection or rendering. A single service
+accepts the conventional `PORT` variable, while a composed stack uses explicit `PI_TIMELINE_PORT`,
+`PI_LIVE_DETAIL_PORT`, and `PI_TPS_ADAPTER_PORT` values that take precedence. The proxy and
+upstreams all bind explicitly to `127.0.0.1`. The proxy runs as the login user on unprivileged port
+1355, allows exactly three `.localhost` Host values, and uses plain HTTP. It installs neither a
+local CA nor a root-owned service:
 
 ```text
 Browser                                  named HTTP proxy       Node upstream

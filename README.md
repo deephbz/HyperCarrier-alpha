@@ -37,6 +37,11 @@ Start the timeline:
 npm start
 ```
 
+`npm run start:stack` starts Timeline, live detail, and the TPS adapter on independent loopback
+ports. Friendly `.localhost` names are an optional proxy add-on. The TPS renderer is supported as
+an explicitly pinned external build; follow `apps/timeline/README.md` and its
+`integrations/pi-tps-web.json` contract rather than installing an unpinned latest version.
+
 Then open:
 
 - `http://127.0.0.1:4318/?demo=1` for the synthetic session timeline;

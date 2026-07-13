@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { createServer } from "node:http";
+import { createServer, request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { assistantCompletionSignature, createLiveDetailServer } from "../live-detail.js";
 import { createNamedProxy } from "../local-proxy.js";
 import { createTpsAdapterServer } from "../tps-adapter.js";
+import { namedUpstreamsFromEnv, resolveCoreHost, resolveServicePort } from "../service-config.js";
 
 const sessionId = "019f-test-session";
 const header = { type: "session", id: sessionId, timestamp: "2026-01-01T00:00:00Z", cwd: "/repo" };
@@ -16,6 +17,29 @@ const assistant = (id, timestamp, stopReason = "stop") => ({
   timestamp,
   message: { role: "assistant", stopReason, content: [{ type: "text", text: "private" }] },
 });
+
+function requestLoopback(port, host, { firstChunk = false } = {}) {
+  return new Promise((resolve, reject) => {
+    const req = request({ hostname: "127.0.0.1", port, headers: { host } }, (res) => {
+      const chunks = [];
+      res.on("data", (chunk) => {
+        chunks.push(chunk);
+        if (firstChunk) {
+          resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString("utf8") });
+          res.destroy();
+        }
+      });
+      res.on("end", () =>
+        resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString("utf8") }),
+      );
+      res.on("error", (error) => {
+        if (!firstChunk) reject(error);
+      });
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
 
 test("named proxy allowlists hosts and preserves streaming responses", async (t) => {
   const upstream = createServer((_req, res) => {
@@ -33,12 +57,64 @@ test("named proxy allowlists hosts and preserves streaming responses", async (t)
     proxy.close();
     upstream.close();
   });
-  const response = await fetch(`http://pi.localhost:${proxy.address().port}`);
+  const response = await requestLoopback(proxy.address().port, "pi.localhost", {
+    firstChunk: true,
+  });
   assert.equal(response.status, 200);
-  const reader = response.body.getReader();
-  assert.equal(new TextDecoder().decode((await reader.read()).value), "event: ready\ndata: {}\n\n");
-  await reader.cancel();
-  assert.equal((await fetch(`http://other.localhost:${proxy.address().port}`)).status, 404);
+  assert.equal(response.body, "event: ready\ndata: {}\n\n");
+  assert.equal((await requestLoopback(proxy.address().port, "other.localhost")).status, 404);
+});
+
+test("service ports isolate a combined stack from inherited PORT and keep proxy parity", () => {
+  const env = {
+    PORT: "44999",
+    PI_TIMELINE_PORT: "44018",
+    PI_LIVE_DETAIL_PORT: "44019",
+    PI_TPS_ADAPTER_PORT: "44020",
+  };
+  assert.equal(resolveServicePort("timeline", env), 44018);
+  assert.equal(resolveServicePort("live", env), 44019);
+  assert.equal(resolveServicePort("tps", env), 44020);
+  assert.deepEqual(
+    [...namedUpstreamsFromEnv(env)],
+    [
+      ["pi.localhost", 44018],
+      ["live.pi.localhost", 44019],
+      ["tps.pi.localhost", 44020],
+    ],
+  );
+  assert.equal(resolveServicePort("timeline", { PORT: "4390" }), 4390);
+  assert.equal(namedUpstreamsFromEnv({ PORT: "44999" }).get("pi.localhost"), 4318);
+  const scripts = JSON.parse(
+    readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+  ).scripts;
+  for (const name of ["start:stack", "start:better-url"])
+    for (const variable of ["PI_TIMELINE_PORT", "PI_LIVE_DETAIL_PORT", "PI_TPS_ADAPTER_PORT"])
+      assert.match(scripts[name], new RegExp(`${variable}=\\\\?\\$\\{${variable}`));
+  assert.doesNotMatch(scripts["start:better-url"], /PORT=43/);
+});
+
+test("TPS renderer dependency contract pins repository, revision, toolchain, and dist entrypoint", () => {
+  const contract = JSON.parse(
+    readFileSync(new URL("../../integrations/pi-tps-web.json", import.meta.url), "utf8"),
+  );
+  assert.equal(contract.repository, "https://github.com/monotykamary/pi-tps-web.git");
+  assert.equal(contract.revision, "a8c99482f541acf945897b20b67cce6c2f119ee1");
+  assert.equal(contract.packageManager, "pnpm@11.6.0");
+  assert.deepEqual(contract.artifact, {
+    path: "dist",
+    entrypoint: "index.html",
+    environmentVariable: "PI_TPS_WEB_DIST",
+  });
+  assert.equal(contract.license.declared, "MIT");
+  assert.equal(contract.license.licenseFilePresentAtRevision, false);
+});
+
+test("core service binding is fixed to IPv4 loopback and ignores ambient HOST", () => {
+  assert.equal(resolveCoreHost({}), "127.0.0.1");
+  assert.equal(resolveCoreHost({ HOST: "::1" }), "127.0.0.1");
+  assert.equal(resolveCoreHost({ HOST: "0.0.0.0" }), "127.0.0.1");
+  assert.equal(resolveCoreHost({ HOST: "attacker.example" }), "127.0.0.1");
 });
 
 function fixture() {
@@ -141,6 +217,12 @@ test("TPS adapter serves pi-tps-web and session-selected raw JSONL", async (t) =
     await (await fetch(`${base}/api/telemetry?session=${sessionId}`)).text(),
     new RegExp(sessionId),
   );
+  assert.equal(
+    (await fetch(`${base}/api/telemetry?session=${sessionId}`)).headers.get(
+      "access-control-allow-origin",
+    ),
+    null,
+  );
   assert.match(
     await (
       await fetch(`${base}/api/telemetry`, {
@@ -150,4 +232,25 @@ test("TPS adapter serves pi-tps-web and session-selected raw JSONL", async (t) =
     new RegExp(sessionId),
   );
   assert.equal((await fetch(`${base}/api/telemetry?session=missing`)).status, 404);
+});
+
+test("TPS adapter keeps telemetry healthy and reports a degraded renderer without a pinned dist", async (t) => {
+  const { root } = fixture();
+  const server = createTpsAdapterServer({
+    sessionsRoot: root,
+    staticDir: undefined,
+    watchSources: () => ({ close() {} }),
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}`;
+  assert.deepEqual(await (await fetch(`${base}/api/health`)).json(), {
+    ok: true,
+    sessions: 1,
+    renderer: false,
+  });
+  assert.equal((await fetch(`${base}/api/telemetry?session=${sessionId}`)).status, 200);
+  const renderer = await fetch(base);
+  assert.equal(renderer.status, 404);
+  assert.match(await renderer.text(), /PI_TPS_WEB_DIST/);
 });

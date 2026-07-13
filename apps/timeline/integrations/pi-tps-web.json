@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/monotykamary/pi-tps-web.git",
+  "revision": "a8c99482f541acf945897b20b67cce6c2f119ee1",
+  "packageManager": "pnpm@11.6.0",
+  "installCommand": "corepack pnpm@11.6.0 install --frozen-lockfile",
+  "verifyCommand": "corepack pnpm@11.6.0 typecheck && corepack pnpm@11.6.0 test",
+  "buildCommand": "corepack pnpm@11.6.0 build",
+  "artifact": {
+    "path": "dist",
+    "entrypoint": "index.html",
+    "environmentVariable": "PI_TPS_WEB_DIST"
+  },
+  "license": {
+    "declared": "MIT",
+    "evidence": ["README.md", "package.json"],
+    "licenseFilePresentAtRevision": false,
+    "note": "The pinned revision declares MIT in README.md and package.json but does not contain a LICENSE file; HyperCarrier references a separately built artifact and does not vendor or redistribute its source."
+  }
+}

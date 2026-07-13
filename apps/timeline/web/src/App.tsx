@@ -4,6 +4,7 @@ import {
   duration,
   extent,
   filterKey,
+  filterLanesByBoundedTime,
   groupKey,
   inspectorDetails,
   laneAlias,
@@ -308,11 +309,9 @@ function LaneRow({
                 }
               >
                 {density === "requests" &&
-                  lane.requests
-                    .filter((r) => r.turnId === turn.id)
-                    .map((r, k, all) => (
-                      <i key={r.id} style={{ left: `${(k / all.length) * 100}%` }} />
-                    ))}
+                  (lane.requestsByTurn.get(turn.id) ?? []).map((r, k, all) => (
+                    <i key={r.id} style={{ left: `${(k / all.length) * 100}%` }} />
+                  ))}
               </span>
             );
           })
@@ -410,12 +409,20 @@ export function App() {
     [selected, setSelected] = useState<string | null>(null);
   useEffect(() => {
     let active = true;
+    let loading = false;
+    let loadQueued = false;
+    let refreshTimer: number | undefined;
     if (forceDemo) {
       return () => {
         active = false;
       };
     }
-    const load = () =>
+    const load = () => {
+      if (loading) {
+        loadQueued = true;
+        return;
+      }
+      loading = true;
       fetch("/api/snapshot")
         .then((r) => {
           if (!r.ok) throw Error();
@@ -432,17 +439,30 @@ export function App() {
             setSnapshot(demoSnapshot());
             setConnection("demo");
           }
+        })
+        .finally(() => {
+          loading = false;
+          if (active && loadQueued) {
+            loadQueued = false;
+            load();
+          }
         });
+    };
+    const scheduleLoad = () => {
+      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
+      refreshTimer = window.setTimeout(load, 100);
+    };
     load();
     let es: EventSource | undefined;
     try {
       es = new EventSource("/api/events");
-      es.addEventListener("ready", load);
-      es.addEventListener("invalidate", load);
+      es.addEventListener("ready", scheduleLoad);
+      es.addEventListener("invalidate", scheduleLoad);
       es.onerror = () => setConnection((c) => (c === "demo" ? "demo" : "error"));
     } catch {}
     return () => {
       active = false;
+      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
       es?.close();
     };
   }, []);
@@ -451,6 +471,7 @@ export function App() {
   const customStartMs = customStart ? Date.parse(customStart) : null;
   const customEndMs = customEnd ? Date.parse(customEnd) : null;
   const rangeStart = range ? now - range * 3_600_000 : customStartMs;
+  const rangeEnd = customEndMs;
   const filterOptions = useMemo(
     () =>
       filterMode === "all"
@@ -460,15 +481,13 @@ export function App() {
   );
   const filtered = useMemo(
     () =>
-      all.filter(
+      filterLanesByBoundedTime(all, rangeStart, rangeEnd).filter(
         (l) =>
-          (rangeStart === null || Boolean(l.live) || l.end >= rangeStart) &&
-          (customEndMs === null || l.start <= customEndMs) &&
           (!alive || !!l.live) &&
           (!filterValue || filterKey(l, filterMode) === filterValue) &&
           sessionMatchesQuery(l.session, query),
       ),
-    [all, alive, query, rangeStart, customEndMs, filterMode, filterValue],
+    [all, alive, query, rangeStart, rangeEnd, filterMode, filterValue],
   );
   const domain = useMemo(
     () =>
@@ -484,7 +503,9 @@ export function App() {
     const m = new Map<string, Lane[]>();
     for (const lane of filtered) {
       const k = groupKey(lane, group);
-      m.set(k, [...(m.get(k) ?? []), lane]);
+      const groupLanes = m.get(k);
+      if (groupLanes) groupLanes.push(lane);
+      else m.set(k, [lane]);
     }
     return [...m.entries()];
   }, [filtered, group]);

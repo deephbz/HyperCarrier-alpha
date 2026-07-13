@@ -18,6 +18,12 @@ export interface Session {
   id: string;
   startedAt: string;
   endedAt: string;
+  /**
+   * Timestamp of the latest recorded session message. This is conversation
+   * evidence, so it is deliberately distinct from process liveness or a
+   * collector heartbeat.
+   */
+  lastMessageAt?: string | null;
   cwd: string;
   source: string;
   name?: string;
@@ -124,7 +130,14 @@ export interface Lane {
   session: Session;
   turns: Turn[];
   requests: Request[];
+  requestsByTurn: ReadonlyMap<string, Request[]>;
   live?: LiveAgent;
+  /**
+   * Evidence used for bounded timeline filtering. Historical sessions require
+   * a recorded message; a live-only lane may use a runtime observation until
+   * its session log is discoverable.
+   */
+  boundedTimeAnchor?: { at: number; source: "message" | "runtime-observation" };
   start: number;
   end: number;
 }

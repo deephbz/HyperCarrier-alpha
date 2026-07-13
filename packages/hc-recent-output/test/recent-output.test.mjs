@@ -27,6 +27,7 @@ import {
   normalizeSummary,
   sha256,
 } from "../src/index.mjs";
+import { readConfiguredRecentOutputSettings } from "../src/extension.mjs";
 
 process.env.HC_PROJECT_ID = "test-project";
 
@@ -42,6 +43,9 @@ const ctxFor = (branch) => ({
     getBranch: () => branch,
   },
 });
+const TEST_MODEL = Object.freeze({ provider: "test", id: "cheap-model" });
+const configuredSettlement = (ctx, config = {}) =>
+  processSettlement(ctx, { model: TEST_MODEL, ...config });
 
 const require = createRequire(import.meta.url);
 function optionalPiLoaderUrl() {
@@ -117,8 +121,8 @@ test("duplicate hooks append one computation identity and changed inputs create 
   };
   const ctx = ctxFor(fixture);
   const [first, second] = await Promise.all([
-    processSettlement(ctx, config),
-    processSettlement(ctx, config),
+    configuredSettlement(ctx, config),
+    configuredSettlement(ctx, config),
   ]);
   assert.equal(
     [first.duplicate, second.duplicate].filter((value) => value === false)
@@ -146,7 +150,7 @@ test("duplicate hooks append one computation identity and changed inputs create 
         }
       : entry,
   );
-  await processSettlement(ctxFor(changed), config);
+  await configuredSettlement(ctxFor(changed), config);
   assert.equal(
     (await readFile(outputPath, "utf8")).trim().split("\n").length,
     2,
@@ -160,7 +164,7 @@ test("safe default skips an unassociated settlement before provider or sink acce
     let called = false;
     const dir = await mkdtemp(join(tmpdir(), "hc-recent-privacy-"));
     const outputPath = join(dir, "must-not-exist.jsonl");
-    const result = await processSettlement(ctxFor(fixture), {
+    const result = await configuredSettlement(ctxFor(fixture), {
       outputPath,
       modelClient: {
         complete: async () => {
@@ -188,10 +192,135 @@ test("default sink is project-scoped", () => {
   assert.throws(() => defaultOutputPath("../unassociated"), /stable projectId/);
 });
 
+test("settings-file injection merges trusted project model and ignores untrusted project settings", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hc-recent-settings-"));
+  const agentDir = join(root, "agent");
+  const projectDir = join(root, "project");
+  await mkdir(join(projectDir, ".pi"), { recursive: true });
+  await mkdir(agentDir, { recursive: true });
+  await writeFile(
+    join(agentDir, "settings.json"),
+    JSON.stringify({
+      hcRecentOutput: { model: { provider: "global", id: "cheap-global" } },
+    }),
+  );
+  await writeFile(
+    join(projectDir, ".pi", "settings.json"),
+    JSON.stringify({
+      hcRecentOutput: { model: { provider: "project", id: "cheap-project" } },
+    }),
+  );
+
+  const untrusted = await readConfiguredRecentOutputSettings({
+    cwd: projectDir,
+    projectTrusted: false,
+    agentDir,
+  });
+  assert.deepEqual(untrusted.model, { provider: "global", id: "cheap-global" });
+  assert.deepEqual(untrusted.modelProvenance.rawRefs, [join(agentDir, "settings.json")]);
+  assert.equal(untrusted.modelProvenance.source, "pi_settings_files");
+
+  const trusted = await readConfiguredRecentOutputSettings({
+    cwd: projectDir,
+    projectTrusted: true,
+    agentDir,
+  });
+  assert.deepEqual(trusted.model, { provider: "project", id: "cheap-project" });
+  assert.deepEqual(trusted.modelProvenance.rawRefs, [
+    join(agentDir, "settings.json"),
+    join(projectDir, ".pi", "settings.json"),
+  ]);
+});
+
+test("missing model configuration fails closed once per unchanged input without a provider call", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hc-recent-model-config-"));
+  const outputPath = join(root, "summary.jsonl");
+  let calls = 0;
+  const config = {
+    n: 1,
+    outputPath,
+    modelClient: {
+      complete: async () => {
+        calls += 1;
+        return { text: "must not be called" };
+      },
+    },
+  };
+  const first = await processSettlement(ctxFor(fixture), config);
+  const second = await processSettlement(ctxFor(fixture), config);
+  assert.equal(first.record.status, "failure");
+  assert.equal(first.record.retryable, false);
+  assert.equal(first.record.error.name, "ModelConfigurationError");
+  assert.equal(second.duplicate, true);
+  assert.equal(calls, 0);
+  assert.equal((await readFile(outputPath, "utf8")).trim().split("\n").length, 1);
+});
+
+test("invalid model configuration fails closed once per unchanged input without a provider call", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hc-recent-invalid-model-config-"));
+  const outputPath = join(root, "summary.jsonl");
+  let calls = 0;
+  const config = {
+    n: 1,
+    outputPath,
+    model: { provider: "", id: "cheap-model" },
+    modelClient: {
+      complete: async () => {
+        calls += 1;
+        return { text: "must not be called" };
+      },
+    },
+  };
+  const first = await processSettlement(ctxFor(fixture), config);
+  const second = await processSettlement(ctxFor(fixture), config);
+  assert.equal(first.record.status, "failure");
+  assert.equal(first.record.retryable, false);
+  assert.equal(first.record.error.name, "ModelConfigurationError");
+  assert.equal(second.duplicate, true);
+  assert.equal(calls, 0);
+  assert.equal((await readFile(outputPath, "utf8")).trim().split("\n").length, 1);
+});
+
+test("legacy model aliases and ctx.model cannot select a provider", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hc-recent-no-ambient-model-"));
+  const outputPath = join(root, "summary.jsonl");
+  let calls = 0;
+  const context = {
+    ...ctxFor(fixture),
+    model: { provider: "ambient", id: "expensive-model" },
+  };
+  const result = await processSettlement(context, {
+    n: 1,
+    outputPath,
+    provider: "legacy-provider",
+    modelId: "legacy-model",
+    modelClient: {
+      complete: async () => {
+        calls += 1;
+        return { text: "must not be called" };
+      },
+    },
+  });
+  assert.equal(result.record.status, "failure");
+  assert.equal(result.record.retryable, false);
+  assert.match(result.record.error.message, /No recent-output model configured/);
+  assert.equal(calls, 0);
+});
+
+test("malformed Pi settings are reported as invalid configuration", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hc-recent-malformed-settings-"));
+  const agentDir = join(root, "agent");
+  await mkdir(agentDir, { recursive: true });
+  await writeFile(join(agentDir, "settings.json"), "not JSON");
+  const configured = await readConfiguredRecentOutputSettings({ agentDir });
+  assert.match(configured.modelConfigurationError, /Cannot read configured Pi settings files/);
+  assert.equal(configured.modelProvenance.status, "invalid");
+});
+
 test("insufficient and empty windows are honest, and model failures are durable", async () => {
   const dir = await mkdtemp(join(tmpdir(), "hc-recent-status-"));
   const insufficientPath = join(dir, "insufficient.jsonl");
-  const insufficient = await processSettlement(ctxFor(fixture.slice(0, 5)), {
+  const insufficient = await configuredSettlement(ctxFor(fixture.slice(0, 5)), {
     n: 3,
     outputPath: insufficientPath,
     modelClient: { complete: async () => ({ text: "Progress: one" }) },
@@ -199,7 +328,7 @@ test("insufficient and empty windows are honest, and model failures are durable"
   assert.equal(insufficient.record.status, "insufficient_window");
   const emptyPath = join(dir, "empty.jsonl");
   let called = false;
-  const empty = await processSettlement(ctxFor([]), {
+  const empty = await configuredSettlement(ctxFor([]), {
     n: 2,
     outputPath: emptyPath,
     modelClient: {
@@ -212,7 +341,7 @@ test("insufficient and empty windows are honest, and model failures are durable"
   assert.equal(empty.record.status, "insufficient_window");
   assert.equal(called, false);
   const failurePath = join(dir, "failure.jsonl");
-  const failure = await processSettlement(ctxFor(fixture), {
+  const failure = await configuredSettlement(ctxFor(fixture), {
     n: 2,
     outputPath: failurePath,
     modelClient: {
@@ -230,7 +359,7 @@ test("failed attempts remain retryable and successful output conflicts remain vi
   const dir = await mkdtemp(join(tmpdir(), "hc-recent-retry-"));
   const outputPath = join(dir, "summary.jsonl");
   let calls = 0;
-  const first = await processSettlement(ctxFor(fixture), {
+  const first = await configuredSettlement(ctxFor(fixture), {
     n: 2,
     outputPath,
     modelClient: {
@@ -240,7 +369,7 @@ test("failed attempts remain retryable and successful output conflicts remain vi
       },
     },
   });
-  const second = await processSettlement(ctxFor(fixture), {
+  const second = await configuredSettlement(ctxFor(fixture), {
     n: 2,
     outputPath,
     modelClient: {
@@ -285,7 +414,7 @@ test("renewable leases suppress overlapping slow calls without deleting the acti
     release = resolve;
   });
   let calls = 0;
-  const first = processSettlement(ctxFor(fixture), {
+  const first = configuredSettlement(ctxFor(fixture), {
     n: 1,
     outputPath,
     leaseMs: 500,
@@ -316,7 +445,7 @@ test("renewable leases suppress overlapping slow calls without deleting the acti
   let second;
   let firstResult;
   try {
-    second = await processSettlement(ctxFor(fixture), {
+    second = await configuredSettlement(ctxFor(fixture), {
       n: 1,
       outputPath,
       leaseMs: 500,
@@ -347,7 +476,7 @@ test("truncated JSONL tails are quarantined and subsequent appends stay parseabl
   const dir = await mkdtemp(join(tmpdir(), "hc-recent-jsonl-"));
   const outputPath = join(dir, "summary.jsonl");
   await writeFile(outputPath, '{"schemaVersion":1,"type":"output_summary"');
-  await processSettlement(ctxFor(fixture), {
+  await configuredSettlement(ctxFor(fixture), {
     n: 1,
     outputPath,
     modelClient: { complete: async () => ({ text: "after recovery" }) },
@@ -366,7 +495,7 @@ test("existing private directories are repaired and symlink sinks fail closed", 
   const dir = await mkdtemp(join(tmpdir(), "hc-recent-private-"));
   const permissive = join(dir, "permissive");
   await mkdir(permissive, { mode: 0o755 });
-  await processSettlement(ctxFor(fixture), {
+  await configuredSettlement(ctxFor(fixture), {
     n: 1,
     outputPath: join(permissive, "summary.jsonl"),
     modelClient: { complete: async () => ({ text: "private" }) },
@@ -378,7 +507,7 @@ test("existing private directories are repaired and symlink sinks fail closed", 
   await symlink(join(target, "real.jsonl"), link);
   await assert.rejects(
     () =>
-      processSettlement(ctxFor(fixture), {
+      configuredSettlement(ctxFor(fixture), {
         n: 1,
         outputPath: link,
         modelClient: { complete: async () => ({ text: "must not write" }) },
@@ -437,7 +566,7 @@ test("normalizes an already pipe-delimited model response without doubling separ
 
 test("settlement persists the normalized one-line summary with source-message lineage", async () => {
   const dir = await mkdtemp(join(tmpdir(), "hc-recent-one-line-"));
-  const result = await processSettlement(ctxFor(fixture), {
+  const result = await configuredSettlement(ctxFor(fixture), {
     n: 2,
     outputPath: join(dir, "summary.jsonl"),
     modelClient: {

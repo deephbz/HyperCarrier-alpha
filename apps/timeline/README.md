@@ -16,6 +16,11 @@ npm run start:stack       # timeline + live detail + TPS adapter
 npm run start:better-url  # http://{pi,live.pi,tps.pi}.localhost:1355
 ```
 
+`PI_TIMELINE_PORT`, `PI_LIVE_DETAIL_PORT`, and `PI_TPS_ADAPTER_PORT` configure the three stack ports
+independently; an ambient parent `PORT` cannot collapse `start:stack` onto one port. All core
+services bind strictly to `127.0.0.1` and ignore `HOST`. The portless/friendly-name proxy is an
+opt-in add-on rather than part of the core stack.
+
 The better-URL mode starts the project's allowlisted HTTP proxy together with the three services.
 Run `npm run start:better-url`, then use `http://pi.localhost:1355`,
 `http://live.pi.localhost:1355`, and `http://tps.pi.localhost:1355`. The proxy and every upstream
@@ -32,16 +37,32 @@ Each session inspector links to two independent detail services:
 - **TPS inspector** (`:4320/?auto=1&session=<id>`) is optional and serves a separately built
   `pi-tps-web` application against that session's native JSONL.
 
-The timeline, live-detail, and Alpha Project surfaces do not require TPS. To use the adapter, set
-`PI_TPS_WEB_DIST` to a separately built `pi-tps-web/dist` directory.
+The timeline, live-detail, and Alpha Project surfaces do not require the TPS renderer. The TPS
+adapter and raw telemetry route remain healthy without it, while `/api/health` reports
+`renderer:false` and the renderer route returns an actionable 404. HyperCarrier pins the external
+renderer contract in `integrations/pi-tps-web.json`; build that exact artifact separately:
+
+```bash
+git clone https://github.com/monotykamary/pi-tps-web.git /path/to/pi-tps-web
+git -C /path/to/pi-tps-web checkout --detach a8c99482f541acf945897b20b67cce6c2f119ee1
+cd /path/to/pi-tps-web
+corepack pnpm@11.6.0 install --frozen-lockfile
+corepack pnpm@11.6.0 typecheck
+corepack pnpm@11.6.0 test
+corepack pnpm@11.6.0 build
+PI_TPS_WEB_DIST="$PWD/dist" npm --prefix /path/to/HyperCarrier/apps/timeline run start:stack
+```
+
+The pinned revision declares MIT in its README and package metadata but contains no `LICENSE` file.
+HyperCarrier therefore references the separately built artifact and does not vendor or redistribute
+that source; re-check upstream licensing before changing the distribution model.
 
 Refresh is event-driven: the server watches Pi session JSONL and lifecycle lease directories,
 debounces write bursts, refreshes the snapshot, and sends an SSE invalidation to browsers. A
 30-second reconciliation covers tmux/process changes that do not produce a filesystem event;
 override it with `PI_TIMELINE_RECONCILIATION_MS` when debugging.
 
-The server binds to `127.0.0.1` by default. Set `HOST` only when you intentionally want a different
-interface.
+The server binds only to `127.0.0.1`; there is no LAN/public listener mode in this Alpha.
 
 Open `http://127.0.0.1:4318/?demo=1` to force a local, metadata-only stress fixture in the browser.
 It contains 60 sessions and one 240-turn, 10M+ token session so dense timeline rendering can be

@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { createSourceWatcher } from "./watcher.js";
 import { SessionRegistry } from "./session-registry.js";
+import { resolveCoreHost, resolveServicePort } from "./service-config.js";
 
 const run = promisify(execFile);
 const esc = (value) =>
@@ -192,8 +193,8 @@ new EventSource('/api/events/${encodeURIComponent(id)}').onmessage=event=>{const
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const port = Number(process.env.PORT ?? process.env.PI_LIVE_DETAIL_PORT ?? 4319),
-    host = process.env.HOST ?? "127.0.0.1";
+  const port = resolveServicePort("live"),
+    host = resolveCoreHost();
   createLiveDetailServer().listen(port, host, () =>
     console.log(`Pi live detail at http://${host}:${port}`),
   );

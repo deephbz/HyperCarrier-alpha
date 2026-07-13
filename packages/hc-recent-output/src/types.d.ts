@@ -3,13 +3,15 @@ export type RecentOutputStatus =
 
 export interface PiAiContract {
   complete: Function;
-  getModel: Function;
+  getModel?: Function;
 }
 
 export interface RecentOutputConfig {
   n?: number;
   promptVersion?: string;
   model?: { provider: string; id: string };
+  modelConfigurationError?: string;
+  modelProvenance?: Record<string, unknown>;
   outputPath?: string;
   projectId?: string;
   allowUnassociated?: boolean;
@@ -52,6 +54,12 @@ export function buildPrompt(
 ): string;
 export function sha256(value: unknown): string;
 export function computeInputHash(input: unknown): string;
+export function resolveModelConfiguration(config?: RecentOutputConfig): {
+  ok: boolean;
+  model: { provider: string; id: string } | null;
+  provenance: Record<string, unknown>;
+  error?: string;
+};
 export function defaultOutputPath(projectId: string): string;
 export function appendUniqueRecord(
   path: string,
