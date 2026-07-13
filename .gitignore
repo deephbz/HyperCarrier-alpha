@@ -20,4 +20,3 @@ config/*.private.json
 *.events.jsonl
 recent-output.jsonl
 proposals/
-

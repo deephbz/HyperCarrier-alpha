@@ -32,4 +32,3 @@ ambiguous.
 
 Runtime activity, reported progress, Task state, delivery evidence, and human
 attention are different axes. None implies another.
-

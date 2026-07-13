@@ -1,11 +1,11 @@
 # `@hypercarrier/hc-project-distill`
 
 This is a separate CLI/library for a bounded Alpha Project distillation pass.
-It requires the canonical HyperCarrier v1 registry with explicit stable Project
-IDs. The canonical product registry under `config/project-registry.json` is the
-write authority; deployments pass its path instead of copying it. A repo or a
-Markdown path is only a location; no ID is derived from cwd, repo basename,
-timestamps, or Beads IDs.
+It requires a canonical HyperCarrier v1 registry with explicit stable Project
+IDs. The calling deployment owns that registry and passes its path instead of
+copying it into this package; the public quickstart uses the ignored
+`config/project-registry.local.json`. A repo or Markdown path is only a
+location; no ID is derived from cwd, repo basename, timestamps, or Beads IDs.
 
 The registry uses `locations.repos`, `evergreen`, `beadsRoot`, `summaries`,
 `events`, and `proposalDir`, and `associations` contains only explicitly

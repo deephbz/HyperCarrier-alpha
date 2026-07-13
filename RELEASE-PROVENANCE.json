@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "sourceRepository": "HyperCarrier",
+  "sourceCommit": "bc04dea010a3621145729caf63e2a64216f28fe9",
+  "sourceTree": "6c4bc4de24d7a223ec0a1aaa9e27404987538c8b",
+  "sourceWorktreeDirty": false,
+  "exportContentSha256": "c511af681a6a7658396b25d5c375d265f238802603695ce5f6577a098ec259f0",
+  "exportManifestSha256": "b32848c4d55ddf64e0ba1173dc39d92dda51e51ba6c3d98b08bd4f88a8c2a459",
+  "dependencies": [
+    {
+      "name": "pi-teams",
+      "repository": "https://github.com/deephbz/pi-teams",
+      "version": "0.10.0-hypercarrier.0",
+      "commit": "bac49fe5338d5289a0b2d41c6b3cb83d915829ce",
+      "tree": "32692ec0f23a88f7609747e8372234e03070a3b6",
+      "worktreeDirty": false
+    }
+  ],
+  "exporter": "scripts/export-public.mjs@1"
+}

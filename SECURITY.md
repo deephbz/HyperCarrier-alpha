@@ -19,4 +19,3 @@ sensitive evidence in a public issue.
   before enabling it for sensitive work.
 - Example configuration contains synthetic identities. Keep real Project
   registries and generated events, summaries, and proposals out of Git.
-
