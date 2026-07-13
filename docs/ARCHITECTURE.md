@@ -56,4 +56,3 @@ over teammate spawn, membership, or messaging.
 The timeline APIs intentionally omit prompt text, assistant text, reasoning,
 tool arguments/results, terminal output, and full process command lines.
 Metadata is still sensitive and the services remain loopback-only by default.
-
