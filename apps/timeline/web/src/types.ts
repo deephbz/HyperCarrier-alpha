@@ -124,7 +124,18 @@ export interface Snapshot {
     pid?: number;
     source: string;
   }>;
-  trace: { durationMs: number; sessionFiles: number; rejected: unknown[] };
+  trace: {
+    durationMs: number;
+    sessionFiles: number;
+    rejected: unknown[];
+    refresh?: { at?: string; reason?: string; paths?: string[] };
+    sessionCache?: {
+      bytesRead: number;
+      linesParsed: number;
+      appendCount: number;
+      rebuildCount: number;
+    };
+  };
 }
 export interface Lane {
   session: Session;

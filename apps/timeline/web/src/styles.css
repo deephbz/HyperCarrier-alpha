@@ -110,6 +110,36 @@ h1 {
   font-size: 11px;
   overflow-x: auto;
 }
+.diagnostics {
+  padding: 9px 28px;
+  border-bottom: 1px solid var(--rule);
+  background: #f0f0ed;
+  color: var(--muted);
+  font:
+    11px "Geist Mono",
+    monospace;
+}
+.diagnostics summary {
+  cursor: pointer;
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-weight: 600;
+}
+.diagnostics dl {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px 20px;
+  margin: 9px 0 0;
+}
+.diagnostics dt {
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-weight: 600;
+}
+.diagnostics dd {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+}
 .toolbar label {
   display: flex;
   align-items: center;

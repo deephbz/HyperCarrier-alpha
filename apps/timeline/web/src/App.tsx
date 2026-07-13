@@ -29,6 +29,30 @@ const timeFmt = new Intl.DateTimeFormat(undefined, {
   minute: "2-digit",
 });
 const forceDemo = new URLSearchParams(window.location.search).get("demo") === "1";
+const diagnosticsEnabled = new URLSearchParams(window.location.search).get("diagnostics") === "1";
+
+type Diagnostics = {
+  fetches: number;
+  invalidations: number;
+  queuedRefreshes: number;
+  lastFetchMs?: number;
+  lastPayloadBytes?: number;
+};
+
+const queuedRefreshDiagnostics = (previous: Diagnostics): Diagnostics => ({
+  ...previous,
+  queuedRefreshes: previous.queuedRefreshes + 1,
+});
+const invalidationDiagnostics = (previous: Diagnostics): Diagnostics => ({
+  ...previous,
+  invalidations: previous.invalidations + 1,
+});
+const fetchedDiagnostics = (fetchStartedAt: number, body: string) => (previous: Diagnostics) => ({
+  ...previous,
+  fetches: previous.fetches + 1,
+  lastFetchMs: performance.now() - fetchStartedAt,
+  lastPayloadBytes: new TextEncoder().encode(body).byteLength,
+});
 
 function Toolbar({
   range,
@@ -406,7 +430,12 @@ export function App() {
     [query, setQuery] = useState(""),
     [customStart, setCustomStart] = useState(""),
     [customEnd, setCustomEnd] = useState(""),
-    [selected, setSelected] = useState<string | null>(null);
+    [selected, setSelected] = useState<string | null>(null),
+    [diagnostics, setDiagnostics] = useState<Diagnostics>({
+      fetches: 0,
+      invalidations: 0,
+      queuedRefreshes: 0,
+    });
   useEffect(() => {
     let active = true;
     let loading = false;
@@ -420,18 +449,22 @@ export function App() {
     const load = () => {
       if (loading) {
         loadQueued = true;
+        if (diagnosticsEnabled) setDiagnostics(queuedRefreshDiagnostics);
         return;
       }
       loading = true;
+      const fetchStartedAt = performance.now();
       fetch("/api/snapshot")
         .then((r) => {
           if (!r.ok) throw Error();
-          return r.json();
+          return r.text();
         })
-        .then((s) => {
+        .then((body) => {
+          const s = JSON.parse(body) as Snapshot;
           if (active) {
             setSnapshot(s);
             setConnection("live");
+            if (diagnosticsEnabled) setDiagnostics(fetchedDiagnostics(fetchStartedAt, body));
           }
         })
         .catch(() => {
@@ -449,6 +482,7 @@ export function App() {
         });
     };
     const scheduleLoad = () => {
+      if (diagnosticsEnabled) setDiagnostics(invalidationDiagnostics);
       if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
       refreshTimer = window.setTimeout(load, 100);
     };
@@ -575,6 +609,43 @@ export function App() {
           setCustomEnd,
         }}
       />
+      {diagnosticsEnabled && (
+        <details className="diagnostics" open>
+          <summary>Local diagnostics — safe to copy into a bug report</summary>
+          <dl>
+            <div>
+              <dt>Snapshot</dt>
+              <dd>
+                {snapshot
+                  ? `${snapshot.sessions.length} sessions · ${all.length} lanes`
+                  : "loading"}
+              </dd>
+            </div>
+            <div>
+              <dt>Collector</dt>
+              <dd>
+                {snapshot
+                  ? `${snapshot.trace.durationMs.toFixed(1)}ms · ${snapshot.trace.refresh?.reason ?? "unknown"}`
+                  : "—"}
+              </dd>
+            </div>
+            <div>
+              <dt>JSONL cache</dt>
+              <dd>
+                {snapshot?.trace.sessionCache
+                  ? `${compact(snapshot.trace.sessionCache.bytesRead)}B read · ${snapshot.trace.sessionCache.linesParsed} lines · ${snapshot.trace.sessionCache.appendCount} append / ${snapshot.trace.sessionCache.rebuildCount} rebuild`
+                  : "not reported"}
+              </dd>
+            </div>
+            <div>
+              <dt>Browser</dt>
+              <dd>
+                {`${diagnostics.fetches} fetches · ${diagnostics.invalidations} invalidations · ${diagnostics.queuedRefreshes} queued · ${diagnostics.lastFetchMs?.toFixed(1) ?? "—"}ms · ${diagnostics.lastPayloadBytes === undefined ? "—" : `${compact(diagnostics.lastPayloadBytes)}B`}`}
+              </dd>
+            </div>
+          </dl>
+        </details>
+      )}
       <div className="workspace">
         <div className="ledger">
           <div className="ruler-row">
