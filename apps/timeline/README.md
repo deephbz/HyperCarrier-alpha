@@ -31,9 +31,11 @@ authorization, DNS edit, or LAN listener is involved. See
 Each session inspector links to two independent detail services:
 
 - **Live session** (`:4319/session/<id>`) uses Pi's own HTML exporter and regenerates through
-  filesystem events after completed assistant messages. It defaults to Pi's `no-tools` filter and
-  incrementally appends same-branch entries while preserving earlier DOM state; branch divergence
-  hard-refreshes.
+  filesystem events after completed assistant messages. Its added `Turns` projection defaults to
+  persisted user messages plus terminal assistant messages (an assistant record whose Pi
+  `stopReason` is present and isn't `toolUse`). Pi's native filters remain available to reveal tool,
+  settings, and other raw entries. Same-branch updates append incrementally while preserving earlier
+  DOM state; branch divergence hard-refreshes.
 - **TPS inspector** (`:4320/?auto=1&session=<id>`) is optional and serves a separately built
   `pi-tps-web` application against that session's native JSONL.
 
