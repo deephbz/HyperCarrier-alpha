@@ -4,7 +4,14 @@ import { createServer, request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { assistantCompletionSignature, createLiveDetailServer } from "../live-detail.js";
+import { Window } from "happy-dom";
+import {
+  assistantCompletionSignature,
+  createLiveDetailServer,
+  createLiveEntryProjection,
+  defaultLiveEntryIds,
+  isDefaultLiveEntry,
+} from "../live-detail.js";
 import { createNamedProxy } from "../local-proxy.js";
 import { createTpsAdapterServer } from "../tps-adapter.js";
 import { namedUpstreamsFromEnv, resolveCoreHost, resolveServicePort } from "../service-config.js";
@@ -144,6 +151,93 @@ test("assistant completion signature changes only with completed assistant recor
   assert.equal(assistantCompletionSignature(path), "a1:2026-01-01T00:00:01Z:stop");
 });
 
+test("live-detail default projection is user messages plus terminal assistant messages", () => {
+  assert.equal(isDefaultLiveEntry({ type: "message", message: { role: "user" } }), true);
+  for (const stopReason of ["stop", "error", "aborted", "length"])
+    assert.equal(
+      isDefaultLiveEntry({ type: "message", message: { role: "assistant", stopReason } }),
+      true,
+    );
+  assert.equal(
+    isDefaultLiveEntry({
+      type: "message",
+      message: { role: "assistant", stopReason: "toolUse" },
+    }),
+    false,
+  );
+  assert.equal(isDefaultLiveEntry({ type: "message", message: { role: "assistant" } }), false);
+  assert.equal(isDefaultLiveEntry({ type: "message", message: { role: "toolResult" } }), false);
+  assert.equal(isDefaultLiveEntry({ type: "compaction" }), false);
+
+  const { path } = fixture();
+  writeFileSync(
+    path,
+    `${readFileSync(path, "utf8")}${JSON.stringify({ type: "message", id: "u2", message: { role: "user" } })}\n${JSON.stringify(assistant("tool", "2026-01-01T00:00:02Z", "toolUse"))}\n{incomplete\n${JSON.stringify(assistant("a2", "2026-01-01T00:00:03Z", "error"))}\n`,
+  );
+  assert.deepEqual(defaultLiveEntryIds(path), ["a1", "u2", "a2"]);
+});
+
+test("live-detail Turns projection survives rerenders and can opt out and return", async () => {
+  const window = new Window();
+  const { document } = window;
+  document.body.innerHTML = `
+    <div id="filters">
+      <button class="filter-btn active" data-filter="default">Default</button>
+      <button class="filter-btn" data-filter="no-tools">No-tools</button>
+      <button class="filter-btn" data-filter="all">All</button>
+    </div>
+    <div id="tree-status"></div>
+    <div id="tree-container">
+      <div class="tree-node" data-id="u1"></div>
+      <div class="tree-node" data-id="tool"></div>
+      <div class="tree-node" data-id="a1"></div>
+      <div class="tree-node" data-id="compact"></div>
+    </div>
+    <div id="messages">
+      <div id="entry-u1"></div>
+      <div id="entry-tool"></div>
+      <div id="entry-a1"></div>
+      <div id="entry-compact"></div>
+    </div>`;
+  const projection = createLiveEntryProjection(["u1", "a1"]);
+  projection.prepare(document, { controls: true });
+
+  const turns = document.querySelector('[data-filter="hc-default-turns"]');
+  assert.equal(turns.textContent, "Turns");
+  assert.equal(turns.classList.contains("active"), true);
+  assert.deepEqual(
+    [...document.querySelectorAll("#messages > *:not(.hc-default-turns-hidden)")].map(
+      (node) => node.id,
+    ),
+    ["entry-u1", "entry-a1"],
+  );
+  assert.equal(document.querySelector("#tree-status").textContent, "2 / 4 entries");
+
+  document.querySelector("#messages").innerHTML = `
+    <div id="entry-u1"></div><div id="entry-tool"></div><div id="entry-a1"></div>`;
+  await window.happyDOM.whenAsyncComplete();
+  assert.equal(
+    document.querySelector("#entry-tool").classList.contains("hc-default-turns-hidden"),
+    true,
+  );
+
+  document.querySelector('[data-filter="no-tools"]').click();
+  assert.equal(document.querySelectorAll(".hc-default-turns-hidden").length, 0);
+  document.querySelector("#messages").innerHTML += '<div id="entry-compact"></div>';
+  await window.happyDOM.whenAsyncComplete();
+  assert.equal(document.querySelectorAll(".hc-default-turns-hidden").length, 0);
+
+  turns.click();
+  assert.equal(turns.classList.contains("active"), true);
+  assert.deepEqual(
+    [...document.querySelectorAll("#messages > *:not(.hc-default-turns-hidden)")].map(
+      (node) => node.id,
+    ),
+    ["entry-u1", "entry-a1"],
+  );
+  window.close();
+});
+
 test("live detail has a stable URL and invalidates after assistant completion", async (t) => {
   const { root, path } = fixture();
   const cacheRoot = mkdtempSync(join(tmpdir(), "pi-live-cache-"));
@@ -173,7 +267,10 @@ test("live detail has a stable URL and invalidates after assistant completion", 
   const base = `http://127.0.0.1:${server.address().port}`;
   const wrapper = await (await fetch(`${base}/session/${sessionId}`)).text();
   assert.match(wrapper, /EventSource/);
-  assert.match(wrapper, /filter-btn\[data-filter="no-tools"\]/);
+  assert.match(wrapper, /dataset\.filter = "hc-default-turns"/);
+  assert.match(wrapper, /terminal assistant messages/);
+  assert.match(wrapper, /}\)\(\["a1"\]\);/);
+  assert.doesNotMatch(wrapper, /applyNoTools/);
   assert.match(wrapper, /appendOnly/);
   assert.match(await (await fetch(`${base}/render/${sessionId}`)).text(), /Rendered/);
   const controller = new AbortController();
@@ -194,6 +291,7 @@ test("live detail has a stable URL and invalidates after assistant completion", 
   notify({ paths: [path] });
   const update = new TextDecoder().decode((await reader.read()).value);
   assert.match(update, /data:/);
+  assert.match(update, /"defaultEntryIds":\["a1","a2"\]/);
   assert.equal(exportCalls, 2);
   controller.abort();
   await new Promise((resolve) => server.close(resolve));
