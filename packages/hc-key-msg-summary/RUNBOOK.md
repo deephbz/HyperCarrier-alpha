@@ -22,9 +22,14 @@ later interactive or RPC user submission schedules another materialization
 only after Pi has persisted that user message. Both run in a detached,
 single-flight worker, so prompt entry remains available while the model call is
 running; multiple triggers during a call coalesce into one latest-branch rerun.
-Pressing ESC does not create a checkpoint, and extension-origin input does not
-count as a user submission. The aborted `agent_end` hook only clears pending
-origin-correlation state; it performs no materialization.
+Normal `agent_settled` creates another detached checkpoint from the complete
+persisted branch when the latest `agent_end` terminal assistant response has
+`stopReason: "stop"`. The separate settled boundary prevents an intermediate
+agent end before retry, compaction, or queued continuation from being projected.
+This includes long tool-call loops whose earlier assistant responses continued
+with `toolUse`. Pressing ESC does not create a checkpoint, and extension-origin
+input does not count as a user submission. An aborted `agent_end` only clears
+pending origin-correlation state; it performs no materialization.
 
 For a branch that crosses the strict synthesis threshold, interactive Pi shows
 human-only lifecycle signals: `triggered`, then either `updated` or a generic
