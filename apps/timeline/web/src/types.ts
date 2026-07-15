@@ -11,9 +11,6 @@ export type GroupMode =
   | "state"
   | "none";
 export type FilterMode = Exclude<GroupMode, "none" | "tmux-pane"> | "all";
-export type ColorMode = "cost" | "tokens" | "state";
-export type Density = "summary" | "turns" | "requests";
-
 export interface Session {
   id: string;
   startedAt: string;
@@ -56,6 +53,20 @@ export interface Request {
   input: number;
   cacheRead: number;
   cacheWrite: number;
+}
+/**
+ * A content-free projection of the shared Key Message predicate. The native
+ * JSONL remains the only transcript authority; this marker has no prose,
+ * tool payload, reasoning, or content-derived hash.
+ */
+export interface KeyMessageMarker {
+  sessionId: string;
+  sourceEntryId: string | null;
+  order: number;
+  role: "user" | "assistant";
+  outcome: "user" | "stop" | "continuation";
+  producer: string | null;
+  timestamp: string | null;
 }
 export interface LiveAgent {
   processInstanceId: string;
@@ -115,6 +126,7 @@ export interface Snapshot {
   sessions: Session[];
   turns: Turn[];
   requests: Request[];
+  keyMessages?: KeyMessageMarker[];
   liveAgents: LiveAgent[];
   teams?: Array<{ name: string; createdAt?: string; source: string; memberCount: number }>;
   teamMemberships?: Array<{
@@ -142,6 +154,7 @@ export interface Lane {
   turns: Turn[];
   requests: Request[];
   requestsByTurn: ReadonlyMap<string, Request[]>;
+  keyMessages: KeyMessageMarker[];
   live?: LiveAgent;
   /**
    * Evidence used for bounded timeline filtering. Historical sessions require

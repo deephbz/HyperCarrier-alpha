@@ -102,6 +102,70 @@ test("serves built assets and SPA routes without shadowing APIs or allowing trav
   assert.equal(await head.text(), "");
 });
 
+test("lazy Session summary is resolved server-side and stays outside the metadata snapshot", async (t) => {
+  const rawSentinel = "RAW_SESSION_TRANSCRIPT_SENTINEL";
+  let requestedSession;
+  const collect = () => ({
+    generatedAt: "g1",
+    sessions: [
+      {
+        id: "s1",
+        startedAt: "2026-01-01T00:00:00Z",
+        endedAt: "2026-01-01T00:01:00Z",
+        lastMessageAt: "2026-01-01T00:01:00Z",
+        cwd: "/repo",
+        source: "/native/sessions/cwd/s1.jsonl",
+        turnCount: 1,
+        requestCount: 1,
+        cost: 0,
+        totalTokens: 1,
+      },
+    ],
+    turns: [],
+    requests: [],
+    keyMessages: [
+      {
+        sessionId: "s1",
+        sourceEntryId: "u1",
+        order: 1,
+        role: "user",
+        outcome: "user",
+        producer: null,
+        timestamp: "2026-01-01T00:01:00Z",
+      },
+    ],
+    liveAgents: [],
+    trace: {},
+  });
+  const server = createTimelineServer({
+    collect,
+    reconciliationMs: 60_000,
+    watchSources: () => ({ close() {} }),
+    watchAlphaSources: () => ({ close() {} }),
+    readKeyMessageSummary: (session) => {
+      requestedSession = session;
+      return {
+        availability: "available",
+        status: "ok",
+        summary: "Derived summary.",
+        hidden: rawSentinel,
+      };
+    },
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const snapshot = await (await fetch(`${base}/api/snapshot`)).text();
+  assert.equal(snapshot.includes(rawSentinel), false);
+  assert.equal(snapshot.includes("Derived summary."), false);
+  const detail = await (await fetch(`${base}/api/sessions/s1/key-message-summary`)).json();
+  assert.equal(requestedSession.id, "s1");
+  assert.equal(detail.summary, "Derived summary.");
+  assert.equal(detail.hidden, undefined);
+  assert.equal(JSON.stringify(detail).includes(rawSentinel), false);
+  assert.equal((await fetch(`${base}/api/sessions/%2Ftmp%2Fbad/key-message-summary`)).status, 404);
+});
+
 test("Alpha API and SSE are additive and isolated from the legacy metadata snapshot", async (t) => {
   let legacyNotify;
   let alphaNotify;
@@ -126,7 +190,7 @@ test("Alpha API and SSE are additive and isolated from the legacy metadata snaps
           {
             projectRef: { id: "p1", name: "Project", provenance: {} },
             runtime: {},
-            recentOutput: { summary: "safe-derived-summary" },
+            keyMessageSummary: { summary: "safe-derived-summary" },
             intervention: {},
             eventDelta: {},
             evergreenDelta: {},
@@ -152,7 +216,7 @@ test("Alpha API and SSE are additive and isolated from the legacy metadata snaps
   const legacy = await (await fetch(`${base}/api/snapshot`)).json();
   assert.equal("secretSentinel" in legacy, true);
   const alpha = await (await fetch(`${base}/api/alpha/snapshot`)).json();
-  assert.equal(alpha.projects[0].recentOutput.summary, "safe-derived-summary");
+  assert.equal(alpha.projects[0].keyMessageSummary.summary, "safe-derived-summary");
   assert.equal("secretSentinel" in alpha, false);
   assert.deepEqual(await (await fetch(`${base}/api/alpha/trace`)).json(), {
     baseGeneratedAt: "legacy-1",

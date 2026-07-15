@@ -19,7 +19,7 @@ The adapters read:
 - Beads using `bd --readonly --json export`; no passive `issues.jsonl` fallback
   exists.
 - Git HEAD, dirty status, recent history, and diff.
-- Narrow recent-output JSONL sidecars.
+- Narrow key-msg-summary JSONL sidecars.
 - Canonical Markdown and explicitly listed source documents.
 
 The result appends duplicate-safe Project event JSONL and atomically publishes

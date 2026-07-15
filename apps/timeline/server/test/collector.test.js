@@ -483,6 +483,7 @@ test("JSONL parsing emits metadata only and reconciles turn cost", () => {
       message: {
         role: "assistant",
         content: secret,
+        stopReason: "stop",
         model: "m",
         usage: { input: 10, output: 5, totalTokens: 15, cost: { total: 0.25 } },
       },
@@ -494,10 +495,85 @@ test("JSONL parsing emits metadata only and reconciles turn cost", () => {
   assert.equal(parsed.session.cost, 0.25);
   assert.equal(parsed.turns[0].requestCount, 1);
   assert.equal(parsed.requests[0].totalTokens, 15);
+  assert.deepEqual(
+    parsed.keyMessages.map((marker) => marker.outcome),
+    ["user", "stop"],
+  );
   assert.ok(!JSON.stringify(parsed).includes(secret));
 
   const nativeUsage = input.replace('"totalTokens":15,', '"cacheRead":3,"cacheWrite":2,');
   assert.equal(parseSessionJsonl(nativeUsage, "native").requests[0].totalTokens, 20);
+});
+
+test("Key Message markers share the summary predicate without serializing session prose", () => {
+  const secret = "SENTINEL_KEY_MESSAGE_PROSE";
+  const parsed = parseSessionJsonl(
+    [
+      { type: "session", id: "s1", timestamp: "2026-01-01T00:00:00Z", cwd: "/repo" },
+      {
+        type: "message",
+        id: "u1",
+        timestamp: "2026-01-01T00:01:00Z",
+        message: { role: "user", content: secret },
+      },
+      {
+        type: "message",
+        id: "tool",
+        timestamp: "2026-01-01T00:01:01Z",
+        message: {
+          role: "assistant",
+          stopReason: "toolUse",
+          content: [{ type: "toolCall", name: "read" }],
+        },
+      },
+      {
+        type: "message",
+        id: "continue",
+        timestamp: "2026-01-01T00:01:02Z",
+        message: {
+          role: "assistant",
+          stopReason: "toolUse",
+          content: [{ type: "text", text: secret }],
+        },
+      },
+      {
+        type: "message",
+        id: "reasoning",
+        timestamp: "2026-01-01T00:01:03Z",
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "thinking", thinking: secret }],
+        },
+      },
+      {
+        type: "message",
+        id: "stop",
+        timestamp: "2026-01-01T00:01:04Z",
+        message: {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: secret }],
+        },
+      },
+    ]
+      .map(JSON.stringify)
+      .join("\n"),
+    "fixture",
+  );
+  assert.deepEqual(
+    parsed.keyMessages.map(({ sourceEntryId, role, outcome }) => ({
+      sourceEntryId,
+      role,
+      outcome,
+    })),
+    [
+      { sourceEntryId: "u1", role: "user", outcome: "user" },
+      { sourceEntryId: "continue", role: "assistant", outcome: "continuation" },
+      { sourceEntryId: "stop", role: "assistant", outcome: "stop" },
+    ],
+  );
+  assert.equal(JSON.stringify(parsed.keyMessages).includes(secret), false);
 });
 
 test("lastMessageAt uses the latest valid persisted user or assistant message timestamp", () => {

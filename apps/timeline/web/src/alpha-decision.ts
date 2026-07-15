@@ -183,7 +183,7 @@ function decisionBucket(actor: string | undefined, action: string | undefined, w
 }
 
 function changeText(project: AlphaProject) {
-  const output = latestItem(objectItems(project.recentOutput));
+  const output = latestItem(objectItems(project.keyMessageSummary));
   const eventCount = eventChangeCount(project);
   const proposalCount = proposalChangeCount(project);
   const facts = eventCount
@@ -207,8 +207,8 @@ function changeText(project: AlphaProject) {
   return `${boundedExcerpt}${separator}${suffix}`;
 }
 
-function recentOutputText(project: AlphaProject) {
-  const output = latestItem(objectItems(project.recentOutput));
+function keyMessageSummaryText(project: AlphaProject) {
+  const output = latestItem(objectItems(project.keyMessageSummary));
   return textValue(output?.findings, output?.progress, output?.summary);
 }
 
@@ -220,7 +220,8 @@ function hasMeaningfulChangeEvidence(project: AlphaProject) {
 
 function unresolvedEvidenceCategory(project: AlphaProject): UnresolvedEvidenceCategory {
   const freshOutput =
-    Boolean(recentOutputText(project)) && project.recentOutput.provenance.freshness === "fresh";
+    Boolean(keyMessageSummaryText(project)) &&
+    project.keyMessageSummary.provenance.freshness === "fresh";
   const meaningfulChanges = hasMeaningfulChangeEvidence(project);
   if (freshOutput && meaningfulChanges) return "fresh-output-and-changes";
   if (freshOutput) return "fresh-output-only";
@@ -231,24 +232,24 @@ function unresolvedEvidenceCategory(project: AlphaProject): UnresolvedEvidenceCa
 function evidenceBasis(category: UnresolvedEvidenceCategory) {
   switch (category) {
     case "fresh-output-and-changes":
-      return "Fresh recent output and meaningful recorded changes are present.";
+      return "Fresh key message summary and meaningful recorded changes are present.";
     case "fresh-output-only":
-      return "Fresh recent output is present; no meaningful change signal is present.";
+      return "Fresh key message summary is present; no meaningful change signal is present.";
     case "changes-only":
-      return "Meaningful recorded changes are present; no fresh recent output is present.";
+      return "Meaningful recorded changes are present; no fresh key message summary is present.";
     case "no-fresh-output":
-      return "No fresh recent output or meaningful change signal is present.";
+      return "No fresh key message summary or meaningful change signal is present.";
   }
 }
 
 function unassessedAction(category: UnresolvedEvidenceCategory) {
   switch (category) {
     case "fresh-output-and-changes":
-      return "recent output and changes available; no owner action assigned.";
+      return "key message summary and changes available; no owner action assigned.";
     case "fresh-output-only":
-      return "recent output available; no owner action assigned.";
+      return "key message summary available; no owner action assigned.";
     case "changes-only":
-      return "changes available, no recent output; no owner action assigned.";
+      return "changes available, no key message summary; no owner action assigned.";
     case "no-fresh-output":
       return "no fresh evidence; no owner action assigned.";
   }
@@ -289,8 +290,8 @@ export function decisionSummaryModel(project: AlphaProject): AlphaDecisionSummar
         : undefined));
   const provenance = [
     project.intervention.provenance,
-    project.recentOutput.provenance,
-    ...objectItems(project.recentOutput).map(
+    project.keyMessageSummary.provenance,
+    ...objectItems(project.keyMessageSummary).map(
       (item) => item.provenance as AlphaProvenance | undefined,
     ),
     ...objectItems(project.eventDelta).map(

@@ -1,8 +1,8 @@
 {
-  "name": "@hypercarrier/hc-recent-output",
+  "name": "@hypercarrier/hc-key-msg-summary",
   "version": "0.1.0",
   "license": "MIT",
-  "description": "A narrow, provenance-bearing recent Pi assistant-output summary projection.",
+  "description": "A narrow, provenance-bearing complete Key Message projection for Pi sessions.",
   "keywords": [
     "pi-package"
   ],
@@ -17,6 +17,7 @@
   },
   "exports": {
     ".": "./src/index.mjs",
+    "./selector": "./src/selector.mjs",
     "./extension": "./src/extension.mjs",
     "./types": "./src/types.d.ts"
   },

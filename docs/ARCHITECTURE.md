@@ -13,7 +13,7 @@ Pi Sessions + lifecycle leases + tmux + OS processes
 recent assistant final messages
              |
              v
-packages/hc-recent-output  ----> append-only summary JSONL
+packages/hc-key-msg-summary  ----> append-only Key Message summary JSONL
                                       |
 Beads + Git + Markdown ---------------+
                                       v

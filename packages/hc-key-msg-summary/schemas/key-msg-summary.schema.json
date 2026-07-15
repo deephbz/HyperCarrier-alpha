@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hypercarrier.local/schemas/key-msg-summary-v1.json",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "type",
+    "eventId",
+    "summaryId",
+    "projectId",
+    "sessionId",
+    "observedAt",
+    "validAt",
+    "selection",
+    "model",
+    "promptVersion",
+    "derivationVersion",
+    "inputHash",
+    "status"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "type": { "const": "key_message_summary" },
+    "status": { "enum": ["ok", "selection_only", "unavailable_overflow", "failure", "conflict"] },
+    "projectId": { "type": ["string", "null"] },
+    "observedAt": { "type": "string" },
+    "validAt": { "type": ["string", "null"] },
+    "retryable": { "type": "boolean" },
+    "attemptId": { "type": "string", "minLength": 1 },
+    "materializationId": { "type": "string", "minLength": 1 },
+    "inputHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "selection": {
+      "type": "object",
+      "required": [
+        "manifestHash",
+        "occurrences",
+        "payloads",
+        "asOf",
+        "completeBranchProjection"
+      ],
+      "properties": {
+        "manifestHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "occurrences": { "type": "array" },
+        "payloads": { "type": "array" },
+        "asOf": { "type": ["string", "null"] },
+        "completeBranchProjection": { "type": "boolean" }
+      }
+    },
+    "model": {
+      "type": ["object", "null"],
+      "required": ["provider", "id"],
+      "properties": {
+        "provider": { "type": "string" },
+        "id": { "type": "string" }
+      }
+    },
+    "synthesis": {
+      "description": "Private machine-only receipt for an actual summary-model call; it excludes prompt and response text.",
+      "type": "object",
+      "required": ["schemaVersion", "kind", "outcome", "requestedModel", "timing", "provider", "usage"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "kind": { "const": "key_message_summary_model_synthesis" },
+        "outcome": { "enum": ["response", "failure"] },
+        "requestedModel": { "type": ["object", "null"] },
+        "timing": {
+          "type": "object",
+          "required": ["startedAt", "completedAt", "durationMs", "provenance"],
+          "properties": {
+            "startedAt": { "type": ["string", "null"] },
+            "completedAt": { "type": ["string", "null"] },
+            "durationMs": { "type": ["number", "null"], "minimum": 0 },
+            "provenance": { "const": "local_monotonic_clock" }
+          }
+        },
+        "usage": {
+          "type": "object",
+          "required": ["availability", "provenance"],
+          "properties": {
+            "availability": { "enum": ["reported", "partial", "unavailable"] },
+            "inputTokens": { "type": ["number", "null"], "minimum": 0 },
+            "outputTokens": { "type": ["number", "null"], "minimum": 0 },
+            "totalTokens": { "type": ["number", "null"], "minimum": 0 },
+            "cacheReadTokens": { "type": ["number", "null"], "minimum": 0 },
+            "cacheWriteTokens": { "type": ["number", "null"], "minimum": 0 },
+            "reasoningTokens": { "type": ["number", "null"], "minimum": 0 },
+            "estimatedCostUsd": { "type": ["number", "null"], "minimum": 0 },
+            "provenance": { "type": "object" }
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": true
+}

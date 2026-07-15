@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { keyMessageMetadata } from "@hypercarrier/hc-key-msg-summary/selector";
 import { readPiTeams } from "./pi-teams.js";
 
 export const SIDECAR_LEASE_MS = 30_000;
@@ -588,11 +589,13 @@ function createSessionParseState(source) {
     session: undefined,
     turns: [],
     requests: [],
+    keyMessages: [],
     rejected: [],
     currentTurnIndex: undefined,
     lastMessageAt: undefined,
     lastMessageAtMs: undefined,
     lineNumber: 0,
+    entryOrder: -1,
   };
 }
 
@@ -602,6 +605,7 @@ function cloneSessionParseState(state) {
     session: state.session ? { ...state.session } : undefined,
     turns: state.turns.map((turn) => ({ ...turn })),
     requests: state.requests.map((request) => ({ ...request })),
+    keyMessages: state.keyMessages.map((marker) => ({ ...marker })),
     rejected: state.rejected.map((rejection) => ({ ...rejection })),
   };
 }
@@ -628,6 +632,9 @@ function parseSessionLine(state, line) {
     return true;
   }
   if (!entry || typeof entry !== "object") return true;
+  state.entryOrder += 1;
+  const keyMessage = keyMessageMetadata(entry, state.entryOrder);
+  if (keyMessage) state.keyMessages.push(keyMessage);
   if (entry.type === "session") {
     state.session = {
       id: entry.id,
@@ -674,12 +681,13 @@ function parseSessionLine(state, line) {
 }
 
 function materializeSessionParseState(state) {
-  const { session, turns, requests, rejected } = state;
+  const { session, turns, requests, keyMessages, rejected } = state;
   if (!session)
     return {
       session,
       turns,
       requests,
+      keyMessages: [],
       rejected: [...rejected, { source: state.source, reason: "missing_session_header" }],
     };
   session.turnCount = turns.length;
@@ -694,7 +702,13 @@ function materializeSessionParseState(state) {
     live: `${liveBase.replace(/\/$/, "")}/session/${encodeURIComponent(session.id)}`,
     tps: `${tpsBase.replace(/\/$/, "")}/?auto=1&session=${encodeURIComponent(session.id)}`,
   };
-  return { session, turns, requests, rejected };
+  return {
+    session,
+    turns,
+    requests,
+    keyMessages: keyMessages.map((marker) => ({ sessionId: session.id, ...marker })),
+    rejected,
+  };
 }
 
 function parseCompleteJsonl(state, text) {
@@ -744,7 +758,7 @@ function readAppendedBytes(path, start, end) {
   }
 }
 
-const SESSION_CACHE_VERSION = 2;
+const SESSION_CACHE_VERSION = 3;
 
 function cacheStamp(stat) {
   return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${SESSION_CACHE_VERSION}`;
@@ -867,7 +881,8 @@ export function collectSnapshot(options = {}) {
   const sessionFiles = options.sessionFiles ?? findSessionFiles(options.sessionsRoot);
   const sessions = [],
     turns = [],
-    requests = [];
+    requests = [],
+    keyMessages = [];
   let cacheHits = 0;
   const sessionCacheTrace = { bytesRead: 0, linesParsed: 0, appendCount: 0, rebuildCount: 0 };
   for (const path of sessionFiles) {
@@ -879,6 +894,7 @@ export function collectSnapshot(options = {}) {
       if (parsed.session) sessions.push(parsed.session);
       turns.push(...parsed.turns);
       requests.push(...parsed.requests);
+      keyMessages.push(...parsed.keyMessages);
       rejected.push(...parsed.rejected);
     } catch (error) {
       rejected.push({ source: path, reason: "read_failed", error: errorSummary(error) });
@@ -947,6 +963,7 @@ export function collectSnapshot(options = {}) {
     sessions,
     turns,
     requests,
+    keyMessages,
     liveAgents,
     teams: piTeams.teams,
     teamMemberships: piTeams.memberships,

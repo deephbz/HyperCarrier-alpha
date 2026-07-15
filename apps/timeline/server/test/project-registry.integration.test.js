@@ -14,7 +14,7 @@ async function fixture() {
   await mkdir(repoB, { recursive: true });
   const evergreen = join(repoA, "Evergreen.md");
   const sourceDoc = join(repoB, "README.md");
-  const summary = join(root, "recent-output.jsonl");
+  const summary = join(root, "key-msg-summary.jsonl");
   const events = join(root, "events.jsonl");
   const proposalDir = join(root, "proposals");
   await writeFile(evergreen, "# Audited Alpha\n\nOutcome: integrate the evidence.\n");
@@ -23,31 +23,31 @@ async function fixture() {
     summary,
     JSON.stringify({
       schemaVersion: 1,
-      type: "output_summary",
+      type: "key_message_summary",
       summaryId: "summary-direct",
       projectId: "spanning-project",
       progress: "The direct producer contract is wired.",
       observedAt: "2026-07-13T00:00:30.000Z",
       validAt: "2026-07-13T00:00:10.000Z",
-      window: {
-        n: 2,
-        selectedMessageIds: ["message-a", "message-b"],
-        selectedMessages: [
+      selection: {
+        manifestHash: "a".repeat(64),
+        occurrences: [
           {
-            id: "message-a",
+            occurrenceId: "message-a:0",
             contentHash: "hash-a",
             timestamp: "2026-07-13T00:00:00.000Z",
             sourceEntryId: "entry-a",
           },
           {
-            id: "message-b",
+            occurrenceId: "message-b:1",
             contentHash: "hash-b",
             timestamp: "2026-07-13T00:00:10.000Z",
             sourceEntryId: "entry-b",
           },
         ],
+        payloads: [{ contentHash: "hash-a", occurrenceIds: ["message-a:0"] }],
         asOf: "2026-07-13T00:00:10.000Z",
-        complete: true,
+        completeBranchProjection: true,
       },
     }) + "\n",
   );
@@ -147,28 +147,27 @@ test("canonical registry drives distiller output directly into timeline proposal
   });
   const projected = snapshot.projects.find((item) => item.projectRef.id === project.id);
   assert.equal(projected.projectRef.repoRoots.length, 2);
-  assert.equal(projected.recentOutput.items[0].progress, "The direct producer contract is wired.");
-  assert.equal(projected.recentOutput.items[0].observedAt, "2026-07-13T00:00:30.000Z");
-  assert.equal(projected.recentOutput.items[0].validAt, "2026-07-13T00:00:10.000Z");
-  assert.deepEqual(projected.recentOutput.items[0].window.selectedMessageIds, [
-    "message-a",
-    "message-b",
-  ]);
-  assert.deepEqual(projected.recentOutput.items[0].window.selectedMessages, [
+  assert.equal(
+    projected.keyMessageSummary.items[0].progress,
+    "The direct producer contract is wired.",
+  );
+  assert.equal(projected.keyMessageSummary.items[0].observedAt, "2026-07-13T00:00:30.000Z");
+  assert.equal(projected.keyMessageSummary.items[0].validAt, "2026-07-13T00:00:10.000Z");
+  assert.deepEqual(projected.keyMessageSummary.items[0].selection.occurrences, [
     {
-      id: "message-a",
+      occurrenceId: "message-a:0",
       contentHash: "hash-a",
       timestamp: "2026-07-13T00:00:00.000Z",
       sourceEntryId: "entry-a",
     },
     {
-      id: "message-b",
+      occurrenceId: "message-b:1",
       contentHash: "hash-b",
       timestamp: "2026-07-13T00:00:10.000Z",
       sourceEntryId: "entry-b",
     },
   ]);
-  assert.equal(projected.recentOutput.items[0].window.asOf, "2026-07-13T00:00:10.000Z");
+  assert.equal(projected.keyMessageSummary.items[0].selection.asOf, "2026-07-13T00:00:10.000Z");
   const persistedEvents = (await readFile(project.locations.events, "utf8"))
     .trim()
     .split("\n")
@@ -241,8 +240,8 @@ test("producer and timeline retain typed summary payloads and append one stable 
     .split("\n")
     .map(JSON.parse);
   await writeFile(
-    join(root, "recent-output.jsonl"),
-    `${await readFile(join(root, "recent-output.jsonl"), "utf8")}${JSON.stringify({ schemaVersion: 1, type: "output_summary", summaryId: "summary-new", projectId: project.id, progress: "A second source fact.", observedAt: "2026-07-13T01:01:00.000Z", validAt: "2026-07-13T01:00:50.000Z", window: { n: 1, selectedMessageIds: ["message-c"], selectedMessages: [{ id: "message-c", contentHash: "hash-c", timestamp: "2026-07-13T01:00:50.000Z", sourceEntryId: "entry-c" }], asOf: "2026-07-13T01:00:50.000Z", complete: true } })}\n`,
+    join(root, "key-msg-summary.jsonl"),
+    `${await readFile(join(root, "key-msg-summary.jsonl"), "utf8")}${JSON.stringify({ schemaVersion: 1, type: "key_message_summary", summaryId: "summary-new", projectId: project.id, progress: "A second source fact.", observedAt: "2026-07-13T01:01:00.000Z", validAt: "2026-07-13T01:00:50.000Z", selection: { manifestHash: "c".repeat(64), occurrences: [{ occurrenceId: "message-c:0", contentHash: "hash-c", timestamp: "2026-07-13T01:00:50.000Z", sourceEntryId: "entry-c" }], payloads: [{ contentHash: "hash-c", occurrenceIds: ["message-c:0"] }], asOf: "2026-07-13T01:00:50.000Z", completeBranchProjection: true } })}\n`,
   );
   const second = await distillProject({
     project,
@@ -270,8 +269,11 @@ test("producer and timeline retain typed summary payloads and append one stable 
     now: Date.parse("2026-07-13T01:03:00.000Z"),
   });
   const projected = snapshot.projects.find((item) => item.projectRef.id === project.id);
-  const latest = projected.recentOutput.items.find((item) => item.id === "summary-new");
-  assert.deepEqual(latest.window.selectedMessageIds, ["message-c"]);
+  const latest = projected.keyMessageSummary.items.find((item) => item.id === "summary-new");
+  assert.deepEqual(
+    latest.selection.occurrences.map((item) => item.occurrenceId),
+    ["message-c:0"],
+  );
   assert.deepEqual(projected.eventDelta.items.at(-1).payload, allEvents.at(-1).payload);
   assert.equal(
     (await readFile(project.locations.evergreen, "utf8")).startsWith("# Audited Alpha\n"),
@@ -287,7 +289,7 @@ test("same repo can hold two Projects and explicit overlapping Session identity 
   await writeFile(
     summary,
     JSON.stringify({
-      type: "output_summary",
+      type: "key_message_summary",
       summaryId: "same",
       sessionId: "ambiguous-session",
       summary: "must remain visible as ambiguous",
@@ -323,8 +325,8 @@ test("same repo can hold two Projects and explicit overlapping Session identity 
   });
   assert.equal(snapshot.projects.length, 2);
   for (const project of snapshot.projects) {
-    assert.equal(project.recentOutput.state, "ambiguous");
-    assert.equal(project.recentOutput.items?.length ?? 0, 0);
+    assert.equal(project.keyMessageSummary.state, "ambiguous");
+    assert.equal(project.keyMessageSummary.items?.length ?? 0, 0);
   }
   assert.ok(
     snapshot.trace.projectSources.every((source) =>

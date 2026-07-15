@@ -88,6 +88,7 @@ export function lanesFromSnapshot(snapshot: Snapshot): Lane[] {
   );
   const sessionIds = new Set(snapshot.sessions.map((session) => session.id));
   const turnsBySession = indexBy(snapshot.turns, (turn) => turn.sessionId);
+  const keyMessagesBySession = indexBy(snapshot.keyMessages ?? [], (marker) => marker.sessionId);
   const requests = indexRequests(snapshot.requests);
   const liveOnly = snapshot.liveAgents
     .filter((live) => !live.sessionId || !sessionIds.has(live.sessionId))
@@ -112,6 +113,7 @@ export function lanesFromSnapshot(snapshot: Snapshot): Lane[] {
         turns: [],
         requests: [],
         requestsByTurn: new Map(),
+        keyMessages: [],
         live,
         boundedTimeAnchor: { at: runtimeObservedAt, source: "runtime-observation" as const },
         start: Date.parse(at),
@@ -128,6 +130,7 @@ export function lanesFromSnapshot(snapshot: Snapshot): Lane[] {
         turns,
         requests: sessionRequests,
         requestsByTurn: requests.bySessionTurn.get(session.id) ?? new Map(),
+        keyMessages: keyMessagesBySession.get(session.id) ?? [],
         live: liveBySession.get(session.id),
         boundedTimeAnchor:
           lastMessageAt === undefined

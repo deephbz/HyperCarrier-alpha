@@ -3,6 +3,10 @@ import { createServer } from "node:http";
 import { extname, join, relative, resolve, sep } from "node:path";
 import { collectAlphaSnapshot, createAlphaSourceWatcher } from "./alpha.js";
 import { collectSnapshot, SessionCache } from "./collector.js";
+import {
+  readSessionKeyMessageSummary,
+  sanitizeKeyMessageSummaryDetail,
+} from "./key-msg-summary-detail.js";
 import { createSourceWatcher } from "./watcher.js";
 
 function json(res, status, body) {
@@ -112,6 +116,7 @@ export function createTimelineServer({
   watchSources = createSourceWatcher,
   collectAlpha = collectAlphaSnapshot,
   watchAlphaSources = createAlphaSourceWatcher,
+  readKeyMessageSummary = readSessionKeyMessageSummary,
 } = {}) {
   const cache = new SessionCache();
   let snapshot;
@@ -162,6 +167,18 @@ export function createTimelineServer({
       return json(res, 200, snapshot ?? refresh());
     if (req.method === "GET" && url.pathname === "/api/trace")
       return json(res, 200, (snapshot ?? refresh()).trace);
+    const keyMessageDetail = url.pathname.match(/^\/api\/sessions\/([^/]+)\/key-message-summary$/);
+    if (req.method === "GET" && keyMessageDetail) {
+      let sessionId;
+      try {
+        sessionId = decodeURIComponent(keyMessageDetail[1]);
+      } catch {
+        return json(res, 400, { error: "invalid_session_id" });
+      }
+      const session = (snapshot ?? refresh()).sessions.find((item) => item.id === sessionId);
+      if (!session) return json(res, 404, { error: "session_not_found" });
+      return json(res, 200, sanitizeKeyMessageSummaryDetail(readKeyMessageSummary(session)));
+    }
     if (req.method === "GET" && url.pathname === "/api/alpha/snapshot")
       return json(res, 200, alphaSnapshot ?? refreshAlpha());
     if (req.method === "GET" && url.pathname === "/api/alpha/trace")

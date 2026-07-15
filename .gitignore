@@ -18,5 +18,5 @@ config/*.private.json
 
 .hypercarrier/
 *.events.jsonl
-recent-output.jsonl
+key-msg-summary.jsonl
 proposals/

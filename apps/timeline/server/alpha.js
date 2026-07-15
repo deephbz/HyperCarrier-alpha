@@ -825,7 +825,7 @@ function projectRecordMeta(record, path, source, now, fallbackId) {
 }
 
 function projectSummary(record, path, line, now) {
-  if (record.type !== "output_summary" && record.type !== "recent_output_summary") return undefined;
+  if (record.type !== "key_message_summary") return undefined;
   const allowedFields = [
     "progress",
     "findings",
@@ -855,22 +855,19 @@ function projectSummary(record, path, line, now) {
       sessionId: typeof record.sessionId === "string" ? record.sessionId : undefined,
       projectId: typeof record.projectId === "string" ? record.projectId : undefined,
       ...summaryFields,
-      window:
-        record.window && typeof record.window === "object"
+      selection:
+        record.selection && typeof record.selection === "object"
           ? {
-              ...record.window,
-              ...(Array.isArray(record.window.selectedMessageIds)
-                ? { selectedMessageIds: [...record.window.selectedMessageIds] }
-                : {}),
-              ...(Array.isArray(record.window.selectedMessages)
+              ...record.selection,
+              ...(Array.isArray(record.selection.occurrences)
                 ? {
-                    selectedMessages: record.window.selectedMessages.map((message) => ({
-                      ...message,
+                    occurrences: record.selection.occurrences.map((occurrence) => ({
+                      ...occurrence,
                     })),
                   }
                 : {}),
-              ...(Array.isArray(record.window.messageIds)
-                ? { messageIds: [...record.window.messageIds] }
+              ...(Array.isArray(record.selection.payloads)
+                ? { payloads: record.selection.payloads.map((payload) => ({ ...payload })) }
                 : {}),
             }
           : undefined,
@@ -2129,7 +2126,7 @@ export function collectAlphaSnapshot({
     return {
       projectRef,
       runtime: runtimeAxis,
-      recentOutput: outputAxis,
+      keyMessageSummary: outputAxis,
       intervention: interventionAxis,
       eventDelta: eventAxis,
       evergreenDelta: evergreenAxis,
@@ -2156,7 +2153,7 @@ export function collectAlphaSnapshot({
       sources: projects.map((project) => ({
         projectId: project.projectRef.id,
         runtime: project.runtime.provenance,
-        summary: project.recentOutput.provenance,
+        summary: project.keyMessageSummary.provenance,
         intervention: project.intervention.provenance,
         events: project.eventDelta.provenance,
         evergreen: project.evergreenDelta.provenance,
@@ -2215,7 +2212,7 @@ function nearestExistingDirectory(path) {
 function alphaSourceKind(path) {
   const value = String(path).toLowerCase();
   if (value.includes("manifest") || value.includes("projects.json")) return "project-manifest";
-  if (value.includes("summary") || basename(value) === "recent-output.jsonl") return "summary";
+  if (value.includes("summary") || basename(value) === "key-msg-summary.jsonl") return "summary";
   if (value.includes("evergreen") || value.includes("proposal") || value.endsWith(".md"))
     return "evergreen";
   if (value.includes("beads")) return "beads";

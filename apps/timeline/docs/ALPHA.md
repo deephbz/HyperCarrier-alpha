@@ -50,22 +50,21 @@ containing only explicit `sessionIds`, `taskIds`, or configured rules. Paths loc
 do not identify a Project. With no explicit Session association, runtime remains unknown even when a
 cwd matches a repository.
 
-`summaries` are read directly as hc-recent-output JSONL and `events` directly as hc-project-distill
-event JSONL. `proposalDir` is read as the distiller's atomic bundle directories and `metadata.json`;
-missing metadata/artifacts, malformed metadata, and hash mismatches remain partial/corrupt
-diagnostics. A legacy proposal JSONL path remains a compatibility input.
+`summaries` are read directly as hc-key-msg-summary JSONL and `events` directly as
+hc-project-distill event JSONL. `proposalDir` is read as the distiller's atomic bundle directories
+and `metadata.json`; missing metadata/artifacts, malformed metadata, and hash mismatches remain
+partial/corrupt diagnostics. A legacy proposal JSONL path remains a compatibility input.
 
 ## v1 source records
 
-Summary JSONL accepts `output_summary` or `recent_output_summary` records with `summaryId`,
-`projectId` or `sessionId`, `observedAt`/`validAt`, and only the reported `progress`, `findings`,
-`questions`, `nextStep`, or `summary` string fields. Other content-bearing fields, including
-`value`, are rejected from the visible projection and recorded as diagnostics. Project event JSONL
-accepts `project_event` or `intervention` records with an `eventId`, `projectId`, `eventKind`, time,
-and an allowlisted payload. Evergreen proposal JSONL accepts `evergreen_proposal` or
-`evergreen_revision` records with revision/base identity, status, owner watermark, and change
-count/records. Canonical Markdown is hashed and exposed as revision identity, size, and modified
-time; its body is never returned.
+Summary JSONL accepts `key_message_summary` records with `summaryId`, `projectId` or `sessionId`,
+`observedAt`/`validAt`, and only the reported `progress`, `findings`, `questions`, `nextStep`, or
+`summary` string fields. Other content-bearing fields, including `value`, are rejected from the
+visible projection and recorded as diagnostics. Project event JSONL accepts `project_event` or
+`intervention` records with an `eventId`, `projectId`, `eventKind`, time, and an allowlisted
+payload. Evergreen proposal JSONL accepts `evergreen_proposal` or `evergreen_revision` records with
+revision/base identity, status, owner watermark, and change count/records. Canonical Markdown is
+hashed and exposed as revision identity, size, and modified time; its body is never returned.
 
 Beads is read only through exactly:
 
@@ -84,8 +83,8 @@ Every projected axis and item carries `source`, `observedAt`, optional `validAt`
 aggregate scalars also carry field-level refs. Missing, malformed, partial, stale, future-dated,
 duplicate, conflicting, and command-failed sources remain structured diagnostics. A timestamp more
 than five minutes ahead of the observer clock is `unknown` with `ambiguous` confidence. The seven
-Project axes are intentionally separate: `runtime`, `recentOutput`, `intervention`, `eventDelta`,
-`evergreenDelta`, `workLedger`, and `delivery`; there is no universal Project status.
+Project axes are intentionally separate: `runtime`, `keyMessageSummary`, `intervention`,
+`eventDelta`, `evergreenDelta`, `workLedger`, and `delivery`; there is no universal Project status.
 
 The checked-in [fixture](../fixtures/alpha/project-manifest.json) demonstrates two Projects in one
 repo and one Project across repos. `/alpha?demo=1` renders browser-only synthetic data only when the

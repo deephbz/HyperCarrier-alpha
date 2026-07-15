@@ -1,4 +1,12 @@
-import type { Snapshot, Session, Turn, Request, LiveAgent, AgentState } from "./types";
+import type {
+  Snapshot,
+  Session,
+  Turn,
+  Request,
+  LiveAgent,
+  AgentState,
+  KeyMessageMarker,
+} from "./types";
 const origin = Date.now() - 8 * 3_600_000;
 const projects = ["api-service", "data-pipeline", "model-evaluation", "research-notes"];
 const states: AgentState[] = ["thinking", "tool", "waiting_input", "blocked", "idle", "settled"];
@@ -6,6 +14,7 @@ export function demoSnapshot(): Snapshot {
   const sessions: Session[] = [],
     turns: Turn[] = [],
     requests: Request[] = [],
+    keyMessages: KeyMessageMarker[] = [],
     liveAgents: LiveAgent[] = [];
   for (let i = 0; i < 60; i++) {
     const id = `demo-${i}`,
@@ -63,6 +72,26 @@ export function demoSnapshot(): Snapshot {
       cost,
       totalTokens: tokens,
     });
+    keyMessages.push(
+      {
+        sessionId: id,
+        sourceEntryId: `${id}-user`,
+        order: 1,
+        role: "user",
+        outcome: "user",
+        producer: null,
+        timestamp: new Date(started + 60_000).toISOString(),
+      },
+      {
+        sessionId: id,
+        sourceEntryId: `${id}-stop`,
+        order: n + 1,
+        role: "assistant",
+        outcome: "stop",
+        producer: null,
+        timestamp: new Date(cursor).toISOString(),
+      },
+    );
     if (i < 10)
       liveAgents.push({
         processInstanceId: `demo-p${i}`,
@@ -90,6 +119,7 @@ export function demoSnapshot(): Snapshot {
     sessions,
     turns,
     requests,
+    keyMessages,
     liveAgents,
     trace: { durationMs: 4.2, sessionFiles: 60, rejected: [] },
   };

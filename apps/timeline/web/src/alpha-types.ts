@@ -38,7 +38,7 @@ export interface AlphaProject {
     valueProvenance?: Record<string, AlphaProvenance>;
   };
   runtime: AlphaAxis;
-  recentOutput: AlphaAxis;
+  keyMessageSummary: AlphaAxis;
   intervention: AlphaAxis;
   eventDelta: AlphaAxis;
   evergreenDelta: AlphaAxis;
