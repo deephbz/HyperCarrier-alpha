@@ -103,8 +103,12 @@ export function createDetachedMaterializer(materialize, onError = () => {}) {
  *
  * `input` carries origin but runs before persistence. `message_end(user)`
  * confirms a user record entered the loop, and `before_provider_request`
- * follows Pi's Session append. ESC interruption emits none of this handshake,
- * so it cannot trigger a summary. Extension-origin prompts are excluded.
+ * follows Pi's Session append. `agent_end` records whether its terminal
+ * assistant stopped normally; `agent_settled` captures the complete branch
+ * only after Pi has exhausted retries, compaction, and queued continuations.
+ * ESC instead ends in an `aborted` assistant message and never creates a
+ * settlement checkpoint.
+ * Extension-origin prompts are excluded from the user-submission trigger.
  */
 export function registerKeyMessageSummaryLifecycle(pi, schedule) {
   const inputOrigins = {
@@ -113,6 +117,7 @@ export function registerKeyMessageSummaryLifecycle(pi, schedule) {
     followUp: [],
   };
   let persistedUserInputAwaitingProvider = false;
+  let normalStopAwaitingSettlement = false;
   let sessionGeneration = 0;
   let sessionLive = false;
   const MAX_PENDING_INPUT_ORIGINS = 256;
@@ -149,6 +154,7 @@ export function registerKeyMessageSummaryLifecycle(pi, schedule) {
   pi.on("session_start", (_event, ctx) => {
     clearInputOrigins();
     persistedUserInputAwaitingProvider = false;
+    normalStopAwaitingSettlement = false;
     sessionGeneration += 1;
     sessionLive = true;
     const generation = sessionGeneration;
@@ -158,6 +164,12 @@ export function registerKeyMessageSummaryLifecycle(pi, schedule) {
         () => sessionLive && sessionGeneration === generation,
       ),
     );
+  });
+
+  pi.on("agent_start", () => {
+    // A retry, compaction pass, or queued continuation starts a new agent run;
+    // an earlier stop is not the fully settled branch.
+    normalStopAwaitingSettlement = false;
   });
 
   pi.on("input", (event) => {
@@ -198,21 +210,36 @@ export function registerKeyMessageSummaryLifecycle(pi, schedule) {
     );
   });
 
-  // ESC ends the agent loop with an aborted assistant message. Clear input
-  // origins that never reached persistence, but never schedule from agent_end.
   pi.on("agent_end", (event) => {
-    const interrupted = [...(event?.messages ?? [])].reverse().some(
-      (message) => message?.role === "assistant" && message?.stopReason === "aborted",
+    // Record the latest run outcome, but do not project yet: Pi may still
+    // retry, compact, or drain a continuation before `agent_settled`.
+    const terminalAssistant = [...(event?.messages ?? [])].reverse().find(
+      (message) => message?.role === "assistant",
     );
-    if (interrupted) {
+    normalStopAwaitingSettlement = terminalAssistant?.stopReason === "stop";
+    if (terminalAssistant?.stopReason === "aborted") {
       clearInputOrigins();
       persistedUserInputAwaitingProvider = false;
     }
   });
 
+  pi.on("agent_settled", (_event, ctx) => {
+    if (!normalStopAwaitingSettlement) return;
+    normalStopAwaitingSettlement = false;
+
+    const generation = sessionGeneration;
+    schedule(
+      snapshotMaterializationContext(
+        ctx,
+        () => sessionLive && sessionGeneration === generation,
+      ),
+    );
+  });
+
   pi.on("session_shutdown", () => {
     clearInputOrigins();
     persistedUserInputAwaitingProvider = false;
+    normalStopAwaitingSettlement = false;
     sessionLive = false;
   });
 }

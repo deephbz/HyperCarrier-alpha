@@ -40,21 +40,30 @@ and `text` fields. Hashes, occurrence/source IDs, timestamps, producer
 metadata, versions, and storage coordinates remain in the private sidecar's
 machine-facing manifest and receipt; they are not paid model input.
 
-It materializes on Pi `session_start` (including reload, resume, and fork) and
+It materializes on Pi `session_start` (including reload, resume, and fork),
 when a user submission from Pi's `interactive` or `rpc` source has been
-persisted. Both paths are detached from Pi's awaited lifecycle chain: synthesis can show
-TUI notifications, but it does not block prompt entry or queue a new submission
-behind the summary call. At most one materialization runs at a time; triggers
+persisted, and at Pi `agent_settled` when the latest `agent_end` contains a
+terminal assistant response with `stopReason: "stop"`. Waiting for
+`agent_settled` ensures retries, compaction, and queued continuations have
+finished before the trigger captures the full persisted branch, including a
+tool-call loop's final agent-stop prose. The extension deliberately reads
+`sessionManager.getBranch()`, not Pi's compaction-aware model context, so Key
+Messages before and after compaction remain one projection; the compaction
+summary itself is not promoted into Session evidence. All paths are detached
+from Pi's awaited lifecycle chain: synthesis can show TUI notifications, but it
+does not block prompt entry or queue a new submission behind the summary call.
+At most one materialization runs at a time; triggers
 that arrive meanwhile collapse into one rerun against the latest captured
 Session branch. Reloading an older session can therefore produce its first
 sidecar without waiting for another user prompt, while identical branch inputs
 remain deduplicated by their manifest-derived identity.
 
-`agent_end` is deliberately not a trigger. The adapter observes an aborted
-`agent_end` only to discard unfinished input-origin bookkeeping; pressing ESC
-during thinking, tool use, or continuation produces no summary checkpoint.
-Inputs whose Pi source is `extension` are also excluded from the
-user-submission trigger.
+An `agent_end` only records the latest run outcome; it never materializes
+directly. One whose terminal assistant response is `aborted` is cleanup-only:
+pressing ESC during thinking, tool use, or continuation produces no summary
+checkpoint. Non-terminal continuation responses do not decide settlement.
+Inputs whose Pi source is `extension` are also excluded from the user-submission
+trigger.
 
 When synthesis—not merely selection-only materialization—starts in an
 interactive Pi TUI, the detached worker emits a TUI notification, then reports

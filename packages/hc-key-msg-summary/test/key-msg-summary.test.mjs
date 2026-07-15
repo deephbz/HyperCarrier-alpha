@@ -315,15 +315,17 @@ test("accepts a provider/model defaultModel when Pi has no separate defaultProvi
   assert.deepEqual(resolved.model, { provider: "openrouter", id: "z-ai/glm-5.2" });
 });
 
-test("registers the human-input persistence handshake with cleanup-only settlement hooks", () => {
+test("registers the human-input persistence and terminal-settlement hooks", () => {
   const coreEvents = [];
   registerKeyMessageSummary({ on: (event) => coreEvents.push(event) });
   assert.deepEqual(coreEvents, [
     "session_start",
+    "agent_start",
     "input",
     "message_end",
     "before_provider_request",
     "agent_end",
+    "agent_settled",
     "session_shutdown",
   ]);
 
@@ -465,6 +467,87 @@ test("extension input and interruption settlement do not trigger materialization
   }, ctx);
   handlers.get("message_end")({ type: "message_end", message: { role: "user", content: [] } }, ctx);
   handlers.get("before_provider_request")({ type: "before_provider_request" }, ctx);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(calls, 0);
+});
+
+test("normal agent settlement materializes the full branch after a tool-call loop", async () => {
+  const handlers = new Map();
+  const branch = denseBranch(51);
+  let calls = 0;
+  let request;
+  registerPiKeyMessageSummary(
+    { on: (event, handler) => handlers.set(event, handler) },
+    {
+      outputPath: await tempPath(),
+      model: TEST_MODEL,
+      modelClient: {
+        complete: async (value) => {
+          calls += 1;
+          request = value;
+          return { text: "Progress: settled | Findings: complete | Questions/Requests: None stated | Next step: inspect" };
+        },
+      },
+    },
+  );
+  const ctx = ctxFor(branch);
+  branch.push({
+    type: "message",
+    id: "continuation-before-stop",
+    timestamp: 1200,
+    message: {
+      role: "assistant",
+      stopReason: "toolUse",
+      content: [{ type: "text", text: "Running the final tool batch." }],
+    },
+  });
+  branch.push({
+    type: "message",
+    id: "terminal-agent-stop",
+    timestamp: 1201,
+    message: {
+      role: "assistant",
+      stopReason: "stop",
+      content: [{ type: "text", text: "Final settled report." }],
+    },
+  });
+
+  const returned = handlers.get("agent_end")({
+    type: "agent_end",
+    messages: [
+      { role: "assistant", stopReason: "toolUse", content: [] },
+      { role: "toolResult", content: [] },
+      { role: "assistant", stopReason: "stop", content: [] },
+    ],
+  }, ctx);
+  assert.equal(returned, undefined);
+  assert.equal(calls, 0, "agent_end must wait for Pi's fully-settled boundary");
+  handlers.get("agent_settled")({ type: "agent_settled" }, ctx);
+  await waitFor(() => calls === 1, "normal agent settlement did not schedule synthesis");
+  assert.match(request.prompt, /Running the final tool batch/);
+  assert.match(request.prompt, /Final settled report/);
+});
+
+test("agent_end without a terminal assistant stop does not materialize", async () => {
+  const handlers = new Map();
+  let calls = 0;
+  registerPiKeyMessageSummary(
+    { on: (event, handler) => handlers.set(event, handler) },
+    {
+      outputPath: await tempPath(),
+      model: TEST_MODEL,
+      modelClient: { complete: async () => { calls += 1; return { text: "must not run" }; } },
+    },
+  );
+  const ctx = ctxFor(denseBranch(51));
+  handlers.get("agent_end")({
+    type: "agent_end",
+    messages: [
+      { role: "assistant", stopReason: "toolUse", content: [] },
+      { role: "toolResult", content: [] },
+    ],
+  }, ctx);
+  handlers.get("agent_settled")({ type: "agent_settled" }, ctx);
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.equal(calls, 0);
 });
