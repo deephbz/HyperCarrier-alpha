@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
@@ -30,11 +30,47 @@ describe("dashboard controls", () => {
 
   it("opens coherent session details from an alias-first lane", async () => {
     const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ availability: "missing", reason: "sidecar_missing" }),
+      }),
+    );
     render(<App />);
     await user.click(screen.getByRole("button", { name: /timeline-lead, session demo-0/ }));
     expect(screen.getByRole("heading", { name: "timeline-lead" })).toBeTruthy();
     expect(screen.getByText("Session ID")).toBeTruthy();
     expect(screen.getAllByText("demo-0").length).toBeGreaterThan(0);
+  });
+
+  it("uses one Key Message marker projection and lazily fetches the selected Session summary", async () => {
+    const user = userEvent.setup();
+    const fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        availability: "available",
+        status: "ok",
+        selection: { occurrenceCount: 2, uniquePayloadCount: 2, asOf: "2026-01-01T00:00:00Z" },
+        summary: "Derived summary only.",
+      }),
+    });
+    vi.stubGlobal("fetch", fetch);
+    render(<App />);
+
+    expect(screen.queryByRole("combobox", { name: "Detail" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Color" })).toBeNull();
+    expect(screen.getAllByRole("listitem", { name: /User message/ }).length).toBeGreaterThan(0);
+    expect(fetch).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: /timeline-lead, session demo-0/ }));
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        "/api/sessions/demo-0/key-message-summary",
+        expect.objectContaining({ signal: expect.anything() }),
+      ),
+    );
+    expect(await screen.findByText("Derived summary only.")).toBeTruthy();
   });
 
   it("coalesces live invalidations while a snapshot is in flight", async () => {

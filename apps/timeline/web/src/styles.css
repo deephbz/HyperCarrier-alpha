@@ -312,6 +312,7 @@ h1 {
 .lane {
   display: grid;
   grid-template-columns: var(--label) 1fr;
+  min-height: 46px;
   background: var(--paper);
   border-bottom: 1px solid #ecece8;
 }
@@ -337,7 +338,7 @@ h1 {
   min-width: 0;
 }
 .lane-label:focus-visible,
-.turn:focus-visible,
+.key-marker:focus-visible,
 .close:focus-visible {
   outline: 2px solid #2563eb;
   outline-offset: -2px;
@@ -405,59 +406,34 @@ h1 {
   overflow: hidden;
   position: relative;
 }
-.lifeline {
+.key-marker {
   position: absolute;
   top: 50%;
-  height: 2px;
-  background: #52525b;
+  width: 10px;
+  height: 10px;
+  padding: 0;
+  border: 1px solid rgba(76, 29, 149, 0.35);
+  border-radius: 50%;
+  background: #6d28d9;
   transform: translateY(-50%);
 }
-.lifeline.live {
-  background: #0891b2;
-}
-.turn {
-  position: absolute;
-  top: 50%;
-  height: 12px;
-  min-width: 3px;
-  border-radius: 2px;
-  transform: translateY(-50%);
-  background: color-mix(in srgb, var(--fill, var(--accent)) calc(var(--heat) * 100%), #ede9fe);
-  border: 1px solid rgba(76, 29, 149, 0.15);
-  overflow: hidden;
-}
-.turn:hover,
-.turn:focus {
+.key-marker:hover,
+.key-marker:focus {
   z-index: 2;
-  outline: 2px solid #18181b;
-  outline-offset: 1px;
+  box-shadow: 0 0 0 3px rgba(24, 24, 27, 0.16);
 }
-.turn.inferred {
+.key-marker-stop {
+  border-radius: 2px;
+  background: #16a34a;
+  border-color: rgba(22, 101, 52, 0.35);
+}
+.key-marker-continuation {
+  width: 9px;
   height: 9px;
-  border-style: dashed;
-  background: repeating-linear-gradient(
-    135deg,
-    rgba(109, 40, 217, 0.62) 0 2px,
-    rgba(237, 233, 254, 0.9) 2px 4px
-  );
-}
-.turn.zero {
-  background: transparent;
-  border-color: #a1a1aa;
-}
-.turn i {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 1px;
-  background: rgba(255, 255, 255, 0.8);
-}
-.live-cap {
-  position: absolute;
-  top: calc(50% - 9px);
-  height: 18px;
-  width: 2px;
-  box-shadow: 0 0 0 3px rgba(8, 145, 178, 0.09);
+  border-radius: 0;
+  background: #d97706;
+  border-color: rgba(146, 64, 14, 0.35);
+  transform: translateY(-50%) rotate(45deg);
 }
 .inspector {
   position: sticky;
@@ -564,6 +540,15 @@ h1 {
 .inspector section p:not(.eyebrow),
 .inspector code {
   font-size: 11px;
+}
+.key-summary .derived-summary {
+  padding: 9px;
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  background: var(--paper);
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 .empty {
   min-height: 330px;

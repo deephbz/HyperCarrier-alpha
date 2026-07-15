@@ -3,17 +3,17 @@ import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { processSettlement } from "../../../../packages/hc-recent-output/src/index.mjs";
+import { processKeyMessageSummary } from "../../../../packages/hc-key-msg-summary/src/index.mjs";
 import { collectAlphaSnapshot } from "../alpha.js";
 import { createTimelineServer } from "../app.js";
 
 const noWatcher = () => ({ close() {} });
 
-test("fake recent-output model reaches canonical Alpha HTTP and HTML without network", async (t) => {
+test("fake Key Message model reaches canonical Alpha HTTP and HTML without network", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hc-recent-alpha-http-"));
   const repo = join(root, "repo");
   const privateRoot = join(root, "private");
-  const summaryPath = join(privateRoot, "alpha", "recent-output.jsonl");
+  const summaryPath = join(privateRoot, "alpha", "key-msg-summary.jsonl");
   const evergreenPath = join(repo, "Evergreen.md");
   const registryPath = join(privateRoot, "project-registry.json");
   const staticDir = join(root, "web");
@@ -28,11 +28,28 @@ test("fake recent-output model reaches canonical Alpha HTTP and HTML without net
   );
 
   let modelCalls = 0;
-  const result = await processSettlement(
+  const result = await processKeyMessageSummary(
     {
       sessionManager: {
         getHeader: () => ({ id: "alpha-session" }),
         getBranch: () => [
+          {
+            type: "message",
+            id: "owner",
+            message: { role: "user", content: [{ type: "text", text: "Build Alpha." }] },
+          },
+          ...Array.from({ length: 51 }, (_, index) => ({
+            type: "message",
+            id: `turn-${index}`,
+            message: {
+              role: "assistant",
+              stopReason: "toolUse",
+              content: [
+                { type: "text", text: `progress ${index}` },
+                { type: "toolCall", id: `call-${index}`, name: "read", arguments: {} },
+              ],
+            },
+          })),
           {
             type: "message",
             id: "assistant-final",
@@ -47,7 +64,6 @@ test("fake recent-output model reaches canonical Alpha HTTP and HTML without net
       },
     },
     {
-      n: 1,
       projectId: "alpha",
       outputPath: summaryPath,
       model: { provider: "fake", id: "deterministic" },
@@ -119,8 +135,8 @@ test("fake recent-output model reaches canonical Alpha HTTP and HTML without net
   const snapshot = await snapshotResponse.json();
   assert.equal(snapshot.trace.registryVersion, "alpha-http-e2e-v1");
   assert.equal(snapshot.projects[0].projectRef.id, "alpha");
-  assert.equal(snapshot.projects[0].recentOutput.items[0].sessionId, "alpha-session");
-  assert.match(snapshot.projects[0].recentOutput.items[0].summary, /deterministic path/);
+  assert.equal(snapshot.projects[0].keyMessageSummary.items[0].sessionId, "alpha-session");
+  assert.match(snapshot.projects[0].keyMessageSummary.items[0].summary, /deterministic path/);
   assert.match(await readFile(summaryPath, "utf8"), /registry projection works/);
 
   const htmlResponse = await fetch(`${base}/alpha`, {

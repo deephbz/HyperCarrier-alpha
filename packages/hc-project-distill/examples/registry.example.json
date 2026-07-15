@@ -12,7 +12,7 @@
         "repos": ["../../../example-project-alpha"],
         "evergreen": "../../../example-project-alpha/docs/evergreen.md",
         "beadsRoot": null,
-        "summaries": ["./state/project-alpha/recent-output.jsonl"],
+        "summaries": ["./state/project-alpha/key-msg-summary.jsonl"],
         "events": "./state/project-alpha/events.jsonl",
         "proposalDir": "./artifacts/proposals",
         "sourceDocs": ["../../../example-project-alpha/README.md"]
@@ -27,7 +27,7 @@
         "repos": ["../../../example-project-beta"],
         "evergreen": "../../../example-project-beta/docs/evergreen.md",
         "beadsRoot": "../../../example-project-beta",
-        "summaries": ["./state/project-beta/recent-output.jsonl"],
+        "summaries": ["./state/project-beta/key-msg-summary.jsonl"],
         "events": "./state/project-beta/events.jsonl",
         "proposalDir": "./artifacts/proposals",
         "sourceDocs": ["../../../example-project-beta/README.md"]

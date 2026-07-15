@@ -88,7 +88,7 @@ placed in explicit “No … evidence” groups rather than guessed.
 The Alpha Project view reads the canonical product registry selected by
 `PI_TIMELINE_PROJECT_REGISTRY` / `HC_PROJECT_REGISTRY`. In this monorepo, start from
 `config/project-registry.example.json` and keep the machine-local registry outside version control.
-The view consumes configured recent-output/event JSONL and distiller proposal bundle metadata
+The view consumes configured key-msg-summary/event JSONL and distiller proposal bundle metadata
 without a timeline-owned manifest or conversion step.
 
 The separate **Filter** and **Value** controls use the same field ontology as grouping for project,

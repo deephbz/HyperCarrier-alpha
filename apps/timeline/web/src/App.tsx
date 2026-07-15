@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   compact,
-  duration,
   extent,
   filterKey,
   filterLanesByBoundedTime,
@@ -9,14 +8,13 @@ import {
   inspectorDetails,
   laneAlias,
   lanesFromSnapshot,
-  money,
   position,
   sessionMatchesQuery,
   stateClass,
   stateLabel,
 } from "./model";
 import { demoSnapshot } from "./demo";
-import type { ColorMode, Density, FilterMode, GroupMode, Lane, Snapshot } from "./types";
+import type { FilterMode, GroupMode, Lane, Snapshot } from "./types";
 
 const rangeOptions: [string, number | null][] = [
   ["1h", 1],
@@ -64,10 +62,6 @@ function Toolbar({
   filterValue,
   setFilterValue,
   filterOptions,
-  density,
-  setDensity,
-  color,
-  setColor,
   alive,
   setAlive,
   query,
@@ -86,10 +80,6 @@ function Toolbar({
   filterValue: string;
   setFilterValue: (v: string) => void;
   filterOptions: string[];
-  density: Density;
-  setDensity: (v: Density) => void;
-  color: ColorMode;
-  setColor: (v: ColorMode) => void;
   alive: boolean;
   setAlive: (v: boolean) => void;
   query: string;
@@ -187,22 +177,6 @@ function Toolbar({
           <option value="none">None</option>
         </select>
       </label>
-      <label>
-        Detail
-        <select value={density} onChange={(e) => setDensity(e.target.value as Density)}>
-          <option value="summary">Summary</option>
-          <option value="turns">Turns</option>
-          <option value="requests">Requests</option>
-        </select>
-      </label>
-      <label>
-        Color
-        <select value={color} onChange={(e) => setColor(e.target.value as ColorMode)}>
-          <option value="cost">Spend</option>
-          <option value="tokens">Tokens</option>
-          <option value="state">State</option>
-        </select>
-      </label>
       <label className="check">
         <input type="checkbox" checked={alive} onChange={(e) => setAlive(e.target.checked)} /> Alive
         only
@@ -234,42 +208,22 @@ function Ruler({ domain }: { domain: [number, number] }) {
 function LaneRow({
   lane,
   domain,
-  density,
-  color,
   selected,
   onSelect,
-  heatMax,
-  now,
 }: {
   lane: Lane;
   domain: [number, number];
-  density: Density;
-  color: ColorMode;
   selected: boolean;
   onSelect: () => void;
-  heatMax: number;
-  now: number;
 }) {
-  const total = lane.session.cost;
   const liveState = lane.live?.state ?? "settled";
   const alias = laneAlias(lane);
-  const height = density === "summary" ? 34 : density === "turns" ? 48 : 64;
-  const stateFill: Record<string, string> = {
-    thinking: "#0891b2",
-    tool: "#7c3aed",
-    waiting_input: "#d97706",
-    blocked: "#dc2626",
-    failed: "#dc2626",
-    idle: "#a1a1aa",
-    settled: "#52525b",
-    unknown: "#a1a1aa",
-  };
   return (
-    <div className={`lane ${selected ? "selected" : ""}`} style={{ height }}>
+    <div className={`lane ${selected ? "selected" : ""}`}>
       <button
         className="lane-label"
         onClick={onSelect}
-        aria-label={`${alias}, session ${lane.live?.sessionId ?? lane.session.id}, ${stateLabel[liveState]}, ${lane.session.turnCount} turns, ${money(total)}`}
+        aria-label={`${alias}, session ${lane.live?.sessionId ?? lane.session.id}, ${stateLabel[liveState]}, ${lane.keyMessages.length} key messages`}
       >
         <span className={`state-dot ${stateClass[liveState]}`} aria-hidden="true" />
         <span className="lane-copy">
@@ -281,73 +235,146 @@ function LaneRow({
           </small>
         </span>
         <span className="lane-totals">
-          <b>{lane.session.turnCount}</b> turns · <b>{money(total)}</b>
+          <b>{lane.keyMessages.length}</b> key msgs
         </span>
       </button>
       <div
         className="track timeline-cell"
         role="list"
-        aria-label={`Turns for ${lane.session.name ?? lane.session.id}`}
+        aria-label={`Key messages for ${lane.session.name ?? lane.session.id}`}
         onClick={onSelect}
       >
-        {density === "summary" ? (
-          <span
-            className={`lifeline ${lane.live ? "live" : ""}`}
-            style={{
-              left: `${position(lane.start, domain)}%`,
-              width: `${Math.max(0.2, position(lane.live ? now : lane.end, domain) - position(lane.start, domain))}%`,
-            }}
-          />
-        ) : (
-          lane.turns.map((turn, index) => {
-            const start = Date.parse(turn.startedAt),
-              end = Date.parse(turn.endedAt ?? turn.startedAt);
-            const intensity =
-              color === "cost"
-                ? turn.cost / heatMax
-                : color === "tokens"
-                  ? turn.totalTokens / heatMax
-                  : 0.55;
-            const turnLabel = `Turn ${index + 1} · ${timeFmt.format(start)}–${timeFmt.format(end)} · ${duration(end - start)} · ${money(turn.cost)} · ${compact(turn.totalTokens)} tokens`;
-            return (
-              <span
-                key={turn.id}
-                role="listitem"
-                tabIndex={0}
-                className={`turn ${turn.confidence === "inferred" ? "inferred" : ""} ${turn.cost === 0 && color === "cost" ? "zero" : ""}`}
-                aria-label={turnLabel}
-                title={turnLabel}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    onSelect();
-                  }
-                }}
-                style={
-                  {
-                    left: `${position(start, domain)}%`,
-                    width: `${Math.max(0.25, position(end, domain) - position(start, domain))}%`,
-                    "--heat": String(color === "state" ? 1 : 0.15 + 0.85 * intensity),
-                    "--fill": color === "state" ? stateFill[liveState] : "#6d28d9",
-                  } as React.CSSProperties
-                }
-              >
-                {density === "requests" &&
-                  (lane.requestsByTurn.get(turn.id) ?? []).map((r, k, all) => (
-                    <i key={r.id} style={{ left: `${(k / all.length) * 100}%` }} />
-                  ))}
-              </span>
-            );
-          })
-        )}
-        {lane.live && (
-          <span
-            className={`live-cap ${stateClass[liveState]}`}
-            style={{ left: `${position(now, domain)}%` }}
-          />
-        )}
+        {lane.keyMessages.flatMap((marker) => {
+          const at = marker.timestamp ? Date.parse(marker.timestamp) : Number.NaN;
+          if (!Number.isFinite(at)) return [];
+          const label = `${marker.outcome === "user" ? "User message" : marker.outcome === "stop" ? "Agent stop" : "Agent continuation"} · ${timeFmt.format(at)}`;
+          return [
+            <button
+              key={`${marker.sourceEntryId ?? "entry"}:${marker.order}`}
+              type="button"
+              role="listitem"
+              className={`key-marker key-marker-${marker.outcome}`}
+              aria-label={label}
+              title={label}
+              onClick={(event) => {
+                event.stopPropagation();
+                onSelect();
+              }}
+              style={{ left: `${position(at, domain)}%` }}
+            />,
+          ];
+        })}
       </div>
     </div>
+  );
+}
+
+type KeyMessageSummaryDetail = {
+  availability: "available" | "stale" | "missing" | "unavailable";
+  reason?: string;
+  status?: "ok" | "selection_only" | "unavailable_overflow" | "failure" | "conflict" | string;
+  selection?: { occurrenceCount: number; uniquePayloadCount: number; asOf: string | null };
+  provenance?: {
+    model?: { provider: string; id: string } | null;
+    derivationVersion?: string | null;
+    synthesis?: {
+      usage?: { availability: string | null; totalTokens: number | null } | null;
+    } | null;
+  };
+  summary?: string;
+  failure?: { retryable: boolean; kind: string | null };
+};
+
+function KeyMessageSummary({ sessionId }: { sessionId: string }) {
+  const [loaded, setLoaded] = useState<{
+    sessionId: string;
+    detail: KeyMessageSummaryDetail;
+  } | null>(null);
+  const detail = loaded?.sessionId === sessionId ? loaded.detail : null;
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/key-message-summary`, {
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return (await response.json()) as KeyMessageSummaryDetail;
+      })
+      .then((value) => {
+        if (!controller.signal.aborted) setLoaded({ sessionId, detail: value });
+      })
+      .catch(() => {
+        if (!controller.signal.aborted)
+          setLoaded({
+            sessionId,
+            detail: { availability: "unavailable", reason: "detail_request_failed" },
+          });
+      });
+    return () => controller.abort();
+  }, [sessionId]);
+
+  return (
+    <section className="key-summary">
+      <p className="eyebrow">Key Message Summary</p>
+      {!detail ? (
+        <p>Loading derived sidecar…</p>
+      ) : detail.availability === "missing" ? (
+        <p>No materialized summary sidecar for this Session.</p>
+      ) : (
+        <>
+          <p>
+            {detail.availability === "stale"
+              ? "Summary is stale against the latest recorded message."
+              : detail.availability === "unavailable"
+                ? "Summary sidecar is unavailable."
+                : detail.status === "selection_only"
+                  ? "Key Messages are materialized; synthesis was not required."
+                  : "Derived summary is available."}
+          </p>
+          <dl>
+            <div>
+              <dt>Materialization</dt>
+              <dd>{detail.status ?? "unknown"}</dd>
+            </div>
+            {detail.selection && (
+              <div>
+                <dt>Coverage</dt>
+                <dd>
+                  {detail.selection.occurrenceCount} selected /{" "}
+                  {detail.selection.uniquePayloadCount} unique
+                </dd>
+              </div>
+            )}
+            {detail.provenance?.model && (
+              <div>
+                <dt>Summary model</dt>
+                <dd>
+                  {detail.provenance.model.provider}/{detail.provenance.model.id}
+                </dd>
+              </div>
+            )}
+            {detail.provenance?.synthesis?.usage && (
+              <div>
+                <dt>Usage</dt>
+                <dd>
+                  {detail.provenance.synthesis.usage.availability ?? "unavailable"}
+                  {detail.provenance.synthesis.usage.totalTokens === null
+                    ? ""
+                    : ` · ${compact(detail.provenance.synthesis.usage.totalTokens)} tokens`}
+                </dd>
+              </div>
+            )}
+          </dl>
+          {detail.failure && (
+            <p>
+              {detail.failure.kind ?? "Summary"} failure
+              {detail.failure.retryable ? "; retryable." : "."}
+            </p>
+          )}
+          {detail.summary && <p className="derived-summary">{detail.summary}</p>}
+        </>
+      )}
+    </section>
   );
 }
 
@@ -411,6 +438,7 @@ function Inspector({ lane, onClose }: { lane: Lane; onClose: () => void }) {
         <p className="eyebrow">Model</p>
         <p>{lane.live?.model ?? lane.requests.at(-1)?.model ?? "Unknown"}</p>
       </section>
+      <KeyMessageSummary sessionId={lane.session.id} />
     </aside>
   );
 }
@@ -424,8 +452,6 @@ export function App() {
     [group, setGroup] = useState<GroupMode>("project"),
     [filterMode, setFilterMode] = useState<FilterMode>("all"),
     [filterValue, setFilterValue] = useState(""),
-    [density, setDensity] = useState<Density>("turns"),
-    [color, setColor] = useState<ColorMode>("cost"),
     [alive, setAlive] = useState(false),
     [query, setQuery] = useState(""),
     [customStart, setCustomStart] = useState(""),
@@ -543,21 +569,8 @@ export function App() {
     }
     return [...m.entries()];
   }, [filtered, group]);
-  const heatMax = useMemo(() => {
-    const values = filtered.flatMap((lane) =>
-      lane.turns.map((turn) => (color === "tokens" ? turn.totalTokens : turn.cost)),
-    );
-    return Math.max(...values, color === "tokens" ? 1 : 0.01);
-  }, [filtered, color]);
   const selectedLane = all.find((l) => l.session.id === selected);
-  const totals = filtered.reduce(
-    (a, l) => ({
-      cost: a.cost + l.session.cost,
-      tokens: a.tokens + l.session.totalTokens,
-      turns: a.turns + l.session.turnCount,
-    }),
-    { cost: 0, tokens: 0, turns: 0 },
-  );
+  const keyMessageCount = filtered.reduce((total, lane) => total + lane.keyMessages.length, 0);
   return (
     <main id="main-content">
       <header>
@@ -570,13 +583,7 @@ export function App() {
             <b>{filtered.filter((l) => l.live).length}</b> live
           </span>
           <span>
-            <b>{totals.turns}</b> turns
-          </span>
-          <span>
-            <b>{money(totals.cost)}</b> spend
-          </span>
-          <span>
-            <b>{compact(totals.tokens)}</b> tokens
+            <b>{keyMessageCount}</b> key msgs
           </span>
         </div>
         <div className={`connection ${connection}`} aria-live="polite">
@@ -595,10 +602,6 @@ export function App() {
           filterValue,
           setFilterValue,
           filterOptions,
-          density,
-          setDensity,
-          color,
-          setColor,
           alive,
           setAlive,
           query,
@@ -655,20 +658,6 @@ export function App() {
             </div>
             <Ruler domain={domain} />
           </div>
-          {density !== "summary" && color !== "state" && (
-            <div
-              className="heat-legend"
-              aria-label={`${color === "cost" ? "Spend" : "Token"} heat scale`}
-            >
-              <span>Lower</span>
-              <i aria-hidden="true" />
-              <span>Higher</span>
-              <b>
-                shared visible max{" "}
-                {color === "cost" ? money(heatMax) : `${compact(heatMax)} tokens`}
-              </b>
-            </div>
-          )}
           {!snapshot ? (
             <div className="empty">
               <div className="skeleton" />
@@ -696,7 +685,7 @@ export function App() {
                   <strong>{name}</strong>
                   <span>
                     {lanes.length} sessions · {lanes.filter((l) => l.live).length} live ·{" "}
-                    {money(lanes.reduce((s, l) => s + l.session.cost, 0))}
+                    {lanes.reduce((total, lane) => total + lane.keyMessages.length, 0)} key msgs
                   </span>
                 </div>
                 {lanes.map((l) => (
@@ -704,12 +693,8 @@ export function App() {
                     key={l.session.id}
                     lane={l}
                     domain={domain}
-                    density={density}
-                    color={color}
                     selected={selected === l.session.id}
                     onSelect={() => setSelected(l.session.id)}
-                    heatMax={heatMax}
-                    now={now}
                   />
                 ))}
               </section>
@@ -719,7 +704,7 @@ export function App() {
         {selectedLane && <Inspector lane={selectedLane} onClose={() => setSelected(null)} />}
       </div>
       <footer>
-        <span>All-entry totals · metadata only</span>
+        <span>Key Message markers · metadata only</span>
         <span>
           {snapshot
             ? `Indexed ${snapshot.trace.sessionFiles} files in ${snapshot.trace.durationMs.toFixed(1)}ms`

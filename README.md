@@ -69,8 +69,8 @@ and process/session identity evidence:
 pi -e "$PWD/apps/timeline/extensions/timeline-lifecycle.mjs"
 ```
 
-The recent-output extension is a separate Pi package under
-`packages/hc-recent-output`. Its model-provider call is opt-in because selected
+The Key Message Summary extension is a separate Pi package under
+`packages/hc-key-msg-summary`. Its model-provider call is opt-in because selected
 assistant final-message text crosses the configured provider boundary.
 
 PiTeams orchestration and its Beads-backed Task integration are maintained in

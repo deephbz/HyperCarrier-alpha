@@ -41,7 +41,7 @@ async function setup() {
     [
       JSON.stringify({
         schemaVersion: 1,
-        type: "output_summary",
+        type: "key_message_summary",
         summaryId: "sum-1",
         status: "ok",
         validAt: "2026-07-11T23:00:00Z",
@@ -50,7 +50,7 @@ async function setup() {
       }),
       JSON.stringify({
         schemaVersion: 1,
-        type: "output_summary",
+        type: "key_message_summary",
         summaryId: "sum-2",
         validAt: "2026-07-11T23:01:00Z",
         summary:
@@ -58,7 +58,7 @@ async function setup() {
       }),
       JSON.stringify({
         schemaVersion: 1,
-        type: "output_summary",
+        type: "key_message_summary",
         summaryId: "sum-3",
         validAt: "2026-07-11T23:02:00Z",
         summary: "Retired: the obsolete path is superseded.",
@@ -474,7 +474,7 @@ test("a frontier change appends only the new source fact and keeps old event ide
     .map(JSON.parse);
   await writeFile(
     join(fixture.root, "summary.jsonl"),
-    `${await readFile(join(fixture.root, "summary.jsonl"), "utf8")}${JSON.stringify({ schemaVersion: 1, type: "output_summary", summaryId: "sum-new", validAt: "2026-07-12T00:59:00Z", summary: "Progress: one new independently identified fact." })}\n`,
+    `${await readFile(join(fixture.root, "summary.jsonl"), "utf8")}${JSON.stringify({ schemaVersion: 1, type: "key_message_summary", summaryId: "sum-new", validAt: "2026-07-12T00:59:00Z", summary: "Progress: one new independently identified fact." })}\n`,
   );
   const second = await distillProject({
     ...fixture,
