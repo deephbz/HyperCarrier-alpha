@@ -34,14 +34,16 @@ export interface KeyMessageSummaryConfig {
       continuationCount: number;
       shouldSynthesize: boolean;
     };
+    keyMessageCount: number;
+    model: { provider: string; id: string };
+    estimatedInputTokens: number;
+    inputTokenEstimateMethod: "utf16_chars_div_4_ceil";
   }) => void | Promise<void>;
 }
 
 export interface ModelRequest {
   prompt: string;
-  selection: KeyMessageSelection;
   model: { provider: string; id: string };
-  promptVersion: string;
 }
 
 export interface ModelResponse {
