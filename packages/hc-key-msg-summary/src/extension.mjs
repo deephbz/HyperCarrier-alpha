@@ -6,6 +6,10 @@ import { complete } from "@earendil-works/pi-ai/compat";
 export * from "./index.mjs";
 
 import { processKeyMessageSummary } from "./index.mjs";
+import {
+  createDetachedMaterializer,
+  registerKeyMessageSummaryLifecycle,
+} from "./lifecycle.mjs";
 
 async function readSettings(path) {
   try {
@@ -98,11 +102,31 @@ export default function registerPiKeyMessageSummary(pi, config = {}) {
     }
   };
 
+  const modelLabel = ({ provider, id } = {}) =>
+    [provider, id].filter(Boolean).join("/") || "unavailable";
+
+  const resultModelLabel = (result) => {
+    const receipt = result?.record?.synthesis;
+    const requested = receipt?.requestedModel ?? result?.record?.model;
+    const provider = receipt?.provider?.responseProvider ?? requested?.provider;
+    const id = receipt?.provider?.responseModel ?? requested?.id;
+    return modelLabel({ provider, id });
+  };
+
+  const tokenLabel = (name, value) =>
+    typeof value === "number" && Number.isFinite(value)
+      ? `${name} tokens: ${value}`
+      : `${name} tokens: unavailable`;
+
   const notifyOutcome = (ctx, result, triggered) => {
     if (!triggered || result?.duplicate || result?.inFlight) return;
     switch (result?.record?.status) {
       case "ok":
-        notify(ctx, "Key Message Summary updated", "info");
+        notify(
+          ctx,
+          `Key Message Summary updated (${tokenLabel("input", result.record.synthesis?.usage?.inputTokens)} · ${tokenLabel("output", result.record.synthesis?.usage?.outputTokens)} · model ${resultModelLabel(result)})`,
+          "info",
+        );
         break;
       case "unavailable_overflow":
         notify(ctx, "Key Message Summary unavailable: input is too large", "warning");
@@ -138,34 +162,24 @@ export default function registerPiKeyMessageSummary(pi, config = {}) {
         };
       }
     }
-    try {
-      const result = await processKeyMessageSummary(ctx, {
-        ...injected,
-        ...explicit,
-        piAi: explicit.piAi ?? { complete },
-        onSynthesisTriggered: (detail) => {
-          synthesisTriggered = true;
-          notify(
-            ctx,
-            `Key Message Summary triggered (${detail.activation.toolCallCount} tool calls, ${detail.activation.continuationCount} continuations)`,
-            "info",
-          );
-        },
-      });
-      notifyOutcome(ctx, result, synthesisTriggered);
-      return result;
-    } catch (error) {
-      if (synthesisTriggered)
-        notify(ctx, "Key Message Summary failed; inspect its private sidecar", "error");
-      throw error;
-    }
+    const result = await processKeyMessageSummary(ctx, {
+      ...injected,
+      ...explicit,
+      piAi: explicit.piAi ?? { complete },
+      onSynthesisTriggered: (detail) => {
+        synthesisTriggered = true;
+        notify(
+          ctx,
+          `Key Message Summary triggered (${detail.keyMessageCount} Key Messages · input tokens: ~${detail.estimatedInputTokens} estimated (chars/4) · model ${modelLabel(detail.model)})`,
+          "info",
+        );
+      },
+    });
+    notifyOutcome(ctx, result, synthesisTriggered);
+    return result;
   };
-  // A reload/resume/fork must be able to materialize an existing durable
-  // Session immediately. Idempotent input identity makes this safe; exact
-  // same-branch records are deduplicated rather than re-summarized.
-  pi.on("session_start", async (_event, ctx) => materialize(ctx));
-  // Pi's `agent_end` fires once after the complete agent loop for a user
-  // prompt. `turn_end` is too early (it repeats after tool use), while an
-  // invented `agent_settled` hook would never run.
-  pi.on("agent_end", async (_event, ctx) => materialize(ctx));
+  const schedule = createDetachedMaterializer(materialize, (_error, ctx) => {
+    notify(ctx, "Key Message Summary failed; inspect its private sidecar", "error");
+  });
+  registerKeyMessageSummaryLifecycle(pi, schedule);
 }

@@ -35,16 +35,40 @@ stores the prompt, provider response text, arbitrary headers, or guessed token
 counts. Its `usage.availability` is `reported`, `partial`, or `unavailable`,
 and each retained field names the exact response path it came from.
 
+The outbound provider prompt contains only ordered semantic `role`, `outcome`,
+and `text` fields. Hashes, occurrence/source IDs, timestamps, producer
+metadata, versions, and storage coordinates remain in the private sidecar's
+machine-facing manifest and receipt; they are not paid model input.
+
 It materializes on Pi `session_start` (including reload, resume, and fork) and
-on `agent_end`. Reloading an older session can therefore produce its first
-sidecar without waiting for another user prompt; identical branch inputs are
-deduplicated by their manifest-derived identity.
+when a user submission from Pi's `interactive` or `rpc` source has been
+persisted. Both paths are detached from Pi's awaited lifecycle chain: synthesis can show
+TUI notifications, but it does not block prompt entry or queue a new submission
+behind the summary call. At most one materialization runs at a time; triggers
+that arrive meanwhile collapse into one rerun against the latest captured
+Session branch. Reloading an older session can therefore produce its first
+sidecar without waiting for another user prompt, while identical branch inputs
+remain deduplicated by their manifest-derived identity.
+
+`agent_end` is deliberately not a trigger. The adapter observes an aborted
+`agent_end` only to discard unfinished input-origin bookkeeping; pressing ESC
+during thinking, tool use, or continuation produces no summary checkpoint.
+Inputs whose Pi source is `extension` are also excluded from the
+user-submission trigger.
 
 When synthesis—not merely selection-only materialization—starts in an
-interactive Pi TUI, the extension emits a non-blocking TUI notification, then
-reports success or a generic failure. These are `ctx.ui.notify` calls only:
+interactive Pi TUI, the detached worker emits a TUI notification, then reports
+success or a generic failure. These are `ctx.ui.notify` calls only:
 they do not add a Session entry, custom message, tool call, or model-visible
 content. Duplicate and already-in-flight inputs stay quiet.
+
+The triggered notice shows Key Message count, requested model, and a clearly
+marked `~N` input-token estimate using Pi's `ceil(prompt characters / 4)`
+display heuristic; provider usage does not exist before its response. The
+updated notice reads only provider-reported `synthesis.usage.inputTokens` and
+`outputTokens`, preferring the reported provider/model and otherwise using the
+requested model. Missing usage is shown as `unavailable`; the local estimate
+is never written into the machine receipt or presented as reported usage.
 
 The extension resolves `defaultProvider` plus `defaultModel` from normal Pi
 settings; a trusted Project's `.pi/settings.json` can override those standard
@@ -65,3 +89,24 @@ The prompt requests a concise, one-line `Progress`, `Findings`,
 `Questions/Requests`, and `Next step` summary. It may summarize only the
 complete selected Key Message projection, not runtime, delivery, priority, or
 intervention state.
+
+## Agent query CLI
+
+Agents can query the same selector directly from native Session evidence:
+
+```sh
+hc-key-messages --session <exact-path-or-id> --json
+```
+
+An exact path reads that file. An ID must match exactly one Session below
+`~/.pi/agent/sessions`; zero or multiple matches fail closed. The command walks
+from the final persisted entry through its parent chain, so abandoned branches
+are excluded, then applies the package's shared Key Message selector. Its JSON
+contains the Session/active-leaf reference and ordered semantic Key Messages;
+content hashes and synthesis manifests stay machine-internal. It never writes,
+migrates, summarizes, joins Beads, or infers a Project/workspace.
+
+Legacy version-1 Sessions are linear and have no entry IDs, so the command
+selects their records in persisted order and returns `null` source/leaf IDs
+without inventing or persisting replacements. Absolute source paths and the
+Session header's `cwd` are deliberately absent from normal JSON output.
