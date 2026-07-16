@@ -4,6 +4,15 @@
   "private": true,
   "license": "MIT",
   "type": "module",
+  "files": [
+    "extensions/timeline-lifecycle.mjs",
+    "extensions/README.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/timeline-lifecycle.mjs"
+    ]
+  },
   "scripts": {
     "start": "node server/index.js",
     "start:timeline": "node server/index.js",
@@ -30,7 +39,7 @@
     "test": "node --test server/test/*.test.js test/*.test.mjs && npm run test:web"
   },
   "dependencies": {
-    "@hypercarrier/hc-key-msg-summary": "0.1.0",
+    "@hypercarrier/hc-rarebit": "0.1.0",
     "@hypercarrier/hc-project-distill": "0.1.0",
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",

@@ -65,7 +65,7 @@ test("Alpha watcher reports source kinds independently", async () => {
   activeWatcher.close();
 });
 
-test("Alpha watcher classifies configured key-msg-summary paths before timeline substrings", async () => {
+test("Alpha watcher classifies configured rarebit paths before timeline substrings", async () => {
   const root = mkdtempSync(join(tmpdir(), "central-vault-timeline-e2e-"));
   let callback;
   const events = [];
@@ -79,7 +79,7 @@ test("Alpha watcher classifies configured key-msg-summary paths before timeline 
       return emitter;
     },
   });
-  callback("change", "key-msg-summary.jsonl");
+  callback("change", "rarebit.jsonl");
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.deepEqual(events[0].sourceKinds, ["summary"]);
   watcher.close();
@@ -90,7 +90,7 @@ test("default Alpha watcher keeps configured summary invalidations exact without
   const configRoot = mkdtempSync(join(tmpdir(), "alpha-watch-config-"));
   const summaryRoot = mkdtempSync(join(tmpdir(), "central-vault-timeline-summary-"));
   const manifestPath = join(configRoot, "manifest.json");
-  const summaryPath = join(summaryRoot, "key-msg-summary.jsonl");
+  const summaryPath = join(summaryRoot, "rarebit.jsonl");
   mkdirSync(join(cwd, ".beads"));
   writeFileSync(join(cwd, ".beads", "noise.jsonl"), "{}\n");
   writeFileSync(summaryPath, "");
@@ -118,7 +118,7 @@ test("default Alpha watcher keeps configured summary invalidations exact without
   assert.equal(watcher.roots.includes(cwd), false);
   const summaryRegistration = registrations.find(({ root }) => root === summaryRoot);
   assert.ok(summaryRegistration);
-  summaryRegistration.onEvent("change", "key-msg-summary.jsonl");
+  summaryRegistration.onEvent("change", "rarebit.jsonl");
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.deepEqual(events, [
     {
@@ -139,7 +139,7 @@ test("Alpha keeps explicit Projects separate and does not associate runtime by c
   const root = mkdtempSync(join(tmpdir(), "alpha-contract-"));
   writeFileSync(
     join(root, "summary.jsonl"),
-    '{"type":"key_message_summary","projectId":"one","summary":"one","observedAt":"2026-07-12T10:00:00.000Z"}\n',
+    '{"type":"rarebit_summary","projectId":"one","summary":"one","observedAt":"2026-07-12T10:00:00.000Z"}\n',
   );
   writeFileSync(
     join(root, "events.jsonl"),
@@ -200,7 +200,7 @@ test("Alpha keeps explicit Projects separate and does not associate runtime by c
   for (const project of snapshot.projects) {
     for (const axis of [
       project.runtime,
-      project.keyMessageSummary,
+      project.rarebitSummary,
       project.intervention,
       project.eventDelta,
       project.evergreenDelta,
@@ -257,7 +257,7 @@ test("Alpha adapters preserve stale/malformed states and avoid bd list --limit 0
   const summaryPath = join(root, "summary.jsonl");
   writeFileSync(
     summaryPath,
-    '{"type":"key_message_summary","summaryId":"old","summary":"visible summary","observedAt":"2026-07-01T00:00:00.000Z"}\nnot-json\n',
+    '{"type":"rarebit_summary","summaryId":"old","summary":"visible summary","observedAt":"2026-07-01T00:00:00.000Z"}\nnot-json\n',
   );
   const summary = readSummaryJsonl({
     path: summaryPath,
@@ -435,7 +435,7 @@ test("canonical registry validation stays in parity with the distiller and fails
       name: "wrong list type",
       reason: "canonical_location_list_type",
       build: (value) => {
-        value.projects[0].locations.summaries = "key-msg-summary.jsonl";
+        value.projects[0].locations.summaries = "rarebit.jsonl";
         return value;
       },
     },
@@ -492,19 +492,19 @@ test("Alpha surfaces partial input, deduplicates stable IDs, and retains conflic
     [
       JSON.stringify({
         schemaVersion: 1,
-        type: "key_message_summary",
+        type: "rarebit_summary",
         summaryId: "same",
         summary: "one",
       }),
       JSON.stringify({
         schemaVersion: 1,
-        type: "key_message_summary",
+        type: "rarebit_summary",
         summaryId: "same",
         summary: "one",
       }),
       JSON.stringify({
         schemaVersion: 1,
-        type: "key_message_summary",
+        type: "rarebit_summary",
         summaryId: "same",
         summary: "two",
         value: "secret",
@@ -529,20 +529,20 @@ test("Alpha surfaces partial input, deduplicates stable IDs, and retains conflic
 
 test("Alpha retains summary failure records as diagnostics instead of crashing", () => {
   const root = mkdtempSync(join(tmpdir(), "alpha-summary-failure-"));
-  const path = join(root, "key-msg-summary.jsonl");
+  const path = join(root, "rarebit.jsonl");
   writeFileSync(
     path,
     [
       JSON.stringify({
         schemaVersion: 1,
-        type: "key_message_summary",
+        type: "rarebit_summary",
         summaryId: "failed-materialization",
         status: "failure",
         error: { name: "Error", message: "model unavailable" },
       }),
       JSON.stringify({
         schemaVersion: 1,
-        type: "key_message_summary",
+        type: "rarebit_summary",
         summaryId: "successful-materialization",
         status: "ok",
         summary: "Progress: recovered",
@@ -724,7 +724,7 @@ test("Alpha marks overlapping session and source associations ambiguous", () => 
     join(root, "summary.jsonl"),
     JSON.stringify({
       schemaVersion: 1,
-      type: "key_message_summary",
+      type: "rarebit_summary",
       summaryId: "shared",
       sessionId: "shared",
       summary: "must not copy",
@@ -759,8 +759,8 @@ test("Alpha marks overlapping session and source associations ambiguous", () => 
     now: Date.parse("2026-07-12T12:00:00.000Z"),
   });
   for (const project of snapshot.projects) {
-    assert.equal(project.keyMessageSummary.state, "ambiguous");
-    assert.equal(project.keyMessageSummary.items?.length ?? 0, 0);
+    assert.equal(project.rarebitSummary.state, "ambiguous");
+    assert.equal(project.rarebitSummary.items?.length ?? 0, 0);
     assert.equal(project.runtime.state, "ambiguous");
     assert.equal(project.workLedger.tasks?.length ?? 0, 0);
   }

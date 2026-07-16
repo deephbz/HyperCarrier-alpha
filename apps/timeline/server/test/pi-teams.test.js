@@ -17,19 +17,24 @@ test("Pi Teams parser projects metadata only and validates live PID evidence", (
       createdAt: 1,
       members: [
         {
+          membershipId: "lead-membership",
           name: "team-lead",
           agentType: "lead",
           cwd: "/repo",
           tmuxPaneId: "%1",
           prompt: "SECRET MEMBER PROMPT",
+          isActive: true,
         },
         {
+          membershipId: "builder-membership",
           name: "builder",
           agentType: "teammate",
           cwd: "/repo",
           tmuxPaneId: "%2",
           model: "safe-model",
           prompt: "SECRET MEMBER PROMPT",
+          sessionFile: "/sessions/builder.jsonl",
+          isActive: true,
         },
       ],
     }),
@@ -42,6 +47,9 @@ test("Pi Teams parser projects metadata only and validates live PID evidence", (
       teamName: "alpha",
       agentName: "builder",
       ready: true,
+      pid: 120,
+      startedAt: 1_800,
+      membershipId: "builder-membership",
       lastHeartbeatAt: 10,
       lastError: { message: "SECRET RUNTIME ERROR" },
     }),
@@ -54,6 +62,9 @@ test("Pi Teams parser projects metadata only and validates live PID evidence", (
   assert.equal(builder.pid, 120);
   assert.equal(builder.ready, true);
   assert.equal(builder.configuredTerminalId, "%2");
+  assert.equal(builder.sessionFile, "/sessions/builder.jsonl");
+  assert.equal(builder.membershipId, builder.runtimeMembershipId);
+  assert.equal(builder.isActive, true);
   assert.equal(JSON.stringify(result).includes("SECRET"), false);
 });
 

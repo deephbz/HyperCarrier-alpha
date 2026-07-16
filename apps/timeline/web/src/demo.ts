@@ -5,7 +5,7 @@ import type {
   Request,
   LiveAgent,
   AgentState,
-  KeyMessageMarker,
+  RarebitMarker,
 } from "./types";
 const origin = Date.now() - 8 * 3_600_000;
 const projects = ["api-service", "data-pipeline", "model-evaluation", "research-notes"];
@@ -14,7 +14,7 @@ export function demoSnapshot(): Snapshot {
   const sessions: Session[] = [],
     turns: Turn[] = [],
     requests: Request[] = [],
-    keyMessages: KeyMessageMarker[] = [],
+    rarebits: RarebitMarker[] = [],
     liveAgents: LiveAgent[] = [];
   for (let i = 0; i < 60; i++) {
     const id = `demo-${i}`,
@@ -47,6 +47,7 @@ export function demoSnapshot(): Snapshot {
           at: new Date(cursor + k * 30_000).toISOString(),
           model: "gpt-5.6-terra",
           provider: "synthetic",
+          stopReason: k < j % 3 ? "toolUse" : "stop",
           cost: c / (1 + (j % 3)),
           totalTokens: tok / (1 + (j % 3)),
           input: tok * 0.8,
@@ -72,7 +73,7 @@ export function demoSnapshot(): Snapshot {
       cost,
       totalTokens: tokens,
     });
-    keyMessages.push(
+    rarebits.push(
       {
         sessionId: id,
         sourceEntryId: `${id}-user`,
@@ -99,6 +100,13 @@ export function demoSnapshot(): Snapshot {
         sessionId: id,
         cwd: `/work/${project}`,
         state: states[i % states.length],
+        processState: "running",
+        process: { pid: 7000 + i, state: "running" },
+        workState: {
+          availability: "observed",
+          state: states[i % states.length],
+          evidenceSource: "demo",
+        },
         activeTool: i % 6 === 1 ? "read" : undefined,
         heartbeatAt: new Date(Date.now() - i * 3000).toISOString(),
         model: "gpt-5.6-terra",
@@ -114,12 +122,12 @@ export function demoSnapshot(): Snapshot {
       });
   }
   return {
+    schemaVersion: 2,
     generatedAt: new Date().toISOString(),
-    sourceVersion: 1,
     sessions,
     turns,
     requests,
-    keyMessages,
+    rarebits,
     liveAgents,
     trace: { durationMs: 4.2, sessionFiles: 60, rejected: [] },
   };

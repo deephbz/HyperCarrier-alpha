@@ -1,26 +1,33 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import {
+  compareIntelligentLanes,
   compact,
+  countLabel,
   extent,
   filterKey,
   filterLanesByBoundedTime,
   groupKey,
+  groupLabel,
   inspectorDetails,
-  laneAlias,
+  laneContextPresentation,
+  laneDisplayLabel,
   lanesFromSnapshot,
+  mergeSnapshotPages,
   position,
+  runtimePresentation,
   sessionMatchesQuery,
-  stateClass,
-  stateLabel,
+  windowHours,
 } from "./model";
 import { demoSnapshot } from "./demo";
-import type { FilterMode, GroupMode, Lane, Snapshot } from "./types";
+import { parseTimelineSnapshot, SnapshotCompatibilityError } from "./snapshot-contract";
+import type { FilterMode, GroupMode, Lane, Snapshot, SnapshotWindow } from "./types";
 
-const rangeOptions: [string, number | null][] = [
-  ["1h", 1],
-  ["6h", 6],
-  ["24h", 24],
-  ["All", null],
+const rangeOptions: Array<{ value: SnapshotWindow; label: string }> = [
+  { value: "15m", label: "Last 15m" },
+  { value: "1h", label: "Last 1h" },
+  { value: "6h", label: "Last 6h" },
+  { value: "24h", label: "Last 24h" },
+  { value: "all", label: "All history" },
 ];
 const timeFmt = new Intl.DateTimeFormat(undefined, {
   hour: "2-digit",
@@ -28,6 +35,7 @@ const timeFmt = new Intl.DateTimeFormat(undefined, {
 });
 const forceDemo = new URLSearchParams(window.location.search).get("demo") === "1";
 const diagnosticsEnabled = new URLSearchParams(window.location.search).get("diagnostics") === "1";
+const DAY_MS = 24 * 3_600_000;
 
 type Diagnostics = {
   fetches: number;
@@ -52,9 +60,149 @@ const fetchedDiagnostics = (fetchStartedAt: number, body: string) => (previous: 
   lastPayloadBytes: new TextEncoder().encode(body).byteLength,
 });
 
+function finiteTime(value: number | null) {
+  return value !== null && Number.isFinite(value) ? value : null;
+}
+
+function selectedSnapshotWindow(
+  windowMode: SnapshotWindow,
+  start: number | null,
+  rangeEnd: number,
+) {
+  if (windowMode === "all") return "all";
+  if (start !== null && rangeEnd - start > DAY_MS) return "all";
+  return windowMode;
+}
+
+function addTimeParameter(params: URLSearchParams, name: string, value: number | null) {
+  if (value !== null) params.set(name, String(value));
+}
+
+export function snapshotSelection(
+  windowMode: SnapshotWindow,
+  customStartMs: number | null,
+  customEndMs: number | null,
+  now: number,
+) {
+  const start = finiteTime(customStartMs);
+  const end = finiteTime(customEndMs);
+  const window = selectedSnapshotWindow(windowMode, start, end === null ? now : end);
+  const params = new URLSearchParams({ window });
+  addTimeParameter(params, "from", start);
+  addTimeParameter(params, "to", end);
+  return { window, query: params.toString() };
+}
+
+function snapshotDiagnostic(snapshot: Snapshot | null, laneCount: number) {
+  return snapshot
+    ? `${countLabel(snapshot.sessions.length, "session")} · ${countLabel(laneCount, "lane")}`
+    : "loading";
+}
+
+function collectorDiagnostic(snapshot: Snapshot | null) {
+  return snapshot
+    ? `${snapshot.trace.durationMs.toFixed(1)}ms · ${snapshot.trace.refresh?.reason ?? "unknown"}`
+    : "—";
+}
+
+function cacheDiagnostic(snapshot: Snapshot | null) {
+  const cache = snapshot?.trace.sessionCache;
+  return cache
+    ? `${compact(cache.bytesRead)}B read · ${cache.linesParsed} lines · ${cache.appendCount} append / ${cache.rebuildCount} rebuild`
+    : "not reported";
+}
+
+function browserDiagnostic(diagnostics: Diagnostics) {
+  const fetchMs = diagnostics.lastFetchMs?.toFixed(1) ?? "—";
+  const payload =
+    diagnostics.lastPayloadBytes === undefined ? "—" : `${compact(diagnostics.lastPayloadBytes)}B`;
+  return `${diagnostics.fetches} fetches · ${diagnostics.invalidations} invalidations · ${diagnostics.queuedRefreshes} queued · ${fetchMs}ms · ${payload}`;
+}
+
+function filterVisibleLanes({
+  lanes,
+  from,
+  to,
+  alive,
+  filterValue,
+  filterMode,
+  query,
+}: {
+  lanes: Lane[];
+  from: number | null;
+  to: number | null;
+  alive: boolean;
+  filterValue: string;
+  filterMode: FilterMode;
+  query: string;
+}) {
+  return filterLanesByBoundedTime(lanes, from, to).filter(
+    (lane) =>
+      (!alive || Boolean(lane.live)) &&
+      (!filterValue || filterKey(lane, filterMode) === filterValue) &&
+      sessionMatchesQuery(lane.session, query),
+  );
+}
+
+function groupedLanes(lanes: Lane[], mode: GroupMode) {
+  if (!lanes.length) return [];
+  if (mode === "context") {
+    return [
+      ["Intelligent", { label: "Intelligent", lanes: [...lanes].sort(compareIntelligentLanes) }],
+    ] as const;
+  }
+  const groups = new Map<string, { label: string; lanes: Lane[] }>();
+  for (const lane of lanes) {
+    const key = groupKey(lane, mode);
+    const existing = groups.get(key);
+    if (existing) existing.lanes.push(lane);
+    else groups.set(key, { label: groupLabel(lane, mode), lanes: [lane] });
+  }
+  return [...groups.entries()];
+}
+
+function connectionLabel(connection: "live" | "demo" | "error") {
+  if (connection === "live") return "Live";
+  if (connection === "demo") return "Demo data";
+  return "Reconnecting";
+}
+
+function DiagnosticsPanel({
+  enabled,
+  snapshot,
+  laneCount,
+  diagnostics,
+}: {
+  enabled: boolean;
+  snapshot: Snapshot | null;
+  laneCount: number;
+  diagnostics: Diagnostics;
+}) {
+  if (!enabled) return null;
+  const rows = [
+    ["Snapshot", snapshotDiagnostic(snapshot, laneCount)],
+    ["Collector", collectorDiagnostic(snapshot)],
+    ["JSONL cache", cacheDiagnostic(snapshot)],
+    ["Browser", browserDiagnostic(diagnostics)],
+  ];
+  return (
+    <details className="diagnostics" open>
+      <summary>Local diagnostics — safe to copy into a bug report</summary>
+      <dl>
+        {rows.map(([label, value]) => (
+          <div key={label}>
+            <dt>{label}</dt>
+            <dd>{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </details>
+  );
+}
+
 function Toolbar({
-  range,
-  setRange,
+  window,
+  setWindow,
   group,
   setGroup,
   filterMode,
@@ -71,8 +219,8 @@ function Toolbar({
   customEnd,
   setCustomEnd,
 }: {
-  range: number | null;
-  setRange: (n: number | null) => void;
+  window: SnapshotWindow;
+  setWindow: (value: SnapshotWindow) => void;
   group: GroupMode;
   setGroup: (v: GroupMode) => void;
   filterMode: FilterMode;
@@ -91,29 +239,33 @@ function Toolbar({
 }) {
   return (
     <div className="toolbar" aria-label="Timeline controls">
-      <div className="segmented" aria-label="Time range">
-        {rangeOptions.map(([label, value]) => (
-          <button
-            className={range === value ? "active" : ""}
-            key={label}
-            onClick={() => {
-              setRange(value);
-              setCustomStart("");
-              setCustomEnd("");
-            }}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      <label>
+        Activity
+        <select
+          aria-label="Activity window"
+          value={window}
+          onChange={(event) => {
+            setWindow(event.target.value as SnapshotWindow);
+            setCustomStart("");
+            setCustomEnd("");
+          }}
+        >
+          {rangeOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
       <label className="time-input">
         From
         <input
           type="datetime-local"
+          aria-label="From"
           value={customStart}
-          onChange={(e) => {
-            setCustomStart(e.target.value);
-            setRange(null);
+          onChange={(event) => {
+            setCustomStart(event.target.value);
+            if (window === "all") setWindow("24h");
           }}
         />
       </label>
@@ -152,20 +304,10 @@ function Toolbar({
           </select>
         </label>
       ) : null}
-      <label className="time-input">
-        To
-        <input
-          type="datetime-local"
-          value={customEnd}
-          onChange={(e) => {
-            setCustomEnd(e.target.value);
-            setRange(null);
-          }}
-        />
-      </label>
       <label>
         Group
         <select value={group} onChange={(e) => setGroup(e.target.value as GroupMode)}>
+          <option value="context">Intelligent</option>
           <option value="project">Project</option>
           <option value="cwd">cwd</option>
           <option value="name">Session name</option>
@@ -181,6 +323,18 @@ function Toolbar({
         <input type="checkbox" checked={alive} onChange={(e) => setAlive(e.target.checked)} /> Alive
         only
       </label>
+      <label className="time-input">
+        To
+        <input
+          type="datetime-local"
+          aria-label="To"
+          value={customEnd}
+          onChange={(event) => {
+            setCustomEnd(event.target.value);
+            if (window === "all") setWindow("24h");
+          }}
+        />
+      </label>
       <input
         className="search"
         aria-label="Search sessions"
@@ -193,7 +347,7 @@ function Toolbar({
 }
 
 function Ruler({ domain }: { domain: [number, number] }) {
-  const ticks = Array.from({ length: 7 }, (_, i) => domain[0] + ((domain[1] - domain[0]) * i) / 6);
+  const ticks = Array.from({ length: 7 }, (_, i) => domain[1] - ((domain[1] - domain[0]) * i) / 6);
   return (
     <div className="ruler timeline-cell">
       {ticks.map((t, i) => (
@@ -205,78 +359,163 @@ function Ruler({ domain }: { domain: [number, number] }) {
   );
 }
 
+function markerX(at: number, domain: [number, number]) {
+  return position(at, domain) * 10;
+}
+
+function circlePath(points: number[], radius: number) {
+  return points
+    .map(
+      (x) =>
+        `M ${x - radius} 20 a ${radius} ${radius} 0 1 0 ${radius * 2} 0 a ${radius} ${radius} 0 1 0 ${-radius * 2} 0`,
+    )
+    .join(" ");
+}
+
+function crossPath(points: number[]) {
+  return points.map((x) => `M ${x - 3} 17 L ${x + 3} 23 M ${x + 3} 17 L ${x - 3} 23`).join(" ");
+}
+
+function squarePath(points: number[]) {
+  return points.map((x) => `M ${x - 3} 17 h 6 v 6 h -6 Z`).join(" ");
+}
+
+export function laneMarkerPaths(lane: Lane, domain: [number, number]) {
+  const users = lane.rarebits.flatMap((marker) => {
+    const at = Date.parse(marker.timestamp ?? "");
+    return marker.outcome === "user" && Number.isFinite(at) ? [markerX(at, domain)] : [];
+  });
+  const responsePoints = (visual: "continuation" | "stop" | "terminal") =>
+    lane.responseOutcomes.flatMap((marker) => {
+      const at = Date.parse(marker.at);
+      return marker.visual === visual && Number.isFinite(at) ? [markerX(at, domain)] : [];
+    });
+  return {
+    users: squarePath(users),
+    continuation: circlePath(responsePoints("continuation"), 2),
+    stop: circlePath(responsePoints("stop"), 3),
+    terminal: crossPath(responsePoints("terminal")),
+  };
+}
+
+export function laneOutcomeSummary(lane: Lane) {
+  const counts = new Map<string, number>();
+  for (const marker of lane.responseOutcomes)
+    counts.set(marker.stopReason, (counts.get(marker.stopReason) ?? 0) + 1);
+  return [...counts.entries()].map(([reason, count]) => `${reason} ${count}`).join(", ");
+}
+
 function LaneRow({
   lane,
+  visibleLanes,
   domain,
   selected,
   onSelect,
 }: {
   lane: Lane;
+  visibleLanes: Lane[];
   domain: [number, number];
   selected: boolean;
   onSelect: () => void;
 }) {
-  const liveState = lane.live?.state ?? "settled";
-  const alias = laneAlias(lane);
+  const runtime = runtimePresentation(lane);
+  const context = laneContextPresentation(lane);
+  const alias = laneDisplayLabel(lane, visibleLanes);
+  const paths = laneMarkerPaths(lane, domain);
+  const outcomeSummary = laneOutcomeSummary(lane);
   return (
     <div className={`lane ${selected ? "selected" : ""}`}>
-      <button
-        className="lane-label"
-        onClick={onSelect}
-        aria-label={`${alias}, session ${lane.live?.sessionId ?? lane.session.id}, ${stateLabel[liveState]}, ${lane.keyMessages.length} key messages`}
-      >
-        <span className={`state-dot ${stateClass[liveState]}`} aria-hidden="true" />
-        <span className="lane-copy">
-          <strong>{alias}</strong>
+      <div className="lane-label">
+        <button
+          className="lane-select"
+          onClick={onSelect}
+          aria-label={`${alias}, session ${lane.session.id}, context ${context.label}, ${runtime.label}, ${countLabel(lane.rarebits.length, "Rarebit")}`}
+        >
+          <span className={`state-dot ${runtime.className}`} aria-hidden="true" />
+          <span className="lane-copy">
+            <strong className="lane-context" aria-label={context.label} title={context.label}>
+              {context.parts.length === 0 ? (
+                <span className="lane-context-part lane-context-session">{context.label}</span>
+              ) : (
+                context.parts.map((part, index) => (
+                  <Fragment key={`${part.coordinate}:${part.value}`}>
+                    {index > 0 && (
+                      <span className="lane-context-separator" aria-hidden="true">
+                        {" | "}
+                      </span>
+                    )}
+                    <span
+                      className={`lane-context-part lane-context-${part.coordinate}`}
+                      data-coordinate={part.coordinate}
+                    >
+                      {part.value}
+                    </span>
+                  </Fragment>
+                ))
+              )}
+            </strong>
+          </span>
+        </button>
+        <div className="lane-secondary">
           <small>
-            {lane.live
-              ? `PID ${lane.live.pid} · ${lane.live.sessionId ?? "session ID unavailable"}`
-              : lane.session.id}
+            {runtime.label} · {countLabel(lane.rarebits.length, "Rarebit")}
           </small>
-        </span>
-        <span className="lane-totals">
-          <b>{lane.keyMessages.length}</b> key msgs
-        </span>
-      </button>
+          {lane.session.links && (
+            <nav className="lane-links" aria-label={`Inspect ${alias}`}>
+              <a
+                href={lane.session.links.live}
+                target="_blank"
+                rel="noreferrer"
+                title="Open live session inspector"
+                aria-label={`Open live inspector for ${alias}`}
+              >
+                ↗
+              </a>
+              <a
+                href={lane.session.links.tps}
+                target="_blank"
+                rel="noreferrer"
+                title="Open TPS inspector"
+                aria-label={`Open TPS inspector for ${alias}`}
+              >
+                ϟ
+              </a>
+            </nav>
+          )}
+        </div>
+      </div>
       <div
         className="track timeline-cell"
-        role="list"
-        aria-label={`Key messages for ${lane.session.name ?? lane.session.id}`}
+        role="img"
+        aria-label={`User messages and response outcomes for ${lane.session.name ?? lane.session.id}: ${outcomeSummary || "no response outcomes"}`}
         onClick={onSelect}
       >
-        {lane.keyMessages.flatMap((marker) => {
-          const at = marker.timestamp ? Date.parse(marker.timestamp) : Number.NaN;
-          if (!Number.isFinite(at)) return [];
-          const label = `${marker.outcome === "user" ? "User message" : marker.outcome === "stop" ? "Agent stop" : "Agent continuation"} · ${timeFmt.format(at)}`;
-          return [
-            <button
-              key={`${marker.sourceEntryId ?? "entry"}:${marker.order}`}
-              type="button"
-              role="listitem"
-              className={`key-marker key-marker-${marker.outcome}`}
-              aria-label={label}
-              title={label}
-              onClick={(event) => {
-                event.stopPropagation();
-                onSelect();
-              }}
-              style={{ left: `${position(at, domain)}%` }}
-            />,
-          ];
-        })}
+        <svg viewBox="0 0 1000 40" preserveAspectRatio="none" aria-hidden="true">
+          <path className="user-marker" d={paths.users} />
+          <path className="response-marker-continuation" d={paths.continuation} />
+          <path className="response-marker-stop" d={paths.stop} />
+          <path className="response-marker-terminal" d={paths.terminal} />
+        </svg>
       </div>
     </div>
   );
 }
 
-type KeyMessageSummaryDetail = {
+type RarebitSummaryDetail = {
   availability: "available" | "stale" | "missing" | "unavailable";
   reason?: string;
-  status?: "ok" | "selection_only" | "unavailable_overflow" | "failure" | "conflict" | string;
-  selection?: { occurrenceCount: number; uniquePayloadCount: number; asOf: string | null };
+  status?: "ok" | "ineligible" | "unavailable_overflow" | "failure" | string;
+  selection?: { occurrenceCount: number | null; uniquePayloadCount: number | null };
+  eligibility?: {
+    eligible: boolean;
+    forced: boolean;
+    reasons: string[];
+    policyVersion: string | null;
+  };
   provenance?: {
     model?: { provider: string; id: string } | null;
-    derivationVersion?: string | null;
+    implementationVersion?: string | null;
+    promptVersion?: string | null;
     synthesis?: {
       usage?: { availability: string | null; totalTokens: number | null } | null;
     } | null;
@@ -285,20 +524,64 @@ type KeyMessageSummaryDetail = {
   failure?: { retryable: boolean; kind: string | null };
 };
 
-function KeyMessageSummary({ sessionId }: { sessionId: string }) {
+async function copyText(value: string | number) {
+  const text = String(value);
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+  } catch {}
+  const input = document.createElement("textarea");
+  input.value = text;
+  input.setAttribute("readonly", "");
+  input.style.position = "fixed";
+  input.style.opacity = "0";
+  document.body.append(input);
+  input.select();
+  document.execCommand("copy");
+  input.remove();
+}
+
+function CopyablePair({ label, value }: { label: string; value: string | number }) {
+  const copyUnlessSelecting = () => {
+    if (window.getSelection()?.toString()) return;
+    void copyText(value);
+  };
+  return (
+    <div className="copyable-pair" onClick={copyUnlessSelecting} title={`Click to copy ${label}`}>
+      <dt>{label}</dt>
+      <dd>
+        <span>{value}</span>
+        <button
+          className="copy-value"
+          onClick={(event) => {
+            event.stopPropagation();
+            void copyText(value);
+          }}
+          aria-label={`Copy ${label}`}
+        >
+          Copy
+        </button>
+      </dd>
+    </div>
+  );
+}
+
+function RarebitSummary({ sessionId }: { sessionId: string }) {
   const [loaded, setLoaded] = useState<{
     sessionId: string;
-    detail: KeyMessageSummaryDetail;
+    detail: RarebitSummaryDetail;
   } | null>(null);
   const detail = loaded?.sessionId === sessionId ? loaded.detail : null;
   useEffect(() => {
     const controller = new AbortController();
-    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/key-message-summary`, {
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/rarebit-summary`, {
       signal: controller.signal,
     })
       .then(async (response) => {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return (await response.json()) as KeyMessageSummaryDetail;
+        return (await response.json()) as RarebitSummaryDetail;
       })
       .then((value) => {
         if (!controller.signal.aborted) setLoaded({ sessionId, detail: value });
@@ -315,54 +598,46 @@ function KeyMessageSummary({ sessionId }: { sessionId: string }) {
 
   return (
     <section className="key-summary">
-      <p className="eyebrow">Key Message Summary</p>
+      <p className="eyebrow">Rarebit Summary</p>
       {!detail ? (
         <p>Loading derived sidecar…</p>
       ) : detail.availability === "missing" ? (
         <p>No materialized summary sidecar for this Session.</p>
       ) : (
         <>
+          {detail.summary && <p className="derived-summary">{detail.summary}</p>}
           <p>
             {detail.availability === "stale"
               ? "Summary is stale against the latest recorded message."
               : detail.availability === "unavailable"
                 ? "Summary sidecar is unavailable."
-                : detail.status === "selection_only"
-                  ? "Key Messages are materialized; synthesis was not required."
+                : detail.status === "ineligible"
+                  ? "Rarebits are materialized; synthesis did not meet the configured policy."
                   : "Derived summary is available."}
           </p>
           <dl>
-            <div>
-              <dt>Materialization</dt>
-              <dd>{detail.status ?? "unknown"}</dd>
-            </div>
+            <CopyablePair label="Materialization" value={detail.status ?? "unknown"} />
             {detail.selection && (
-              <div>
-                <dt>Coverage</dt>
-                <dd>
-                  {detail.selection.occurrenceCount} selected /{" "}
-                  {detail.selection.uniquePayloadCount} unique
-                </dd>
-              </div>
+              <CopyablePair
+                label="Coverage"
+                value={`${detail.selection.occurrenceCount ?? "unknown"} selected / ${detail.selection.uniquePayloadCount ?? "unknown"} unique`}
+              />
             )}
             {detail.provenance?.model && (
-              <div>
-                <dt>Summary model</dt>
-                <dd>
-                  {detail.provenance.model.provider}/{detail.provenance.model.id}
-                </dd>
-              </div>
+              <CopyablePair
+                label="Summary model"
+                value={`${detail.provenance.model.provider}/${detail.provenance.model.id}`}
+              />
             )}
             {detail.provenance?.synthesis?.usage && (
-              <div>
-                <dt>Usage</dt>
-                <dd>
-                  {detail.provenance.synthesis.usage.availability ?? "unavailable"}
-                  {detail.provenance.synthesis.usage.totalTokens === null
+              <CopyablePair
+                label="Usage"
+                value={`${detail.provenance.synthesis.usage.availability ?? "unavailable"}${
+                  detail.provenance.synthesis.usage.totalTokens === null
                     ? ""
-                    : ` · ${compact(detail.provenance.synthesis.usage.totalTokens)} tokens`}
-                </dd>
-              </div>
+                    : ` · ${compact(detail.provenance.synthesis.usage.totalTokens)} tokens`
+                }`}
+              />
             )}
           </dl>
           {detail.failure && (
@@ -371,7 +646,6 @@ function KeyMessageSummary({ sessionId }: { sessionId: string }) {
               {detail.failure.retryable ? "; retryable." : "."}
             </p>
           )}
-          {detail.summary && <p className="derived-summary">{detail.summary}</p>}
         </>
       )}
     </section>
@@ -379,7 +653,8 @@ function KeyMessageSummary({ sessionId }: { sessionId: string }) {
 }
 
 function Inspector({ lane, onClose }: { lane: Lane; onClose: () => void }) {
-  const state = lane.live?.state ?? "settled";
+  const runtime = runtimePresentation(lane);
+  const context = laneContextPresentation(lane);
   const details = inspectorDetails(lane);
   return (
     <aside className="inspector">
@@ -387,31 +662,32 @@ function Inspector({ lane, onClose }: { lane: Lane; onClose: () => void }) {
         ×
       </button>
       <p className="eyebrow">Session detail</p>
-      <h2>{laneAlias(lane)}</h2>
+      <h2>{laneDisplayLabel(lane, [lane])}</h2>
+      <p className="inspector-context" aria-label="Session context">
+        {context.label}
+      </p>
       <p className="path">{lane.session.cwd}</p>
       {lane.session.links && (
         <nav className="session-links" aria-label="Session detail views">
           <a href={lane.session.links.live} target="_blank" rel="noreferrer">
-            Live session
+            Open live
           </a>
           <a href={lane.session.links.tps} target="_blank" rel="noreferrer">
-            TPS inspector
+            Open TPS
           </a>
         </nav>
       )}
       <div className="status-line">
-        <span className={`status-badge ${stateClass[state]}`}>
-          <span className={`state-dot ${stateClass[state]}`} aria-hidden="true" />
-          {stateLabel[state]}
+        <span className={`status-badge ${runtime.className}`}>
+          <span className={`state-dot ${runtime.className}`} aria-hidden="true" />
+          {runtime.label}
         </span>
         {lane.live?.activeTool ? <span>{lane.live.activeTool}</span> : null}
       </div>
+      <RarebitSummary sessionId={lane.session.id} />
       <dl>
         {details.map(([label, value]) => (
-          <div key={label}>
-            <dt>{label}</dt>
-            <dd>{value}</dd>
-          </div>
+          <CopyablePair key={label} label={label} value={value} />
         ))}
       </dl>
       {lane.live?.coordination && (
@@ -438,7 +714,6 @@ function Inspector({ lane, onClose }: { lane: Lane; onClose: () => void }) {
         <p className="eyebrow">Model</p>
         <p>{lane.live?.model ?? lane.requests.at(-1)?.model ?? "Unknown"}</p>
       </section>
-      <KeyMessageSummary sessionId={lane.session.id} />
     </aside>
   );
 }
@@ -448,20 +723,30 @@ export function App() {
       forceDemo ? demoSnapshot() : null,
     ),
     [connection, setConnection] = useState<"live" | "demo" | "error">(forceDemo ? "demo" : "live");
-  const [range, setRange] = useState<number | null>(24),
-    [group, setGroup] = useState<GroupMode>("project"),
+  const [compatibilityError, setCompatibilityError] = useState<string | null>(null);
+  const [windowMode, setWindowMode] = useState<SnapshotWindow>("24h"),
+    [mountedAt] = useState(() => Date.now()),
+    [customStart, setCustomStart] = useState(""),
+    [customEnd, setCustomEnd] = useState(""),
+    [olderPages, setOlderPages] = useState<Snapshot[]>([]),
+    [loadingOlder, setLoadingOlder] = useState(false),
+    [group, setGroup] = useState<GroupMode>("context"),
     [filterMode, setFilterMode] = useState<FilterMode>("all"),
     [filterValue, setFilterValue] = useState(""),
     [alive, setAlive] = useState(false),
     [query, setQuery] = useState(""),
-    [customStart, setCustomStart] = useState(""),
-    [customEnd, setCustomEnd] = useState(""),
     [selected, setSelected] = useState<string | null>(null),
     [diagnostics, setDiagnostics] = useState<Diagnostics>({
       fetches: 0,
       invalidations: 0,
       queuedRefreshes: 0,
     });
+  const customStartMs = customStart ? Date.parse(customStart) : null;
+  const customEndMs = customEnd ? Date.parse(customEnd) : null;
+  const selection = useMemo(
+    () => snapshotSelection(windowMode, customStartMs, customEndMs, mountedAt),
+    [windowMode, customStartMs, customEndMs, mountedAt],
+  );
   useEffect(() => {
     let active = true;
     let loading = false;
@@ -480,23 +765,30 @@ export function App() {
       }
       loading = true;
       const fetchStartedAt = performance.now();
-      fetch("/api/snapshot")
+      fetch(`/api/snapshot?${selection.query}`)
         .then((r) => {
           if (!r.ok) throw Error();
           return r.text();
         })
         .then((body) => {
-          const s = JSON.parse(body) as Snapshot;
+          const s = parseTimelineSnapshot(JSON.parse(body));
           if (active) {
             setSnapshot(s);
+            setCompatibilityError(null);
+            setOlderPages([]);
             setConnection("live");
             if (diagnosticsEnabled) setDiagnostics(fetchedDiagnostics(fetchStartedAt, body));
           }
         })
-        .catch(() => {
+        .catch((error: unknown) => {
           if (active) {
-            setSnapshot(demoSnapshot());
-            setConnection("demo");
+            if (error instanceof SnapshotCompatibilityError) {
+              setCompatibilityError(error.message);
+              setConnection("error");
+            } else {
+              setSnapshot(demoSnapshot());
+              setConnection("demo");
+            }
           }
         })
         .finally(() => {
@@ -525,13 +817,23 @@ export function App() {
       if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
       es?.close();
     };
-  }, []);
-  const all = useMemo(() => (snapshot ? lanesFromSnapshot(snapshot) : []), [snapshot]);
-  const now = Date.parse(snapshot?.generatedAt ?? "1970-01-01T00:00:00.000Z");
-  const customStartMs = customStart ? Date.parse(customStart) : null;
-  const customEndMs = customEnd ? Date.parse(customEnd) : null;
-  const rangeStart = range ? now - range * 3_600_000 : customStartMs;
-  const rangeEnd = customEndMs;
+  }, [selection.query]);
+  const mergedSnapshot = useMemo(
+    () => (snapshot ? mergeSnapshotPages(snapshot, olderPages) : null),
+    [snapshot, olderPages],
+  );
+  const all = useMemo(
+    () => (mergedSnapshot ? lanesFromSnapshot(mergedSnapshot) : []),
+    [mergedSnapshot],
+  );
+  const now = Date.parse(mergedSnapshot?.generatedAt ?? "1970-01-01T00:00:00.000Z");
+  const rangeHours = windowHours(windowMode);
+  const rangeStart = Number.isFinite(customStartMs)
+    ? customStartMs
+    : rangeHours
+      ? now - rangeHours * 3_600_000
+      : null;
+  const rangeEnd = Number.isFinite(customEndMs) ? customEndMs : null;
   const filterOptions = useMemo(
     () =>
       filterMode === "all"
@@ -541,36 +843,54 @@ export function App() {
   );
   const filtered = useMemo(
     () =>
-      filterLanesByBoundedTime(all, rangeStart, rangeEnd).filter(
-        (l) =>
-          (!alive || !!l.live) &&
-          (!filterValue || filterKey(l, filterMode) === filterValue) &&
-          sessionMatchesQuery(l.session, query),
-      ),
+      filterVisibleLanes({
+        lanes: all,
+        from: rangeStart,
+        to: rangeEnd,
+        alive,
+        filterValue,
+        filterMode,
+        query,
+      }),
     [all, alive, query, rangeStart, rangeEnd, filterMode, filterValue],
   );
   const domain = useMemo(
     () =>
-      customStartMs !== null || customEndMs !== null
-        ? ([customStartMs ?? extent(filtered, null, now)[0], customEndMs ?? now] as [
-            number,
-            number,
-          ])
-        : extent(filtered, range, now),
-    [filtered, range, customStartMs, customEndMs, now],
+      Number.isFinite(customStartMs) || Number.isFinite(customEndMs)
+        ? ([
+            Number.isFinite(customStartMs) ? customStartMs : extent(filtered, null, now)[0],
+            Number.isFinite(customEndMs) ? customEndMs : now,
+          ] as [number, number])
+        : extent(filtered, rangeHours, now),
+    [filtered, rangeHours, now, customStartMs, customEndMs],
   );
-  const groups = useMemo(() => {
-    const m = new Map<string, Lane[]>();
-    for (const lane of filtered) {
-      const k = groupKey(lane, group);
-      const groupLanes = m.get(k);
-      if (groupLanes) groupLanes.push(lane);
-      else m.set(k, [lane]);
-    }
-    return [...m.entries()];
-  }, [filtered, group]);
+  const groups = useMemo(() => groupedLanes(filtered, group), [filtered, group]);
   const selectedLane = all.find((l) => l.session.id === selected);
-  const keyMessageCount = filtered.reduce((total, lane) => total + lane.keyMessages.length, 0);
+  const rarebitCount = filtered.reduce((total, lane) => total + lane.rarebits.length, 0);
+  const loadOlder = async () => {
+    if (selection.window !== "all" || loadingOlder) return;
+    const cursor = olderPages.at(-1)?.page?.nextCursor ?? snapshot?.page?.nextCursor;
+    if (!cursor) return;
+    setLoadingOlder(true);
+    try {
+      const params = new URLSearchParams({ window: "all", before: cursor });
+      if (Number.isFinite(customStartMs)) params.set("from", String(customStartMs));
+      if (Number.isFinite(customEndMs)) params.set("to", String(customEndMs));
+      const response = await fetch(`/api/snapshot?${params.toString()}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const page = parseTimelineSnapshot(await response.json());
+      setOlderPages((pages) => [...pages, page]);
+      setCompatibilityError(null);
+    } catch (error) {
+      if (error instanceof SnapshotCompatibilityError) setCompatibilityError(error.message);
+      else setConnection("error");
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
+  const hasOlder =
+    selection.window === "all" &&
+    Boolean(olderPages.at(-1)?.page?.hasOlder ?? snapshot?.page?.hasOlder);
   return (
     <main id="main-content">
       <header>
@@ -582,19 +902,19 @@ export function App() {
           <span>
             <b>{filtered.filter((l) => l.live).length}</b> live
           </span>
-          <span>
-            <b>{keyMessageCount}</b> key msgs
-          </span>
+          {snapshot && !compatibilityError ? (
+            <span>{countLabel(rarebitCount, "Rarebit")}</span>
+          ) : null}
         </div>
         <div className={`connection ${connection}`} aria-live="polite">
           <i aria-hidden="true" />
-          {connection === "live" ? "Live" : connection === "demo" ? "Demo data" : "Reconnecting"}
+          {connectionLabel(connection)}
         </div>
       </header>
       <Toolbar
         {...{
-          range,
-          setRange,
+          window: windowMode,
+          setWindow: setWindowMode,
           group,
           setGroup,
           filterMode,
@@ -612,43 +932,18 @@ export function App() {
           setCustomEnd,
         }}
       />
-      {diagnosticsEnabled && (
-        <details className="diagnostics" open>
-          <summary>Local diagnostics — safe to copy into a bug report</summary>
-          <dl>
-            <div>
-              <dt>Snapshot</dt>
-              <dd>
-                {snapshot
-                  ? `${snapshot.sessions.length} sessions · ${all.length} lanes`
-                  : "loading"}
-              </dd>
-            </div>
-            <div>
-              <dt>Collector</dt>
-              <dd>
-                {snapshot
-                  ? `${snapshot.trace.durationMs.toFixed(1)}ms · ${snapshot.trace.refresh?.reason ?? "unknown"}`
-                  : "—"}
-              </dd>
-            </div>
-            <div>
-              <dt>JSONL cache</dt>
-              <dd>
-                {snapshot?.trace.sessionCache
-                  ? `${compact(snapshot.trace.sessionCache.bytesRead)}B read · ${snapshot.trace.sessionCache.linesParsed} lines · ${snapshot.trace.sessionCache.appendCount} append / ${snapshot.trace.sessionCache.rebuildCount} rebuild`
-                  : "not reported"}
-              </dd>
-            </div>
-            <div>
-              <dt>Browser</dt>
-              <dd>
-                {`${diagnostics.fetches} fetches · ${diagnostics.invalidations} invalidations · ${diagnostics.queuedRefreshes} queued · ${diagnostics.lastFetchMs?.toFixed(1) ?? "—"}ms · ${diagnostics.lastPayloadBytes === undefined ? "—" : `${compact(diagnostics.lastPayloadBytes)}B`}`}
-              </dd>
-            </div>
-          </dl>
-        </details>
-      )}
+      {compatibilityError ? (
+        <section className="compatibility-error" role="alert">
+          <strong>Timeline backend/frontend mismatch</strong>
+          <span>{compatibilityError}</span>
+        </section>
+      ) : null}
+      <DiagnosticsPanel
+        enabled={diagnosticsEnabled}
+        snapshot={mergedSnapshot}
+        laneCount={all.length}
+        diagnostics={diagnostics}
+      />
       <div className="workspace">
         <div className="ledger">
           <div className="ruler-row">
@@ -679,19 +974,24 @@ export function App() {
               </button>
             </div>
           ) : (
-            groups.map(([name, lanes]) => (
-              <section className="group" key={name}>
+            groups.map(([key, value]) => (
+              <section className="group" key={key}>
                 <div className="group-head">
-                  <strong>{name}</strong>
+                  <strong>{value.label}</strong>
                   <span>
-                    {lanes.length} sessions · {lanes.filter((l) => l.live).length} live ·{" "}
-                    {lanes.reduce((total, lane) => total + lane.keyMessages.length, 0)} key msgs
+                    {countLabel(value.lanes.length, "session")} ·{" "}
+                    {value.lanes.filter((l) => l.live).length} live ·{" "}
+                    {countLabel(
+                      value.lanes.reduce((total, lane) => total + lane.rarebits.length, 0),
+                      "Rarebit",
+                    )}
                   </span>
                 </div>
-                {lanes.map((l) => (
+                {value.lanes.map((l) => (
                   <LaneRow
                     key={l.session.id}
                     lane={l}
+                    visibleLanes={filtered}
                     domain={domain}
                     selected={selected === l.session.id}
                     onSelect={() => setSelected(l.session.id)}
@@ -700,14 +1000,21 @@ export function App() {
               </section>
             ))
           )}
+          {hasOlder && (
+            <div className="load-older">
+              <button onClick={() => void loadOlder()} disabled={loadingOlder}>
+                {loadingOlder ? "Loading older Sessions…" : "Load older Sessions"}
+              </button>
+            </div>
+          )}
         </div>
         {selectedLane && <Inspector lane={selectedLane} onClose={() => setSelected(null)} />}
       </div>
       <footer>
-        <span>Key Message markers · metadata only</span>
+        <span>User + response outcomes · Rarebit evidence remains separate · metadata only</span>
         <span>
           {snapshot
-            ? `Indexed ${snapshot.trace.sessionFiles} files in ${snapshot.trace.durationMs.toFixed(1)}ms`
+            ? `Catalogued ${snapshot.trace.catalogSessions ?? snapshot.trace.sessionFiles} files; materialized ${snapshot.trace.responseSessions ?? snapshot.sessions.length} in ${snapshot.trace.durationMs.toFixed(1)}ms`
             : ""}
         </span>
       </footer>

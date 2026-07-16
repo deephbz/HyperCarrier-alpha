@@ -24,13 +24,14 @@ function snapshotMaterializationContext(ctx, mayNotify = () => true) {
   const sessionFile = sessionManager?.getSessionFile?.();
   const projectTrusted = ctx?.isProjectTrusted?.() === true;
   const liveUi = ctx?.ui;
-  const ui = liveUi && typeof liveUi.notify === "function"
-    ? {
-        notify: (...args) => {
-          if (mayNotify()) liveUi.notify(...args);
-        },
-      }
-    : liveUi;
+  const ui =
+    liveUi && typeof liveUi.notify === "function"
+      ? {
+          notify: (...args) => {
+            if (mayNotify()) liveUi.notify(...args);
+          },
+        }
+      : liveUi;
   return {
     cwd: ctx?.cwd,
     hasUI: ctx?.hasUI,
@@ -39,9 +40,9 @@ function snapshotMaterializationContext(ctx, mayNotify = () => true) {
     sessionId: ctx?.sessionId,
     isProjectTrusted: () => projectTrusted,
     sessionManager: {
-        getHeader: () => header,
-        getBranch: () => branchSnapshot.slice(),
-        getSessionFile: () => sessionFile,
+      getHeader: () => header,
+      getBranch: () => branchSnapshot.slice(),
+      getSessionFile: () => sessionFile,
     },
   };
 }
@@ -99,7 +100,7 @@ export function createDetachedMaterializer(materialize, onError = () => {}) {
 }
 
 /**
- * Register Pi's lifecycle handshake for Key Message materialization.
+ * Register Pi's lifecycle handshake for Rarebit materialization.
  *
  * `input` carries origin but runs before persistence. `message_end(user)`
  * confirms a user record entered the loop, and `before_provider_request`
@@ -110,7 +111,7 @@ export function createDetachedMaterializer(materialize, onError = () => {}) {
  * settlement checkpoint.
  * Extension-origin prompts are excluded from the user-submission trigger.
  */
-export function registerKeyMessageSummaryLifecycle(pi, schedule) {
+export function registerRarebitLifecycle(pi, schedule, options = {}) {
   const inputOrigins = {
     direct: [],
     steer: [],
@@ -118,6 +119,8 @@ export function registerKeyMessageSummaryLifecycle(pi, schedule) {
   };
   let persistedUserInputAwaitingProvider = false;
   let normalStopAwaitingSettlement = false;
+  let firstOwnerInputAwaitingProvider;
+  let ownerMessageSeen = false;
   let sessionGeneration = 0;
   let sessionLive = false;
   const MAX_PENDING_INPUT_ORIGINS = 256;
@@ -127,7 +130,10 @@ export function registerKeyMessageSummaryLifecycle(pi, schedule) {
   };
 
   const pendingOriginCount = () =>
-    Object.values(inputOrigins).reduce((total, queue) => total + queue.length, 0);
+    Object.values(inputOrigins).reduce(
+      (total, queue) => total + queue.length,
+      0,
+    );
 
   const pruneOldestOrigin = () => {
     const candidates = Object.values(inputOrigins)
@@ -141,20 +147,33 @@ export function registerKeyMessageSummaryLifecycle(pi, schedule) {
     // Prefer an exact semantic payload match. If skill/template expansion
     // changed the text, fall back to Pi's delivery order: direct prompt first,
     // then every steer before follow-ups.
-    for (const queue of [inputOrigins.direct, inputOrigins.steer, inputOrigins.followUp]) {
+    for (const queue of [
+      inputOrigins.direct,
+      inputOrigins.steer,
+      inputOrigins.followUp,
+    ]) {
       const index = queue.findIndex((entry) => entry.text === text);
       if (index >= 0) return queue.splice(index, 1)[0];
     }
-    for (const queue of [inputOrigins.direct, inputOrigins.steer, inputOrigins.followUp]) {
+    for (const queue of [
+      inputOrigins.direct,
+      inputOrigins.steer,
+      inputOrigins.followUp,
+    ]) {
       if (queue.length > 0) return queue.shift();
     }
     return undefined;
   };
 
   pi.on("session_start", (_event, ctx) => {
+    options.onSessionStart?.(ctx);
     clearInputOrigins();
     persistedUserInputAwaitingProvider = false;
     normalStopAwaitingSettlement = false;
+    firstOwnerInputAwaitingProvider = undefined;
+    ownerMessageSeen = (ctx?.sessionManager?.getBranch?.() ?? []).some(
+      (entry) => entry?.type === "message" && entry?.message?.role === "user",
+    );
     sessionGeneration += 1;
     sessionLive = true;
     const generation = sessionGeneration;
@@ -173,13 +192,15 @@ export function registerKeyMessageSummaryLifecycle(pi, schedule) {
   });
 
   pi.on("input", (event) => {
-    const bucket = event?.streamingBehavior === "steer"
-      ? "steer"
-      : event?.streamingBehavior === "followUp"
-        ? "followUp"
-        : "direct";
+    const bucket =
+      event?.streamingBehavior === "steer"
+        ? "steer"
+        : event?.streamingBehavior === "followUp"
+          ? "followUp"
+          : "direct";
     inputOrigins[bucket].push({
       source: event?.source,
+      bucket,
       text: typeof event?.text === "string" ? event.text : "",
       sequence: inputSequence,
     });
@@ -192,6 +213,19 @@ export function registerKeyMessageSummaryLifecycle(pi, schedule) {
     const origin = consumeInputOrigin(messageText(event));
     if (isUserSubmissionOrigin(origin)) {
       persistedUserInputAwaitingProvider = true;
+      if (!ownerMessageSeen && origin.bucket === "direct") {
+        ownerMessageSeen = true;
+        firstOwnerInputAwaitingProvider = {
+          text: messageText(event),
+          source: origin.source,
+          sourceEntryId:
+            typeof event?.message?.id === "string"
+              ? event.message.id
+              : typeof event?.id === "string"
+                ? event.id
+                : null,
+        };
+      }
     }
   });
 
@@ -202,24 +236,34 @@ export function registerKeyMessageSummaryLifecycle(pi, schedule) {
     // the evidence coordinates now so a later Session switch cannot retarget
     // an already detached materialization.
     const generation = sessionGeneration;
-    schedule(
-      snapshotMaterializationContext(
-        ctx,
-        () => sessionLive && sessionGeneration === generation,
-      ),
+    const snapshot = snapshotMaterializationContext(
+      ctx,
+      () => sessionLive && sessionGeneration === generation,
     );
+    schedule(snapshot);
+    if (firstOwnerInputAwaitingProvider) {
+      const ownerMessage = firstOwnerInputAwaitingProvider;
+      firstOwnerInputAwaitingProvider = undefined;
+      try {
+        options.onFirstPersistedOwnerMessage?.(snapshot, ownerMessage);
+      } catch {
+        // Auto-title is a detached human-facing projection. Failure must not
+        // enter Pi's provider path or change summary settlement.
+      }
+    }
   });
 
   pi.on("agent_end", (event) => {
     // Record the latest run outcome, but do not project yet: Pi may still
     // retry, compact, or drain a continuation before `agent_settled`.
-    const terminalAssistant = [...(event?.messages ?? [])].reverse().find(
-      (message) => message?.role === "assistant",
-    );
+    const terminalAssistant = [...(event?.messages ?? [])]
+      .reverse()
+      .find((message) => message?.role === "assistant");
     normalStopAwaitingSettlement = terminalAssistant?.stopReason === "stop";
     if (terminalAssistant?.stopReason === "aborted") {
       clearInputOrigins();
       persistedUserInputAwaitingProvider = false;
+      firstOwnerInputAwaitingProvider = undefined;
     }
   });
 
@@ -239,7 +283,9 @@ export function registerKeyMessageSummaryLifecycle(pi, schedule) {
   pi.on("session_shutdown", () => {
     clearInputOrigins();
     persistedUserInputAwaitingProvider = false;
+    firstOwnerInputAwaitingProvider = undefined;
     normalStopAwaitingSettlement = false;
     sessionLive = false;
+    options.onSessionShutdown?.();
   });
 }

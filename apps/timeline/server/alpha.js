@@ -825,7 +825,7 @@ function projectRecordMeta(record, path, source, now, fallbackId) {
 }
 
 function projectSummary(record, path, line, now) {
-  if (record.type !== "key_message_summary") return undefined;
+  if (record.type !== "rarebit_summary") return undefined;
   const allowedFields = [
     "progress",
     "findings",
@@ -2126,7 +2126,7 @@ export function collectAlphaSnapshot({
     return {
       projectRef,
       runtime: runtimeAxis,
-      keyMessageSummary: outputAxis,
+      rarebitSummary: outputAxis,
       intervention: interventionAxis,
       eventDelta: eventAxis,
       evergreenDelta: evergreenAxis,
@@ -2153,7 +2153,7 @@ export function collectAlphaSnapshot({
       sources: projects.map((project) => ({
         projectId: project.projectRef.id,
         runtime: project.runtime.provenance,
-        summary: project.keyMessageSummary.provenance,
+        summary: project.rarebitSummary.provenance,
         intervention: project.intervention.provenance,
         events: project.eventDelta.provenance,
         evergreen: project.evergreenDelta.provenance,
@@ -2212,7 +2212,7 @@ function nearestExistingDirectory(path) {
 function alphaSourceKind(path) {
   const value = String(path).toLowerCase();
   if (value.includes("manifest") || value.includes("projects.json")) return "project-manifest";
-  if (value.includes("summary") || basename(value) === "key-msg-summary.jsonl") return "summary";
+  if (value.includes("summary") || basename(value) === "rarebit.jsonl") return "summary";
   if (value.includes("evergreen") || value.includes("proposal") || value.endsWith(".md"))
     return "evergreen";
   if (value.includes("beads")) return "beads";

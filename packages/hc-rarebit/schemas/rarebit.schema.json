@@ -1,0 +1,199 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://hypercarrier.local/schemas/rarebit-v1.json",
+  "title": "HyperCarrier Rarebit materialization record",
+  "oneOf": [
+    { "$ref": "#/definitions/summary" },
+    { "$ref": "#/definitions/title" }
+  ],
+  "definitions": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "model": {
+      "type": ["object", "null"],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1 },
+        "id": { "type": "string", "minLength": 1 }
+      },
+      "required": ["provider", "id"],
+      "additionalProperties": true
+    },
+    "branch": {
+      "type": "object",
+      "required": ["leafId", "entryIds"],
+      "properties": {
+        "leafId": { "type": ["string", "null"] },
+        "entryIds": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "selection": {
+      "type": "object",
+      "required": [
+        "manifestHash",
+        "selectorVersion",
+        "occurrenceCount",
+        "uniquePayloadCount",
+        "occurrences",
+        "payloads"
+      ],
+      "properties": {
+        "manifestHash": { "$ref": "#/definitions/sha256" },
+        "selectorVersion": { "type": "string", "minLength": 1 },
+        "occurrenceCount": { "type": "integer", "minimum": 0 },
+        "uniquePayloadCount": { "type": "integer", "minimum": 0 },
+        "occurrences": { "type": "array" },
+        "payloads": { "type": "array" }
+      },
+      "additionalProperties": false
+    },
+    "measurement": {
+      "type": "object",
+      "required": [
+        "measurementVersion",
+        "rawUnit",
+        "estimateMethod",
+        "totalMessageProseChars",
+        "rarebitChars",
+        "estimatedTotalTokens",
+        "estimatedRarebitTokens",
+        "rarebitRatio",
+        "rarebitOccurrenceCount"
+      ],
+      "properties": {
+        "measurementVersion": { "type": "string", "minLength": 1 },
+        "rawUnit": { "type": "string", "minLength": 1 },
+        "estimateMethod": { "const": "ceil(chars_div_4)" },
+        "totalMessageProseChars": { "type": "integer", "minimum": 0 },
+        "rarebitChars": { "type": "integer", "minimum": 0 },
+        "estimatedTotalTokens": { "type": "integer", "minimum": 0 },
+        "estimatedRarebitTokens": { "type": "integer", "minimum": 0 },
+        "rarebitRatio": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "rarebitOccurrenceCount": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "eligibility": {
+      "type": "object",
+      "required": ["eligible", "reasons", "policy", "measurement", "forced"],
+      "properties": {
+        "eligible": { "type": "boolean" },
+        "forced": { "type": "boolean" },
+        "reasons": { "type": "array", "items": { "type": "string" } },
+        "policy": { "type": "object" },
+        "measurement": { "$ref": "#/definitions/measurement" }
+      },
+      "additionalProperties": false
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "type",
+        "status",
+        "implementationVersion",
+        "synthesisMode",
+        "inputCoveragePolicy",
+        "jobId",
+        "sessionId",
+        "branch",
+        "observedAt",
+        "selection",
+        "measurement",
+        "eligibility",
+        "model",
+        "modelProvenance",
+        "promptVersion"
+      ],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "type": { "const": "rarebit_summary" },
+        "status": {
+          "enum": ["ok", "ineligible", "unavailable_overflow", "failure"]
+        },
+        "implementationVersion": { "type": "string", "minLength": 1 },
+        "synthesisMode": { "enum": ["automatic", "forced"] },
+        "inputCoveragePolicy": {
+          "type": "object",
+          "required": ["strategy", "maxPromptChars"],
+          "properties": {
+            "strategy": { "const": "complete_or_explicit_overflow" },
+            "maxPromptChars": { "type": "integer", "minimum": 1 }
+          },
+          "additionalProperties": false
+        },
+        "jobId": { "$ref": "#/definitions/sha256" },
+        "sessionId": { "type": "string", "minLength": 1 },
+        "branch": { "$ref": "#/definitions/branch" },
+        "observedAt": { "type": "string", "format": "date-time" },
+        "selection": { "$ref": "#/definitions/selection" },
+        "measurement": { "$ref": "#/definitions/measurement" },
+        "eligibility": { "$ref": "#/definitions/eligibility" },
+        "model": { "$ref": "#/definitions/model" },
+        "modelProvenance": { "type": "object" },
+        "promptVersion": { "type": "string", "minLength": 1 },
+        "summary": { "type": "string" },
+        "synthesis": { "type": "object" },
+        "overflow": { "type": "object" },
+        "retryable": { "type": "boolean" },
+        "error": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+    "title": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "type",
+        "status",
+        "implementationVersion",
+        "jobId",
+        "sessionId",
+        "branch",
+        "selectionManifestHash",
+        "titleEvidence",
+        "promptVersion",
+        "model",
+        "modelProvenance",
+        "applicationMode",
+        "priorTitle",
+        "title",
+        "observedAt"
+      ],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "type": { "const": "rarebit_title" },
+        "status": {
+          "enum": [
+            "proposal",
+            "applied",
+            "skipped_session_changed",
+            "skipped_title_changed",
+            "skipped_existing_title",
+            "failure"
+          ]
+        },
+        "implementationVersion": { "type": "string", "minLength": 1 },
+        "jobId": { "$ref": "#/definitions/sha256" },
+        "sessionId": { "type": "string", "minLength": 1 },
+        "branch": { "$ref": "#/definitions/branch" },
+        "selectionManifestHash": { "$ref": "#/definitions/sha256" },
+        "titleEvidence": { "type": "object" },
+        "promptVersion": { "type": "string", "minLength": 1 },
+        "model": { "$ref": "#/definitions/model" },
+        "modelProvenance": { "type": "object" },
+        "applicationMode": { "enum": ["proposal", "apply"] },
+        "priorTitle": { "type": ["string", "null"] },
+        "title": { "type": ["string", "null"] },
+        "observedAt": { "type": "string", "format": "date-time" },
+        "synthesis": { "type": "object" },
+        "retryable": { "type": "boolean" },
+        "error": { "type": "object" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

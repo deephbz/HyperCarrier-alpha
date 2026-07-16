@@ -9,7 +9,7 @@
         "repos": ["../repo"],
         "evergreen": "../Evergreen.md",
         "beadsRoot": null,
-        "summaries": ["../key-msg-summary.jsonl"],
+        "summaries": ["../rarebit.jsonl"],
         "events": null,
         "proposalDir": "../proposals",
         "sourceDocs": ["../README.md"]

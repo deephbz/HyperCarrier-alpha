@@ -5,6 +5,37 @@ import { join } from "node:path";
 import test from "node:test";
 import { createTimelineServer } from "../app.js";
 
+test("snapshot API forwards bounded windows and rejects malformed bounds before collection", async (t) => {
+  const seen = [];
+  const server = createTimelineServer({
+    collect: (options) => {
+      seen.push(options);
+      return {
+        generatedAt: "g1",
+        sessions: [],
+        turns: [],
+        requests: [],
+        rarebits: [],
+        liveAgents: [],
+        trace: {},
+      };
+    },
+    reconciliationMs: 60_000,
+    watchSources: () => ({ close() {} }),
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}`;
+  assert.equal((await fetch(`${base}/api/snapshot`)).status, 200);
+  assert.equal(seen.at(-1).window, "24h");
+  assert.equal((await fetch(`${base}/api/snapshot?window=all&from=10&to=20`)).status, 200);
+  assert.equal(seen.at(-1).window, "all");
+  assert.equal(seen.at(-1).from, 10);
+  assert.equal(seen.at(-1).to, 20);
+  const invalid = await (await fetch(`${base}/api/snapshot?window=24h&from=20&to=10`)).json();
+  assert.deepEqual(invalid, { error: "invalid_snapshot_bounds" });
+});
+
 test("snapshot, trace, health and filesystem-driven SSE expose one state model", async (t) => {
   let generation = 0;
   let notify;
@@ -123,7 +154,7 @@ test("lazy Session summary is resolved server-side and stays outside the metadat
     ],
     turns: [],
     requests: [],
-    keyMessages: [
+    rarebits: [
       {
         sessionId: "s1",
         sourceEntryId: "u1",
@@ -142,7 +173,7 @@ test("lazy Session summary is resolved server-side and stays outside the metadat
     reconciliationMs: 60_000,
     watchSources: () => ({ close() {} }),
     watchAlphaSources: () => ({ close() {} }),
-    readKeyMessageSummary: (session) => {
+    readRarebitSummary: (session) => {
       requestedSession = session;
       return {
         availability: "available",
@@ -158,12 +189,12 @@ test("lazy Session summary is resolved server-side and stays outside the metadat
   const snapshot = await (await fetch(`${base}/api/snapshot`)).text();
   assert.equal(snapshot.includes(rawSentinel), false);
   assert.equal(snapshot.includes("Derived summary."), false);
-  const detail = await (await fetch(`${base}/api/sessions/s1/key-message-summary`)).json();
+  const detail = await (await fetch(`${base}/api/sessions/s1/rarebit-summary`)).json();
   assert.equal(requestedSession.id, "s1");
   assert.equal(detail.summary, "Derived summary.");
   assert.equal(detail.hidden, undefined);
   assert.equal(JSON.stringify(detail).includes(rawSentinel), false);
-  assert.equal((await fetch(`${base}/api/sessions/%2Ftmp%2Fbad/key-message-summary`)).status, 404);
+  assert.equal((await fetch(`${base}/api/sessions/%2Ftmp%2Fbad/rarebit-summary`)).status, 404);
 });
 
 test("Alpha API and SSE are additive and isolated from the legacy metadata snapshot", async (t) => {
@@ -190,7 +221,7 @@ test("Alpha API and SSE are additive and isolated from the legacy metadata snaps
           {
             projectRef: { id: "p1", name: "Project", provenance: {} },
             runtime: {},
-            keyMessageSummary: { summary: "safe-derived-summary" },
+            rarebitSummary: { summary: "safe-derived-summary" },
             intervention: {},
             eventDelta: {},
             evergreenDelta: {},
@@ -216,7 +247,7 @@ test("Alpha API and SSE are additive and isolated from the legacy metadata snaps
   const legacy = await (await fetch(`${base}/api/snapshot`)).json();
   assert.equal("secretSentinel" in legacy, true);
   const alpha = await (await fetch(`${base}/api/alpha/snapshot`)).json();
-  assert.equal(alpha.projects[0].keyMessageSummary.summary, "safe-derived-summary");
+  assert.equal(alpha.projects[0].rarebitSummary.summary, "safe-derived-summary");
   assert.equal("secretSentinel" in alpha, false);
   assert.deepEqual(await (await fetch(`${base}/api/alpha/trace`)).json(), {
     baseGeneratedAt: "legacy-1",

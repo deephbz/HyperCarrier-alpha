@@ -61,7 +61,7 @@ describe("Alpha project board", () => {
       actor: "Unassessed",
       action: expect.stringContaining("no fresh evidence"),
       headline: expect.stringContaining("Unassessed"),
-      evidenceBasis: expect.stringContaining("No fresh key message summary"),
+      evidenceBasis: expect.stringContaining("No fresh Rarebit Summary"),
     });
     expect(decisionSummaryModel(projects[2]).uncertainty).toContain("does not assign owner action");
   });
@@ -96,7 +96,7 @@ describe("Alpha project board", () => {
     expect(freshSummary.headline).toContain("no owner action assigned");
     expect(emptySummary.headline).toContain("no owner action assigned");
     expect(freshSummary.evidenceBasis).toContain(
-      "Fresh key message summary and meaningful recorded changes",
+      "Fresh Rarebit Summary and meaningful recorded changes",
     );
     expect(
       orderProjectsByIntervention([noOutput, freshOutput]).map(
@@ -111,13 +111,13 @@ describe("Alpha project board", () => {
       "The adapter now records the latest source contract, preserves the reported evidence boundary, and keeps the operator-facing projection aligned while the remaining validation path continues through several deliberately verbose clauses that should be clipped for the board surface.";
     const markdownTick = String.fromCharCode(96);
     const longSummary =
-      `# hc-key-msg-summary\n\n## Progress\n- **Progress:** ${markdownTick}${longProgress}${markdownTick}\n\n## Findings\n- ` +
+      `# hc-rarebit\n\n## Progress\n- **Progress:** ${markdownTick}${longProgress}${markdownTick}\n\n## Findings\n- ` +
       `${markdownTick}raw-summary-id-987${markdownTick} remains traceable from the source record.\n- The rest of this structured report contains many more words than the depth-0 surface should carry, including questions, next steps, and delivery notes.`;
     const project = {
       ...source,
-      keyMessageSummary: {
-        ...source.keyMessageSummary,
-        provenance: { ...source.keyMessageSummary.provenance, freshness: "fresh" as const },
+      rarebitSummary: {
+        ...source.rarebitSummary,
+        provenance: { ...source.rarebitSummary.provenance, freshness: "fresh" as const },
         items: [{ summary: longSummary, observedAt: "2026-07-13T00:00:01.000Z" }],
       },
       eventDelta: { ...source.eventDelta, count: 53 },
@@ -126,7 +126,7 @@ describe("Alpha project board", () => {
     const summary = decisionSummaryModel(project);
 
     expect(summary.headline).toBe(
-      "Unassessed — key message summary and changes available; no owner action assigned.",
+      "Unassessed — Rarebit Summary and changes available; no owner action assigned.",
     );
     expect(summary.headline.length).toBeLessThan(100);
     expect(summary.whatChanged).toContain("Agent reported:");
@@ -143,9 +143,9 @@ describe("Alpha project board", () => {
     const source = alphaDemoSnapshot().projects[2];
     const project = {
       ...source,
-      keyMessageSummary: {
-        ...source.keyMessageSummary,
-        provenance: { ...source.keyMessageSummary.provenance, freshness: "fresh" as const },
+      rarebitSummary: {
+        ...source.rarebitSummary,
+        provenance: { ...source.rarebitSummary.provenance, freshness: "fresh" as const },
         items: [
           {
             summary:
@@ -162,7 +162,7 @@ describe("Alpha project board", () => {
   });
 
   it("sorts recent reports newest-first without treating source order as recency", () => {
-    const source = alphaDemoSnapshot().projects[0].keyMessageSummary;
+    const source = alphaDemoSnapshot().projects[0].rarebitSummary;
     const models = recentSummaryModels({
       ...source,
       items: [
@@ -190,14 +190,14 @@ describe("Alpha project board", () => {
     const withEventAndProposal = {
       ...source,
       projectRef: { ...source.projectRef, id: "event-and-proposal" },
-      keyMessageSummary: { ...source.keyMessageSummary, items: [] },
+      rarebitSummary: { ...source.rarebitSummary, items: [] },
       eventDelta: { ...source.eventDelta, count: 1 },
       evergreenDelta: { ...source.evergreenDelta, changeCount: 999 },
     };
     const withEventOnly = {
       ...source,
       projectRef: { ...source.projectRef, id: "event-only" },
-      keyMessageSummary: { ...source.keyMessageSummary, items: [] },
+      rarebitSummary: { ...source.rarebitSummary, items: [] },
       eventDelta: { ...source.eventDelta, count: 1 },
       evergreenDelta: { ...source.evergreenDelta, changeCount: 0 },
     };

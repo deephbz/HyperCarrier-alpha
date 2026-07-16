@@ -1,15 +1,23 @@
 import { open, readFile, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
-import { KEY_MESSAGE_SELECTOR_VERSION } from "./selector.mjs";
-import { selectKeyMessages } from "./index.mjs";
+import {
+  RAREBIT_SELECTOR_VERSION,
+  measureRarebits,
+  selectRarebits,
+} from "./rarebit-core.mjs";
 
-export const DEFAULT_PI_SESSION_ROOT = join(homedir(), ".pi", "agent", "sessions");
-export const KEY_MESSAGE_QUERY_SCHEMA_VERSION = 1;
+export const DEFAULT_PI_SESSION_ROOT = join(
+  homedir(),
+  ".pi",
+  "agent",
+  "sessions",
+);
+export const RAREBIT_QUERY_SCHEMA_VERSION = 1;
 
 function queryError(message) {
   const error = new Error(message);
-  error.name = "KeyMessageQueryError";
+  error.name = "RarebitQueryError";
   return error;
 }
 
@@ -42,7 +50,11 @@ async function readHeader(path) {
   try {
     const buffer = Buffer.alloc(16384);
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    const firstLine = buffer.subarray(0, bytesRead).toString("utf8").split("\n", 1)[0]?.trim();
+    const firstLine = buffer
+      .subarray(0, bytesRead)
+      .toString("utf8")
+      .split("\n", 1)[0]
+      ?.trim();
     if (!firstLine) return null;
     try {
       const header = JSON.parse(firstLine);
@@ -64,9 +76,10 @@ function looksLikePath(reference) {
 }
 
 /** Resolve either an existing JSONL path or one exact Pi Session ID. */
-export async function resolveSessionFile(reference, {
-  sessionRoot = DEFAULT_PI_SESSION_ROOT,
-} = {}) {
+export async function resolveRarebitSessionFile(
+  reference,
+  { sessionRoot = DEFAULT_PI_SESSION_ROOT } = {},
+) {
   if (typeof reference !== "string" || !reference.trim())
     throw queryError("--session requires an exact Pi Session path or ID");
   const input = reference.trim();
@@ -74,11 +87,8 @@ export async function resolveSessionFile(reference, {
   if (await isRegularFile(path)) return path;
   if (looksLikePath(input))
     throw queryError(`Pi Session file not found: ${input}`);
-
   const matches = [];
   for await (const candidate of jsonlFiles(resolve(sessionRoot))) {
-    // Inspect every header: copied evidence must produce an ambiguity rather
-    // than an arbitrary winner based on its filename.
     const header = await readHeader(candidate);
     if (header?.id === input) matches.push(candidate);
   }
@@ -98,7 +108,9 @@ export function parseNativeSession(content, source = "Pi Session") {
     try {
       records.push(JSON.parse(line));
     } catch {
-      throw queryError(`${source} contains malformed JSON at line ${index + 1}`);
+      throw queryError(
+        `${source} contains malformed JSON at line ${index + 1}`,
+      );
     }
   }
   const header = records[0];
@@ -111,16 +123,19 @@ export function parseNativeSession(content, source = "Pi Session") {
     if (typeof entry?.id !== "string" || !entry.id)
       throw queryError(`${source} contains a Session entry without an ID`);
     if (byId.has(entry.id))
-      throw queryError(`${source} contains duplicate Session entry ID ${entry.id}`);
+      throw queryError(
+        `${source} contains duplicate Session entry ID ${entry.id}`,
+      );
     byId.set(entry.id, entry);
   }
   return { header, entries, byId, linear: false };
 }
 
 /** Match Pi's persisted active branch: the final entry is the active leaf. */
-export function resolveActiveBranch({ entries, byId, linear }, source = "Pi Session") {
-  // Version 1 predates tree IDs. It is already a single ordered branch, so do
-  // not manufacture coordinates that are absent from the evidence.
+export function resolveActiveBranch(
+  { entries, byId, linear },
+  source = "Pi Session",
+) {
   if (linear) return entries.slice();
   const leaf = entries.at(-1);
   if (!leaf) return [];
@@ -129,32 +144,85 @@ export function resolveActiveBranch({ entries, byId, linear }, source = "Pi Sess
   let current = leaf;
   while (current) {
     if (visited.has(current.id))
-      throw queryError(`${source} contains a cycle at Session entry ${current.id}`);
+      throw queryError(
+        `${source} contains a cycle at Session entry ${current.id}`,
+      );
     visited.add(current.id);
     reversed.push(current);
     if (current.parentId === null || current.parentId === undefined) break;
     current = byId.get(current.parentId);
     if (!current)
-      throw queryError(`${source} is missing parent Session entry ${reversed.at(-1).parentId}`);
+      throw queryError(
+        `${source} is missing parent Session entry ${reversed.at(-1).parentId}`,
+      );
   }
   return reversed.reverse();
 }
 
-export async function queryKeyMessages(reference, options = {}) {
-  const sessionFile = await resolveSessionFile(reference, options);
-  const parsed = parseNativeSession(await readFile(sessionFile, "utf8"), sessionFile);
-  const branch = resolveActiveBranch(parsed, sessionFile);
-  const selected = selectKeyMessages(branch);
+function sessionProjection(parsed, branch) {
+  const selection = selectRarebits(branch);
+  const measurement = measureRarebits(branch, selection);
   return {
-    schemaVersion: KEY_MESSAGE_QUERY_SCHEMA_VERSION,
-    selectorVersion: KEY_MESSAGE_SELECTOR_VERSION,
+    schemaVersion: RAREBIT_QUERY_SCHEMA_VERSION,
+    selectorVersion: RAREBIT_SELECTOR_VERSION,
     session: {
       id: parsed.header.id,
-      activeLeafId: parsed.linear ? null : branch.at(-1)?.id ?? null,
+      activeLeafId: parsed.linear ? null : (branch.at(-1)?.id ?? null),
+      // The original persisted header timestamp is provenance for a title
+      // date choice; source paths and cwd intentionally remain private.
+      startedAt:
+        typeof parsed.header.timestamp === "string"
+          ? parsed.header.timestamp
+          : null,
     },
-    keyMessageCount: selected.occurrences.length,
-    keyMessages: selected.occurrences.map(({
-      sourceEntryId, timestamp, role, outcome, text,
-    }) => ({ sourceEntryId, timestamp, role, outcome, text })),
+    selection,
+    measurement,
+  };
+}
+
+export async function readRarebitSession(reference, options = {}) {
+  const sessionFile = await resolveRarebitSessionFile(reference, options);
+  const parsed = parseNativeSession(
+    await readFile(sessionFile, "utf8"),
+    sessionFile,
+  );
+  const branch = resolveActiveBranch(parsed, sessionFile);
+  return { sessionFile, parsed, branch, ...sessionProjection(parsed, branch) };
+}
+
+/** Metadata-only projection, safe for a dashboard or programmatic inspection. */
+export async function queryRarebits(reference, options = {}) {
+  const result = await readRarebitSession(reference, options);
+  return {
+    schemaVersion: result.schemaVersion,
+    selectorVersion: result.selectorVersion,
+    session: result.session,
+    rarebitCount: result.selection.occurrences.length,
+    measurement: result.measurement,
+    rarebits: result.selection.occurrences.map(
+      ({ text, ...occurrence }) => occurrence,
+    ),
+  };
+}
+
+/** Raw selected prose remains inspectable on demand but is never a sidecar authority. */
+export async function extractRarebits(reference, options = {}) {
+  const result = await readRarebitSession(reference, options);
+  return {
+    schemaVersion: result.schemaVersion,
+    selectorVersion: result.selectorVersion,
+    session: result.session,
+    rarebitCount: result.selection.occurrences.length,
+    measurement: result.measurement,
+    rarebits: result.selection.occurrences.map(
+      ({ sourceEntryId, timestamp, role, outcome, producer, text }) => ({
+        sourceEntryId,
+        timestamp,
+        role,
+        outcome,
+        producer,
+        text,
+      }),
+    ),
   };
 }

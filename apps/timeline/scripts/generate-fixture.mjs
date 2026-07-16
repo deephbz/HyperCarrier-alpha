@@ -178,6 +178,7 @@ export function generateFixture(root) {
     }
   }
   const live = (number, heartbeatAt, state) => ({
+    schemaVersion: 1,
     processInstanceId: `synthetic-host:${50_000 + number}:2026-07-11`,
     processStartedAt: iso(97_000 + number * 20),
     pid: 50_000 + number,

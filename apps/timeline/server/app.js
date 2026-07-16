@@ -2,11 +2,8 @@ import { createReadStream, existsSync, realpathSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, relative, resolve, sep } from "node:path";
 import { collectAlphaSnapshot, createAlphaSourceWatcher } from "./alpha.js";
-import { collectSnapshot, SessionCache } from "./collector.js";
-import {
-  readSessionKeyMessageSummary,
-  sanitizeKeyMessageSummaryDetail,
-} from "./key-msg-summary-detail.js";
+import { collectSnapshot, SessionCache, SessionCatalog } from "./collector.js";
+import { readSessionRarebitSummary, sanitizeRarebitSummaryDetail } from "./rarebit-detail.js";
 import { createSourceWatcher } from "./watcher.js";
 
 function json(res, status, body) {
@@ -28,6 +25,26 @@ const ALPHA_SOURCE_KINDS = new Set([
   "timeline-runtime",
 ]);
 const ALPHA_REASONS = new Set(["request", "filesystem", "alpha-filesystem", "reconciliation"]);
+const SNAPSHOT_WINDOWS = new Set(["15m", "1h", "6h", "24h", "all"]);
+
+function snapshotQuery(url) {
+  const window = url.searchParams.get("window") ?? "24h";
+  if (!SNAPSHOT_WINDOWS.has(window)) return { error: "invalid_snapshot_window" };
+  const cursor = url.searchParams.get("before");
+  if (cursor !== null && (cursor.length > 500 || !/^[A-Za-z0-9_-]+$/.test(cursor)))
+    return { error: "invalid_snapshot_cursor" };
+  const parseBound = (name) => {
+    const raw = url.searchParams.get(name);
+    if (raw === null) return undefined;
+    const value = Number(raw);
+    return Number.isFinite(value) && value >= 0 ? value : null;
+  };
+  const from = parseBound("from");
+  const to = parseBound("to");
+  if (from === null || to === null || (from !== undefined && to !== undefined && from > to))
+    return { error: "invalid_snapshot_bounds" };
+  return { window, cursor: cursor ?? undefined, from, to };
+}
 
 export function sanitizeAlphaEvent(event = {}) {
   const paths = Array.isArray(event.paths)
@@ -109,6 +126,18 @@ function staticResponse(req, res, staticDir, rawPath, normalizedPath) {
   createReadStream(actualFile).pipe(res);
 }
 
+function serveSnapshot(res, url, snapshotFor) {
+  const query = snapshotQuery(url);
+  if (query.error) return json(res, 400, { error: query.error });
+  try {
+    return json(res, 200, snapshotFor(query));
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("invalid_snapshot_"))
+      return json(res, 400, { error: error.message });
+    throw error;
+  }
+}
+
 export function createTimelineServer({
   collect = collectSnapshot,
   reconciliationMs = 30_000,
@@ -116,24 +145,46 @@ export function createTimelineServer({
   watchSources = createSourceWatcher,
   collectAlpha = collectAlphaSnapshot,
   watchAlphaSources = createAlphaSourceWatcher,
-  readKeyMessageSummary = readSessionKeyMessageSummary,
+  readRarebitSummary = readSessionRarebitSummary,
 } = {}) {
   const cache = new SessionCache();
+  const catalogCache = new SessionCatalog();
+  const snapshots = new Map();
   let snapshot;
   let alphaSnapshot;
   let lastRefresh;
   const clients = new Set();
   const alphaClients = new Set();
-  const refresh = ({ reason = "request", paths = [], notify = true } = {}) => {
-    snapshot = collect({ cache });
-    lastRefresh = { at: snapshot.generatedAt, reason, paths: paths.slice(0, 20) };
-    snapshot.trace ??= {};
-    snapshot.trace.refresh = lastRefresh;
+  const refresh = ({
+    reason = "request",
+    paths = [],
+    notify = true,
+    query = { window: "24h" },
+  } = {}) => {
+    const key = `${query.window}:${query.cursor ?? ""}:${query.from ?? ""}:${query.to ?? ""}`;
+    const refreshed = collect({
+      cache,
+      catalogCache,
+      window: query.window,
+      cursor: query.cursor,
+      from: query.from,
+      to: query.to,
+    });
+    snapshots.set(key, refreshed);
+    if (!query.cursor && query.window === "24h") snapshot = refreshed;
+    snapshot ??= refreshed;
+    lastRefresh = { at: refreshed.generatedAt, reason, paths: paths.slice(0, 20) };
+    refreshed.trace ??= {};
+    refreshed.trace.refresh = lastRefresh;
     if (notify) {
-      const payload = `event: invalidate\ndata: ${JSON.stringify({ generatedAt: snapshot.generatedAt })}\n\n`;
+      const payload = `event: invalidate\ndata: ${JSON.stringify({ generatedAt: refreshed.generatedAt })}\n\n`;
       for (const client of clients) client.write(payload);
     }
-    return snapshot;
+    return refreshed;
+  };
+  const snapshotFor = (query) => {
+    const key = `${query.window}:${query.cursor ?? ""}:${query.from ?? ""}:${query.to ?? ""}`;
+    return snapshots.get(key) ?? refresh({ query, notify: false });
   };
   const refreshAlpha = (event = {}) => {
     const safeEvent = sanitizeAlphaEvent(event);
@@ -164,20 +215,23 @@ export function createTimelineServer({
     if (req.method === "GET" && url.pathname === "/api/health")
       return json(res, 200, { ok: true, generatedAt: snapshot?.generatedAt, refresh: lastRefresh });
     if (req.method === "GET" && url.pathname === "/api/snapshot")
-      return json(res, 200, snapshot ?? refresh());
+      return serveSnapshot(res, url, snapshotFor);
     if (req.method === "GET" && url.pathname === "/api/trace")
       return json(res, 200, (snapshot ?? refresh()).trace);
-    const keyMessageDetail = url.pathname.match(/^\/api\/sessions\/([^/]+)\/key-message-summary$/);
-    if (req.method === "GET" && keyMessageDetail) {
+    const rarebitDetail = url.pathname.match(/^\/api\/sessions\/([^/]+)\/rarebit-summary$/);
+    if (req.method === "GET" && rarebitDetail) {
       let sessionId;
       try {
-        sessionId = decodeURIComponent(keyMessageDetail[1]);
+        sessionId = decodeURIComponent(rarebitDetail[1]);
       } catch {
         return json(res, 400, { error: "invalid_session_id" });
       }
-      const session = (snapshot ?? refresh()).sessions.find((item) => item.id === sessionId);
+      const known = [...snapshots.values()].flatMap((item) => item.sessions);
+      const session =
+        known.find((item) => item.id === sessionId) ??
+        (snapshot ?? refresh()).sessions.find((item) => item.id === sessionId);
       if (!session) return json(res, 404, { error: "session_not_found" });
-      return json(res, 200, sanitizeKeyMessageSummaryDetail(readKeyMessageSummary(session)));
+      return json(res, 200, sanitizeRarebitSummaryDetail(readRarebitSummary(session)));
     }
     if (req.method === "GET" && url.pathname === "/api/alpha/snapshot")
       return json(res, 200, alphaSnapshot ?? refreshAlpha());
@@ -213,6 +267,7 @@ export function createTimelineServer({
   });
   const sourceWatcher = watchSources((event) => {
     try {
+      snapshots.clear();
       refresh(event);
       refreshAlpha(event);
     } catch {}
@@ -224,6 +279,7 @@ export function createTimelineServer({
   });
   const timer = setInterval(() => {
     try {
+      snapshots.clear();
       refresh({ reason: "reconciliation" });
       refreshAlpha({ reason: "reconciliation", sourceKinds: ["timeline-runtime"] });
     } catch {}
