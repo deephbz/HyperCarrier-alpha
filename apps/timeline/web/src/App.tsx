@@ -1,5 +1,11 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import {
+  InspectorTrafficAction,
+  TrafficAgentToggle,
+  TrafficLaunch,
+  TrafficProvider,
+} from "./TrafficLaunch";
+import {
   compareIntelligentLanes,
   compact,
   countLabel,
@@ -425,6 +431,7 @@ function LaneRow({
   const outcomeSummary = laneOutcomeSummary(lane);
   return (
     <div className={`lane ${selected ? "selected" : ""}`}>
+      <TrafficAgentToggle sessionId={lane.session.id} label={alias} />
       <div className="lane-label">
         <button
           className="lane-select"
@@ -697,6 +704,7 @@ function Inspector({ lane, onClose }: { lane: Lane; onClose: () => void }) {
             {lane.live.coordination.teamName} · {lane.live.coordination.agentName} ·{" "}
             {lane.live.coordination.role}
           </p>
+          <InspectorTrafficAction teamName={lane.live.coordination.teamName} />
         </section>
       )}
       {lane.live?.pane && (
@@ -892,132 +900,143 @@ export function App() {
     selection.window === "all" &&
     Boolean(olderPages.at(-1)?.page?.hasOlder ?? snapshot?.page?.hasOlder);
   return (
-    <main id="main-content">
-      <header>
-        <div>
-          <p className="kicker">Local agent observatory</p>
-          <h1>Pi session timeline</h1>
-        </div>
-        <div className="headline-metrics">
-          <span>
-            <b>{filtered.filter((l) => l.live).length}</b> live
-          </span>
-          {snapshot && !compatibilityError ? (
-            <span>{countLabel(rarebitCount, "Rarebit")}</span>
-          ) : null}
-        </div>
-        <div className={`connection ${connection}`} aria-live="polite">
-          <i aria-hidden="true" />
-          {connectionLabel(connection)}
-        </div>
-      </header>
-      <Toolbar
-        {...{
-          window: windowMode,
-          setWindow: setWindowMode,
-          group,
-          setGroup,
-          filterMode,
-          setFilterMode,
-          filterValue,
-          setFilterValue,
-          filterOptions,
-          alive,
-          setAlive,
-          query,
-          setQuery,
-          customStart,
-          setCustomStart,
-          customEnd,
-          setCustomEnd,
-        }}
-      />
-      {compatibilityError ? (
-        <section className="compatibility-error" role="alert">
-          <strong>Timeline backend/frontend mismatch</strong>
-          <span>{compatibilityError}</span>
-        </section>
-      ) : null}
-      <DiagnosticsPanel
-        enabled={diagnosticsEnabled}
-        snapshot={mergedSnapshot}
-        laneCount={all.length}
-        diagnostics={diagnostics}
-      />
-      <div className="workspace">
-        <div className="ledger">
-          <div className="ruler-row">
-            <div className="label-heading">
-              <span>Sessions</span>
-              <small>{filtered.length} visible</small>
-            </div>
-            <Ruler domain={domain} />
+    <TrafficProvider enabled={!forceDemo}>
+      <main id="main-content">
+        <header>
+          <div>
+            <p className="kicker">Local agent observatory</p>
+            <h1>Pi session timeline</h1>
           </div>
-          {!snapshot ? (
-            <div className="empty">
-              <div className="skeleton" />
-              <div className="skeleton" />
-              <p>Indexing local Pi sessions…</p>
+          <div className="headline-metrics">
+            <span>
+              <b>{filtered.filter((l) => l.live).length}</b> live
+            </span>
+            {snapshot && !compatibilityError ? (
+              <span>{countLabel(rarebitCount, "Rarebit")}</span>
+            ) : null}
+          </div>
+          <div className={`connection ${connection}`} aria-live="polite">
+            <i aria-hidden="true" />
+            {connectionLabel(connection)}
+          </div>
+        </header>
+        <Toolbar
+          {...{
+            window: windowMode,
+            setWindow: setWindowMode,
+            group,
+            setGroup,
+            filterMode,
+            setFilterMode,
+            filterValue,
+            setFilterValue,
+            filterOptions,
+            alive,
+            setAlive,
+            query,
+            setQuery,
+            customStart,
+            setCustomStart,
+            customEnd,
+            setCustomEnd,
+          }}
+        />
+        {compatibilityError ? (
+          <section className="compatibility-error" role="alert">
+            <strong>Timeline backend/frontend mismatch</strong>
+            <span>{compatibilityError}</span>
+          </section>
+        ) : null}
+        <DiagnosticsPanel
+          enabled={diagnosticsEnabled}
+          snapshot={mergedSnapshot}
+          laneCount={all.length}
+          diagnostics={diagnostics}
+        />
+        <TrafficLaunch
+          snapshot={snapshot}
+          filtered={filtered}
+          onShowAll={() => {
+            setWindowMode("all");
+            setCustomStart("");
+            setCustomEnd("");
+          }}
+        />
+        <div className="workspace">
+          <div className="ledger">
+            <div className="ruler-row">
+              <div className="label-heading">
+                <span>Sessions</span>
+                <small>{filtered.length} visible</small>
+              </div>
+              <Ruler domain={domain} />
             </div>
-          ) : groups.length === 0 ? (
-            <div className="empty">
-              <h2>No matching sessions</h2>
-              <p>Adjust the filters to return sessions to the wall-clock view.</p>
-              <button
-                onClick={() => {
-                  setAlive(false);
-                  setQuery("");
-                  setFilterValue("");
-                }}
-              >
-                Clear filters
-              </button>
-            </div>
-          ) : (
-            groups.map(([key, value]) => (
-              <section className="group" key={key}>
-                <div className="group-head">
-                  <strong>{value.label}</strong>
-                  <span>
-                    {countLabel(value.lanes.length, "session")} ·{" "}
-                    {value.lanes.filter((l) => l.live).length} live ·{" "}
-                    {countLabel(
-                      value.lanes.reduce((total, lane) => total + lane.rarebits.length, 0),
-                      "Rarebit",
-                    )}
-                  </span>
-                </div>
-                {value.lanes.map((l) => (
-                  <LaneRow
-                    key={l.session.id}
-                    lane={l}
-                    visibleLanes={filtered}
-                    domain={domain}
-                    selected={selected === l.session.id}
-                    onSelect={() => setSelected(l.session.id)}
-                  />
-                ))}
-              </section>
-            ))
-          )}
-          {hasOlder && (
-            <div className="load-older">
-              <button onClick={() => void loadOlder()} disabled={loadingOlder}>
-                {loadingOlder ? "Loading older Sessions…" : "Load older Sessions"}
-              </button>
-            </div>
-          )}
+            {!snapshot ? (
+              <div className="empty">
+                <div className="skeleton" />
+                <div className="skeleton" />
+                <p>Indexing local Pi sessions…</p>
+              </div>
+            ) : groups.length === 0 ? (
+              <div className="empty">
+                <h2>No matching sessions</h2>
+                <p>Adjust the filters to return sessions to the wall-clock view.</p>
+                <button
+                  onClick={() => {
+                    setAlive(false);
+                    setQuery("");
+                    setFilterValue("");
+                  }}
+                >
+                  Clear filters
+                </button>
+              </div>
+            ) : (
+              groups.map(([key, value]) => (
+                <section className="group" key={key}>
+                  <div className="group-head">
+                    <strong>{value.label}</strong>
+                    <span>
+                      {countLabel(value.lanes.length, "session")} ·{" "}
+                      {value.lanes.filter((l) => l.live).length} live ·{" "}
+                      {countLabel(
+                        value.lanes.reduce((total, lane) => total + lane.rarebits.length, 0),
+                        "Rarebit",
+                      )}
+                    </span>
+                  </div>
+                  {value.lanes.map((l) => (
+                    <LaneRow
+                      key={l.session.id}
+                      lane={l}
+                      visibleLanes={filtered}
+                      domain={domain}
+                      selected={selected === l.session.id}
+                      onSelect={() => setSelected(l.session.id)}
+                    />
+                  ))}
+                </section>
+              ))
+            )}
+            {hasOlder && (
+              <div className="load-older">
+                <button onClick={() => void loadOlder()} disabled={loadingOlder}>
+                  {loadingOlder ? "Loading older Sessions…" : "Load older Sessions"}
+                </button>
+              </div>
+            )}
+          </div>
+          {selectedLane && <Inspector lane={selectedLane} onClose={() => setSelected(null)} />}
         </div>
-        {selectedLane && <Inspector lane={selectedLane} onClose={() => setSelected(null)} />}
-      </div>
-      <footer>
-        <span>User + response outcomes · Rarebit evidence remains separate · metadata only</span>
-        <span>
-          {snapshot
-            ? `Catalogued ${snapshot.trace.catalogSessions ?? snapshot.trace.sessionFiles} files; materialized ${snapshot.trace.responseSessions ?? snapshot.sessions.length} in ${snapshot.trace.durationMs.toFixed(1)}ms`
-            : ""}
-        </span>
-      </footer>
-    </main>
+        <footer>
+          <span>User + response outcomes · Rarebit evidence remains separate · metadata only</span>
+          <span>
+            {snapshot
+              ? `Catalogued ${snapshot.trace.catalogSessions ?? snapshot.trace.sessionFiles} files; materialized ${snapshot.trace.responseSessions ?? snapshot.sessions.length} in ${snapshot.trace.durationMs.toFixed(1)}ms`
+              : ""}
+          </span>
+        </footer>
+      </main>
+    </TrafficProvider>
   );
 }

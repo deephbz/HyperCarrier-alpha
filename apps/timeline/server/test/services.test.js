@@ -14,7 +14,13 @@ import {
 } from "../live-detail.js";
 import { createNamedProxy } from "../local-proxy.js";
 import { createTpsAdapterServer } from "../tps-adapter.js";
-import { namedUpstreamsFromEnv, resolveCoreHost, resolveServicePort } from "../service-config.js";
+import {
+  namedUpstreamsFromEnv,
+  resolveCoreHost,
+  resolveServicePort,
+  resolveTimelineSourceOptions,
+  resolveTrafficBaseUrl,
+} from "../service-config.js";
 
 const sessionId = "019f-test-session";
 const header = { type: "session", id: sessionId, timestamp: "2026-01-01T00:00:00Z", cwd: "/repo" };
@@ -78,16 +84,19 @@ test("service ports isolate a combined stack from inherited PORT and keep proxy 
     PI_TIMELINE_PORT: "44018",
     PI_LIVE_DETAIL_PORT: "44019",
     PI_TPS_ADAPTER_PORT: "44020",
+    PI_TRAFFIC_PORT: "44021",
   };
   assert.equal(resolveServicePort("timeline", env), 44018);
   assert.equal(resolveServicePort("live", env), 44019);
   assert.equal(resolveServicePort("tps", env), 44020);
+  assert.equal(resolveServicePort("traffic", env), 44021);
   assert.deepEqual(
     [...namedUpstreamsFromEnv(env)],
     [
       ["pi.localhost", 44018],
       ["live.pi.localhost", 44019],
       ["tps.pi.localhost", 44020],
+      ["traffic.pi.localhost", 44021],
     ],
   );
   assert.equal(resolveServicePort("timeline", { PORT: "4390" }), 4390);
@@ -96,9 +105,42 @@ test("service ports isolate a combined stack from inherited PORT and keep proxy 
     readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
   ).scripts;
   for (const name of ["start:stack", "start:better-url"])
-    for (const variable of ["PI_TIMELINE_PORT", "PI_LIVE_DETAIL_PORT", "PI_TPS_ADAPTER_PORT"])
+    for (const variable of [
+      "PI_TIMELINE_PORT",
+      "PI_LIVE_DETAIL_PORT",
+      "PI_TPS_ADAPTER_PORT",
+      "PI_TRAFFIC_PORT",
+    ])
       assert.match(scripts[name], new RegExp(`${variable}=\\\\?\\$\\{${variable}`));
-  assert.doesNotMatch(scripts["start:better-url"], /PORT=43/);
+  assert.doesNotMatch(scripts["start:better-url"], /(?<!_)PORT=43/);
+  assert.match(
+    scripts["start:better-url"],
+    /PI_TRAFFIC_BASE_URL=http:\/\/traffic\.pi\.localhost:1355/,
+  );
+});
+
+test("installed Timeline accepts trusted process-local fixture roots without publishing them", () => {
+  assert.deepEqual(resolveTimelineSourceOptions({}), {});
+  assert.deepEqual(
+    resolveTimelineSourceOptions({
+      PI_TIMELINE_SESSIONS_ROOT: "/tmp/sessions",
+      PI_TIMELINE_TEAMS_ROOT: "/tmp/teams",
+    }),
+    { sessionsRoot: "/tmp/sessions", teamsRoot: "/tmp/teams" },
+  );
+});
+
+test("traffic origin is independently configured and stays loopback allowlisted", () => {
+  assert.equal(resolveTrafficBaseUrl({}), "http://127.0.0.1:4321");
+  assert.equal(resolveTrafficBaseUrl({ PI_TRAFFIC_PORT: "44121" }), "http://127.0.0.1:44121");
+  assert.equal(
+    resolveTrafficBaseUrl({ PI_TRAFFIC_BASE_URL: "http://traffic.pi.localhost:1355" }),
+    "http://traffic.pi.localhost:1355",
+  );
+  assert.throws(() => resolveTrafficBaseUrl({ PI_TRAFFIC_BASE_URL: "https://example.com" }));
+  assert.throws(() =>
+    resolveTrafficBaseUrl({ PI_TRAFFIC_BASE_URL: "http://127.0.0.1:4321/traffic" }),
+  );
 });
 
 test("TPS renderer dependency contract pins repository, revision, toolchain, and dist entrypoint", () => {

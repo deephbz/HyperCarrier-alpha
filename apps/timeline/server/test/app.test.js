@@ -89,6 +89,72 @@ test("snapshot, trace, health and filesystem-driven SSE expose one state model",
   assert.equal(watcherClosed, true);
 });
 
+test("installed server passes fixture roots only to collection and watching", async (t) => {
+  let collection;
+  let watcherOptions;
+  const server = createTimelineServer({
+    collectionOptions: { sessionsRoot: "/tmp/session-fixture", teamsRoot: "/tmp/team-fixture" },
+    watchRoots: ["/tmp/session-fixture", "/tmp/team-fixture"],
+    collect: (options) => {
+      collection = options;
+      return {
+        generatedAt: "g1",
+        sessions: [],
+        turns: [],
+        requests: [],
+        liveAgents: [],
+        trace: {},
+      };
+    },
+    reconciliationMs: 60_000,
+    watchSources: (_callback, options) => {
+      watcherOptions = options;
+      return { close() {} };
+    },
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const body = await (await fetch(`http://127.0.0.1:${server.address().port}/api/snapshot`)).text();
+  assert.equal(body.includes("session-fixture"), false);
+  assert.equal(body.includes("team-fixture"), false);
+  assert.equal(collection.sessionsRoot, "/tmp/session-fixture");
+  assert.equal(collection.teamsRoot, "/tmp/team-fixture");
+  assert.equal(collection.cache instanceof Object, true);
+  assert.deepEqual(watcherOptions, { roots: ["/tmp/session-fixture", "/tmp/team-fixture"] });
+});
+
+test("traffic launch config and health diagnostics remain a loopback adapter boundary", async (t) => {
+  const traffic = createTimelineServer({
+    collect: () => ({
+      generatedAt: "g1",
+      sessions: [],
+      turns: [],
+      requests: [],
+      liveAgents: [],
+      trace: {},
+    }),
+    reconciliationMs: 60_000,
+    watchSources: () => ({ close() {} }),
+    trafficBaseUrl: "http://127.0.0.1:4321",
+  });
+  await new Promise((resolve) => traffic.listen(0, "127.0.0.1", resolve));
+  t.after(() => traffic.close());
+  const base = `http://127.0.0.1:${traffic.address().port}`;
+  assert.deepEqual(await (await fetch(`${base}/api/traffic/config`)).json(), {
+    baseUrl: "http://127.0.0.1:4321",
+    path: "/traffic",
+  });
+  assert.deepEqual(await (await fetch(`${base}/api/health`)).json(), {
+    ok: true,
+    traffic: { baseUrl: "http://127.0.0.1:4321", health: "http://127.0.0.1:4321/health" },
+  });
+  assert.deepEqual(await (await fetch(`${base}/api/traffic/health`)).json(), {
+    available: false,
+    status: null,
+    body: null,
+  });
+});
+
 test("serves built assets and SPA routes without shadowing APIs or allowing traversal", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "pi-web-"));
   mkdirSync(join(root, "assets"));

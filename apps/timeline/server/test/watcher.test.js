@@ -4,7 +4,19 @@ import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { createSourceWatcher } from "../watcher.js";
+import { createSourceWatcher, timelineWatchRoots } from "../watcher.js";
+
+test("fixture roots replace only native Session and Team watch roots", () => {
+  const home = mkdtempSync(join(tmpdir(), "pi-watch-home-"));
+  const sessionsRoot = join(home, "fixture-sessions");
+  const teamsRoot = join(home, "fixture-teams");
+  assert.deepEqual(timelineWatchRoots({ sessionsRoot, teamsRoot, home }), [
+    sessionsRoot,
+    join(home, ".pi", "agent", "timeline", "events"),
+    join(home, ".pi", "agent", "timeline", "live"),
+    teamsRoot,
+  ]);
+});
 
 test("source watcher debounces related writes into one refresh", async () => {
   const root = mkdtempSync(join(tmpdir(), "pi-watch-"));

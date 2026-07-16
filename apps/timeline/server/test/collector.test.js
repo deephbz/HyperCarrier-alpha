@@ -110,6 +110,15 @@ test("isolated real tmux server maps a live Pi-shaped process", { timeout: 10_00
   assert.equal(mapped[0].pane.serverSocket, socket);
 });
 
+test("process parser accepts macOS weekday-day-month lstart output before the command", () => {
+  const [process] = parseProcessTable("66844 66843 ttys003 Thu 16 Jul 12:33:42 2026     pi 30\n");
+  assert.deepEqual(
+    { pid: process.pid, ppid: process.ppid, tty: process.tty, command: process.command },
+    { pid: 66844, ppid: 66843, tty: "ttys003", command: "pi 30" },
+  );
+  assert.match(process.startTime, /^2026-07-16T/);
+});
+
 test("process ancestry finds nested Pi without trusting pane current command", () => {
   const processes = parseProcessTable(
     `100 1 ttys001 zsh\n110 100 ttys001 npm exec pi\n120 110 ttys001 node /x/@mariozechner/pi-coding-agent/dist/cli.js\n200 1 ?? pi`,
