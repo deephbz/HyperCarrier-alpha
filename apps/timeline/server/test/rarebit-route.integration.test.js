@@ -3,22 +3,28 @@ import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { processKeyMessageSummary } from "../../../../packages/hc-key-msg-summary/src/index.mjs";
+import { processRarebitSummary } from "../../../../packages/hc-rarebit/src/index.mjs";
+import { rarebitMaterializationPath } from "@hypercarrier/hc-rarebit";
 import { collectAlphaSnapshot } from "../alpha.js";
 import { createTimelineServer } from "../app.js";
 
 const noWatcher = () => ({ close() {} });
 
-test("fake Key Message model reaches canonical Alpha HTTP and HTML without network", async (t) => {
+test("fake Rarebit model reaches canonical Alpha HTTP and HTML without network", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "hc-recent-alpha-http-"));
   const repo = join(root, "repo");
   const privateRoot = join(root, "private");
-  const summaryPath = join(privateRoot, "alpha", "key-msg-summary.jsonl");
+  const sessionRoot = join(privateRoot, "sessions");
+  const sessionFile = join(sessionRoot, "alpha", "alpha-session.jsonl");
+  const rarebitRoot = join(privateRoot, "rarebit");
+  const summaryPath = rarebitMaterializationPath(sessionFile, { sessionRoot, rarebitRoot });
   const evergreenPath = join(repo, "Evergreen.md");
   const registryPath = join(privateRoot, "project-registry.json");
   const staticDir = join(root, "web");
   await mkdir(repo, { recursive: true });
   await mkdir(privateRoot, { recursive: true, mode: 0o700 });
+  await mkdir(join(sessionRoot, "alpha"), { recursive: true, mode: 0o700 });
+  await writeFile(sessionFile, "{}\n", { mode: 0o600 });
   await mkdir(staticDir, { recursive: true });
   await chmod(privateRoot, 0o700);
   await writeFile(evergreenPath, "# Alpha\n\nCanonical owner context.\n");
@@ -28,10 +34,11 @@ test("fake Key Message model reaches canonical Alpha HTTP and HTML without netwo
   );
 
   let modelCalls = 0;
-  const result = await processKeyMessageSummary(
+  const result = await processRarebitSummary(
     {
       sessionManager: {
         getHeader: () => ({ id: "alpha-session" }),
+        getSessionFile: () => sessionFile,
         getBranch: () => [
           {
             type: "message",
@@ -64,8 +71,9 @@ test("fake Key Message model reaches canonical Alpha HTTP and HTML without netwo
       },
     },
     {
-      projectId: "alpha",
-      outputPath: summaryPath,
+      sessionRoot,
+      rarebitRoot,
+      forceSynthesis: true,
       model: { provider: "fake", id: "deterministic" },
       modelClient: {
         complete: async () => {
@@ -135,8 +143,8 @@ test("fake Key Message model reaches canonical Alpha HTTP and HTML without netwo
   const snapshot = await snapshotResponse.json();
   assert.equal(snapshot.trace.registryVersion, "alpha-http-e2e-v1");
   assert.equal(snapshot.projects[0].projectRef.id, "alpha");
-  assert.equal(snapshot.projects[0].keyMessageSummary.items[0].sessionId, "alpha-session");
-  assert.match(snapshot.projects[0].keyMessageSummary.items[0].summary, /deterministic path/);
+  assert.equal(snapshot.projects[0].rarebitSummary.items[0].sessionId, "alpha-session");
+  assert.match(snapshot.projects[0].rarebitSummary.items[0].summary, /deterministic path/);
   assert.match(await readFile(summaryPath, "utf8"), /registry projection works/);
 
   const htmlResponse = await fetch(`${base}/alpha`, {

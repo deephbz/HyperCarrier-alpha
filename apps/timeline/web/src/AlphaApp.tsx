@@ -227,7 +227,7 @@ function TraceDrawer({
   const entries = [
     ["identity", project.projectRef],
     ["runtime", project.runtime],
-    ["keyMessageSummary", project.keyMessageSummary],
+    ["rarebitSummary", project.rarebitSummary],
     ["intervention", project.intervention],
     ["eventDelta", project.eventDelta],
     ["evergreenDelta", project.evergreenDelta],
@@ -317,7 +317,7 @@ function ProjectRow({
   traceOpen: boolean;
 }) {
   const decision = decisionSummaryModel(project);
-  const summaries = recentSummaryModels(project.keyMessageSummary);
+  const summaries = recentSummaryModels(project.rarebitSummary);
   const tasks = (project.workLedger.tasks ?? []) as Array<{
     id: string;
     title?: string;
@@ -393,7 +393,7 @@ function ProjectRow({
               <p className="alpha-unknown">{runtimeEmptyText(project.runtime)}</p>
             )}
           </AxisCard>
-          <AxisCard label="Key Message Summary" axis={project.keyMessageSummary}>
+          <AxisCard label="Rarebit Summary" axis={project.rarebitSummary}>
             {summaries.length ? (
               summaries.map(({ item, index: sourceIndex, timestamp }, index) => (
                 <details className="alpha-summary-details" key={sourceIndex} open={index === 0}>
@@ -408,7 +408,7 @@ function ProjectRow({
                       " · time unavailable"
                     )}
                   </summary>
-                  <p className="alpha-key-msg-summary-summary">
+                  <p className="alpha-rarebit-summary">
                     <strong>Agent reported:</strong>{" "}
                     {String(item.summary ?? item.progress ?? "Summary available")}
                   </p>

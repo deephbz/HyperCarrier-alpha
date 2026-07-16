@@ -10,10 +10,10 @@ Pi Sessions + lifecycle leases + tmux + OS processes
                        |
                timeline / Alpha UI
 
-recent assistant final messages
+selected user and assistant Rarebits
              |
              v
-packages/hc-key-msg-summary  ----> append-only Key Message summary JSONL
+packages/hc-rarebit          ----> append-only Rarebit materialization JSONL
                                       |
 Beads + Git + Markdown ---------------+
                                       v

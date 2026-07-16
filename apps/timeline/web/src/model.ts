@@ -1,4 +1,14 @@
-import type { AgentState, FilterMode, GroupMode, Lane, Request, Session, Snapshot } from "./types";
+import type {
+  AgentState,
+  FilterMode,
+  GroupMode,
+  Lane,
+  Request,
+  ResponseOutcomeMarker,
+  Session,
+  Snapshot,
+  SnapshotWindow,
+} from "./types";
 
 export const statePresentation: Record<AgentState, { label: string; className: string }> = {
   idle: { label: "Idle", className: "state-idle" },
@@ -88,7 +98,7 @@ export function lanesFromSnapshot(snapshot: Snapshot): Lane[] {
   );
   const sessionIds = new Set(snapshot.sessions.map((session) => session.id));
   const turnsBySession = indexBy(snapshot.turns, (turn) => turn.sessionId);
-  const keyMessagesBySession = indexBy(snapshot.keyMessages ?? [], (marker) => marker.sessionId);
+  const rarebitsBySession = indexBy(snapshot.rarebits ?? [], (marker) => marker.sessionId);
   const requests = indexRequests(snapshot.requests);
   const liveOnly = snapshot.liveAgents
     .filter((live) => !live.sessionId || !sessionIds.has(live.sessionId))
@@ -113,7 +123,8 @@ export function lanesFromSnapshot(snapshot: Snapshot): Lane[] {
         turns: [],
         requests: [],
         requestsByTurn: new Map(),
-        keyMessages: [],
+        rarebits: [],
+        responseOutcomes: [],
         live,
         boundedTimeAnchor: { at: runtimeObservedAt, source: "runtime-observation" as const },
         start: Date.parse(at),
@@ -130,7 +141,8 @@ export function lanesFromSnapshot(snapshot: Snapshot): Lane[] {
         turns,
         requests: sessionRequests,
         requestsByTurn: requests.bySessionTurn.get(session.id) ?? new Map(),
-        keyMessages: keyMessagesBySession.get(session.id) ?? [],
+        rarebits: rarebitsBySession.get(session.id) ?? [],
+        responseOutcomes: responseOutcomesFromRequests(sessionRequests),
         live: liveBySession.get(session.id),
         boundedTimeAnchor:
           lastMessageAt === undefined
@@ -154,8 +166,143 @@ export function laneAlias(lane: Lane) {
   );
 }
 
+export function shortSessionId(lane: Lane) {
+  return lane.session.id.slice(0, 8);
+}
+
+/**
+ * A label is a presentation aid, never Session identity. Keep the short ID
+ * visible whenever an alias is missing or conflicts within the current view.
+ */
+export function laneDisplayLabel(lane: Lane, lanes: Lane[]) {
+  const alias = laneAlias(lane);
+  const conflicts = lanes.filter((candidate) => laneAlias(candidate) === alias).length > 1;
+  return conflicts || alias === shortSessionId(lane) ? `${alias} · ${shortSessionId(lane)}` : alias;
+}
+
+export function runtimePresentation(lane: Lane) {
+  if (!lane.live)
+    return {
+      label: "Stopped",
+      processLabel: "Stopped",
+      workLabel: "No live process",
+      className: "state-stopped",
+    };
+  const observed = lane.live.workState?.availability === "observed";
+  const state = observed ? lane.live.workState.state : undefined;
+  // Accept exact legacy fixtures while the v2 HTTP contract remains strict.
+  const legacyState = lane.live.confidence === "exact" ? lane.live.state : undefined;
+  const presentation = statePresentation[state ?? legacyState ?? "unknown"];
+  if (!observed && !legacyState)
+    return {
+      label: "Running · work state unavailable",
+      processLabel: "Running",
+      workLabel: "Work state unavailable",
+      className: "state-unobserved",
+    };
+  return {
+    label: `Running · ${presentation.label}`,
+    processLabel: "Running",
+    workLabel: presentation.label,
+    className: presentation.className,
+  };
+}
+
+export function responseOutcome(request: Request): ResponseOutcomeMarker | undefined {
+  const stopReason = request.stopReason;
+  const visual =
+    stopReason === "toolUse"
+      ? "continuation"
+      : stopReason === "stop"
+        ? "stop"
+        : stopReason
+          ? "terminal"
+          : undefined;
+  return visual
+    ? {
+        requestId: request.id,
+        sessionId: request.sessionId,
+        at: request.at,
+        visual,
+        stopReason,
+      }
+    : undefined;
+}
+
+export function responseOutcomesFromRequests(requests: Request[]) {
+  return requests.flatMap((request) => {
+    const marker = responseOutcome(request);
+    return marker ? [marker] : [];
+  });
+}
+
 const noTmux = "No live tmux evidence";
-const groupResolvers: Record<GroupMode, (lane: Lane) => string> = {
+export function explicitProjectName(lane: Lane) {
+  return lane.session.projectName;
+}
+
+function cwdBasename(cwd: string | undefined) {
+  const normalized = cwd?.trim().replace(/[\\/]+$/, "");
+  if (!normalized) return undefined;
+  return normalized.split(/[\\/]/).at(-1) || undefined;
+}
+
+/**
+ * A display-only Project/workspace coordinate. An explicit registry Project
+ * label wins; cwd contributes only its basename and never becomes Project
+ * identity or association evidence.
+ */
+export function effectiveProjectLabel(lane: Lane) {
+  return explicitProjectName(lane) ?? cwdBasename(lane.session.cwd || lane.live?.cwd);
+}
+
+/**
+ * Compact presentation tuple used by each Intelligent lane. Missing
+ * coordinates stay explicit, and the inspector remains the place to audit
+ * their evidence. This is not an identity key.
+ */
+export function laneContextPresentation(lane: Lane) {
+  const team = lane.live?.coordination?.teamName;
+  const teamRoleName = lane.live?.coordination?.agentName;
+  const project = effectiveProjectLabel(lane);
+  const sessionName = lane.session.name ?? lane.live?.sessionName;
+  const parts = [
+    { coordinate: "team" as const, value: team },
+    { coordinate: "team-role" as const, value: teamRoleName },
+    { coordinate: "session" as const, value: sessionName },
+    { coordinate: "project" as const, value: project },
+  ].filter(
+    (part): part is { coordinate: "team" | "team-role" | "session" | "project"; value: string } =>
+      Boolean(part.value),
+  );
+  // The sort contract keeps all four slots, but the human title spends no
+  // space on missing evidence. Session ID remains visible on its own line.
+  const label = parts.map((part) => part.value).join(" | ") || "Unlabelled session";
+  return { label, parts, sessionName, project, team, teamRoleName };
+}
+
+function intelligentCoordinates(lane: Lane) {
+  const context = laneContextPresentation(lane);
+  return [
+    context.team ?? "",
+    context.teamRoleName ?? "",
+    context.sessionName ?? "",
+    context.project ?? "",
+  ];
+}
+
+/** Sort the Intelligent projection without turning its tuple into a group or identity. */
+export function compareIntelligentLanes(left: Lane, right: Lane) {
+  const leftCoordinates = intelligentCoordinates(left);
+  const rightCoordinates = intelligentCoordinates(right);
+  for (let index = 0; index < leftCoordinates.length; index += 1) {
+    const comparison = leftCoordinates[index].localeCompare(rightCoordinates[index]);
+    if (comparison !== 0) return comparison;
+  }
+  return left.session.id.localeCompare(right.session.id);
+}
+
+const groupResolvers: Record<Exclude<GroupMode, "context">, (lane: Lane) => string> = {
   none: () => "All sessions",
   name: (lane) => lane.session.name ?? lane.session.id,
   team: (lane) => lane.live?.coordination?.teamName ?? "No Pi Team evidence",
@@ -169,13 +316,18 @@ const groupResolvers: Record<GroupMode, (lane: Lane) => string> = {
     const pane = lane.live?.pane;
     return pane ? `${pane.sessionName} / ${pane.windowIndex} / ${pane.paneId}` : noTmux;
   },
-  state: (lane) => stateLabel[lane.live?.state ?? "settled"],
+  state: (lane) => runtimePresentation(lane).label,
   cwd: (lane) => lane.session.cwd,
-  project: (lane) => lane.session.cwd.split("/").filter(Boolean).at(-1) ?? lane.session.cwd,
+  project: (lane) => explicitProjectName(lane) ?? "No Project association",
 };
 
 export function groupKey(lane: Lane, mode: GroupMode) {
+  if (mode === "context") return "Intelligent";
   return groupResolvers[mode](lane);
+}
+
+export function groupLabel(lane: Lane, mode: GroupMode) {
+  return groupKey(lane, mode);
 }
 
 export function filterKey(lane: Lane, mode: FilterMode) {
@@ -196,7 +348,51 @@ export function extent(
 }
 
 export const position = (at: number, [start, end]: [number, number]) =>
-  Math.max(0, Math.min(100, ((at - start) / (end - start)) * 100));
+  Math.max(0, Math.min(100, 100 - ((at - start) / (end - start)) * 100));
+
+export function windowHours(window: SnapshotWindow) {
+  return window === "15m"
+    ? 0.25
+    : window === "1h"
+      ? 1
+      : window === "6h"
+        ? 6
+        : window === "24h"
+          ? 24
+          : null;
+}
+
+function uniqueBy<T>(items: T[], key: (item: T) => string) {
+  const index = new Map<string, T>();
+  for (const item of items) if (!index.has(key(item))) index.set(key(item), item);
+  return [...index.values()];
+}
+
+/** Merge newest-first metadata pages without ever merging Session identities. */
+export function mergeSnapshotPages(head: Snapshot, older: Snapshot[]): Snapshot {
+  const pages = [head, ...older];
+  return {
+    ...head,
+    sessions: uniqueBy(
+      pages.flatMap((page) => page.sessions),
+      (session) => session.id,
+    ),
+    turns: uniqueBy(
+      pages.flatMap((page) => page.turns),
+      (turn) => turn.id,
+    ),
+    requests: uniqueBy(
+      pages.flatMap((page) => page.requests),
+      (request) => request.id,
+    ),
+    rarebits: uniqueBy(
+      pages.flatMap((page) => page.rarebits ?? []),
+      (message) => `${message.sessionId}:${message.sourceEntryId ?? "entry"}:${message.order}`,
+    ),
+    liveAgents: head.liveAgents,
+    page: older.at(-1)?.page ?? head.page,
+  };
+}
 export const money = (v: number) =>
   v < 0.01 && v > 0
     ? "<$0.01"
@@ -216,6 +412,10 @@ export const duration = (ms: number) =>
     : ms < 3_600_000
       ? `${Math.round(ms / 60_000)}m`
       : `${(ms / 3_600_000).toFixed(1)}h`;
+
+export function countLabel(count: number, singular: string, plural = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
 
 function contextLabel(lane: Lane) {
   const context = lane.live?.context;
@@ -237,18 +437,23 @@ function processEvidence(lane: Lane) {
   return binding ? `${binding.source} · ${binding.confidence}` : "—";
 }
 
+function sessionIdentityConfidence(lane: Lane) {
+  const live = lane.live;
+  return live?.sessionBinding?.confidence ?? live?.sessionConfidence ?? "—";
+}
+
 export function inspectorDetails(lane: Lane): ReadonlyArray<readonly [string, string | number]> {
   const live = lane.live;
+  const runtime = runtimePresentation(lane);
   return [
+    ["Process state", runtime.processLabel],
+    ["Work state", runtime.workLabel],
     ["Session ID", live ? (live.sessionId ?? "Unavailable") : lane.session.id],
     ["Alias", laneAlias(lane)],
     ["PID", live?.pid ?? "—"],
     ["Process instance", live?.processInstanceId ?? "—"],
     ["Source", lane.session.source],
-    [
-      "Identity confidence",
-      live?.sessionConfidence?.replaceAll("_", " ") ?? live?.confidence ?? "—",
-    ],
+    ["Session identity confidence", sessionIdentityConfidence(lane).replaceAll("_", " ")],
     ["Session match", live?.sessionBinding?.kind.replaceAll("_", " ") ?? "—"],
     ["Session evidence", sessionEvidence(lane)],
     ["Session source", live?.sessionBinding?.sessionSource ?? lane.session.source],

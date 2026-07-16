@@ -69,9 +69,9 @@ and process/session identity evidence:
 pi -e "$PWD/apps/timeline/extensions/timeline-lifecycle.mjs"
 ```
 
-The Key Message Summary extension is a separate Pi package under
-`packages/hc-key-msg-summary`. Its model-provider call is opt-in because selected
-assistant final-message text crosses the configured provider boundary.
+Rarebit is a separate Pi package under `packages/hc-rarebit`. Its model-provider
+call is opt-in because selected user and assistant prose crosses the configured
+provider boundary.
 
 PiTeams orchestration and its Beads-backed Task integration are maintained in
 [deephbz/pi-teams](https://github.com/deephbz/pi-teams).

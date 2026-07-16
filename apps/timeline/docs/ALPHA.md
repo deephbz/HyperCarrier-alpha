@@ -50,14 +50,14 @@ containing only explicit `sessionIds`, `taskIds`, or configured rules. Paths loc
 do not identify a Project. With no explicit Session association, runtime remains unknown even when a
 cwd matches a repository.
 
-`summaries` are read directly as hc-key-msg-summary JSONL and `events` directly as
-hc-project-distill event JSONL. `proposalDir` is read as the distiller's atomic bundle directories
-and `metadata.json`; missing metadata/artifacts, malformed metadata, and hash mismatches remain
-partial/corrupt diagnostics. A legacy proposal JSONL path remains a compatibility input.
+`summaries` are read directly as hc-rarebit JSONL and `events` directly as hc-project-distill event
+JSONL. `proposalDir` is read as the distiller's atomic bundle directories and `metadata.json`;
+missing metadata/artifacts, malformed metadata, and hash mismatches remain partial/corrupt
+diagnostics. A legacy proposal JSONL path remains a compatibility input.
 
 ## v1 source records
 
-Summary JSONL accepts `key_message_summary` records with `summaryId`, `projectId` or `sessionId`,
+Summary JSONL accepts `rarebit_summary` records with `summaryId`, `projectId` or `sessionId`,
 `observedAt`/`validAt`, and only the reported `progress`, `findings`, `questions`, `nextStep`, or
 `summary` string fields. Other content-bearing fields, including `value`, are rejected from the
 visible projection and recorded as diagnostics. Project event JSONL accepts `project_event` or
@@ -83,8 +83,8 @@ Every projected axis and item carries `source`, `observedAt`, optional `validAt`
 aggregate scalars also carry field-level refs. Missing, malformed, partial, stale, future-dated,
 duplicate, conflicting, and command-failed sources remain structured diagnostics. A timestamp more
 than five minutes ahead of the observer clock is `unknown` with `ambiguous` confidence. The seven
-Project axes are intentionally separate: `runtime`, `keyMessageSummary`, `intervention`,
-`eventDelta`, `evergreenDelta`, `workLedger`, and `delivery`; there is no universal Project status.
+Project axes are intentionally separate: `runtime`, `rarebitSummary`, `intervention`, `eventDelta`,
+`evergreenDelta`, `workLedger`, and `delivery`; there is no universal Project status.
 
 The checked-in [fixture](../fixtures/alpha/project-manifest.json) demonstrates two Projects in one
 repo and one Project across repos. `/alpha?demo=1` renders browser-only synthetic data only when the

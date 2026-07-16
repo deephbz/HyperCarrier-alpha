@@ -1,6 +1,8 @@
 # Pi lifecycle extension
 
-Load `timeline-lifecycle.mjs` in every Pi process. It writes metadata-only, append-only JSONL under
+Install the parent Timeline directory as a Pi package to load `timeline-lifecycle.mjs` in every new
+Pi process; `package.json` declares it through `pi.extensions`. Direct `pi -e` loading remains a
+one-off alternative. The extension writes metadata-only, append-only JSONL under
 `~/.pi/agent/timeline/events/` by default:
 
 ```sh
@@ -20,3 +22,7 @@ totals are not the same as current context occupancy.
 The latest lease is also projected atomically to `~/.pi/agent/timeline/live/<process-boot-id>.json`
 with mode `0600`; set `PI_TIMELINE_LIVE_DIR` to override it. This projection is disposable. The
 append-only event stream remains the historical source of truth.
+
+Both inputs use lifecycle schema version `1`. The collector rejects missing or unsupported input
+versions rather than interpreting a future record through old semantics. This lifecycle input
+version is independent of the HTTP snapshot projection schema.

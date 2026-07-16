@@ -1,17 +1,23 @@
 {
-  "name": "@hypercarrier/hc-key-msg-summary",
+  "name": "@hypercarrier/hc-rarebit",
   "version": "0.1.0",
   "license": "MIT",
-  "description": "A narrow, provenance-bearing complete Key Message projection for Pi sessions.",
+  "description": "A narrow, provenance-bearing complete Rarebit projection for Pi sessions.",
   "keywords": [
     "pi-package"
   ],
   "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
   "bin": {
-    "hc-key-messages": "./bin/hc-key-messages.mjs"
+    "hc-rarebit": "./bin/hc-rarebit.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "0.80.6"
+  },
+  "devDependencies": {
+    "ajv": "^6.15.0"
   },
   "pi": {
     "extensions": [
@@ -20,7 +26,9 @@
   },
   "exports": {
     ".": "./src/index.mjs",
-    "./selector": "./src/selector.mjs",
+    "./core": "./src/rarebit-core.mjs",
+    "./session": "./src/rarebit-session.mjs",
+    "./service": "./src/rarebit-service.mjs",
     "./extension": "./src/extension.mjs",
     "./types": "./src/types.d.ts"
   },

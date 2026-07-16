@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 function safeEntries(path) {
   try {
@@ -48,6 +48,15 @@ function projectMember(team, teamDir, member, livePids) {
   const runtime = safeJson(runtimePath);
   const pid = memberPid(teamDir, member, runtime, livePids);
   const heartbeat = Number(runtime?.lastHeartbeatAt);
+  const runtimeStartedAt = Number(runtime?.startedAt);
+  const membershipId =
+    typeof member.membershipId === "string" && member.membershipId
+      ? member.membershipId
+      : undefined;
+  const runtimeMembershipId =
+    typeof runtime?.membershipId === "string" && runtime.membershipId
+      ? runtime.membershipId
+      : undefined;
   return {
     teamName: team.name,
     agentName: member.name,
@@ -61,6 +70,18 @@ function projectMember(team, teamDir, member, livePids) {
     source: team.source,
     runtimeSource: runtime ? runtimePath : undefined,
     pidSource: pid.path,
+    // Internal cross-source locator. The collector uses it only for a
+    // currently PID-validated Membership and strips it from the HTTP snapshot.
+    sessionFile:
+      typeof member.sessionFile === "string" && isAbsolute(member.sessionFile)
+        ? member.sessionFile
+        : undefined,
+    isActive: member.isActive === true,
+    membershipId,
+    runtimeMembershipId,
+    runtimeStartedAt: Number.isFinite(runtimeStartedAt)
+      ? new Date(runtimeStartedAt).toISOString()
+      : undefined,
   };
 }
 

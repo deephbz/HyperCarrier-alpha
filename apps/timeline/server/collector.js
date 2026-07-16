@@ -9,12 +9,15 @@ import {
   statSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
-import { keyMessageMetadata } from "@hypercarrier/hc-key-msg-summary/selector";
+import { join, resolve } from "node:path";
+import { rarebitMetadata } from "@hypercarrier/hc-rarebit/core";
 import { readPiTeams } from "./pi-teams.js";
 
 export const SIDECAR_LEASE_MS = 30_000;
+export const SNAPSHOT_SCHEMA_VERSION = 2;
 const MAX_CLOCK_SKEW_MS = 5_000;
+const PI_TEAMS_PROCESS_START_TOLERANCE_MS = 2_500;
+const SOLO_SESSION_STARTUP_GRACE_MS = 120_000;
 const TMUX_FIELD_SEPARATOR = "::PI_TIMELINE_FIELD::";
 
 function errorSummary(error) {
@@ -181,6 +184,81 @@ export function mapPiProcessesToPanes(panes, processes) {
 
 const qualifiedWindow = (pane) => `${pane.serverSocket}:${pane.sessionId}:${pane.windowId}`;
 
+function terminalMatches(membership, pane) {
+  if (membership.configuredTerminalId?.startsWith("%"))
+    return membership.configuredTerminalId === pane?.paneId;
+  if (membership.configuredTerminalId?.startsWith("@"))
+    return membership.configuredTerminalId === pane?.windowId;
+  return false;
+}
+
+function exactPiTeamsMembership(agent, memberships) {
+  const candidates = memberships.filter(
+    (membership) =>
+      membership.pid === agent.pid &&
+      membership.sessionFile &&
+      membership.isActive &&
+      membership.membershipId &&
+      membership.membershipId === membership.runtimeMembershipId &&
+      membership.runtimeStartedAt &&
+      agent.processStartedAt &&
+      Math.abs(Date.parse(membership.runtimeStartedAt) - Date.parse(agent.processStartedAt)) <=
+        PI_TEAMS_PROCESS_START_TOLERANCE_MS &&
+      terminalMatches(membership, agent.pane),
+  );
+  return candidates.length === 1 ? candidates[0] : undefined;
+}
+
+function bindExactPiTeamsSessions(liveAgents, sessions, memberships, claimedSessions, bindSession) {
+  for (const agent of liveAgents.filter((item) => !item.sessionId)) {
+    const membership = exactPiTeamsMembership(agent, memberships);
+    if (!membership) continue;
+    const matchingSessions = sessions.filter(
+      (session) =>
+        !claimedSessions.has(session.id) &&
+        resolve(session.source) === resolve(membership.sessionFile),
+    );
+    if (matchingSessions.length !== 1) continue;
+    bindSession(agent, matchingSessions[0], "exact", {
+      kind: "pi_teams_session_file",
+      evidenceSource: membership.source,
+    });
+  }
+}
+
+function bindUniqueRecentSoloSessions(liveAgents, sessions, claimedSessions, bindSession) {
+  const unboundByCwd = new Map();
+  for (const agent of liveAgents.filter(
+    (item) => !item.sessionId && !item.coordination && item.processStartedAt,
+  )) {
+    const candidates = unboundByCwd.get(agent.cwd) ?? [];
+    candidates.push(agent);
+    unboundByCwd.set(agent.cwd, candidates);
+  }
+  for (const [cwd, agents] of unboundByCwd) {
+    if (agents.length !== 1) continue;
+    const agent = agents[0];
+    const processStartedAt = Date.parse(agent.processStartedAt);
+    if (!Number.isFinite(processStartedAt)) continue;
+    const candidates = sessions.filter((session) => {
+      const sessionStartedAt = Date.parse(session.startedAt);
+      return (
+        !claimedSessions.has(session.id) &&
+        session.cwd === cwd &&
+        Number.isFinite(sessionStartedAt) &&
+        sessionStartedAt >= processStartedAt &&
+        sessionStartedAt - processStartedAt <= SOLO_SESSION_STARTUP_GRACE_MS
+      );
+    });
+    if (candidates.length !== 1) continue;
+    bindSession(agent, candidates[0], "inferred_unique_recent_session", {
+      kind: "unique_recent_session",
+      value: candidates[0].startedAt,
+      processSource: "ps",
+    });
+  }
+}
+
 export function inferLiveMetadata(liveAgents, sessions, memberships, teams, now = Date.now()) {
   const claimedSessions = new Set(
     liveAgents.flatMap((agent) => (agent.sessionId ? [agent.sessionId] : [])),
@@ -189,7 +267,8 @@ export function inferLiveMetadata(liveAgents, sessions, memberships, teams, now 
   const bindSession = (agent, session, confidence, evidence) => {
     agent.sessionId = session.id;
     agent.sessionName = session.name;
-    agent.sessionConfidence = confidence;
+    if (confidence === "exact") delete agent.sessionConfidence;
+    else agent.sessionConfidence = confidence;
     agent.sessionBinding = {
       confidence,
       sessionSource: session.source,
@@ -197,6 +276,11 @@ export function inferLiveMetadata(liveAgents, sessions, memberships, teams, now 
     };
     claimedSessions.add(session.id);
   };
+
+  // A PID-validated PiTeams Membership can name its exact native Session
+  // file. Join that locator before heuristics, but expose only binding kind and
+  // provenance in the public projection.
+  bindExactPiTeamsSessions(liveAgents, sessions, memberships, claimedSessions, bindSession);
 
   // A stale lead PID is common after a resumed/restarted Pi process. Infer only
   // when multiple PID-validated teammates share one qualified window and there
@@ -324,6 +408,13 @@ export function inferLiveMetadata(liveAgents, sessions, memberships, teams, now 
       });
   }
 
+  // Compatibility join for a solo Pi that started before lifecycle package
+  // adoption. It is intentionally weaker than the exact/title/start-time
+  // joins above and therefore requires one unbound process and one forward-
+  // time Session candidate in the cwd. It binds identity only; callers retain
+  // the process-only work-state projection.
+  bindUniqueRecentSoloSessions(liveAgents, sessions, claimedSessions, bindSession);
+
   // A resumed lead predates its current process. After exact/start-time joins,
   // accept only one recently active, named, unclaimed session in the same cwd.
   for (const agent of liveAgents.filter(
@@ -422,6 +513,10 @@ export function readLiveSidecars({
       continue;
     }
     const reject = (reason) => rejected.push({ source: path, reason, pid: record?.pid });
+    if (record.schemaVersion !== 1) {
+      reject("unsupported_schema_version");
+      continue;
+    }
     if (!Number.isInteger(record.pid) || !record.processInstanceId || !record.processStartedAt) {
       reject("invalid_identity");
       continue;
@@ -468,7 +563,7 @@ export function readLiveSidecars({
   return { accepted, rejected };
 }
 
-function lifecycleRecord(started, heartbeat, attached, state) {
+function lifecycleRecord(started, heartbeat, attached, named, state) {
   const attachedTmux = attached?.tmux;
   const startedTmux = started.tmux;
   return {
@@ -477,7 +572,7 @@ function lifecycleRecord(started, heartbeat, attached, state) {
     pid: started.pid,
     sessionId: heartbeat.sessionId ?? attached?.sessionId,
     sessionFile: attached?.sessionFile,
-    sessionName: attached?.name,
+    sessionName: named ? named.name : attached?.name,
     cwd: attached?.cwd ?? started.cwd,
     model: heartbeat.model ?? attached?.model,
     context: heartbeat.context,
@@ -505,9 +600,18 @@ function lifecycleCandidate(path, now) {
   } catch {
     return { rejection: { source: path, reason: "malformed_lifecycle_jsonl" } };
   }
+  if (events.some((event) => event.schemaVersion !== 1)) {
+    return { rejection: { source: path, reason: "unsupported_schema_version" } };
+  }
   const started = events.find((event) => event.type === "process_started");
   const heartbeat = events.findLast((event) => event.type === "heartbeat");
   const attached = events.findLast((event) => event.type === "session_attached");
+  const named = events.findLast(
+    (event) =>
+      event.type === "session_named" &&
+      event.attachmentId === attached?.attachmentId &&
+      event.sessionId === attached?.sessionId,
+  );
   const state = events.findLast((event) => event.type === "state_observed");
   const stopped = events.findLast((event) => event.type === "process_stopping");
   if (!started?.pid || !started.processStartedAt || !started.processBootId) {
@@ -519,7 +623,9 @@ function lifecycleCandidate(path, now) {
   if (!heartbeat || !leaseIsFresh(heartbeat.at, heartbeat.leaseMs, now)) {
     return { rejection: { source: path, reason: "lease_expired", pid: started.pid } };
   }
-  return { candidate: { path, record: lifecycleRecord(started, heartbeat, attached, state) } };
+  return {
+    candidate: { path, record: lifecycleRecord(started, heartbeat, attached, named, state) },
+  };
 }
 
 function validateLifecycleCandidate(candidate, { alive, processByPid, paneById, processes }) {
@@ -589,7 +695,7 @@ function createSessionParseState(source) {
     session: undefined,
     turns: [],
     requests: [],
-    keyMessages: [],
+    rarebits: [],
     rejected: [],
     currentTurnIndex: undefined,
     lastMessageAt: undefined,
@@ -605,7 +711,7 @@ function cloneSessionParseState(state) {
     session: state.session ? { ...state.session } : undefined,
     turns: state.turns.map((turn) => ({ ...turn })),
     requests: state.requests.map((request) => ({ ...request })),
-    keyMessages: state.keyMessages.map((marker) => ({ ...marker })),
+    rarebits: state.rarebits.map((marker) => ({ ...marker })),
     rejected: state.rejected.map((rejection) => ({ ...rejection })),
   };
 }
@@ -633,8 +739,8 @@ function parseSessionLine(state, line) {
   }
   if (!entry || typeof entry !== "object") return true;
   state.entryOrder += 1;
-  const keyMessage = keyMessageMetadata(entry, state.entryOrder);
-  if (keyMessage) state.keyMessages.push(keyMessage);
+  const rarebit = rarebitMetadata(entry, state.entryOrder);
+  if (rarebit) state.rarebits.push(rarebit);
   if (entry.type === "session") {
     state.session = {
       id: entry.id,
@@ -681,13 +787,13 @@ function parseSessionLine(state, line) {
 }
 
 function materializeSessionParseState(state) {
-  const { session, turns, requests, keyMessages, rejected } = state;
+  const { session, turns, requests, rarebits, rejected } = state;
   if (!session)
     return {
       session,
       turns,
       requests,
-      keyMessages: [],
+      rarebits: [],
       rejected: [...rejected, { source: state.source, reason: "missing_session_header" }],
     };
   session.turnCount = turns.length;
@@ -696,17 +802,12 @@ function materializeSessionParseState(state) {
   session.totalTokens = requests.reduce((sum, item) => sum + item.totalTokens, 0);
   session.endedAt = requests.at(-1)?.at ?? session.startedAt;
   session.lastMessageAt = state.lastMessageAt;
-  const liveBase = process.env.PI_LIVE_DETAIL_BASE_URL ?? "http://127.0.0.1:4319";
-  const tpsBase = process.env.PI_TPS_WEB_BASE_URL ?? "http://127.0.0.1:4320";
-  session.links = {
-    live: `${liveBase.replace(/\/$/, "")}/session/${encodeURIComponent(session.id)}`,
-    tps: `${tpsBase.replace(/\/$/, "")}/?auto=1&session=${encodeURIComponent(session.id)}`,
-  };
+  session.links = sessionLinks(session.id);
   return {
     session,
     turns,
     requests,
-    keyMessages: keyMessages.map((marker) => ({ sessionId: session.id, ...marker })),
+    rarebits: rarebits.map((marker) => ({ sessionId: session.id, ...marker })),
     rejected,
   };
 }
@@ -759,9 +860,176 @@ function readAppendedBytes(path, start, end) {
 }
 
 const SESSION_CACHE_VERSION = 3;
+const SESSION_CATALOG_VERSION = 1;
 
 function cacheStamp(stat) {
   return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${SESSION_CACHE_VERSION}`;
+}
+
+function catalogStamp(stat) {
+  return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${SESSION_CATALOG_VERSION}`;
+}
+
+function sessionLinks(id) {
+  const liveBase = process.env.PI_LIVE_DETAIL_BASE_URL ?? "http://127.0.0.1:4319";
+  const tpsBase = process.env.PI_TPS_WEB_BASE_URL ?? "http://127.0.0.1:4320";
+  return {
+    live: `${liveBase.replace(/\/$/, "")}/session/${encodeURIComponent(id)}`,
+    tps: `${tpsBase.replace(/\/$/, "")}/?auto=1&session=${encodeURIComponent(id)}`,
+  };
+}
+
+function parseCatalogHeader(bytes, source) {
+  for (const line of bytes.toString("utf8").split("\n")) {
+    try {
+      const entry = JSON.parse(line);
+      if (
+        entry?.type === "session" &&
+        typeof entry.id === "string" &&
+        typeof entry.timestamp === "string"
+      ) {
+        return {
+          id: entry.id,
+          startedAt: entry.timestamp,
+          endedAt: entry.timestamp,
+          cwd: typeof entry.cwd === "string" ? entry.cwd : "",
+          source,
+          turnCount: 0,
+          requestCount: 0,
+          cost: 0,
+          totalTokens: 0,
+          links: sessionLinks(entry.id),
+        };
+      }
+    } catch {}
+  }
+  return null;
+}
+
+const CATALOG_TAIL_CHUNK_BYTES = 64 * 1024;
+const CATALOG_TAIL_MAX_BYTES = 1024 * 1024;
+
+function messageTimestampFromLine(line) {
+  if (!line.length) return undefined;
+  try {
+    const entry = JSON.parse(line.toString("utf8"));
+    if (
+      entry?.type === "message" &&
+      (entry.message?.role === "user" || entry.message?.role === "assistant") &&
+      typeof entry.timestamp === "string" &&
+      Number.isFinite(Date.parse(entry.timestamp))
+    )
+      return entry.timestamp;
+  } catch {}
+  return undefined;
+}
+
+function latestMessageInCompleteLines(bytes) {
+  let end = bytes.length;
+  while (end > 0) {
+    const newline = bytes.lastIndexOf(0x0a, end - 1);
+    const start = newline + 1;
+    const timestamp = messageTimestampFromLine(bytes.subarray(start, end));
+    if (timestamp) return timestamp;
+    if (newline < 0) break;
+    end = newline;
+  }
+  return undefined;
+}
+
+function latestMessageFromTail(path, size, maxBytes = CATALOG_TAIL_MAX_BYTES) {
+  const descriptor = openSync(path, "r");
+  try {
+    let position = size;
+    let tail = Buffer.alloc(0);
+    let bytesRead = 0;
+    while (position > 0 && bytesRead < maxBytes) {
+      const length = Math.min(CATALOG_TAIL_CHUNK_BYTES, position, maxBytes - bytesRead);
+      position -= length;
+      const chunk = Buffer.allocUnsafe(length);
+      const read = readSync(descriptor, chunk, 0, length, position);
+      bytesRead += read;
+      tail = Buffer.concat([chunk.subarray(0, read), tail]);
+      const firstNewline = tail.indexOf(0x0a);
+      if (firstNewline >= 0) {
+        const timestamp = latestMessageInCompleteLines(tail.subarray(firstNewline + 1));
+        if (timestamp) return { timestamp, bytesRead, state: "observed" };
+        // Keep only the possibly split line. Complete lines have already been
+        // inspected as raw bytes, so a UTF-8 code point split at a chunk edge
+        // is never decoded and re-encoded into replacement characters.
+        tail = tail.subarray(0, firstNewline);
+      }
+    }
+    if (position > 0)
+      return {
+        timestamp: undefined,
+        bytesRead,
+        state: "unknown",
+        reason: "tail_scan_cap_exhausted",
+      };
+    const timestamp = messageTimestampFromLine(tail);
+    return timestamp
+      ? { timestamp, bytesRead, state: "observed" }
+      : { timestamp: undefined, bytesRead, state: "absent" };
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+/**
+ * A bounded header/tail scan is the cold-start catalog. Full JSONL parsing is
+ * deferred until a Session falls inside the requested response window.
+ */
+export function readSessionCatalogMetadata(path) {
+  const stat = statSync(path);
+  const header = readAppendedBytes(path, 0, Math.min(stat.size, 64 * 1024));
+  const session = parseCatalogHeader(header, path);
+  if (!session)
+    return {
+      session: null,
+      rejected: { source: path, reason: "missing_session_header" },
+      catalogTrace: { bytesRead: header.length },
+    };
+  const tail = latestMessageFromTail(path, stat.size);
+  return {
+    session: {
+      ...session,
+      lastMessageAt: tail.timestamp,
+      lastMessageAtEvidence: {
+        state: tail.state,
+        source: "bounded_tail_scan",
+        reason: tail.reason,
+      },
+    },
+    rejected: null,
+    catalogTrace: {
+      bytesRead: header.length + tail.bytesRead,
+      tailScan: {
+        state: tail.state,
+        reason: tail.reason,
+        maxBytes: CATALOG_TAIL_MAX_BYTES,
+      },
+    },
+  };
+}
+
+export class SessionCatalog {
+  constructor() {
+    this.files = new Map();
+  }
+  read(path) {
+    const stat = statSync(path);
+    const cached = this.files.get(path);
+    if (cached?.stamp === catalogStamp(stat))
+      return {
+        ...cached.value,
+        catalogCacheHit: true,
+        catalogTrace: { ...cached.value.catalogTrace, bytesRead: 0 },
+      };
+    const value = readSessionCatalogMetadata(path);
+    this.files.set(path, { stamp: catalogStamp(stat), value });
+    return { ...value, catalogCacheHit: false };
+  }
 }
 
 export function parseSessionJsonl(text, source = "unknown") {
@@ -857,6 +1125,116 @@ export function findSessionFiles(root = join(homedir(), ".pi", "agent", "session
   return files.sort();
 }
 
+export const SNAPSHOT_WINDOWS = new Map([
+  ["15m", 15 * 60_000],
+  ["1h", 60 * 60_000],
+  ["6h", 6 * 60 * 60_000],
+  ["24h", 24 * 60 * 60_000],
+]);
+export const HISTORY_PAGE_SIZE = 100;
+
+function decodeHistoryCursor(cursor) {
+  if (cursor === undefined) return null;
+  if (typeof cursor !== "string" || !cursor) throw new Error("invalid_snapshot_cursor");
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+    if (
+      typeof parsed?.at !== "number" ||
+      !Number.isFinite(parsed.at) ||
+      typeof parsed?.id !== "string"
+    )
+      throw new Error("invalid_snapshot_cursor");
+    return parsed;
+  } catch (error) {
+    if (error instanceof Error && error.message === "invalid_snapshot_cursor") throw error;
+    throw new Error("invalid_snapshot_cursor", { cause: error });
+  }
+}
+
+function encodeHistoryCursor(item) {
+  return Buffer.from(JSON.stringify({ at: item.at, id: item.session.id })).toString("base64url");
+}
+
+function sessionCatalogEntry(item) {
+  const session = item.session ?? item;
+  const at = Date.parse(session?.lastMessageAt ?? "");
+  return Number.isFinite(at) ? { item, session, at } : null;
+}
+
+/**
+ * Selects a metadata response by canonical message evidence. This deliberately
+ * does not use file mtime, process heartbeat, or cwd as a session-activity
+ * substitute. The opaque history cursor makes the all-history view stable and
+ * bounded even when a host has thousands of session logs.
+ */
+export function selectSessionWindow(
+  parsedSessions,
+  { window = "full", cursor, now = Date.now(), limit = HISTORY_PAGE_SIZE, from, to } = {},
+) {
+  const allSessions = parsedSessions
+    .map((item) => item?.session ?? item)
+    .filter((session) => typeof session?.id === "string");
+  const catalog = parsedSessions
+    .map(sessionCatalogEntry)
+    .filter(Boolean)
+    .sort((a, b) => b.at - a.at || a.session.id.localeCompare(b.session.id));
+  if (window === "full") {
+    return {
+      // Full is used by internal callers which need all source records,
+      // including a syntactically valid Session without message evidence.
+      selected: new Set(allSessions.map((session) => session.id)),
+      messageFrom: null,
+      messageTo: null,
+      page: { window: "all", nextCursor: null, hasOlder: false, source: "last_message_at" },
+    };
+  }
+  if (window !== "all") {
+    const duration = SNAPSHOT_WINDOWS.get(window);
+    if (!duration) throw new Error(`invalid_snapshot_window:${window}`);
+    const upperBound = Number.isFinite(to) ? to : null;
+    const lowerBound = Number.isFinite(from) ? from : (upperBound ?? now) - duration;
+    return {
+      selected: new Set(
+        catalog
+          .filter((item) => item.at >= lowerBound && (upperBound === null || item.at <= upperBound))
+          .map((item) => item.session.id),
+      ),
+      messageFrom: lowerBound,
+      messageTo: upperBound,
+      page: { window, nextCursor: null, hasOlder: false, source: "last_message_at" },
+    };
+  }
+  const lowerBound = Number.isFinite(from) ? from : null;
+  const upperBound = Number.isFinite(to) ? to : null;
+  const boundedCatalog = catalog.filter(
+    (item) =>
+      (lowerBound === null || item.at >= lowerBound) &&
+      (upperBound === null || item.at <= upperBound),
+  );
+  const decoded = decodeHistoryCursor(cursor);
+  const eligible = decoded
+    ? boundedCatalog.filter(
+        (item) => item.at < decoded.at || (item.at === decoded.at && item.session.id > decoded.id),
+      )
+    : boundedCatalog;
+  const pageItems = eligible.slice(
+    0,
+    Math.max(1, Math.min(Number(limit) || HISTORY_PAGE_SIZE, HISTORY_PAGE_SIZE)),
+  );
+  const hasOlder = eligible.length > pageItems.length;
+  return {
+    selected: new Set(pageItems.map((item) => item.session.id)),
+    messageFrom: pageItems.at(-1)?.at ?? null,
+    messageTo: pageItems[0]?.at ?? null,
+    page: {
+      window: "all",
+      nextCursor: hasOlder && pageItems.length ? encodeHistoryCursor(pageItems.at(-1)) : null,
+      hasOlder,
+      source: "last_message_at",
+    },
+  };
+}
+
 export function collectSnapshot(options = {}) {
   const started = performance.now();
   const tmux = queryTmux(options.run, options.sockets);
@@ -878,34 +1256,66 @@ export function collectSnapshot(options = {}) {
     processes,
   });
   const cache = options.cache ?? new SessionCache();
+  const catalogCache = options.catalogCache ?? new SessionCatalog();
   const sessionFiles = options.sessionFiles ?? findSessionFiles(options.sessionsRoot);
-  const sessions = [],
-    turns = [],
-    requests = [],
-    keyMessages = [];
+  const catalogSessions = [];
   let cacheHits = 0;
+  let catalogCacheHits = 0;
+  let catalogBytesRead = 0;
+  let catalogUnknownLastMessageAt = 0;
   const sessionCacheTrace = { bytesRead: 0, linesParsed: 0, appendCount: 0, rebuildCount: 0 };
   for (const path of sessionFiles) {
     try {
-      const parsed = cache.read(path);
-      if (parsed.cacheHit) cacheHits++;
-      for (const key of Object.keys(sessionCacheTrace))
-        sessionCacheTrace[key] += parsed.cacheTrace?.[key] ?? 0;
-      if (parsed.session) sessions.push(parsed.session);
-      turns.push(...parsed.turns);
-      requests.push(...parsed.requests);
-      keyMessages.push(...parsed.keyMessages);
-      rejected.push(...parsed.rejected);
+      const catalog = catalogCache.read(path);
+      if (catalog.catalogCacheHit) catalogCacheHits += 1;
+      catalogBytesRead += catalog.catalogTrace?.bytesRead ?? 0;
+      if (catalog.session?.lastMessageAtEvidence?.state === "unknown")
+        catalogUnknownLastMessageAt += 1;
+      if (catalog.session) catalogSessions.push({ path, session: catalog.session });
+      if (catalog.rejected) rejected.push(catalog.rejected);
     } catch (error) {
       rejected.push({ source: path, reason: "read_failed", error: errorSummary(error) });
     }
   }
+  const selection = selectSessionWindow(
+    catalogSessions.map((item) => item.session),
+    options,
+  );
+  const selectedParses = [];
+  for (const item of catalogSessions) {
+    if (!selection.selected.has(item.session.id)) continue;
+    try {
+      const parsed = cache.read(item.path);
+      if (parsed.cacheHit) cacheHits++;
+      for (const key of Object.keys(sessionCacheTrace))
+        sessionCacheTrace[key] += parsed.cacheTrace?.[key] ?? 0;
+      if (parsed.session) selectedParses.push(parsed);
+      rejected.push(...parsed.rejected);
+    } catch (error) {
+      rejected.push({ source: item.path, reason: "read_failed", error: errorSummary(error) });
+    }
+  }
+  const sessions = selectedParses.map((parsed) => parsed.session);
+  const turns = selectedParses.flatMap((parsed) => parsed.turns);
+  const requests = selectedParses.flatMap((parsed) => parsed.requests);
+  const rarebits = selectedParses.flatMap((parsed) =>
+    parsed.rarebits.filter((marker) => {
+      const at = Date.parse(marker.timestamp ?? "");
+      return (
+        Number.isFinite(at) &&
+        (selection.messageFrom === null || at >= selection.messageFrom) &&
+        (selection.messageTo === null || at <= selection.messageTo)
+      );
+    }),
+  );
+  const allCatalogSessions = catalogSessions.map((item) => item.session);
+
   // The atomic hot projection is the authoritative current observation when
   // both representations exist; append-only lifecycle events remain the
   // historical source and fallback.
   const exactRecords = [...lifecycle.accepted, ...sidecars.accepted];
   const exactByPid = new Map(exactRecords.map((item) => [item.pid, item]));
-  const sessionById = new Map(sessions.map((item) => [item.id, item]));
+  const sessionById = new Map(allCatalogSessions.map((item) => [item.id, item]));
   const teamMembershipsByPid = new Map();
   for (const membership of piTeams.memberships.filter((item) => item.pid)) {
     const candidates = teamMembershipsByPid.get(membership.pid) ?? [];
@@ -927,12 +1337,20 @@ export function collectSnapshot(options = {}) {
         }
       : undefined;
     const processBinding = { confidence: "exact", source: "ps", pid: process.pid };
+    const processObservation = { pid: process.pid, state: "running" };
     return exact
       ? {
           ...exact,
           pane,
           coordination,
-          process: { pid: process.pid },
+          process: processObservation,
+          processState: "running",
+          workState: {
+            availability: "observed",
+            state: exact.state,
+            evidenceSource: exact.source,
+            observedAt: exact.heartbeatAt,
+          },
           processBinding,
           sessionBinding: exact.sessionId
             ? {
@@ -948,25 +1366,44 @@ export function collectSnapshot(options = {}) {
           processStartedAt: process.startTime,
           pid: process.pid,
           cwd: pane.cwd,
-          state: "unknown",
           pane,
           coordination,
-          process: { pid: process.pid },
+          process: processObservation,
+          processState: "running",
+          workState: {
+            availability: "unobserved",
+            reason: "lifecycle_evidence_unavailable",
+          },
           processBinding,
           confidence: "process_only",
         };
   });
-  inferLiveMetadata(liveAgents, sessions, piTeams.memberships, piTeams.teams);
+  inferLiveMetadata(liveAgents, allCatalogSessions, piTeams.memberships, piTeams.teams);
+  const visibleLiveAgents = liveAgents.filter(
+    // A live sidecar can truthfully bind a just-created Session before that
+    // JSONL is discoverable. Keep that runtime-only evidence instead of
+    // treating the catalog's temporary absence as a stopped process.
+    (agent) =>
+      !agent.sessionId ||
+      !sessionById.has(agent.sessionId) ||
+      selection.selected.has(agent.sessionId),
+  );
   return {
+    schemaVersion: SNAPSHOT_SCHEMA_VERSION,
     generatedAt: new Date().toISOString(),
-    sourceVersion: 1,
     sessions,
     turns,
     requests,
-    keyMessages,
-    liveAgents,
+    rarebits,
+    liveAgents: visibleLiveAgents,
     teams: piTeams.teams,
-    teamMemberships: piTeams.memberships,
+    teamMemberships: piTeams.memberships.map((membership) => ({
+      teamName: membership.teamName,
+      agentName: membership.agentName,
+      role: membership.role,
+      pid: membership.pid,
+      source: membership.source,
+    })),
     trace: {
       durationMs: performance.now() - started,
       tmux: tmux.diagnostics,
@@ -994,14 +1431,25 @@ export function collectSnapshot(options = {}) {
         inferredProcessStartBatch: liveAgents.filter(
           (agent) => agent.sessionConfidence === "inferred_process_start_batch",
         ).length,
+        inferredUniqueRecent: liveAgents.filter(
+          (agent) => agent.sessionConfidence === "inferred_unique_recent_session",
+        ).length,
         inferredRecentNamed: liveAgents.filter(
           (agent) => agent.sessionConfidence === "inferred_recent_named_session",
         ).length,
       },
       sessionFiles: sessionFiles.length,
+      catalogSessions: allCatalogSessions.length,
+      responseSessions: sessions.length,
+      catalog: {
+        cacheHits: catalogCacheHits,
+        bytesRead: catalogBytesRead,
+        unknownLastMessageAt: catalogUnknownLastMessageAt,
+      },
       cacheHits,
       sessionCache: sessionCacheTrace,
       rejected: [...rejected, ...sidecars.rejected, ...lifecycle.rejected, ...piTeams.rejected],
     },
+    page: selection.page,
   };
 }

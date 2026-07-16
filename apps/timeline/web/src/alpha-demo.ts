@@ -59,7 +59,7 @@ export function alphaDemoSnapshot(): AlphaSnapshot {
               ],
               provenance: meta("timeline-runtime", id),
             },
-      keyMessageSummary: {
+      rarebitSummary: {
         state: freshness === "unknown" ? "unknown" : "observed",
         items:
           freshness === "unknown"

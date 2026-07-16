@@ -6,12 +6,42 @@ The application is a local, metadata-only observatory for Pi sessions. It does n
 pi-messenger, or pi-teams, and it never exposes prompt, completion, tool argument, or tool output
 content.
 
+The default `/api/snapshot` is a 24-hour activity projection, keyed only by the latest persisted
+user or assistant message timestamp. A server-owned, stat-invalidated catalog performs a bounded
+JSONL header/tail scan for every known file; it fully parses only Sessions selected for the
+requested page. `all` and custom ranges longer than 24 hours use opaque reverse-time cursors, so
+history is progressively materialized rather than returned as one giant payload. File mtime, cwd,
+and runtime heartbeat are not substitutes for historical Session activity. The tail scan preserves
+raw UTF-8 bytes across chunk boundaries and has an explicit byte cap; when the cap is exhausted
+before finding message evidence, activity is reported as `unknown` and excluded from time-window
+claims rather than inferred from unrelated file or runtime metadata.
+
+The web UI renders newest time at the left, while `Session ID` remains the identity throughout. Its
+Intelligent projection is one group whose lanes sort by a presentation tuple (Team, member/role,
+Session label, effective Project label). The fourth coordinate prefers an explicit Project label and
+otherwise uses the cwd basename as a workspace label; that fallback is not Project identity or
+association evidence. The lane title compactly joins only the tuple's present coordinates with `|`,
+while sorting retains all four fixed slots; neither operation merges distinct Session evidence.
+Process and work state remain separate. A validated process without lifecycle evidence reads
+`Running · work state unavailable`; only an accepted lifecycle lease may render working/idle/tool
+color. A stopped lane remains gray.
+
+Lane geometry composes two independent metadata projections. User markers come from Rarebit
+evidence, while every persisted assistant Request projects its raw `stopReason` as an outcome:
+`toolUse` is a small hollow circle, `stop` is a larger solid circle, and other terminal reasons are
+crosses while retaining their exact reason. Four SVG paths per lane preserve dense evidence without
+one focusable DOM node per Request; Rarebit counts and summaries remain separate.
+
 ## Deployed stack and process topology
 
 The production dashboard is deliberately small: Node.js reads local source artifacts and serves a
 Vite-built React application. There is no Express, Next.js, container layer, or application
 database. Native Pi JSONL and tmux/team artifacts remain canonical; the in-memory snapshot is a
 rebuildable projection.
+
+The Timeline directory is also a Pi extension package. A host may add that directory once to Pi's
+`packages` setting; Pi then loads the declared lifecycle extension for new processes. This is a
+deployment adapter, not a new service.
 
 ```text
 ~/.pi/agent/sessions/**/*.jsonl ----+
@@ -92,6 +122,7 @@ never presented as Pi session IDs.
 
 ```text
 ProcessState = alive | exited | unknown
+WorkStateAvailability = observed | unobserved
 WorkState = idle | thinking | tool | waiting_input | settled | failed
 ```
 
@@ -143,8 +174,9 @@ process-tree snapshot, and joins Pi descendants to panes. Extension leases are a
 when PID/process-start/pane/heartbeat all validate. Without an extension, process ancestry proves a
 live Pi process but JSONL session binding is explicitly heuristic or unknown.
 
-- `GET /api/snapshot`: sessions, submissions, runs, steps, requests, intervals, live tmux state,
-  source version, and generation time.
+- `GET /api/snapshot`: schema version `2`, sessions, requests and raw stop reasons, Rarebit marker
+  metadata, process/work observations, live tmux state, and generation time. The frontend accepts
+  only its exact projection version and renders incompatibility as an operator-visible error.
 - `GET /api/events`: SSE invalidation/status stream; clients refetch snapshot.
 - `GET /api/trace`: sources, checkpoints, candidates, rejection reasons, parse timing, redactions,
   and tmux diagnostics.

@@ -13,6 +13,7 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   SessionCache,
+  SessionCatalog,
   collectSnapshot,
   discoverTmuxSockets,
   inferLiveMetadata,
@@ -22,8 +23,10 @@ import {
   parseTmuxPanes,
   queryProcesses,
   queryTmux,
+  readSessionCatalogMetadata,
   readLifecycleLeases,
   readLiveSidecars,
+  selectSessionWindow,
 } from "../collector.js";
 
 const paneLine = "$1\twork\t@2\t0\tagents\t%3\t1\t100\t/dev/ttys001\t/repo\tzsh\t0";
@@ -68,7 +71,7 @@ test("multi-socket tmux query keeps failure diagnostics", () => {
   );
 });
 
-test("isolated real tmux server maps a live Pi-shaped process", { timeout: 10_000 }, (t) => {
+test("isolated real tmux server maps a live Pi-shaped process", { timeout: 10_000 }, async (t) => {
   try {
     execFileSync("tmux", ["-V"]);
   } catch {
@@ -83,10 +86,27 @@ test("isolated real tmux server maps a live Pi-shaped process", { timeout: 10_00
     } catch {}
   });
   execFileSync("tmux", ["-S", socket, "new-session", "-d", "bash", "-c", "exec -a pi sleep 30"]);
-  const tmux = queryTmux(execFileSync, [socket]);
-  assert.equal(tmux.panes.length, 1);
-  const mapped = mapPiProcessesToPanes(tmux.panes, queryProcesses(execFileSync));
-  assert.equal(mapped.length, 1);
+  const deadline = Date.now() + 3_000;
+  let observation = { tmux: { panes: [], diagnostics: [] }, mapped: [], processCount: 0 };
+  while (Date.now() < deadline) {
+    const tmux = queryTmux(execFileSync, [socket]);
+    const processes = queryProcesses(execFileSync);
+    const mapped = mapPiProcessesToPanes(tmux.panes, processes);
+    observation = { tmux, mapped, processCount: processes.length };
+    if (tmux.panes.length === 1 && mapped.length === 1) break;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.equal(
+    observation.tmux.panes.length,
+    1,
+    `tmux pane was not ready: ${JSON.stringify(observation.tmux.diagnostics)}`,
+  );
+  assert.equal(
+    observation.mapped.length,
+    1,
+    `Pi process was not ready: ${JSON.stringify({ tmux: observation.tmux.diagnostics, processCount: observation.processCount })}`,
+  );
+  const mapped = observation.mapped;
   assert.equal(mapped[0].pane.serverSocket, socket);
 });
 
@@ -304,6 +324,62 @@ test("tmux window binding refuses duplicate named sessions in one cwd", () => {
   assert.equal(agent.sessionBinding, undefined);
 });
 
+test("solo pre-lifecycle Pi binds one Session created 47 seconds after process start", () => {
+  const workState = {
+    availability: "unobserved",
+    reason: "lifecycle_evidence_unavailable",
+  };
+  const agent = {
+    pid: 77129,
+    processStartedAt: "2026-07-16T04:46:30.000Z",
+    cwd: "/workspaces/example-project",
+    workState,
+  };
+  const session = {
+    id: "example-session",
+    name: "20260716-Example Session",
+    cwd: "/workspaces/example-project",
+    startedAt: "2026-07-16T04:47:17.000Z",
+    source: "/sessions/example-session.jsonl",
+  };
+
+  inferLiveMetadata([agent], [session], [], []);
+
+  assert.equal(agent.sessionId, session.id);
+  assert.equal(agent.sessionName, session.name);
+  assert.equal(agent.sessionConfidence, "inferred_unique_recent_session");
+  assert.deepEqual(agent.sessionBinding, {
+    confidence: "inferred_unique_recent_session",
+    sessionSource: session.source,
+    kind: "unique_recent_session",
+    value: session.startedAt,
+    processSource: "ps",
+  });
+  assert.equal(agent.workState, workState);
+});
+
+test("solo startup compatibility binding fails closed with a second agent or Session", () => {
+  const agent = (pid) => ({
+    pid,
+    processStartedAt: "2026-07-16T04:46:30.000Z",
+    cwd: "/workspaces/example-project",
+  });
+  const session = (id, seconds) => ({
+    id,
+    cwd: "/workspaces/example-project",
+    startedAt: `2026-07-16T04:47:${seconds}.000Z`,
+    source: `/sessions/${id}.jsonl`,
+  });
+  const withSecondAgent = [agent(77129), agent(77130)];
+  inferLiveMetadata(withSecondAgent, [session("one", "17")], [], []);
+  assert.ok(withSecondAgent.every((item) => item.sessionId === undefined));
+
+  const oneAgent = agent(77129);
+  inferLiveMetadata([oneAgent], [session("one", "17"), session("two", "18")], [], []);
+  assert.equal(oneAgent.sessionId, undefined);
+  assert.equal(oneAgent.sessionBinding, undefined);
+});
+
 test("same-second teammate spawn batch receives distinct session IDs by stable order", () => {
   const pane = (paneId) => ({
     serverSocket: "/tmp/a",
@@ -362,6 +438,7 @@ test("sidecars require a live process, valid lease, pane, and ancestry", () => {
     { pid: 120, ppid: 100, tty: "t", command: "pi" },
   ];
   const base = {
+    schemaVersion: 1,
     processInstanceId: "host:120:1",
     processStartedAt: "2026-07-11T10:00:00.000Z",
     pid: 120,
@@ -443,7 +520,7 @@ test("lifecycle event logs materialize an exact leased live record", () => {
       state: "tool",
       context: { tokens: 10, window: 100, percent: 10 },
     },
-  ];
+  ].map((event) => ({ schemaVersion: 1, ...event }));
   writeFileSync(join(root, "boot.jsonl"), events.map(JSON.stringify).join("\n"));
   const result = readLifecycleLeases({
     dir: root,
@@ -464,6 +541,71 @@ test("lifecycle event logs materialize an exact leased live record", () => {
   assert.equal(result.accepted[0].sessionId, "s1");
   assert.equal(result.accepted[0].state, "tool");
   assert.equal(result.accepted[0].activeTool, "bash");
+});
+
+test("lifecycle inputs reject unsupported schema versions", () => {
+  const sidecars = mkdtempSync(join(tmpdir(), "pi-sidecar-schema-"));
+  writeFileSync(
+    join(sidecars, "future.json"),
+    JSON.stringify({ schemaVersion: 2, pid: 1, processInstanceId: "p", processStartedAt: "x" }),
+  );
+  assert.equal(
+    readLiveSidecars({ dir: sidecars }).rejected[0].reason,
+    "unsupported_schema_version",
+  );
+
+  const events = mkdtempSync(join(tmpdir(), "pi-event-schema-"));
+  writeFileSync(
+    join(events, "future.jsonl"),
+    `${JSON.stringify({ schemaVersion: 2, type: "process_started" })}\n`,
+  );
+  assert.equal(
+    readLifecycleLeases({ dir: events }).rejected[0].reason,
+    "unsupported_schema_version",
+  );
+});
+
+test("PID-validated PiTeams Session locator binds exactly only with matching generation and pane", () => {
+  const session = {
+    id: "session-exact",
+    source: "/sessions/session-exact.jsonl",
+    cwd: "/repo",
+    startedAt: "2026-07-16T04:00:00Z",
+  };
+  const agent = {
+    pid: 81616,
+    cwd: "/repo",
+    processStartedAt: "2026-07-16T04:07:18.000Z",
+    pane: { paneId: "%314", windowId: "@9" },
+  };
+  const membership = {
+    pid: 81616,
+    sessionFile: "/sessions/session-exact.jsonl",
+    isActive: true,
+    membershipId: "membership-1",
+    runtimeMembershipId: "membership-1",
+    runtimeStartedAt: "2026-07-16T04:07:19.800Z",
+    configuredTerminalId: "%314",
+    source: "/teams/example/config.json",
+  };
+  inferLiveMetadata([agent], [session], [membership], []);
+  assert.equal(agent.sessionId, "session-exact");
+  assert.equal(agent.sessionConfidence, undefined);
+  assert.deepEqual(agent.sessionBinding, {
+    confidence: "exact",
+    sessionSource: "/sessions/session-exact.jsonl",
+    kind: "pi_teams_session_file",
+    evidenceSource: "/teams/example/config.json",
+  });
+
+  const mismatch = {
+    ...agent,
+    sessionId: undefined,
+    sessionBinding: undefined,
+    pane: { paneId: "%9" },
+  };
+  inferLiveMetadata([mismatch], [session], [membership], []);
+  assert.equal(mismatch.sessionId, undefined);
 });
 
 test("JSONL parsing emits metadata only and reconciles turn cost", () => {
@@ -496,16 +638,18 @@ test("JSONL parsing emits metadata only and reconciles turn cost", () => {
   assert.equal(parsed.turns[0].requestCount, 1);
   assert.equal(parsed.requests[0].totalTokens, 15);
   assert.deepEqual(
-    parsed.keyMessages.map((marker) => marker.outcome),
+    parsed.rarebits.map((marker) => marker.outcome),
     ["user", "stop"],
   );
+  assert.equal(new URL(parsed.session.links.live).pathname, "/session/s1");
+  assert.equal(new URL(parsed.session.links.tps).searchParams.get("session"), "s1");
   assert.ok(!JSON.stringify(parsed).includes(secret));
 
   const nativeUsage = input.replace('"totalTokens":15,', '"cacheRead":3,"cacheWrite":2,');
   assert.equal(parseSessionJsonl(nativeUsage, "native").requests[0].totalTokens, 20);
 });
 
-test("Key Message markers share the summary predicate without serializing session prose", () => {
+test("Rarebit markers share the summary predicate without serializing session prose", () => {
   const secret = "SENTINEL_KEY_MESSAGE_PROSE";
   const parsed = parseSessionJsonl(
     [
@@ -562,7 +706,7 @@ test("Key Message markers share the summary predicate without serializing sessio
     "fixture",
   );
   assert.deepEqual(
-    parsed.keyMessages.map(({ sourceEntryId, role, outcome }) => ({
+    parsed.rarebits.map(({ sourceEntryId, role, outcome }) => ({
       sourceEntryId,
       role,
       outcome,
@@ -573,7 +717,7 @@ test("Key Message markers share the summary predicate without serializing sessio
       { sourceEntryId: "stop", role: "assistant", outcome: "stop" },
     ],
   );
-  assert.equal(JSON.stringify(parsed.keyMessages).includes(secret), false);
+  assert.equal(JSON.stringify(parsed.rarebits).includes(secret), false);
 });
 
 test("lastMessageAt uses the latest valid persisted user or assistant message timestamp", () => {
@@ -602,6 +746,197 @@ test("lastMessageAt uses the latest valid persisted user or assistant message ti
   );
   assert.equal(parsed.session.lastMessageAt, "2026-01-01T00:01:02Z");
   assert.equal(parsed.session.endedAt, "2026-01-01T00:01:01Z");
+});
+
+test("catalog windowing uses persisted message time, pages older history, and avoids cold full parses", () => {
+  const now = Date.parse("2026-01-02T00:00:00Z");
+  const sessions = [
+    { id: "recent", lastMessageAt: "2026-01-01T23:55:00Z" },
+    { id: "old", lastMessageAt: "2025-12-30T00:00:00Z" },
+  ];
+  const recent = selectSessionWindow(sessions, { window: "15m", now });
+  assert.deepEqual([...recent.selected], ["recent"]);
+  const first = selectSessionWindow(sessions, { window: "all", limit: 1 });
+  assert.deepEqual([...first.selected], ["recent"]);
+  assert.equal(first.page.hasOlder, true);
+  const second = selectSessionWindow(sessions, {
+    window: "all",
+    cursor: first.page.nextCursor,
+    limit: 1,
+  });
+  assert.deepEqual([...second.selected], ["old"]);
+  assert.throws(
+    () => selectSessionWindow(sessions, { window: "all", cursor: "not-a-cursor" }),
+    /invalid_snapshot_cursor/,
+  );
+});
+
+test("fixed windows use lastMessageAt and anchor a historical window to its explicit upper bound", () => {
+  const now = Date.parse("2026-01-10T00:00:00Z");
+  const historicalEnd = Date.parse("2026-01-02T00:00:00Z");
+  const sessions = [
+    { id: "inside", lastMessageAt: "2026-01-01T23:30:00Z" },
+    { id: "too-old", lastMessageAt: "2026-01-01T22:30:00Z" },
+    { id: "too-new", lastMessageAt: "2026-01-02T00:30:00Z" },
+  ];
+
+  const selected = selectSessionWindow(sessions, {
+    window: "1h",
+    now,
+    to: historicalEnd,
+  });
+
+  assert.deepEqual([...selected.selected], ["inside"]);
+  assert.equal(selected.messageFrom, historicalEnd - 60 * 60_000);
+  assert.equal(selected.messageTo, historicalEnd);
+});
+
+test("history cursor remains stable when Sessions share the same lastMessageAt", () => {
+  const sessions = ["c", "a", "b"].map((id) => ({
+    id,
+    lastMessageAt: "2026-01-01T00:00:00Z",
+  }));
+
+  const first = selectSessionWindow(sessions, { window: "all", limit: 2 });
+  const second = selectSessionWindow(sessions, {
+    window: "all",
+    cursor: first.page.nextCursor,
+    limit: 2,
+  });
+
+  assert.deepEqual([...first.selected], ["a", "b"]);
+  assert.deepEqual([...second.selected], ["c"]);
+});
+
+test("bounded collection skips full JSONL parsing for catalog entries outside the response window", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-catalog-window-"));
+  const path = join(root, "old.jsonl");
+  writeFileSync(
+    path,
+    [
+      { type: "session", id: "old", timestamp: "2025-01-01T00:00:00Z", cwd: "/repo" },
+      { type: "message", id: "u", timestamp: "2025-01-01T00:01:00Z", message: { role: "user" } },
+      {
+        type: "message",
+        id: "large",
+        timestamp: "2025-01-01T00:02:00Z",
+        message: { role: "assistant", usage: {} },
+        padding: "x".repeat(200_000),
+      },
+      {
+        type: "message",
+        id: "latest",
+        timestamp: "2025-01-01T00:03:00Z",
+        message: { role: "user" },
+      },
+    ]
+      .map(JSON.stringify)
+      .join("\n"),
+  );
+  const snapshot = collectSnapshot({
+    sessionFiles: [path],
+    cache: { read: () => assert.fail("old Session must not be full-parsed") },
+    catalogCache: new SessionCatalog(),
+    sockets: [],
+    processes: [],
+    window: "24h",
+    now: Date.parse("2026-01-02T00:00:00Z"),
+  });
+  assert.equal(snapshot.sessions.length, 0);
+  assert.equal(snapshot.trace.responseSessions, 0);
+  assert.ok(snapshot.trace.catalog.bytesRead < 200_000);
+});
+
+test("catalog tail scan preserves a Unicode message split across 64 KiB chunks", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-catalog-unicode-tail-"));
+  const path = join(root, "unicode.jsonl");
+  const header = JSON.stringify({
+    type: "session",
+    id: "unicode",
+    timestamp: "2026-01-01T00:00:00Z",
+    cwd: "/repo",
+  });
+  const timestamp = "2026-01-01T00:10:00Z";
+  const message = JSON.stringify({
+    type: "message",
+    id: "unicode-message",
+    timestamp,
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "界".repeat(30_000) }],
+    },
+  });
+  const unicodeStart = Buffer.byteLength(`${header}\n${message.slice(0, message.indexOf("界"))}`);
+  const unicodeEnd = unicodeStart + Buffer.byteLength("界".repeat(30_000));
+  let body;
+  let crossing;
+  for (let pad = 0; pad < 3; pad += 1) {
+    const trailing = Array.from({ length: 96 }, (_, index) =>
+      JSON.stringify({ type: "session_name", name: `${index}-${"x".repeat(2_000)}` }),
+    );
+    trailing.push(JSON.stringify({ type: "session_name", name: "z".repeat(pad) }));
+    body = [header, message, ...trailing].join("\n");
+    const size = Buffer.byteLength(body);
+    crossing = Array.from(
+      { length: Math.ceil(size / (64 * 1024)) },
+      (_, index) => size - (index + 1) * 64 * 1024,
+    ).find(
+      (boundary) =>
+        boundary > unicodeStart &&
+        boundary < unicodeEnd &&
+        (boundary - unicodeStart) % Buffer.byteLength("界") !== 0,
+    );
+    if (crossing !== undefined) break;
+  }
+  assert.notEqual(crossing, undefined, "fixture must split a UTF-8 code point at a chunk edge");
+  writeFileSync(path, body);
+
+  const catalog = readSessionCatalogMetadata(path);
+  assert.equal(catalog.session.lastMessageAt, timestamp);
+  assert.deepEqual(catalog.session.lastMessageAtEvidence, {
+    state: "observed",
+    source: "bounded_tail_scan",
+    reason: undefined,
+  });
+  assert.equal(catalog.catalogTrace.tailScan.state, "observed");
+});
+
+test("catalog tail scan reports unknown when trailing records exhaust its byte cap", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-catalog-cap-"));
+  const path = join(root, "capped.jsonl");
+  const timestamp = "2026-01-01T23:55:00Z";
+  const lines = [
+    { type: "session", id: "capped", timestamp: "2026-01-01T00:00:00Z", cwd: "/repo" },
+    { type: "message", id: "recent", timestamp, message: { role: "user" } },
+    ...Array.from({ length: 560 }, (_, index) => ({
+      type: "session_name",
+      name: `${index}-${"x".repeat(2_000)}`,
+    })),
+  ];
+  writeFileSync(path, lines.map(JSON.stringify).join("\n"));
+
+  const catalog = readSessionCatalogMetadata(path);
+  assert.equal(catalog.session.lastMessageAt, undefined);
+  assert.deepEqual(catalog.session.lastMessageAtEvidence, {
+    state: "unknown",
+    source: "bounded_tail_scan",
+    reason: "tail_scan_cap_exhausted",
+  });
+  assert.deepEqual(catalog.catalogTrace.tailScan, {
+    state: "unknown",
+    reason: "tail_scan_cap_exhausted",
+    maxBytes: 1024 * 1024,
+  });
+
+  const selected = selectSessionWindow(
+    [
+      catalog.session,
+      { id: "recent", lastMessageAt: "2026-01-01T23:50:00Z" },
+      { id: "old", lastMessageAt: "2026-01-01T20:00:00Z" },
+    ],
+    { window: "1h", now: Date.parse("2026-01-02T00:00:00Z") },
+  );
+  assert.deepEqual([...selected.selected], ["recent"]);
 });
 
 test("session cache is keyed by source stat identity", () => {
@@ -761,6 +1096,7 @@ test("snapshot never exposes process argv or raw command errors", () => {
           agentType: "teammate",
           cwd: "/repo",
           tmuxPaneId: "%old",
+          sessionFile: "/sessions/private-builder.jsonl",
           prompt: sentinel,
         },
       ],
@@ -786,7 +1122,14 @@ test("snapshot never exposes process argv or raw command errors", () => {
   });
   assert.equal(snapshot.liveAgents.length, 1);
   assert.equal(JSON.stringify(snapshot).includes(sentinel), false);
-  assert.deepEqual(snapshot.liveAgents[0].process, { pid: 120 });
+  assert.deepEqual(snapshot.liveAgents[0].process, { pid: 120, state: "running" });
+  assert.equal(snapshot.liveAgents[0].processState, "running");
+  assert.deepEqual(snapshot.liveAgents[0].workState, {
+    availability: "unobserved",
+    reason: "lifecycle_evidence_unavailable",
+  });
+  assert.equal(snapshot.liveAgents[0].state, undefined);
+  assert.equal(snapshot.schemaVersion, 2);
   assert.deepEqual(snapshot.liveAgents[0].coordination, {
     kind: "pi-team",
     teamName: "alpha",
@@ -796,6 +1139,8 @@ test("snapshot never exposes process argv or raw command errors", () => {
     source: join(teamsRoot, "alpha", "config.json"),
   });
   assert.equal(snapshot.trace.piTeams.liveMatches, 1);
+  assert.equal(JSON.stringify(snapshot.teamMemberships).includes("sessionFile"), false);
+  assert.equal(JSON.stringify(snapshot.teamMemberships).includes("private-builder"), false);
 
   const failed = queryTmux(() => {
     throw new Error(sentinel);

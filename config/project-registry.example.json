@@ -12,7 +12,7 @@
         "repos": ["../example-workspace"],
         "evergreen": "../example-workspace/Evergreen.md",
         "beadsRoot": null,
-        "summaries": ["../example-state/key-msg-summary.jsonl"],
+        "summaries": ["../example-state/rarebit.jsonl"],
         "events": "../example-state/project-events.jsonl",
         "proposalDir": "../example-state/proposals",
         "sourceDocs": ["../example-workspace/README.md"]

@@ -65,6 +65,7 @@ export function createLifecycleExtension(options = {}) {
   const clock = () => now().toISOString();
   let ctx;
   let attachmentId;
+  let attachmentSessionName;
   let agentRunId;
   let workState = "idle";
   let activeTool;
@@ -91,7 +92,7 @@ export function createLifecycleExtension(options = {}) {
       pid: process.pid,
       sessionId: sessionId(),
       sessionFile: ctx?.sessionManager?.getSessionFile?.(),
-      sessionName: ctx?.sessionManager?.getSessionName?.(),
+      sessionName: attachmentSessionName,
       attachmentId,
       heartbeatAt,
       lastEventAt,
@@ -151,13 +152,14 @@ export function createLifecycleExtension(options = {}) {
     pi.on("session_start", (event, eventCtx) => {
       ctx = eventCtx;
       attachmentId = randomUUID();
+      attachmentSessionName = pi.getSessionName?.() ?? eventCtx.sessionManager.getSessionName?.();
       emit("session_attached", {
         sessionId: sessionId(),
         attachmentId,
         reason: event.reason,
         cwd: eventCtx.cwd,
         sessionFile: eventCtx.sessionManager.getSessionFile?.(),
-        name: pi.getSessionName?.() ?? eventCtx.sessionManager.getSessionName?.(),
+        name: attachmentSessionName,
         tmux: parseTmuxEnvironment(env),
         ...contextSnapshot(),
       });
@@ -169,13 +171,15 @@ export function createLifecycleExtension(options = {}) {
       }
       heartbeat();
     });
-    pi.on("session_info_changed", (event) =>
+    pi.on("session_info_changed", (event) => {
+      attachmentSessionName = event.name;
       emit("session_named", {
         sessionId: sessionId(),
         attachmentId,
         name: event.name ?? null,
-      }),
-    );
+      });
+      writeLive();
+    });
     pi.on("agent_start", () => {
       agentRunId = randomUUID();
       emit("agent_run_started", {
@@ -261,6 +265,7 @@ export function createLifecycleExtension(options = {}) {
       }
       ctx = undefined;
       attachmentId = undefined;
+      attachmentSessionName = undefined;
     });
   };
 }

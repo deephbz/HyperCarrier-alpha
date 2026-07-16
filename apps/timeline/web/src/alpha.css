@@ -263,7 +263,7 @@ body:has(.alpha-page) {
   outline: 3px solid #8b5cf6;
   outline-offset: 2px;
 }
-.alpha-summary-details .alpha-key-msg-summary-summary {
+.alpha-summary-details .alpha-rarebit-summary {
   max-height: 9rem;
   margin: 9px 0 0;
   overflow: auto;

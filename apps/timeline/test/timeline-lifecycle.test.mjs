@@ -1,19 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, readFileSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   createAtomicJsonSink,
   createLifecycleExtension,
   parseTmuxEnvironment,
   SCHEMA_VERSION,
 } from "../extensions/timeline-lifecycle.mjs";
-import { collectSnapshot, readLiveSidecars } from "../server/collector.js";
+import { collectSnapshot, readLifecycleLeases, readLiveSidecars } from "../server/collector.js";
 
 function harness() {
   const handlers = new Map();
   const records = [];
+  const liveRecords = [];
   const pi = {
     on(name, fn) {
       handlers.set(name, fn);
@@ -39,11 +41,12 @@ function harness() {
   };
   createLifecycleExtension({
     sink: (r) => records.push(r),
+    liveSink: (r) => liveRecords.push(r),
     boot,
     heartbeatMs: 0,
     now: () => new Date("2026-01-01T00:00:01.000Z"),
   })(pi);
-  return { handlers, records, ctx };
+  return { handlers, records, liveRecords, ctx };
 }
 
 test("parses tmux identity without titles or terminal content", () => {
@@ -118,6 +121,8 @@ test("atomic private live lease is accepted by collector, expires, and records s
   assert.equal(snapshot.liveAgents.length, 1);
   assert.equal(snapshot.liveAgents[0].confidence, "exact");
   assert.equal(snapshot.liveAgents[0].sessionId, "s1");
+  assert.equal(snapshot.liveAgents[0].processState, "running");
+  assert.equal(snapshot.liveAgents[0].workState.availability, "observed");
   const stale = readLiveSidecars({
     dir: root,
     now: Date.parse("2026-07-11T12:01:00Z"),
@@ -136,6 +141,13 @@ test("atomic private live lease is accepted by collector, expires, and records s
   });
   assert.equal(stopped.accepted.length, 0);
   assert.equal(stopped.rejected[0].reason, "process_stopped");
+});
+
+test("Timeline package declares its lifecycle extension for Pi package loading", () => {
+  const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+  const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  assert.deepEqual(manifest.pi.extensions, ["./extensions/timeline-lifecycle.mjs"]);
+  assert.ok(manifest.files.includes("extensions/timeline-lifecycle.mjs"));
 });
 
 test("emits distinct process, runtime, attachment, run, and model-step identities", () => {
@@ -211,4 +223,102 @@ test("heartbeat is a lease observation and shutdown closes only the attachment/r
     records.some((r) => r.type === "process_stopping"),
     false,
   );
+});
+
+test("session rename updates the hot lease immediately without changing exact identity", () => {
+  const { handlers, records, liveRecords, ctx } = harness();
+  handlers.get("session_start")({ reason: "startup" }, ctx);
+  const before = liveRecords.at(-1);
+
+  handlers.get("session_info_changed")({ name: "20260716-generated-title" }, ctx);
+
+  const named = records.findLast((record) => record.type === "session_named");
+  const after = liveRecords.at(-1);
+  assert.equal(named.name, "20260716-generated-title");
+  assert.equal(named.sessionId, "session-1");
+  assert.equal(after.sessionName, "20260716-generated-title");
+  assert.equal(after.sessionId, before.sessionId);
+  assert.equal(after.attachmentId, before.attachmentId);
+  assert.equal(liveRecords.length, 2);
+});
+
+test("append-only fallback uses the latest name from the current attachment", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-timeline-rename-"));
+  const events = join(root, "events");
+  const path = join(events, "boot-rename.jsonl");
+  const pane = {
+    serverSocket: "/tmp/a",
+    sessionId: "$1",
+    windowId: "@2",
+    paneId: "%3",
+    panePid: 100,
+    dead: false,
+  };
+  const processStartedAt = "2026-07-16T04:46:30.000Z";
+  const rows = [
+    {
+      schemaVersion: 1,
+      type: "process_started",
+      processBootId: "boot-rename",
+      pid: 120,
+      processStartedAt,
+      tmux: { serverSocket: "/tmp/a", paneId: "%3" },
+    },
+    {
+      schemaVersion: 1,
+      type: "session_attached",
+      sessionId: "old-session",
+      attachmentId: "old-attachment",
+      name: "old-session-name",
+      tmux: { serverSocket: "/tmp/a", paneId: "%3" },
+    },
+    {
+      schemaVersion: 1,
+      type: "session_attached",
+      sessionId: "exact-session",
+      attachmentId: "current-attachment",
+      name: "stale-attached-name",
+      tmux: { serverSocket: "/tmp/a", paneId: "%3" },
+    },
+    {
+      schemaVersion: 1,
+      type: "session_named",
+      sessionId: "old-session",
+      attachmentId: "old-attachment",
+      name: "wrong-attachment-name",
+    },
+    {
+      schemaVersion: 1,
+      type: "session_named",
+      sessionId: "exact-session",
+      attachmentId: "current-attachment",
+      name: "latest-current-name",
+    },
+    {
+      schemaVersion: 1,
+      type: "heartbeat",
+      sessionId: "exact-session",
+      attachmentId: "current-attachment",
+      state: "idle",
+      at: "2026-07-16T04:47:00.000Z",
+      leaseMs: 30_000,
+    },
+  ];
+  mkdirSync(events, { recursive: true });
+  writeFileSync(path, `${rows.map(JSON.stringify).join("\n")}\n`);
+
+  const result = readLifecycleLeases({
+    dir: events,
+    now: Date.parse("2026-07-16T04:47:10.000Z"),
+    panes: [pane],
+    processes: [
+      { pid: 100, ppid: 1, command: "zsh" },
+      { pid: 120, ppid: 100, command: "pi", startTime: processStartedAt },
+    ],
+    alive: () => true,
+  });
+
+  assert.equal(result.accepted.length, 1);
+  assert.equal(result.accepted[0].sessionId, "exact-session");
+  assert.equal(result.accepted[0].sessionName, "latest-current-name");
 });
