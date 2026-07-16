@@ -13,9 +13,14 @@
   ],
   "scripts": {
     "start": "npm --workspace pi-session-timeline start",
-    "test": "npm run test:packages && npm run test:timeline",
+    "start:traffic": "npm --workspace @hypercarrier/traffic-analysis start",
+    "start:stack": "npm --workspace pi-session-timeline run start:stack",
+    "start:better-url": "npm --workspace pi-session-timeline run start:better-url",
+    "test": "npm run test:packages && npm run test:timeline && npm run test:traffic",
     "test:packages": "node --test packages/*/test/*.test.mjs",
     "test:timeline": "npm --workspace pi-session-timeline test",
-    "build:timeline": "npm --workspace pi-session-timeline run build:web"
+    "test:traffic": "npm --workspace @hypercarrier/traffic-analysis test",
+    "build:timeline": "npm --workspace pi-session-timeline run build:web",
+    "build:traffic": "npm --workspace @hypercarrier/traffic-analysis run build"
   }
 }

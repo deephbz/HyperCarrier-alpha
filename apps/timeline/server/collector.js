@@ -125,18 +125,27 @@ export function queryTmux(run = execFileSync, sockets = discoverTmuxSockets()) {
   return { panes, diagnostics };
 }
 
+function processStartTime(value) {
+  const fields = value.split(/\s+/);
+  const normalized = /^\w{3}\s+\d+\s+\w{3}\b/.test(value)
+    ? `${fields[0]} ${fields[2]} ${fields[1]} ${fields.slice(3).join(" ")}`
+    : value;
+  const timestamp = Date.parse(normalized);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : undefined;
+}
+
 export function parseProcessTable(text) {
   const processes = [];
   for (const line of text.split("\n")) {
     const match = line.match(
-      /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(?:(\w{3}\s+\w{3}\s+\d+\s+\d\d:\d\d:\d\d\s+\d{4})\s+)?(.+)$/,
+      /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(?:(\w{3}\s+(?:\w{3}\s+\d+|\d+\s+\w{3})\s+\d\d:\d\d:\d\d\s+\d{4})\s+)?(.+)$/,
     );
     if (!match) continue;
     processes.push({
       pid: Number(match[1]),
       ppid: Number(match[2]),
       tty: match[3],
-      startTime: match[4] ? new Date(match[4]).toISOString() : undefined,
+      startTime: match[4] ? processStartTime(match[4]) : undefined,
       command: match[5],
     });
   }

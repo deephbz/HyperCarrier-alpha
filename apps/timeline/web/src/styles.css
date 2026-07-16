@@ -4,6 +4,7 @@
   background: #f7f7f5;
   font-synthesis: none;
   --label: clamp(320px, 38vw, 460px);
+  --selection: 34px;
   --rule: #deded9;
   --muted: #72726c;
   --paper: #fff;
@@ -231,6 +232,32 @@ h1 {
   width: 190px;
   flex: 0 0 190px;
 }
+.traffic-launch {
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 28px;
+  border-bottom: 1px solid var(--rule);
+  background: #f0f0ed;
+  color: var(--muted);
+  font-size: 11px;
+}
+.traffic-launch button,
+.traffic-action {
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  background: var(--paper);
+  color: var(--ink);
+  padding: 6px 9px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.traffic-launch button:disabled,
+.traffic-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
 .workspace {
   display: flex;
   align-items: stretch;
@@ -241,7 +268,7 @@ h1 {
 }
 .ruler-row {
   display: grid;
-  grid-template-columns: var(--label) 1fr;
+  grid-template-columns: var(--selection) var(--label) 1fr;
   position: sticky;
   top: var(--app-toolbar-block-size);
   z-index: 8;
@@ -272,6 +299,7 @@ h1 {
   font-weight: 600;
 }
 .label-heading {
+  grid-column: 1 / 3;
   height: 40px;
   display: flex;
   align-items: center;
@@ -344,7 +372,7 @@ h1 {
 .lane {
   position: relative;
   display: grid;
-  grid-template-columns: var(--label) 1fr;
+  grid-template-columns: var(--selection) var(--label) 1fr;
   min-height: 48px;
   background: var(--paper);
   border-bottom: 1px solid #ecece8;
@@ -358,6 +386,17 @@ h1 {
 }
 .lane.selected {
   box-shadow: inset 3px 0 var(--accent);
+}
+.traffic-agent-select {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-right: 1px solid var(--rule);
+}
+.traffic-agent-select input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
 }
 .lane-label {
   position: relative;

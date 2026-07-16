@@ -3,6 +3,7 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App, laneMarkerPaths, laneOutcomeSummary, snapshotSelection } from "./App";
+import { trafficDeepLink } from "./TrafficLaunch";
 import { demoSnapshot } from "./demo";
 
 const timelineStyles = readFileSync("web/src/styles.css", "utf8");
@@ -83,6 +84,19 @@ describe("dashboard controls", () => {
     expect(container.querySelectorAll(".group")).toHaveLength(1);
   });
 
+  it("forms exclusive opaque Team or canonical Agent traffic deep links", () => {
+    expect(trafficDeepLink("http://127.0.0.1:4321", { teamName: "traffic team" })).toBe(
+      "http://127.0.0.1:4321/traffic?team=piteams%3Atraffic+team",
+    );
+    const sessionIds = [
+      ["019f0000", "0000", "7000", "8000", "000000000001"].join("-"),
+      ["019f0000", "0000", "7000", "8000", "000000000002"].join("-"),
+    ];
+    const expected = new URL("/traffic", "http://127.0.0.1:4321");
+    for (const sessionId of sessionIds)
+      expected.searchParams.append("agent", `pi-session:${sessionId}`);
+    expect(trafficDeepLink("http://127.0.0.1:4321", { sessionIds })).toBe(expected.toString());
+  });
   it("renders the demo fleet and composes alive, field, and value filters", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -375,6 +389,7 @@ describe("dashboard controls", () => {
     const response = { ok: true, text: async () => JSON.stringify(demoSnapshot()) };
     const fetch = vi
       .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ baseUrl: "http://127.0.0.1:4321" }) })
       .mockReturnValueOnce(first.then(() => response))
       .mockResolvedValue(response);
     vi.stubGlobal("EventSource", FakeEventSource);
@@ -382,22 +397,22 @@ describe("dashboard controls", () => {
 
     const { App: LiveApp } = await import("./App");
     render(<LiveApp />);
-    expect(fetch).toHaveBeenCalledTimes(1);
-    expect(fetch).toHaveBeenNthCalledWith(1, "/api/snapshot?window=24h");
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenNthCalledWith(2, "/api/snapshot?window=24h");
 
     await act(async () => {
       listeners.get("ready")?.();
       listeners.get("invalidate")?.();
       vi.advanceTimersByTime(100);
     });
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(2);
 
     await act(async () => {
       resolveFirst(undefined);
       await Promise.resolve();
     });
-    expect(fetch).toHaveBeenCalledTimes(2);
-    expect(fetch).toHaveBeenNthCalledWith(2, "/api/snapshot?window=24h");
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(fetch).toHaveBeenNthCalledWith(3, "/api/snapshot?window=24h");
   });
 
   it("fails visibly instead of treating a stale backend as zero Rarebits", async () => {

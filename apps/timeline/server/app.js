@@ -5,6 +5,7 @@ import { collectAlphaSnapshot, createAlphaSourceWatcher } from "./alpha.js";
 import { collectSnapshot, SessionCache, SessionCatalog } from "./collector.js";
 import { readSessionRarebitSummary, sanitizeRarebitSummaryDetail } from "./rarebit-detail.js";
 import { createSourceWatcher } from "./watcher.js";
+import { resolveTrafficBaseUrl } from "./service-config.js";
 
 function json(res, status, body) {
   res.writeHead(status, {
@@ -99,6 +100,16 @@ function safeStaticPath(staticDir, rawUrlPath) {
   return { root, candidate };
 }
 
+async function trafficHealth(baseUrl) {
+  try {
+    const response = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(2_000) });
+    const body = await response.json();
+    return { available: response.ok && body?.ok === true, status: response.status, body };
+  } catch {
+    return { available: false, status: null, body: null };
+  }
+}
+
 function staticResponse(req, res, staticDir, rawPath, normalizedPath) {
   const safe = safeStaticPath(staticDir, rawPath);
   if (safe.error) return json(res, 400, { error: safe.error });
@@ -146,6 +157,9 @@ export function createTimelineServer({
   collectAlpha = collectAlphaSnapshot,
   watchAlphaSources = createAlphaSourceWatcher,
   readRarebitSummary = readSessionRarebitSummary,
+  collectionOptions = {},
+  watchRoots,
+  trafficBaseUrl = resolveTrafficBaseUrl(),
 } = {}) {
   const cache = new SessionCache();
   const catalogCache = new SessionCatalog();
@@ -163,6 +177,7 @@ export function createTimelineServer({
   } = {}) => {
     const key = `${query.window}:${query.cursor ?? ""}:${query.from ?? ""}:${query.to ?? ""}`;
     const refreshed = collect({
+      ...collectionOptions,
       cache,
       catalogCache,
       window: query.window,
@@ -209,11 +224,22 @@ export function createTimelineServer({
     for (const client of alphaClients) client.write(payload);
     return alphaSnapshot;
   };
-  const server = createServer((req, res) => {
+  // The single HTTP router keeps API/static precedence auditable; route handlers remain side-effect free.
+  // eslint-disable-next-line complexity
+  const server = createServer(async (req, res) => {
     const rawPath = String(req.url ?? "/").split("?", 1)[0];
     const url = new URL(req.url, "http://localhost");
     if (req.method === "GET" && url.pathname === "/api/health")
-      return json(res, 200, { ok: true, generatedAt: snapshot?.generatedAt, refresh: lastRefresh });
+      return json(res, 200, {
+        ok: true,
+        generatedAt: snapshot?.generatedAt,
+        refresh: lastRefresh,
+        traffic: { baseUrl: trafficBaseUrl, health: `${trafficBaseUrl}/health` },
+      });
+    if (req.method === "GET" && url.pathname === "/api/traffic/config")
+      return json(res, 200, { baseUrl: trafficBaseUrl, path: "/traffic" });
+    if (req.method === "GET" && url.pathname === "/api/traffic/health")
+      return json(res, 200, await trafficHealth(trafficBaseUrl));
     if (req.method === "GET" && url.pathname === "/api/snapshot")
       return serveSnapshot(res, url, snapshotFor);
     if (req.method === "GET" && url.pathname === "/api/trace")
@@ -265,13 +291,16 @@ export function createTimelineServer({
       return staticResponse(req, res, staticDir, rawPath, url.pathname);
     return json(res, 404, { error: "not_found" });
   });
-  const sourceWatcher = watchSources((event) => {
-    try {
-      snapshots.clear();
-      refresh(event);
-      refreshAlpha(event);
-    } catch {}
-  });
+  const sourceWatcher = watchSources(
+    (event) => {
+      try {
+        snapshots.clear();
+        refresh(event);
+        refreshAlpha(event);
+      } catch {}
+    },
+    watchRoots ? { roots: watchRoots } : undefined,
+  );
   const alphaSourceWatcher = watchAlphaSources((event) => {
     try {
       refreshAlpha(event);

@@ -1,0 +1,5 @@
+{"type":"session","id":"session-fixture"}
+{"type":"message","timestamp":"2026-07-14T09:00:00.000Z","message":{"role":"user","timestamp":1784019600000,"content":"Please inspect the source"}}
+{"type":"message","timestamp":"2026-07-14T09:00:03.000Z","message":{"role":"assistant","timestamp":1784019601000,"provider":"test","model":"test-1","stopReason":"toolUse","usage":{"input":10,"output":8,"reasoning":3,"totalTokens":18,"cost":{"total":0.01}},"content":[{"type":"text","text":"I will inspect it."},{"type":"toolCall","id":"call-1","name":"read","arguments":"TOP_SECRET_TOOL_ARGUMENT"}]}}
+{"type":"message","timestamp":"2026-07-14T09:00:05.000Z","message":{"role":"toolResult","toolCallId":"call-1","content":"TOP_SECRET_TOOL_RESULT"}}
+{"type":"message","timestamp":"2026-07-14T09:00:06.000Z","message":{"role":"assistant","timestamp":1784019605500,"provider":"test","model":"test-1","stopReason":"stop","usage":{"input":5,"output":4,"reasoning":1,"totalTokens":9,"cost":{"total":0.005}},"content":[{"type":"text","text":"Done."}]}}

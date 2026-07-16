@@ -1,0 +1,530 @@
+{
+  "schema_version": "traffic-analysis-v1",
+  "analysis_contract_version": "information-contract-v1",
+  "prepared_derivation_id": "d34d01990725b9d2c712c40c82bf2d5c46922429c8551528c2eed80f1d52407b",
+  "analysis_id": "5001a5c33367df026bab896cf2a689c04907073a388d96b9bbe7ead89166369e",
+  "parameters": {
+    "interval_policy": "half-open-distinct-agent-union",
+    "tool_span": "not_tool_runtime"
+  },
+  "provenance": {
+    "source_ids": [
+      "source:session-fixture"
+    ],
+    "source_artifacts": [
+      {
+        "source_id": "source:session-fixture",
+        "sha256": "14122dfbc8edcc1fdcf970bd04203b1ee808c60f96bd08248ce077324ec389d4",
+        "byte_count": 1035,
+        "record_count": 5,
+        "header_id": "session-fixture",
+        "location": null,
+        "parser_version": "pi-0.80.6-byte-adapter-v1"
+      }
+    ],
+    "parser_version": "pi-0.80.6-byte-adapter-v1",
+    "content_policy": "approved-first-last-200-only",
+    "classifier": {
+      "id": "pi.teams.inbox-message-v1",
+      "version": "1"
+    },
+    "tool_manifest_version": "tool-owner-manifest-v1"
+  },
+  "report": {
+    "title": "Agent-turns viz",
+    "team_name": null,
+    "leader_session_id": null,
+    "leader_session_name": null,
+    "coverage": {
+      "start_ms": 1784019600000,
+      "end_ms": 1784019606000
+    }
+  },
+  "rows": [
+    {
+      "row_type": "agent",
+      "row_id": "agent:session-fixture",
+      "prepared_derivation_id": "d34d01990725b9d2c712c40c82bf2d5c46922429c8551528c2eed80f1d52407b",
+      "source_id": "source:session-fixture",
+      "agent_id": "agent:session-fixture",
+      "turn_id": null,
+      "request_id": null,
+      "evidence": {
+        "class": "observed",
+        "basis": "Pi session header UUID",
+        "confidence": 1
+      },
+      "provenance_refs": [],
+      "session_trace_id": "session-fixture",
+      "display_name": null,
+      "display_name_evidence": {
+        "class": "unavailable",
+        "basis": "no external display attribution",
+        "unavailable_reason": "no_explicit_member_mapping"
+      }
+    },
+    {
+      "row_type": "turn",
+      "row_id": "source:session-fixture:turn:0",
+      "prepared_derivation_id": "d34d01990725b9d2c712c40c82bf2d5c46922429c8551528c2eed80f1d52407b",
+      "source_id": "source:session-fixture",
+      "agent_id": "agent:session-fixture",
+      "turn_id": "source:session-fixture:turn:0",
+      "request_id": null,
+      "evidence": {
+        "class": "observed",
+        "basis": "persisted role=user",
+        "confidence": 1
+      },
+      "provenance_refs": [],
+      "ordinal": 0,
+      "global_ordinal": 0,
+      "agent_local_ordinal": 0,
+      "tool_count": 1,
+      "preceding_user_boundary": {
+        "source_id": "source:session-fixture",
+        "ordinal": 1
+      },
+      "timestamp_ms": 1784019600000,
+      "classifier": "user_request",
+      "classifier_provenance": {
+        "id": "pi.teams.inbox-message-v1",
+        "version": "1",
+        "method": "allowlisted-regex",
+        "matched_attributes": []
+      },
+      "excerpt": "Please inspect the source",
+      "following_request_count": 2,
+      "following_total_tokens": 27,
+      "following_estimated_cost_usd": 0.015,
+      "episode_outcome": "stop"
+    },
+    {
+      "row_type": "request_interval",
+      "row_id": "source:session-fixture:request:0",
+      "prepared_derivation_id": "d34d01990725b9d2c712c40c82bf2d5c46922429c8551528c2eed80f1d52407b",
+      "source_id": "source:session-fixture",
+      "agent_id": "agent:session-fixture",
+      "turn_id": "source:session-fixture:turn:0",
+      "request_id": "source:session-fixture:request:0",
+      "evidence": {
+        "class": "observed",
+        "basis": "Pi 0.80.6 assistant message and entry timestamps",
+        "confidence": 1
+      },
+      "provenance_refs": [
+        "source:session-fixture:2"
+      ],
+      "ordinal": 0,
+      "assistant_request_start_ms": 1784019601000,
+      "assistant_response_recorded_ms": 1784019603000,
+      "observed_elapsed_ms": 2000,
+      "provider": "test",
+      "model": "test-1",
+      "api": null,
+      "outcome": "continuation",
+      "usage": {
+        "input_tokens": 10,
+        "output_tokens": 8,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "reasoning_tokens": 3,
+        "total_tokens": 18,
+        "estimated_cost_usd": 0.01,
+        "cost_basis": "pi_model_table_static_estimate"
+      },
+      "part_count": 2,
+      "tool_call_count": 1
+    },
+    {
+      "row_type": "cumulative_usage_point",
+      "row_id": "source:session-fixture:request:0:cumulative",
+      "prepared_derivation_id": "d34d01990725b9d2c712c40c82bf2d5c46922429c8551528c2eed80f1d52407b",
+      "source_id": "source:session-fixture",
+      "agent_id": "agent:session-fixture",
+      "turn_id": null,
+      "request_id": "source:session-fixture:request:0",
+      "evidence": {
+        "class": "derived",
+        "basis": "request-native response-recorded step"
+      },
+      "provenance_refs": [],
+      "at_ms": 1784019603000,
+      "input_increment": 10,
+      "cost_increment": 0.01,
+      "cumulative_input_tokens": 10,
+      "cumulative_estimated_cost_usd": 0.01
+    },
+    {
+      "row_type": "request_interval",
+      "row_id": "source:session-fixture:request:1",
+      "prepared_derivation_id": "d34d01990725b9d2c712c40c82bf2d5c46922429c8551528c2eed80f1d52407b",
+      "source_id": "source:session-fixture",
+      "agent_id": "agent:session-fixture",
+      "turn_id": "source:session-fixture:turn:0",
+      "request_id": "source:session-fixture:request:1",
+      "evidence": {
+        "class": "observed",
+        "basis": "Pi 0.80.6 assistant message and entry timestamps",
+        "confidence": 1
+      },
+      "provenance_refs": [
+        "source:session-fixture:4"
+      ],
+      "ordinal": 1,
+      "assistant_request_start_ms": 1784019605500,
+      "assistant_response_recorded_ms": 1784019606000,
+      "observed_elapsed_ms": 500,
+      "provider": "test",
+      "model": "test-1",
+      "api": null,
+      "outcome": "stop",
+      "usage": {
+        "input_tokens": 5,
+        "output_tokens": 4,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "reasoning_tokens": 1,
+        "total_tokens": 9,
+        "estimated_cost_usd": 0.005,
+        "cost_basis": "pi_model_table_static_estimate"
+      },
+      "part_count": 1,
+      "tool_call_count": 0
+    },
+    {
+      "row_type": "cumulative_usage_point",
+      "row_id": "source:session-fixture:request:1:cumulative",
+      "prepared_derivation_id": "d34d01990725b9d2c712c40c82bf2d5c46922429c8551528c2eed80f1d52407b",
+      "source_id": "source:session-fixture",
+      "agent_id": "agent:session-fixture",
+      "turn_id": null,
+      "request_id": "source:session-fixture:request:1",
+      "evidence": {
+        "class": "derived",
+        "basis": "request-native response-recorded step"
+      },
+      "provenance_refs": [],
+      "at_ms": 1784019606000,
+      "input_increment": 5,
+      "cost_increment": 0.005,
+      "cumulative_input_tokens": 15,
+      "cumulative_estimated_cost_usd": 0.015
+    },
+    {
+      "row_type": "content_part",
+      "row_id": "source:session-fixture:request:0:part:0",
+      "prepared_derivation_id": "d34d01990725b9d2c712c40c82bf2d5c46922429c8551528c2eed80f1d52407b",
+      "source_id": "source:session-fixture",
+      "agent_id": "agent:session-fixture",
+      "turn_id": "source:session-fixture:turn:0",
+      "request_id": "source:session-fixture:request:0",
+      "evidence": {
+        "class": "observed",
+        "basis": "ordered assistant content part",
+        "confidence": 1
+      },
+      "provenance_refs": [],
+      "part_id": "source:session-fixture:request:0:part:0",
+      "part_index": 0,
+      "part_type": "text",
+      "present": true,
+      "retention": "approved_excerpt",
+      "visible_text_excerpt": "I will inspect it.",
+      "tool_call_id": null,
+      "time_ms": null,
+      "usage": null,
+      "estimated_cost_usd": null
+    },
+    {
+      "row_type": "content_part",
+      "row_id": "source:session-fixture:request:0:part:1",
+      "prepared_derivation_id": "d34d01990725b9d2c712c40c82bf2d5c46922429c8551528c2eed80f1d52407b",
+      "source_id": "source:session-fixture",
+      "agent_id": "agent:session-fixture",
+      "turn_id": "source:session-fixture:turn:0",
+      "request_id": "source:session-fixture:request:0",
+      "evidence": {
+        "class": "observed",
+        "basis": "ordered assistant content part",
+        "confidence": 1
+      },
+      "provenance_refs": [],
+      "part_id": "source:session-fixture:request:0:part:1",
+      "part_index": 1,
+      "part_type": "toolCall",
+      "present": true,
+      "retention": "metadata_only",
+      "visible_text_excerpt": null,
+      "tool_call_id": "call-1",
+      "time_ms": null,
+      "usage": null,
+      "estimated_cost_usd": null
+    },
+    {
+      "row_type": "content_part",
+      "row_id": "source:session-fixture:request:1:part:0",
+      "prepared_derivation_id": "d34d01990725b9d2c712c40c82bf2d5c46922429c8551528c2eed80f1d52407b",
+      "source_id": "source:session-fixture",
+      "agent_id": "agent:session-fixture",
+      "turn_id": "source:session-fixture:turn:0",
+      "request_id": "source:session-fixture:request:1",
+      "evidence": {
+        "class": "observed",
+        "basis": "ordered assistant content part",
+        "confidence": 1
+      },
+      "provenance_refs": [],
+      "part_id": "source:session-fixture:request:1:part:0",
+      "part_index": 0,
+      "part_type": "text",
+      "present": true,
+      "retention": "approved_excerpt",
+      "visible_text_excerpt": "Done.",
+      "tool_call_id": null,
+      "time_ms": null,
+      "usage": null,
+      "estimated_cost_usd": null
+    },
+    {
+      "row_type": "tool_event",
+      "row_id": "source:session-fixture:tool-call:0",
+      "prepared_derivation_id": "d34d01990725b9d2c712c40c82bf2d5c46922429c8551528c2eed80f1d52407b",
+      "source_id": "source:session-fixture",
+      "agent_id": "agent:session-fixture",
+      "turn_id": "source:session-fixture:turn:0",
+      "request_id": "source:session-fixture:request:0",
+      "evidence": {
+        "class": "observed",
+        "basis": "assistant tool-call part",
+        "confidence": 1
+      },
+      "provenance_refs": [],
+      "tool_event_id": "source:session-fixture:tool-call:0",
+      "kind": "call_available",
+      "call_id": "call-1",
+      "tool_name": "read",
+      "timestamp_ms": 1784019603000,
+      "status": "unknown",
+      "pairing_state": "matched"
+    },
+    {
+      "row_type": "tool_event",
+      "row_id": "source:session-fixture:tool-result:1",
+      "prepared_derivation_id": "d34d01990725b9d2c712c40c82bf2d5c46922429c8551528c2eed80f1d52407b",
+      "source_id": "source:session-fixture",
+      "agent_id": "agent:session-fixture",
+      "turn_id": "source:session-fixture:turn:0",
+      "request_id": "source:session-fixture:request:0",
+      "evidence": {
+        "class": "observed",
+        "basis": "persisted toolResult message",
+        "confidence": 1
+      },
+      "provenance_refs": [],
+      "tool_event_id": "source:session-fixture:tool-result:1",
+      "kind": "result_recorded",
+      "call_id": "call-1",
+      "tool_name": null,
+      "timestamp_ms": 1784019605000,
+      "status": "ok",
+      "pairing_state": "matched"
+    },
+    {
+      "row_type": "tool_observation_span",
+      "row_id": "source:session-fixture:span:call-1",
+      "prepared_derivation_id": "d34d01990725b9d2c712c40c82bf2d5c46922429c8551528c2eed80f1d52407b",
+      "source_id": "source:session-fixture",
+      "agent_id": "agent:session-fixture",
+      "turn_id": "source:session-fixture:turn:0",
+      "request_id": "source:session-fixture:request:0",
+      "evidence": {
+        "class": "observed",
+        "basis": "exact source-scoped call ID pairing",
+        "confidence": 1
+      },
+      "provenance_refs": [],
+      "span_id": "source:session-fixture:span:call-1",
+      "call_id": "call-1",
+      "tool_name": "read",
+      "start_ms": 1784019603000,
+      "end_ms": 1784019605000,
+      "observed_span_ms": 2000,
+      "interpretation": "not_tool_runtime",
+      "pairing_state": "matched"
+    },
+    {
+      "row_type": "quiet_gap",
+      "row_id": "source:session-fixture:gap:0",
+      "prepared_derivation_id": "d34d01990725b9d2c712c40c82bf2d5c46922429c8551528c2eed80f1d52407b",
+      "source_id": "source:session-fixture",
+      "agent_id": "agent:session-fixture",
+      "turn_id": "source:session-fixture:turn:0",
+      "request_id": null,
+      "evidence": {
+        "class": "inferred",
+        "basis": "trace end lower bound",
+        "unavailable_reason": "right_censored"
+      },
+      "provenance_refs": [],
+      "gap_id": "source:session-fixture:gap:0",
+      "after_turn_id": "source:session-fixture:turn:0",
+      "start_ms": 1784019606000,
+      "end_ms": 1784019606000,
+      "duration_ms": 0,
+      "qualification": "right_censored_trace_end"
+    },
+    {
+      "row_type": "active_agent_interval",
+      "row_id": "active:1784019601000:1784019603000",
+      "prepared_derivation_id": "d34d01990725b9d2c712c40c82bf2d5c46922429c8551528c2eed80f1d52407b",
+      "source_id": null,
+      "agent_id": null,
+      "turn_id": null,
+      "request_id": null,
+      "evidence": {
+        "class": "derived",
+        "basis": "half-open interval union distinct agent IDs"
+      },
+      "provenance_refs": [],
+      "start_ms": 1784019601000,
+      "end_ms": 1784019603000,
+      "distinct_active_agents": 1
+    },
+    {
+      "row_type": "active_agent_interval",
+      "row_id": "active:1784019605500:1784019606000",
+      "prepared_derivation_id": "d34d01990725b9d2c712c40c82bf2d5c46922429c8551528c2eed80f1d52407b",
+      "source_id": null,
+      "agent_id": null,
+      "turn_id": null,
+      "request_id": null,
+      "evidence": {
+        "class": "derived",
+        "basis": "half-open interval union distinct agent IDs"
+      },
+      "provenance_refs": [],
+      "start_ms": 1784019605500,
+      "end_ms": 1784019606000,
+      "distinct_active_agents": 1
+    }
+  ],
+  "aggregates": [
+    {
+      "aggregate_id": "usage:team",
+      "kind": "usage_aggregate",
+      "dimensions": {
+        "agent_id": null
+      },
+      "measures": {
+        "request_count": 2,
+        "input_tokens": 15,
+        "reasoning_output_tokens": 4,
+        "non_reasoning_output_tokens": 8,
+        "total_tokens": 27,
+        "estimated_cost_usd": 0.015
+      },
+      "semantics": "request-native usage; reasoning is output subset; static estimate not billed truth",
+      "evidence": {
+        "class": "derived",
+        "basis": "distinct request sum"
+      }
+    },
+    {
+      "aggregate_id": "usage:agent:session-fixture",
+      "kind": "usage_aggregate",
+      "dimensions": {
+        "agent_id": "agent:session-fixture"
+      },
+      "measures": {
+        "request_count": 2,
+        "input_tokens": 15,
+        "reasoning_output_tokens": 4,
+        "non_reasoning_output_tokens": 8,
+        "total_tokens": 27,
+        "estimated_cost_usd": 0.015
+      },
+      "semantics": "request-native usage; reasoning is output subset; static estimate not billed truth",
+      "evidence": {
+        "class": "derived",
+        "basis": "distinct request sum"
+      }
+    },
+    {
+      "aggregate_id": "inventory:team",
+      "kind": "event_inventory",
+      "dimensions": {
+        "agent_id": null
+      },
+      "measures": {
+        "user_turns": 1,
+        "user_alerts": 0,
+        "agent_continuations": 1,
+        "agent_stops": 1,
+        "agent_truncated": 0,
+        "tool_calls": 1,
+        "tool_results": 1
+      },
+      "semantics": "heterogeneous nested-grain inventory, not a turn partition",
+      "evidence": {
+        "class": "derived",
+        "basis": "row counts"
+      }
+    },
+    {
+      "aggregate_id": "inventory:agent:session-fixture",
+      "kind": "event_inventory",
+      "dimensions": {
+        "agent_id": "agent:session-fixture"
+      },
+      "measures": {
+        "user_turns": 1,
+        "user_alerts": 0,
+        "agent_continuations": 1,
+        "agent_stops": 1,
+        "agent_truncated": 0,
+        "tool_calls": 1,
+        "tool_results": 1
+      },
+      "semantics": "heterogeneous nested-grain inventory, not a turn partition",
+      "evidence": {
+        "class": "derived",
+        "basis": "row counts"
+      }
+    },
+    {
+      "aggregate_id": "tool:pi-core",
+      "kind": "tool_activity",
+      "dimensions": {
+        "tool_owner": "pi-core"
+      },
+      "measures": {
+        "calls": 1,
+        "recorded_results": 1,
+        "errors": 0,
+        "missing_results": 0,
+        "distinct_containing_turns": 1,
+        "distinct_containing_requests": 1,
+        "associated_request_tokens": 18,
+        "associated_estimated_cost_usd": 0.01
+      },
+      "semantics": "versioned tool-owner manifest; associated request usage is noncausal and nonadditive",
+      "evidence": {
+        "class": "associated",
+        "basis": "tool call contains request relation"
+      }
+    }
+  ],
+  "reconciliation": {
+    "requests": 2,
+    "total_tokens": 27,
+    "input_tokens": 15,
+    "output_tokens": 12,
+    "reasoning_tokens": 4,
+    "estimated_cost_usd": 0.015,
+    "matched_tool_spans": 1,
+    "exact_quiet_ms": 0,
+    "diagnostics": 0
+  },
+  "diagnostics": []
+}

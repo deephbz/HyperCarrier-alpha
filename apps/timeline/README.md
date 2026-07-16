@@ -12,21 +12,24 @@ npm run build:web
 npm run quality             # format, lint, duplication, coverage, CRAP, tests, build
 npm start                 # dashboard + API at http://127.0.0.1:4318
 PORT=4390 npm start       # choose another local port
-npm run start:stack       # timeline + live detail + TPS adapter
-npm run start:better-url  # http://{pi,live.pi,tps.pi}.localhost:1355
+npm run start:stack       # timeline + live detail + TPS adapter + traffic analysis
+npm run start:better-url  # http://{pi,live.pi,tps,traffic.pi}.localhost:1355
 ```
 
-`PI_TIMELINE_PORT`, `PI_LIVE_DETAIL_PORT`, and `PI_TPS_ADAPTER_PORT` configure the three stack ports
-independently; an ambient parent `PORT` cannot collapse `start:stack` onto one port. All core
+`PI_TIMELINE_PORT`, `PI_LIVE_DETAIL_PORT`, `PI_TPS_ADAPTER_PORT`, and `PI_TRAFFIC_PORT` configure
+stack ports independently; traffic defaults to `4321`, and an ambient parent `PORT` cannot collapse
+`start:stack` onto one port. `PI_TRAFFIC_BASE_URL` configures Timeline's traffic launch origin and
+must be an allowlisted loopback HTTP origin; it defaults to `http://127.0.0.1:4321`. All core
 services bind strictly to `127.0.0.1` and ignore `HOST`. The portless/friendly-name proxy is an
 opt-in add-on rather than part of the core stack.
 
-The better-URL mode starts the project's allowlisted HTTP proxy together with the three services.
-Run `npm run start:better-url`, then use `http://pi.localhost:1355`,
-`http://live.pi.localhost:1355`, and `http://tps.pi.localhost:1355`. The proxy and every upstream
-bind explicitly to `127.0.0.1`. No certificate, trusted local CA, root service, administrator
-authorization, DNS edit, or LAN listener is involved. See
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full dataflow and routing diagram.
+The better-URL mode starts the project's allowlisted HTTP proxy together with all four services. Run
+`npm run start:better-url`, then use `http://pi.localhost:1355`, `http://live.pi.localhost:1355`,
+`http://tps.pi.localhost:1355`, and `http://traffic.pi.localhost:1355`. Better-URL mode configures
+Timeline to launch traffic through the latter origin. The proxy and every upstream bind explicitly
+to `127.0.0.1`. No certificate, trusted local CA, root service, administrator authorization, DNS
+edit, or LAN listener is involved. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full
+dataflow and routing diagram.
 
 Each session inspector links to two independent detail services:
 
@@ -66,6 +69,12 @@ override it with `PI_TIMELINE_RECONCILIATION_MS` when debugging.
 
 The server binds only to `127.0.0.1`; there is no LAN/public listener mode in this Alpha.
 
+For an installed-stack fixture or canary, trusted process-local adapters may replace native
+discovery roots: `PI_TIMELINE_SESSIONS_ROOT=/tmp/sessions` and `PI_TIMELINE_TEAMS_ROOT=/tmp/teams`.
+Unset variables retain native `~/.pi/agent/sessions` and `~/.pi/teams` defaults. These are
+launch-time collector/watcher inputs, not HTTP configuration or Timeline scope authority; use only
+generated or explicitly approved local evidence roots.
+
 Open `http://127.0.0.1:4318/?demo=1` to force a local, metadata-only stress fixture in the browser.
 It contains 60 sessions and one 240-turn, 10M+ token session so dense timeline rendering can be
 inspected without replacing or mixing with canonical Pi session data.
@@ -75,6 +84,14 @@ When diagnosing slowness, append `&diagnostics=1` to an existing URL (or use
 snapshot/session counts, collector duration and refresh reason, incremental JSONL cache counters,
 and browser fetch/invalidation timing. It never exposes prompt, completion, tool, or terminal
 content; copy those values into a bug report together with the relevant time window.
+
+The Timeline offers two read-only traffic entry points. In an attributable Pi Team inspector, **Open
+traffic analysis** opens `traffic?team=piteams:<team-name>`. Select explicit canonical Pi Session
+UUIDs with the lane checkboxes, then **Open traffic analysis for N Agents** opens repeated
+`agent=pi-session:<uuid>` parameters. These deep links are mutually exclusive, carry neither file
+paths nor Timeline-owned scope state, and the traffic service resolves its own scope through its
+`POST /api/traffic/scopes` boundary. The Timeline's `/api/traffic/config` reports the launch origin
+and `/api/traffic/health` reports an opt-in loopback availability diagnostic.
 
 The **Search sessions** box performs a case-insensitive partial match against session ID, session
 name, and cwd. An empty or whitespace-only query leaves all sessions visible.
@@ -160,7 +177,9 @@ process liveness never becomes guessed `working` or `idle` state.
   model.
 - `GET /api/trace` explains tmux queries, cache hits, source counts, and every rejected/stale
   lifecycle record.
-- `GET /api/health` reports collector health.
+- `GET /api/health` reports collector health plus the configured traffic health location.
+- `GET /api/traffic/config` reports the traffic launch origin; `GET /api/traffic/health` performs a
+  bounded loopback health diagnostic without making Timeline a traffic authority.
 
 The JSONL parser only copies identity, timestamps, model/provider, stop reason, token counts, and
 cost. Prompt text, assistant text, reasoning, tool arguments, tool output, terminal content, and

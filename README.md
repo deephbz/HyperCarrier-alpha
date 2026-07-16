@@ -1,14 +1,17 @@
 # HyperCarrier Alpha
 
 HyperCarrier is an experimental, single-user, local-first control plane for
-agent-assisted work. This public Alpha combines three independently useful
+agent-assisted work. This public Alpha combines four independently useful
 parts:
 
 - a Pi/tmux timeline and live-session dashboard;
-- a narrow Pi extension that summarizes only recent assistant final messages;
+- Rarebit, a sparse key-message projection with a Pi extension and CLI for
+  derived summaries and Session-title proposals;
 - a Project distiller that joins explicit Project configuration, Beads Tasks,
-  Git evidence, and those narrow summaries into append-only events and
-  reviewable Markdown proposals.
+  Git evidence, and Rarebit summaries into append-only events and
+  reviewable Markdown proposals;
+- an optional read-only traffic analysis module that resolves explicit Team or
+  Agent scopes from local Pi Session evidence and explicit PiTeams attribution.
 
 The Alpha is read-only by default. It keeps runtime observations, reported
 agent output, Task records, Evergreen proposals, delivery evidence, and human
@@ -29,6 +32,7 @@ Install and verify:
 npm ci
 npm test
 npm run build:timeline
+npm run build:traffic
 ```
 
 Start the timeline:
@@ -90,7 +94,7 @@ PiTeams orchestration and its Beads-backed Task integration are maintained in
   not prove that model-generated claims are true or accepted.
 
 See [Concepts](docs/CONCEPTS.md), [Architecture](docs/ARCHITECTURE.md),
-[Alpha operation](docs/ALPHA.md), and
+[Alpha operation](docs/ALPHA.md), [Traffic analysis](docs/TRAFFIC.md), and
 [Known limitations](docs/KNOWN-LIMITATIONS.md).
 
 ## Privacy and security

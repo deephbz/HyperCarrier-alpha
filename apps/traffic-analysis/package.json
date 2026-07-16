@@ -1,0 +1,46 @@
+{
+  "name": "@hypercarrier/traffic-analysis",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "hc-traffic": "dist/cli/index.js"
+  },
+  "engines": {
+    "node": ">=22.19"
+  },
+  "scripts": {
+    "build": "npm run build:backend && npm run build:web",
+    "build:backend": "tsc -p tsconfig.json",
+    "build:web": "tsc -p web/tsconfig.json && vite build --config web/vite.config.ts",
+    "test": "npm run test:backend && npm run test:web",
+    "test:backend": "npm run build:backend && node --test dist/test/*.test.js",
+    "test:web": "vitest run --config web/vitest.config.ts",
+    "format": "prettier --write src web package.json tsconfig.json README.md",
+    "format:check": "prettier --check src web package.json tsconfig.json README.md",
+    "quality": "npm run format:check && npm test && npm run build",
+    "cli": "npm run build:backend && node dist/cli/index.js",
+    "benchmark": "npm run build:backend && node dist/cli/index.js benchmark",
+    "dev:web": "vite --config web/vite.config.ts",
+    "start": "npm run build && node dist/server/index.js"
+  },
+  "dependencies": {
+    "@tanstack/react-virtual": "^3.14.6",
+    "echarts": "^6.1.0",
+    "plotly.js-dist-min": "^3.4.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
+  "devDependencies": {
+    "@testing-library/react": "16.3.2",
+    "@types/node": "26.1.1",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.3",
+    "happy-dom": "20.10.6",
+    "prettier": "3.9.5",
+    "typescript": "6.0.3",
+    "vite": "8.1.4",
+    "vitest": "4.1.10"
+  }
+}
