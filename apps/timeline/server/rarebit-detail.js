@@ -116,6 +116,7 @@ export function projectRarebitSummaryRecord(record, session) {
 
 function latestRecordForSession(raw, sessionId) {
   let latest = null;
+  const synthesisByLeaf = new Map();
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue;
     try {
@@ -124,12 +125,31 @@ function latestRecordForSession(raw, sessionId) {
         record?.type === "rarebit_summary" &&
         record.sessionId === sessionId &&
         typeof record.status === "string"
-      )
+      ) {
         latest = record;
+        const leafId = safeString(record.branch?.leafId);
+        if (
+          leafId &&
+          (record.status === "ok" ||
+            record.status === "failure" ||
+            record.status === "unavailable_overflow")
+        )
+          synthesisByLeaf.set(leafId, record);
+      }
     } catch {
       // Sidecar history is evidence. A malformed historical line must not
       // make an otherwise valid newest materialization unsafe to inspect.
     }
+  }
+  // An automatic eligibility check is an observation about whether to launch
+  // new synthesis, not a replacement for an existing synthesis outcome. On
+  // exact-Session resume, Rarebit can append an ineligible record for the same
+  // unchanged branch after a forced summary. Preserve that branch's latest
+  // actual outcome, while a new branch remains free to supersede it and an
+  // explicit failure/overflow remains visible instead of reviving older text.
+  if (latest?.status === "ineligible") {
+    const leafId = safeString(latest.branch?.leafId);
+    if (leafId && synthesisByLeaf.has(leafId)) return synthesisByLeaf.get(leafId);
   }
   return latest;
 }
