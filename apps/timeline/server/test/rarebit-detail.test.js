@@ -99,6 +99,54 @@ test("detail makes missing, stale, ineligible, overflow, and failure explicit", 
   assert.equal(JSON.stringify(failure).includes("RAW_SESSION_PROSE"), false);
 });
 
+test("same-branch eligibility checks do not replace synthesis outcomes", () => {
+  const options = roots();
+  const session = {
+    id: "s1",
+    source: join(options.sessionRoot, "cwd", "s1.jsonl"),
+    lastMessageAt: "2026-01-01T00:01:00Z",
+  };
+  const path = rarebitMaterializationPath(session.source, options);
+  mkdirSync(join(path, ".."), { recursive: true });
+  const summary = record("s1", "ok", {
+    observedAt: "2026-01-01T00:01:00Z",
+    branch: { leafId: "same-leaf", entryIds: ["same-leaf"] },
+  });
+  const resumedEligibilityCheck = record("s1", "ineligible", {
+    summary: undefined,
+    observedAt: "2026-01-01T00:02:00Z",
+    branch: { leafId: "same-leaf", entryIds: ["same-leaf"] },
+  });
+  writeFileSync(path, `${JSON.stringify(summary)}\n${JSON.stringify(resumedEligibilityCheck)}\n`);
+  const preserved = readSessionRarebitSummary(session, options);
+  assert.equal(preserved.status, "ok");
+  assert.equal(preserved.summary, "Derived summary only.");
+
+  const failure = record("s1", "failure", {
+    summary: undefined,
+    observedAt: "2026-01-01T00:03:00Z",
+    branch: { leafId: "same-leaf", entryIds: ["same-leaf"] },
+    error: { name: "ProviderFailure" },
+  });
+  writeFileSync(
+    path,
+    `${JSON.stringify(summary)}\n${JSON.stringify(failure)}\n${JSON.stringify(resumedEligibilityCheck)}\n`,
+  );
+  const explicitFailure = readSessionRarebitSummary(session, options);
+  assert.equal(explicitFailure.status, "failure");
+  assert.deepEqual(explicitFailure.failure, {
+    retryable: false,
+    kind: "ProviderFailure",
+  });
+
+  const newBranchCheck = {
+    ...resumedEligibilityCheck,
+    branch: { leafId: "new-leaf", entryIds: ["same-leaf", "new-leaf"] },
+  };
+  writeFileSync(path, `${JSON.stringify(summary)}\n${JSON.stringify(newBranchCheck)}\n`);
+  assert.equal(readSessionRarebitSummary(session, options).status, "ineligible");
+});
+
 test("source outside the native session root is not addressable", () => {
   assert.deepEqual(readSessionRarebitSummary({ id: "s1", source: "/tmp/untrusted/s1.jsonl" }), {
     availability: "missing",

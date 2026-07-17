@@ -14,7 +14,7 @@
     "hc-rarebit": "./bin/hc-rarebit.mjs"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "0.80.6"
+    "@earendil-works/pi-ai": "0.80.10"
   },
   "devDependencies": {
     "ajv": "^6.15.0"
