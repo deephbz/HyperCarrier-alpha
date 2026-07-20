@@ -14,8 +14,8 @@ sensitive evidence in a public issue.
 - Raw Pi sessions, tool calls, runtime records, and local Project files remain
   on the operator's machine unless an explicitly configured model provider is
   called.
-- The recent-output extension sends only the selected assistant final-message
-  text to its configured model provider. Review that provider's privacy terms
-  before enabling it for sensitive work.
+- An explicitly configured Rarebit model receives the complete selected user
+  and assistant Rarebit prose under the configured summary policy. Review that
+  provider's privacy terms before enabling synthesis for sensitive work.
 - Example configuration contains synthetic identities. Keep real Project
   registries and generated events, summaries, and proposals out of Git.

@@ -1,0 +1,144 @@
+From 2c31ffc14735315638abf02078117bbbf7868ac0 Mon Sep 17 00:00:00 2001
+From: "TechnoHouse (deephbz)" <13776377+deephbz@users.noreply.github.com>
+Date: Mon, 20 Jul 2026 12:24:01 +0800
+Subject: [PATCH] fix(coding-agent): render deep session exports iteratively
+
+---
+ .../src/core/export-html/template.js          | 39 ++++++++++-----
+ .../test/export-html-deep-tree.test.ts        | 49 +++++++++++++++++++
+ 2 files changed, 77 insertions(+), 11 deletions(-)
+ create mode 100644 packages/coding-agent/test/export-html-deep-tree.test.ts
+
+diff --git a/packages/coding-agent/src/core/export-html/template.js b/packages/coding-agent/src/core/export-html/template.js
+index cfdd161..c380a67 100644
+--- a/packages/coding-agent/src/core/export-html/template.js
++++ b/packages/coding-agent/src/core/export-html/template.js
+@@ -98,14 +98,17 @@
+           }
+         }
+ 
+-        // Sort children by timestamp
+-        function sortChildren(node) {
++        // Sort children by timestamp without depending on the JavaScript call stack.
++        const sortStack = [...roots];
++        while (sortStack.length > 0) {
++          const node = sortStack.pop();
+           node.children.sort((a, b) =>
+             new Date(a.entry.timestamp).getTime() - new Date(b.entry.timestamp).getTime()
+           );
+-          node.children.forEach(sortChildren);
++          for (const child of node.children) {
++            sortStack.push(child);
++          }
+         }
+-        roots.forEach(sortChildren);
+ 
+         return roots;
+       }
+@@ -157,11 +160,14 @@
+         if (!treeNodeMap) {
+           treeNodeMap = new Map();
+           const tree = buildTree();
+-          function mapNodes(node) {
++          const mapStack = [...tree];
++          while (mapStack.length > 0) {
++            const node = mapStack.pop();
+             treeNodeMap.set(node.entry.id, node);
+-            node.children.forEach(mapNodes);
++            for (const child of node.children) {
++              mapStack.push(child);
++            }
+           }
+-          tree.forEach(mapNodes);
+         }
+ 
+         const node = treeNodeMap.get(nodeId);
+@@ -186,15 +192,26 @@
+ 
+         // Mark which subtrees contain the active leaf
+         const containsActive = new Map();
+-        function markActive(node) {
++        const markStack = [];
++        for (const root of roots) {
++          markStack.push([root, false]);
++        }
++        while (markStack.length > 0) {
++          const [node, visited] = markStack.pop();
++          if (!visited) {
++            markStack.push([node, true]);
++            for (const child of node.children) {
++              markStack.push([child, false]);
++            }
++            continue;
++          }
++
+           let has = activePathIds.has(node.entry.id);
+           for (const child of node.children) {
+-            if (markActive(child)) has = true;
++            if (containsActive.get(child)) has = true;
+           }
+           containsActive.set(node, has);
+-          return has;
+         }
+-        roots.forEach(markActive);
+ 
+         // Stack: [node, indent, justBranched, showConnector, isLast, gutters, isVirtualRootChild]
+         const stack = [];
+diff --git a/packages/coding-agent/test/export-html-deep-tree.test.ts b/packages/coding-agent/test/export-html-deep-tree.test.ts
+new file mode 100644
+index 0000000..2d3ab4f
+--- /dev/null
++++ b/packages/coding-agent/test/export-html-deep-tree.test.ts
+@@ -0,0 +1,49 @@
++import { readFileSync } from "fs";
++import { describe, expect, it } from "vitest";
++import { runInNewContext } from "vm";
++
++describe("export HTML deep session trees", () => {
++	it("prepares and navigates an arbitrary-depth parent chain without overflowing the call stack", () => {
++		const templateJs = readFileSync(new URL("../src/core/export-html/template.js", import.meta.url), "utf-8");
++		const dataStructuresStart = templateJs.indexOf("// DATA STRUCTURES");
++		const filteringStart = templateJs.indexOf("// FILTERING");
++		expect(dataStructuresStart).toBeGreaterThan(-1);
++		expect(filteringStart).toBeGreaterThan(dataStructuresStart);
++
++		const depth = 20_000;
++		const entries = Array.from({ length: depth }, (_, index) => ({
++			id: `entry-${index}`,
++			parentId: index === 0 ? null : `entry-${index - 1}`,
++			timestamp: "2026-01-01T00:00:00.000Z",
++			type: "message",
++			message: { role: "user", content: "" },
++		}));
++		const treePreparationSource = templateJs.slice(dataStructuresStart, filteringStart);
++		const context = { entries };
++
++		runInNewContext(
++			`${treePreparationSource}
++			const targetId = "entry-${depth - 1}";
++			const tree = buildTree();
++			const activePathIds = buildActivePathIds(targetId);
++			const flatNodes = flattenTree(tree, activePathIds);
++			globalThis.result = {
++				rootCount: tree.length,
++				activeCount: activePathIds.size,
++				flatCount: flatNodes.length,
++				lastId: flatNodes.at(-1).node.entry.id,
++				newestLeafId: findNewestLeaf("entry-0")
++			};`,
++			context,
++			{ timeout: 10_000 },
++		);
++
++		expect(context).toHaveProperty("result", {
++			rootCount: 1,
++			activeCount: depth,
++			flatCount: depth,
++			lastId: `entry-${depth - 1}`,
++			newestLeafId: `entry-${depth - 1}`,
++		});
++	});
++});
+-- 
+2.50.0
+

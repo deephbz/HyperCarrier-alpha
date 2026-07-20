@@ -1,18 +1,29 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer, request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { Window } from "happy-dom";
 import {
-  assistantCompletionSignature,
+  analyzeSessionParentGraph,
+  createIncrementalRarebitReader,
   createLiveDetailServer,
-  createLiveEntryProjection,
-  defaultLiveEntryIds,
   isDefaultLiveEntry,
+  nativeExportPreflight,
+  resolveNativeExporter,
 } from "../live-detail.js";
 import { createNamedProxy } from "../local-proxy.js";
+import { renderRarebitMarkdown } from "../rarebit-markdown.js";
+import { SessionRegistry } from "../session-registry.js";
 import { createTpsAdapterServer } from "../tps-adapter.js";
 import {
   namedUpstreamsFromEnv,
@@ -166,6 +177,19 @@ test("core service binding is fixed to IPv4 loopback and ignores ambient HOST", 
   assert.equal(resolveCoreHost({ HOST: "attacker.example" }), "127.0.0.1");
 });
 
+test("Rarebit Markdown renders readable structure while neutralizing HTML and unsafe links", () => {
+  const rendered = renderRarebitMarkdown(
+    "## Result\n\n- one\n- two\n\n```js\nconst answer = 42;\n```\n\n[docs](https://example.com)\n\n<script>alert('x')</script>\n\n[bad](javascript:alert(1))\n\n<img src=x onerror=alert(2)>",
+  );
+  assert.match(rendered, /<h2>Result<\/h2>/);
+  assert.match(rendered, /<ul>[\s\S]*<li>one<\/li>/);
+  assert.match(rendered, /<pre><code class="language-js">/);
+  assert.match(rendered, /href="https:\/\/example\.com"/);
+  assert.match(rendered, /rel="noopener noreferrer"/);
+  assert.doesNotMatch(rendered, /<script|javascript:|<[^>]*onerror=/i);
+  assert.match(rendered, /&lt;script&gt;/);
+});
+
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "pi-services-"));
   const project = join(root, "project");
@@ -178,109 +202,332 @@ function fixture() {
   return { root, path };
 }
 
-test("assistant completion signature changes only with completed assistant records", () => {
-  const { path } = fixture();
-  assert.equal(assistantCompletionSignature(path), "a1:2026-01-01T00:00:01Z:stop");
-  writeFileSync(
-    path,
-    `${readFileSync(path, "utf8")}${JSON.stringify({ type: "message", id: "u2", timestamp: "2026-01-01T00:00:02Z", message: { role: "user", content: "private" } })}\n`,
-  );
-  assert.equal(assistantCompletionSignature(path), "a1:2026-01-01T00:00:01Z:stop");
-  writeFileSync(
-    path,
-    `${readFileSync(path, "utf8")}${JSON.stringify(assistant("tool", "2026-01-01T00:00:03Z", "toolUse"))}\n`,
-  );
-  assert.equal(assistantCompletionSignature(path), "a1:2026-01-01T00:00:01Z:stop");
+test("Session registry refreshes exact changed JSONL paths and fully reconciles ambiguous events", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-registry-targeted-"));
+  const project = join(root, "project");
+  mkdirSync(project);
+  const first = join(project, "first.jsonl");
+  const second = join(project, "second.jsonl");
+  writeFileSync(first, `${JSON.stringify({ ...header, id: "registry-first" })}\n`);
+  writeFileSync(second, `${JSON.stringify({ ...header, id: "registry-second" })}\n`);
+  const registry = new SessionRegistry({ sessionsRoot: root }).refresh();
+  assert.equal(registry.lastRefresh.mode, "full");
+
+  writeFileSync(second, "{malformed\n");
+  appendFileSync(first, `${JSON.stringify({ type: "custom", id: "append" })}\n`);
+  registry.refreshPaths([first]);
+  assert.deepEqual(registry.lastRefresh, { mode: "targeted", paths: [first] });
+  assert.equal(registry.byId.get("registry-second"), second, "unrelated headers stay unread");
+
+  writeFileSync(first, `${JSON.stringify({ ...header, id: "registry-replaced" })}\n`);
+  registry.refreshPaths([first]);
+  assert.equal(registry.byId.has("registry-first"), false);
+  assert.equal(registry.byId.get("registry-replaced"), first);
+
+  unlinkSync(first);
+  registry.refreshPaths([first]);
+  assert.equal(registry.byId.has("registry-replaced"), false);
+  registry.refreshPaths([project]);
+  assert.equal(registry.lastRefresh.mode, "full");
+  assert.equal(registry.byId.has("registry-second"), false, "directory events fully reconcile");
 });
 
-test("live-detail default projection is user messages plus terminal assistant messages", () => {
-  assert.equal(isDefaultLiveEntry({ type: "message", message: { role: "user" } }), true);
-  for (const stopReason of ["stop", "error", "aborted", "length"])
+test("incremental Rarebit reader consumes only appended complete JSONL records", () => {
+  const { path } = fixture();
+  const reader = createIncrementalRarebitReader(path);
+  const initial = reader.refresh();
+  assert.equal(initial.kind, "snapshot");
+  assert.equal(initial.io.startOffset, 0);
+  assert.deepEqual(
+    initial.projection.occurrences.map((item) => item.sourceEntryId),
+    ["a1"],
+  );
+  const user = JSON.stringify({
+    type: "message",
+    id: "u2",
+    timestamp: "2026-01-01T00:00:02Z",
+    message: { role: "user", content: "private user" },
+  });
+  appendFileSync(path, user);
+  const partial = reader.refresh();
+  assert.equal(partial.kind, "append");
+  assert.equal(partial.io.startOffset, initial.io.contentBytesRead);
+  assert.deepEqual(partial.occurrences, []);
+  appendFileSync(path, "\n");
+  const completed = reader.refresh();
+  assert.deepEqual(
+    completed.occurrences.map((item) => item.sourceEntryId),
+    ["u2"],
+  );
+  assert.equal(completed.io.contentBytesRead, 1);
+});
+
+test("live-detail default delegates exactly to Rarebit message semantics", () => {
+  assert.equal(
+    isDefaultLiveEntry({ type: "message", message: { role: "user", content: "owner" } }),
+    true,
+  );
+  for (const stopReason of ["stop", "toolUse"])
     assert.equal(
-      isDefaultLiveEntry({ type: "message", message: { role: "assistant", stopReason } }),
+      isDefaultLiveEntry({
+        type: "message",
+        message: { role: "assistant", stopReason, content: "agent" },
+      }),
       true,
+    );
+  for (const stopReason of ["error", "aborted", "length"])
+    assert.equal(
+      isDefaultLiveEntry({
+        type: "message",
+        message: { role: "assistant", stopReason, content: "exception" },
+      }),
+      false,
     );
   assert.equal(
     isDefaultLiveEntry({
       type: "message",
-      message: { role: "assistant", stopReason: "toolUse" },
+      message: { role: "assistant", stopReason: "stop", content: [] },
     }),
     false,
   );
   assert.equal(isDefaultLiveEntry({ type: "message", message: { role: "assistant" } }), false);
   assert.equal(isDefaultLiveEntry({ type: "message", message: { role: "toolResult" } }), false);
   assert.equal(isDefaultLiveEntry({ type: "compaction" }), false);
+});
 
-  const { path } = fixture();
+test("native exporter preflight is iterative and identifies only compatibility degradation", () => {
+  const entries = [];
+  for (let index = 0; index < 6_000; index += 1)
+    entries.push({ id: `e${index}`, parentId: index ? `e${index - 1}` : null });
+  const graph = analyzeSessionParentGraph(entries);
+  assert.deepEqual(graph, { status: "available", entryCount: 6_000, maxDepth: 6_000 });
+  assert.deepEqual(nativeExportPreflight({ preflight: graph }, { maxDepth: 2_000 }), {
+    status: "degraded",
+    reason: "legacy_exporter_depth_compatibility",
+    entryCount: 6_000,
+    maxDepth: 6_000,
+    limit: 2_000,
+  });
+});
+
+test("native exporter identity is pinned, stack-safe, observable, and rejects empty output", async (t) => {
+  assert.throws(
+    () => resolveNativeExporter({ env: { PI_LIVE_DETAIL_EXPORTER: process.execPath } }),
+    /revision must be nonempty/,
+  );
+  assert.throws(
+    () =>
+      resolveNativeExporter({
+        env: {
+          PI_LIVE_DETAIL_EXPORTER: "pi",
+          PI_LIVE_DETAIL_EXPORTER_REVISION: "dev",
+          PI_LIVE_DETAIL_EXPORTER_CAPABILITY: "stack-safe",
+        },
+      }),
+    /must be an absolute path/,
+  );
+  const identity = resolveNativeExporter({
+    env: {
+      PI_LIVE_DETAIL_EXPORTER: process.execPath,
+      PI_LIVE_DETAIL_EXPORTER_REVISION: "pi-core-stack-safe-abc123",
+      PI_LIVE_DETAIL_EXPORTER_CAPABILITY: "stack-safe",
+    },
+  });
+  assert.deepEqual(identity, {
+    executable: process.execPath,
+    revision: "pi-core-stack-safe-abc123",
+    capability: "stack-safe",
+    identity: `${process.execPath}@pi-core-stack-safe-abc123#stack-safe`,
+    provider: { kind: "development-override" },
+  });
+
+  const root = mkdtempSync(join(tmpdir(), "pi-stack-safe-exporter-"));
+  const project = join(root, "project");
+  mkdirSync(project);
+  const id = "stack-safe-export";
   writeFileSync(
-    path,
-    `${readFileSync(path, "utf8")}${JSON.stringify({ type: "message", id: "u2", message: { role: "user" } })}\n${JSON.stringify(assistant("tool", "2026-01-01T00:00:02Z", "toolUse"))}\n{incomplete\n${JSON.stringify(assistant("a2", "2026-01-01T00:00:03Z", "error"))}\n`,
+    join(project, "session.jsonl"),
+    `${JSON.stringify({ ...header, version: 2, id })}\n${JSON.stringify({ type: "message", id: "u", parentId: null, message: { role: "user", content: "owner" } })}\n${JSON.stringify({ ...assistant("a", "2026-01-01T00:00:01Z"), parentId: "u" })}\n`,
   );
-  assert.deepEqual(defaultLiveEntryIds(path), ["a1", "u2", "a2"]);
-});
-
-test("live-detail Turns projection survives rerenders and can opt out and return", async () => {
-  const window = new Window();
+  const cacheRoot = mkdtempSync(join(tmpdir(), "pi-stack-safe-cache-"));
+  let calls = 0;
+  const server = createLiveDetailServer({
+    sessionsRoot: root,
+    cacheRoot,
+    exportCommand: identity.executable,
+    exporterRevision: identity.revision,
+    exporterCapability: identity.capability,
+    maxNativeExportDepth: 1,
+    exporter: async (_source, output) => {
+      calls += 1;
+      writeFileSync(output, calls === 1 ? "" : "<!doctype html><title>Stack safe</title>");
+    },
+    watchSources: () => ({ close() {} }),
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}`;
+  assert.deepEqual((await (await fetch(`${base}/api/health`)).json()).exporter, identity);
+  const wrapper = await (await fetch(`${base}/session/${id}`)).text();
+  const inlineScript = wrapper.match(/<script>([\s\S]*)<\/script>/)?.[1];
+  assert.ok(inlineScript);
+  const window = new Window({ url: `${base}/session/${id}` });
+  class FakeEventSource {
+    static instance;
+    constructor() {
+      FakeEventSource.instance = this;
+    }
+  }
+  window.EventSource = FakeEventSource;
+  window.document.write(wrapper.replace(/<script>[\s\S]*<\/script>/, ""));
+  window.eval(inlineScript);
+  t.after(() => window.close());
   const { document } = window;
-  document.body.innerHTML = `
-    <div id="filters">
-      <button class="filter-btn active" data-filter="default">Default</button>
-      <button class="filter-btn" data-filter="no-tools">No-tools</button>
-      <button class="filter-btn" data-filter="all">All</button>
-    </div>
-    <div id="tree-status"></div>
-    <div id="tree-container">
-      <div class="tree-node" data-id="u1"></div>
-      <div class="tree-node" data-id="tool"></div>
-      <div class="tree-node" data-id="a1"></div>
-      <div class="tree-node" data-id="compact"></div>
-    </div>
-    <div id="messages">
-      <div id="entry-u1"></div>
-      <div id="entry-tool"></div>
-      <div id="entry-a1"></div>
-      <div id="entry-compact"></div>
-    </div>`;
-  const projection = createLiveEntryProjection(["u1", "a1"]);
-  projection.prepare(document, { controls: true });
-
-  const turns = document.querySelector('[data-filter="hc-default-turns"]');
-  assert.equal(turns.textContent, "Turns");
-  assert.equal(turns.classList.contains("active"), true);
-  assert.deepEqual(
-    [...document.querySelectorAll("#messages > *:not(.hc-default-turns-hidden)")].map(
-      (node) => node.id,
-    ),
-    ["entry-u1", "entry-a1"],
-  );
-  assert.equal(document.querySelector("#tree-status").textContent, "2 / 4 entries");
-
-  document.querySelector("#messages").innerHTML = `
-    <div id="entry-u1"></div><div id="entry-tool"></div><div id="entry-a1"></div>`;
-  await window.happyDOM.whenAsyncComplete();
   assert.equal(
-    document.querySelector("#entry-tool").classList.contains("hc-default-turns-hidden"),
-    true,
+    document.querySelector('[role="group"]')?.getAttribute("aria-label"),
+    "Session detail views",
   );
-
-  document.querySelector('[data-filter="no-tools"]').click();
-  assert.equal(document.querySelectorAll(".hc-default-turns-hidden").length, 0);
-  document.querySelector("#messages").innerHTML += '<div id="entry-compact"></div>';
-  await window.happyDOM.whenAsyncComplete();
-  assert.equal(document.querySelectorAll(".hc-default-turns-hidden").length, 0);
-
-  turns.click();
-  assert.equal(turns.classList.contains("active"), true);
-  assert.deepEqual(
-    [...document.querySelectorAll("#messages > *:not(.hc-default-turns-hidden)")].map(
-      (node) => node.id,
-    ),
-    ["entry-u1", "entry-a1"],
+  for (const control of document.querySelectorAll("#rarebit-button,#native-button,#raw-link")) {
+    const tooltip = document.getElementById(control.getAttribute("aria-describedby"));
+    assert.equal(tooltip?.getAttribute("role"), "tooltip");
+    assert.ok(control.textContent.trim().length > 1);
+  }
+  const style = document.querySelector("style").textContent;
+  assert.match(style, /\.tool-wrap:hover>\.tooltip/);
+  assert.match(style, /\.tool-wrap:focus-within>\.tooltip/);
+  assert.match(style, /html,body\{max-width:100%;overflow-x:hidden\}/);
+  assert.match(style, /\.collapse-wrap\{flex:0 0 auto\}/);
+  assert.match(style, /\.tooltip\{display:none;/);
+  assert.match(
+    style,
+    /\.tool-wrap:hover>\.tooltip,\.tool-wrap:focus-within>\.tooltip\{display:block\}/,
   );
-  window.close();
+  assert.match(style, /@media\(max-width:560px\)/);
+  assert.match(style, /\.control-group\{flex:1 1 auto;overflow-x:auto;/);
+  const collapse = document.querySelector("#collapse-button");
+  assert.equal(collapse.parentElement.classList.contains("collapse-wrap"), true);
+  assert.equal(collapse.getAttribute("aria-expanded"), "true");
+  collapse.click();
+  assert.equal(document.querySelector("#toolbar").classList.contains("collapsed"), true);
+  assert.equal(collapse.getAttribute("aria-expanded"), "false");
+
+  const jump = document.querySelector('.jump-native[data-entry-id="u"]');
+  const jumpUrl = new URL(jump.href);
+  assert.equal(jumpUrl.pathname, `/session/${id}`);
+  assert.equal(jumpUrl.searchParams.get("view"), "native");
+  assert.equal(jumpUrl.searchParams.get("leaf"), "a");
+  assert.equal(jumpUrl.searchParams.get("entry"), "u");
+  const pinnedWindow = new Window({ url: jump.href });
+  pinnedWindow.EventSource = FakeEventSource;
+  pinnedWindow.document.write(wrapper.replace(/<script>[\s\S]*<\/script>/, ""));
+  pinnedWindow.eval(inlineScript);
+  t.after(() => pinnedWindow.close());
+  const nativeView = pinnedWindow.document.querySelector("#native-view");
+  const pinnedUrl = new URL(nativeView.src);
+  assert.equal(pinnedUrl.searchParams.get("leafId"), "a");
+  assert.equal(pinnedUrl.searchParams.get("targetId"), "u");
+  const pinnedSource = nativeView.src;
+  FakeEventSource.instance.onmessage({
+    data: JSON.stringify({
+      kind: "append",
+      version: "new-version",
+      occurrences: [],
+      activeLeafId: "new-leaf",
+      rarebitCount: 2,
+      otherEntryCount: 1,
+    }),
+  });
+  assert.equal(nativeView.src, pinnedSource, "pinned source must not move on append");
+
+  assert.equal((await fetch(`${base}/render/${id}`)).status, 500);
+  assert.deepEqual(readdirSync(cacheRoot), [], "failed empty temp output must be removed");
+  const retried = await fetch(`${base}/render/${id}`);
+  assert.equal(retried.status, 200, "stack-safe capability bypasses the legacy depth guard");
+  assert.match(await retried.text(), /Stack safe/);
+  assert.equal(calls, 2);
+  const validPin = await fetch(`${base}/render/${id}?leafId=a&targetId=u`);
+  assert.equal(validPin.status, 200);
+  const invalidPin = await fetch(`${base}/render/${id}?leafId=u&targetId=a`);
+  assert.equal(invalidPin.status, 422);
+  assert.equal(
+    invalidPin.headers.get("x-hypercarrier-degraded-reason"),
+    "target_not_on_leaf_ancestry",
+  );
+  assert.equal(calls, 2, "invalid pins must not invoke or fall back to the exporter");
 });
 
-test("live detail has a stable URL and invalidates after assistant completion", async (t) => {
+test("native exports serialize generations and never publish stale in-flight HTML", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "pi-native-export-generation-"));
+  const id = "native-export-generation";
+  const source = join(root, "session.jsonl");
+  writeFileSync(
+    source,
+    `${JSON.stringify({ ...header, version: 3, id })}\n${JSON.stringify({ type: "message", id: "u", parentId: null, message: { role: "user", content: "owner" } })}\n${JSON.stringify({ ...assistant("a", "2026-01-01T00:00:01Z"), parentId: "u" })}\n`,
+  );
+  let calls = 0;
+  let releaseFirst;
+  let signalFirst;
+  let signalSecond;
+  const firstStarted = new Promise((resolve) => {
+    signalFirst = resolve;
+  });
+  const secondStarted = new Promise((resolve) => {
+    signalSecond = resolve;
+  });
+  const firstMayFinish = new Promise((resolve) => {
+    releaseFirst = resolve;
+  });
+  const server = createLiveDetailServer({
+    sessionsRoot: root,
+    cacheRoot: join(root, "cache"),
+    exportCommand: process.execPath,
+    exporterRevision: "generation-test",
+    exporterCapability: "stack-safe",
+    exporter: async (_path, output) => {
+      calls += 1;
+      if (calls === 1) {
+        signalFirst();
+        await firstMayFinish;
+        writeFileSync(output, "<!doctype html><title>stale generation</title>");
+        return;
+      }
+      signalSecond();
+      writeFileSync(output, "<!doctype html><title>fresh generation</title>");
+    },
+    watchSources: () => ({ close() {} }),
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  const firstResponse = fetch(`${base}/render/${id}`);
+  await firstStarted;
+  appendFileSync(
+    source,
+    `${JSON.stringify({ ...assistant("b", "2026-01-01T00:00:02Z"), parentId: "a" })}\n`,
+  );
+  const secondResponse = fetch(`${base}/render/${id}`);
+  const startedBeforeRelease = await Promise.race([
+    secondStarted.then(() => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), 50)),
+  ]);
+  assert.equal(startedBeforeRelease, false, "different generations must serialize per Session");
+  releaseFirst();
+  await secondStarted;
+
+  const responses = await Promise.all([firstResponse, secondResponse]);
+  assert.deepEqual(
+    responses.map((response) => response.status),
+    [200, 200],
+  );
+  assert.deepEqual(await Promise.all(responses.map((response) => response.text())), [
+    "<!doctype html><title>fresh generation</title>",
+    "<!doctype html><title>fresh generation</title>",
+  ]);
+  assert.equal(calls, 2);
+});
+
+test("live detail transports Rarebits first and lazily exports the native trace", async (t) => {
   const { root, path } = fixture();
   const cacheRoot = mkdtempSync(join(tmpdir(), "pi-live-cache-"));
   let notify;
@@ -309,12 +556,13 @@ test("live detail has a stable URL and invalidates after assistant completion", 
   const base = `http://127.0.0.1:${server.address().port}`;
   const wrapper = await (await fetch(`${base}/session/${sessionId}`)).text();
   assert.match(wrapper, /EventSource/);
-  assert.match(wrapper, /dataset\.filter = "hc-default-turns"/);
-  assert.match(wrapper, /terminal assistant messages/);
-  assert.match(wrapper, /}\)\(\["a1"\]\);/);
-  assert.doesNotMatch(wrapper, /applyNoTools/);
-  assert.match(wrapper, /appendOnly/);
+  assert.match(wrapper, /Load the full native trace/);
+  assert.match(wrapper, /Rarebits ·.*other entries not loaded/);
+  assert.match(wrapper, /"otherEntryCount":0/);
+  assert.match(wrapper, /"sourceEntryId":"a1"/);
+  assert.equal(exportCalls, 0, "default Rarebit response must not invoke Pi export");
   assert.match(await (await fetch(`${base}/render/${sessionId}`)).text(), /Rendered/);
+  assert.equal(exportCalls, 1);
   const controller = new AbortController();
   const response = await fetch(`${base}/api/events/${sessionId}`, { signal: controller.signal });
   const reader = response.body.getReader();
@@ -324,7 +572,9 @@ test("live detail has a stable URL and invalidates after assistant completion", 
     `${readFileSync(path, "utf8")}${JSON.stringify(assistant("tool", "2026-01-01T00:00:02Z", "toolUse"))}\n`,
   );
   notify({ paths: [path] });
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  const continuation = new TextDecoder().decode((await reader.read()).value);
+  assert.match(continuation, /"kind":"append"/);
+  assert.match(continuation, /"sourceEntryId":"tool"/);
   assert.equal(exportCalls, 1);
   writeFileSync(
     path,
@@ -333,8 +583,11 @@ test("live detail has a stable URL and invalidates after assistant completion", 
   notify({ paths: [path] });
   const update = new TextDecoder().decode((await reader.read()).value);
   assert.match(update, /data:/);
-  assert.match(update, /"defaultEntryIds":\["a1","a2"\]/);
+  assert.match(update, /"sourceEntryId":"a2"/);
+  assert.equal(exportCalls, 1, "watch updates must not eagerly regenerate native HTML");
+  assert.match(await (await fetch(`${base}/render/${sessionId}`)).text(), /Rendered/);
   assert.equal(exportCalls, 2);
+  assert.match(await (await fetch(`${base}/raw/${sessionId}`)).text(), new RegExp(sessionId));
   controller.abort();
   await new Promise((resolve) => server.close(resolve));
   assert.equal(closed, true);

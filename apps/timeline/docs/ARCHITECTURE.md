@@ -49,14 +49,16 @@ deployment adapter, not a new service.
 ~/.pi/teams/** ---------------------+---->|    snapshot/trace/SSE + React SPA
 tmux sockets + list-panes ----------+     |
 macOS process table ----------------+     +--> live-detail Node HTTP service
-                                          |    pi --export + completion SSE
+                                          |    Rarebit projection + JSONL SSE
+                                          |    explicit pi --export disclosure
                                           |
                                           +--> TPS adapter Node HTTP service
                                                JSONL stream + pi-tps-web
 
 Browser surfaces:
   main dashboard  = React + TypeScript + Vite build + CSS timeline lanes
-  live detail     = Pi-exported HTML + vanilla-JS incremental DOM wrapper
+  live detail     = shared-core Rarebits + sanitized Markdown projection
+                    + lazy pinned stack-safe Pi native HTML
   TPS inspector   = React + TypeScript + DuckDB-WASM + Recharts
 ```
 
@@ -89,8 +91,9 @@ The timeline emits absolute inspector links using
 `PI_LIVE_DETAIL_BASE_URL=http://live.pi.localhost:1355` and
 `PI_TPS_WEB_BASE_URL=http://tps.pi.localhost:1355`. LAN mode is intentionally not enabled because
 live detail and TPS surfaces contain session transcript data. SSE remains end-to-end HTTP
-`text/event-stream`; filesystem events invalidate the main snapshot and completed assistant messages
-invalidate live detail.
+`text/event-stream`; filesystem events invalidate the main snapshot and cause Live Detail to read
+only new bytes on ordinary growth. Semantic branch changes cause a typed projection reset. Pi's full
+native export is not generated or transported until the owner explicitly requests it.
 
 ## Ontology
 
@@ -216,16 +219,24 @@ optional until measured latency justifies it. Synthetic verification covers at l
 
 ## Frontend contract
 
-One synchronized wall-clock scale and session lanes. Implemented detail levels are summary, turns,
-and provider requests. Grouping includes project, cwd, session name, Pi Team, current tmux
-session/window/pane, state, and none. A separate field/value filter uses the same ontology for
-project, cwd, session name, Pi Team, tmux session/window, and state; it composes with time,
-alive-only, and free-text ID/name/cwd search. Messenger-mesh grouping and lane virtualization remain
-future work.
+One synchronized wall-clock scale runs newest-to-oldest from left to right. The default request is
+the last 24 hours by latest persisted message time; 15-minute, 1-hour, 6-hour, 24-hour, all-history,
+and custom windows share the same time semantics, while ranges beyond 24 hours cursor-page older
+history lazily.
 
-Width encodes duration only for exact intervals. Inferred activity is rendered as a point/capsule or
-hatched interval. Color can encode state, provider spend, context, TPS, tokens, or cache efficiency
-and is paired with shape/text.
+The lane has one fixed metadata projection rather than user-selectable detail or colour modes.
+Rarebit user occurrences and independent assistant response outcomes retain their declared shapes
+and roles; process/work state appears as a separate state cue. `Intelligent` is one group whose
+lanes are sorted and titled by the compact Team, role/member, Session-label, effective-Project
+tuple. Other grouping choices include project, cwd, session name, Pi Team, current tmux
+session/window/pane, state, and none. A separate field/value filter composes with time, alive-only,
+and free-text ID/name/cwd search.
+
+Selecting one exact Session opens an inspector that requests its allowlisted Rarebit Summary sidecar
+lazily. Missing, stale, selection-only, overflow, and failed derivations remain explicit. Raw
+transcript and technical request/TPS detail stay in the separately linked Live Detail and TPS
+surfaces instead of enlarging the fleet snapshot. Messenger-mesh grouping and lane virtualization
+remain future work.
 
 ## Verification anchors
 

@@ -33,12 +33,13 @@ dataflow and routing diagram.
 
 Each session inspector links to two independent detail services:
 
-- **Live session** (`:4319/session/<id>`) uses Pi's own HTML exporter and regenerates through
-  filesystem events after completed assistant messages. Its added `Turns` projection defaults to
-  persisted user messages plus terminal assistant messages (an assistant record whose Pi
-  `stopReason` is present and isn't `toolUse`). Pi's native filters remain available to reveal tool,
-  settings, and other raw entries. Same-branch updates append incrementally while preserving earlier
-  DOM state; branch divergence hard-refreshes.
+- **Live session** (`:4319/session/<id>`) defaults to the complete active-branch Rarebit projection:
+  persisted user messages, assistant continuations at `toolUse`, and normal assistant stops selected
+  by the shared Rarebit core. It reads only appended JSONL bytes on updates and does not invoke or
+  transport Pi's native export until **Full native** is selected. Full native uses the checked-in,
+  checksum-verified stack-safe Pi provider automatically; its exact package/base/patch identity is
+  reported by the live-detail health route. Pi's native filters remain available inside that lazy
+  disclosure.
 - **TPS inspector** (`:4320/?auto=1&session=<id>`) is optional and serves a separately built
   `pi-tps-web` application against that session's native JSONL.
 

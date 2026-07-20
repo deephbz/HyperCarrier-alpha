@@ -46,6 +46,13 @@ ports. Friendly `.localhost` names are an optional proxy add-on. The TPS rendere
 an explicitly pinned external build; follow `apps/timeline/README.md` and its
 `integrations/pi-tps-web.json` contract rather than installing an unpinned latest version.
 
+Live Detail is Rarebit-first: its default exact-Session page transfers only the shared-core
+active-branch Rarebit messages and incrementally reads appended JSONL. **Full native** lazily uses
+the checked-in checksum-verified stack-safe Pi provider; users don't need to patch or configure a
+global Pi installation. The provider's release base, public patch revision, MIT notice, artifact
+integrity, and removal condition are under `vendor/pi-exporter` and reported by the live-detail
+health route.
+
 Then open:
 
 - `http://127.0.0.1:4318/?demo=1` for the synthetic session timeline;
