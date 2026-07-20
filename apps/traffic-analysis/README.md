@@ -109,6 +109,11 @@ A Team URL is a recorded Team trace, including explicit current and historical
 teammate mappings. An Agent-list URL is a fixed explicit list. Neither accepts
 paths or infers membership from cwd, filenames, timestamps, or prose.
 
+`TeamTraceScope` deliberately means the Team's recorded trace rather than its
+current roster: shutdown removes current authority to operate a Membership but
+does not erase explicitly attributed Session evidence. The resolver, types,
+and tests own the exact current mechanics.
+
 A normal Team scope can resolve four readable Session sources but render three
 Agent lanes. That is not by itself an error: sources are attribution inputs,
 while distinct rendered Agents are Session/Agent identities; mappings can share

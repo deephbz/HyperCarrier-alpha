@@ -1,0 +1,313 @@
+{
+  "schemaVersion": 1,
+  "selectorVersion": "rarebit-selector-v1",
+  "purpose": "Human-reviewed semantic examples for comparing Rarebit and adjacent projections without using an implementation as the oracle.",
+  "capabilities": {
+    "strictRarebit": ["core", "cli", "pi_extension"],
+    "knownNonconformance": {
+      "timeline": "selects matching physical JSONL entries without resolving the active branch"
+    },
+    "notRarebitProjections": {
+      "live_detail_turns": "shows user messages and terminal assistant outcomes; it omits continuations and includes non-Rarebit terminal outcomes",
+      "traffic_outcomes": "shows operational user and assistant request outcomes, including truncated outcomes"
+    }
+  },
+  "cases": [
+    {
+      "id": "linear-prose-and-outcomes",
+      "description": "User prose, assistant continuation, and normal stop are Rarebits; tool traffic, hidden reasoning, and exceptional terminal outcomes are not.",
+      "records": [
+        {
+          "type": "session",
+          "version": 2,
+          "id": "session-linear",
+          "timestamp": "2026-01-01T00:00:00.000Z",
+          "cwd": "/example"
+        },
+        {
+          "type": "message",
+          "id": "u-linear",
+          "parentId": null,
+          "timestamp": "2026-01-01T00:00:01.000Z",
+          "producer": "owner",
+          "message": {
+            "role": "user",
+            "content": [
+              { "type": "text", "text": "Compare the candidate renderers." }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "a-continuation",
+          "parentId": "u-linear",
+          "timestamp": "2026-01-01T00:00:02.000Z",
+          "message": {
+            "role": "assistant",
+            "timestamp": 1767225601500,
+            "stopReason": "toolUse",
+            "content": [
+              {
+                "type": "text",
+                "text": "I will measure the current baseline."
+              },
+              {
+                "type": "toolCall",
+                "id": "call-1",
+                "name": "benchmark",
+                "arguments": {}
+              }
+            ]
+          }
+        },
+        {
+          "type": "message",
+          "id": "tool-result",
+          "parentId": "a-continuation",
+          "timestamp": "2026-01-01T00:00:03.000Z",
+          "message": {
+            "role": "toolResult",
+            "toolCallId": "call-1",
+            "content": [{ "type": "text", "text": "machine result" }]
+          }
+        },
+        {
+          "type": "message",
+          "id": "a-error",
+          "parentId": "tool-result",
+          "timestamp": "2026-01-01T00:00:04.000Z",
+          "message": {
+            "role": "assistant",
+            "timestamp": 1767225603500,
+            "stopReason": "error",
+            "content": [{ "type": "text", "text": "The attempt failed." }]
+          }
+        },
+        {
+          "type": "message",
+          "id": "a-stop",
+          "parentId": "a-error",
+          "timestamp": "2026-01-01T00:00:05.000Z",
+          "message": {
+            "role": "assistant",
+            "timestamp": 1767225604500,
+            "stopReason": "stop",
+            "content": [
+              { "type": "thinking", "thinking": "hidden reasoning" },
+              { "type": "text", "text": "The baseline is ready for review." }
+            ]
+          }
+        }
+      ],
+      "expected": {
+        "activeBranchIds": [
+          "u-linear",
+          "a-continuation",
+          "tool-result",
+          "a-error",
+          "a-stop"
+        ],
+        "rarebits": [
+          {
+            "sourceEntryId": "u-linear",
+            "role": "user",
+            "outcome": "user",
+            "producer": "owner",
+            "text": "Compare the candidate renderers."
+          },
+          {
+            "sourceEntryId": "a-continuation",
+            "role": "assistant",
+            "outcome": "continuation",
+            "producer": null,
+            "text": "I will measure the current baseline."
+          },
+          {
+            "sourceEntryId": "a-stop",
+            "role": "assistant",
+            "outcome": "stop",
+            "producer": null,
+            "text": "The baseline is ready for review."
+          }
+        ],
+        "excludedEntryIds": ["tool-result", "a-error"]
+      }
+    },
+    {
+      "id": "fork-compaction-and-resume",
+      "description": "The final entry is the active leaf. An abandoned fork and a compaction summary are not selected; messages before and after compaction remain eligible on the active lineage.",
+      "records": [
+        {
+          "type": "session",
+          "version": 2,
+          "id": "session-fork",
+          "timestamp": "2026-01-02T00:00:00.000Z",
+          "cwd": "/example"
+        },
+        {
+          "type": "message",
+          "id": "u-root",
+          "parentId": null,
+          "timestamp": "2026-01-02T00:00:01.000Z",
+          "message": {
+            "role": "user",
+            "content": "Start from the measured baseline."
+          }
+        },
+        {
+          "type": "message",
+          "id": "a-shared",
+          "parentId": "u-root",
+          "timestamp": "2026-01-02T00:00:02.000Z",
+          "message": {
+            "role": "assistant",
+            "stopReason": "toolUse",
+            "content": "I will inspect the trace."
+          }
+        },
+        {
+          "type": "message",
+          "id": "u-abandoned",
+          "parentId": "a-shared",
+          "timestamp": "2026-01-02T00:00:03.000Z",
+          "message": {
+            "role": "user",
+            "content": "Try the abandoned direction."
+          }
+        },
+        {
+          "type": "message",
+          "id": "a-abandoned",
+          "parentId": "u-abandoned",
+          "timestamp": "2026-01-02T00:00:04.000Z",
+          "message": {
+            "role": "assistant",
+            "stopReason": "stop",
+            "content": "Abandoned fork result."
+          }
+        },
+        {
+          "type": "message",
+          "id": "u-resumed",
+          "parentId": "a-shared",
+          "timestamp": "2026-01-02T00:00:05.000Z",
+          "message": {
+            "role": "user",
+            "content": "Resume on the shared branch."
+          }
+        },
+        {
+          "type": "compaction",
+          "id": "compact-active",
+          "parentId": "u-resumed",
+          "timestamp": "2026-01-02T00:00:06.000Z",
+          "summary": "Derived compaction text is not Rarebit evidence."
+        },
+        {
+          "type": "message",
+          "id": "a-active",
+          "parentId": "compact-active",
+          "timestamp": "2026-01-02T00:00:07.000Z",
+          "message": {
+            "role": "assistant",
+            "stopReason": "stop",
+            "content": "Active branch result."
+          }
+        }
+      ],
+      "expected": {
+        "activeBranchIds": [
+          "u-root",
+          "a-shared",
+          "u-resumed",
+          "compact-active",
+          "a-active"
+        ],
+        "rarebits": [
+          {
+            "sourceEntryId": "u-root",
+            "role": "user",
+            "outcome": "user",
+            "producer": null,
+            "text": "Start from the measured baseline."
+          },
+          {
+            "sourceEntryId": "a-shared",
+            "role": "assistant",
+            "outcome": "continuation",
+            "producer": null,
+            "text": "I will inspect the trace."
+          },
+          {
+            "sourceEntryId": "u-resumed",
+            "role": "user",
+            "outcome": "user",
+            "producer": null,
+            "text": "Resume on the shared branch."
+          },
+          {
+            "sourceEntryId": "a-active",
+            "role": "assistant",
+            "outcome": "stop",
+            "producer": null,
+            "text": "Active branch result."
+          }
+        ],
+        "excludedEntryIds": ["u-abandoned", "a-abandoned", "compact-active"]
+      }
+    }
+  ],
+  "failureCases": [
+    {
+      "id": "malformed-jsonl",
+      "description": "A complete prefix followed by malformed JSON is unavailable to strict Rarebit readers, never an empty successful selection.",
+      "lines": [
+        "{\"type\":\"session\",\"version\":2,\"id\":\"session-malformed\"}",
+        "{\"type\":\"message\",\"id\":\"u1\",\"parentId\":null,\"message\":{\"role\":\"user\",\"content\":\"complete prefix\"}}",
+        "{\"type\":\"message\",\"id\":\"truncated\""
+      ],
+      "expected": {
+        "strictStatus": "unavailable",
+        "reason": "malformed_jsonl",
+        "trafficDiagnostic": "malformed_jsonl"
+      }
+    },
+    {
+      "id": "missing-active-parent",
+      "description": "An active leaf whose parent is absent is unavailable rather than a guessed partial branch.",
+      "records": [
+        { "type": "session", "version": 2, "id": "session-missing-parent" },
+        {
+          "type": "message",
+          "id": "a-orphan",
+          "parentId": "missing-parent",
+          "message": {
+            "role": "assistant",
+            "stopReason": "stop",
+            "content": "orphan"
+          }
+        }
+      ],
+      "expected": {
+        "strictStatus": "unavailable",
+        "reason": "missing_parent"
+      }
+    },
+    {
+      "id": "scan-capped",
+      "description": "A consumer that did not inspect the complete required branch reports unavailable instead of a successful partial Rarebit set.",
+      "expected": {
+        "strictStatus": "unavailable",
+        "reason": "scan_capped"
+      }
+    },
+    {
+      "id": "source-unavailable",
+      "description": "An absent or unreadable source remains explicitly unavailable.",
+      "expected": {
+        "strictStatus": "unavailable",
+        "reason": "source_unavailable"
+      }
+    }
+  ]
+}

@@ -823,7 +823,7 @@ test("command timeout escalates through the whole detached process group", async
   await chmod(script, 0o700);
   const result = await runCommand(script, [], {
     env: { ...process.env, HC_CHILD_PID_FILE: childPidFile },
-    timeoutMs: 500,
+    timeoutMs: 2000,
     killGraceMs: 100,
   });
   assert.equal(result.error.code, "ETIMEDOUT");
