@@ -162,7 +162,11 @@ test("shared imperative summary service persists a derived receipt without raw s
         provider: "test",
         model: "cheap",
         usage: { input: 3, output: 2, totalTokens: 5 },
-        text: "Progress: inspected | Findings: context | Questions/Requests: None stated | Next step: review",
+        text: JSON.stringify({
+          summary:
+            "Progress: inspected | Findings: context | Questions/Requests: None stated | Next step: review",
+          summaryNeedsHumanAttention: false,
+        }),
       }),
     },
   });
@@ -213,6 +217,27 @@ test("writer-aligned JSON Schema accepts every persisted Rarebit terminal status
   };
   const ineligible = await run("ineligible", {});
   assert.equal(ineligible.status, "ineligible");
+  const policyObservedAt = new Date();
+  const inhibited = await run("inhibited", {
+    summaryPolicy: { minTotalLength: 0, maxRarebitRatio: 1 },
+    queryAutomaticSummaryPolicy: async () => ({
+      contractVersion: "rarebit-automatic-summary-policy/1",
+      queryId: "schema-query",
+      decision: "inhibit",
+      queryStatus: "inhibited",
+      provider: "test-policy",
+      reason: "exact_binding",
+      observedAt: policyObservedAt.toISOString(),
+      validUntil: new Date(policyObservedAt.getTime() + 1_000).toISOString(),
+      queriedAt: policyObservedAt.toISOString(),
+      provenance: {
+        identity: "opaque-identity",
+        generation: "opaque-generation",
+        association: "opaque-association",
+      },
+    }),
+  });
+  assert.equal(inhibited.status, "inhibited");
   const failure = await run("failure", { forceSynthesis: true });
   assert.equal(failure.status, "failure");
   const overflow = await run("overflow", {
@@ -226,7 +251,11 @@ test("writer-aligned JSON Schema accepts every persisted Rarebit terminal status
     model: { provider: "test", id: "cheap" },
     modelClient: {
       complete: async () => ({
-        text: "Progress: p | Findings: f | Questions/Requests: None stated | Next step: n",
+        text: JSON.stringify({
+          summary:
+            "Progress: p | Findings: f | Questions/Requests: None stated | Next step: n",
+          summaryNeedsHumanAttention: false,
+        }),
       }),
     },
   });

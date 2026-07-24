@@ -16,6 +16,14 @@ function safeNumber(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function optionalBoolean(key, value) {
+  return typeof value === "boolean" ? { [key]: value } : {};
+}
+
+function optionalNumber(key, value) {
+  return typeof value === "number" && Number.isFinite(value) ? { [key]: value } : {};
+}
+
 function object(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
@@ -53,12 +61,80 @@ function projectSynthesis(synthesis) {
   };
 }
 
+function projectAutomaticSummaryPolicy(policy, nowMillis) {
+  const source = object(policy);
+  const provenance = object(source.provenance);
+  const observedAtMillis = finiteTimestamp(source.observedAt);
+  const validUntilMillis = finiteTimestamp(source.validUntil);
+  const queriedAtMillis = finiteTimestamp(source.queriedAt);
+  if (
+    source.contractVersion !== "rarebit-automatic-summary-policy/1" ||
+    source.decision !== "inhibit" ||
+    source.queryStatus !== "inhibited" ||
+    !safeString(source.queryId) ||
+    !safeString(source.provider) ||
+    !safeString(source.reason) ||
+    !safeString(provenance.identity) ||
+    !safeString(provenance.generation) ||
+    !safeString(provenance.association) ||
+    observedAtMillis === null ||
+    validUntilMillis === null ||
+    queriedAtMillis === null ||
+    observedAtMillis > queriedAtMillis ||
+    queriedAtMillis >= validUntilMillis
+  )
+    return null;
+  const current = validUntilMillis > nowMillis;
+  return {
+    state: current ? "inhibited" : "inhibition_receipt_expired",
+    wording: current
+      ? "automatic summary inhibited by team-management policy"
+      : "latest automatic-summary inhibition receipt has expired",
+    contractVersion: safeString(source.contractVersion),
+    provider: safeString(source.provider),
+    reason: safeString(source.reason),
+    observedAt: safeString(source.observedAt),
+    validUntil: safeString(source.validUntil),
+  };
+}
+
+function projectedSummaryAvailability({ historical, status, unavailable, stale }) {
+  if (historical) return historical.availability;
+  if (status === "inhibited") return "missing";
+  if (unavailable) return "unavailable";
+  return stale ? "stale" : "available";
+}
+
+function projectedSummaryText(record, historical) {
+  if (typeof record.summary === "string") return { summary: record.summary };
+  return typeof historical?.summary === "string" ? { summary: historical.summary } : {};
+}
+
+function projectedHistoricalSummary(status, historical) {
+  if (status !== "inhibited") return {};
+  return {
+    historicalSummary: historical
+      ? {
+          availability: historical.availability,
+          status: historical.status,
+          observedAt: historical.observedAt,
+          jobId: historical.jobId,
+        }
+      : { availability: "missing" },
+  };
+}
+
 /**
  * Projects only the derived Rarebit Summary record. In particular, it
  * intentionally omits sidecar path, sessionFile, branch records, selected
  * message prose, and all raw Session JSONL fields.
  */
-export function projectRarebitSummaryRecord(record, session) {
+export function projectRarebitSummaryRecord(
+  record,
+  session,
+  historicalRecord = null,
+  nowMillis = Date.now(),
+) {
   const selection = object(record.selection);
   const model = object(record.model);
   const modelProvenance = object(record.modelProvenance);
@@ -68,8 +144,19 @@ export function projectRarebitSummaryRecord(record, session) {
   const unavailable = status === "failure" || status === "unavailable_overflow";
   const stale =
     !unavailable && lastMessageAt !== null && (summaryAsOf === null || summaryAsOf < lastMessageAt);
+  const currentPolicy = projectAutomaticSummaryPolicy(record.automaticSummaryPolicy, nowMillis);
+  const historical =
+    status === "inhibited" && historicalRecord
+      ? projectRarebitSummaryRecord(historicalRecord, session, null, nowMillis)
+      : null;
   return {
-    availability: unavailable ? "unavailable" : stale ? "stale" : "available",
+    availability: projectedSummaryAvailability({
+      historical,
+      status,
+      unavailable,
+      stale,
+    }),
+    ...optionalNumber("schemaVersion", historical?.schemaVersion ?? record.schemaVersion),
     status,
     jobId: safeString(record.jobId),
     observedAt: safeString(record.observedAt),
@@ -87,7 +174,7 @@ export function projectRarebitSummaryRecord(record, session) {
         : [],
       policyVersion: safeString(record.eligibility?.policy?.policyVersion),
     },
-    provenance: {
+    provenance: historical?.provenance ?? {
       model:
         safeString(model.provider) && safeString(model.id)
           ? { provider: model.provider, id: model.id }
@@ -102,7 +189,13 @@ export function projectRarebitSummaryRecord(record, session) {
       jobId: safeString(record.jobId),
       synthesis: projectSynthesis(record.synthesis),
     },
-    ...(typeof record.summary === "string" ? { summary: record.summary } : {}),
+    ...optionalBoolean(
+      "summaryNeedsHumanAttention",
+      historical?.summaryNeedsHumanAttention ?? record.summaryNeedsHumanAttention,
+    ),
+    ...projectedSummaryText(record, historical),
+    ...(currentPolicy ? { automaticSummaryPolicy: currentPolicy } : {}),
+    ...projectedHistoricalSummary(status, historical),
     ...(status === "failure"
       ? {
           failure: {
@@ -116,6 +209,7 @@ export function projectRarebitSummaryRecord(record, session) {
 
 function latestRecordForSession(raw, sessionId) {
   let latest = null;
+  let latestSuccessfulSummary = null;
   const synthesisByLeaf = new Map();
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue;
@@ -127,6 +221,8 @@ function latestRecordForSession(raw, sessionId) {
         typeof record.status === "string"
       ) {
         latest = record;
+        if (record.status === "ok" && typeof record.summary === "string")
+          latestSuccessfulSummary = record;
         const leafId = safeString(record.branch?.leafId);
         if (
           leafId &&
@@ -149,9 +245,13 @@ function latestRecordForSession(raw, sessionId) {
   // explicit failure/overflow remains visible instead of reviving older text.
   if (latest?.status === "ineligible") {
     const leafId = safeString(latest.branch?.leafId);
-    if (leafId && synthesisByLeaf.has(leafId)) return synthesisByLeaf.get(leafId);
+    if (leafId && synthesisByLeaf.has(leafId))
+      return { record: synthesisByLeaf.get(leafId), historicalSummary: null };
   }
-  return latest;
+  return {
+    record: latest,
+    historicalSummary: latest?.status === "inhibited" ? latestSuccessfulSummary : null,
+  };
 }
 
 /**
@@ -169,9 +269,14 @@ export function readSessionRarebitSummary(session, options = {}) {
   try {
     if (statSync(path).size > (options.maxBytes ?? MAX_SIDECAR_BYTES))
       return { availability: "unavailable", reason: "sidecar_too_large" };
-    const record = latestRecordForSession(readFileSync(path, "utf8"), session.id);
-    return record
-      ? projectRarebitSummaryRecord(record, session)
+    const result = latestRecordForSession(readFileSync(path, "utf8"), session.id);
+    return result.record
+      ? projectRarebitSummaryRecord(
+          result.record,
+          session,
+          result.historicalSummary,
+          typeof options.now === "function" ? options.now() : Date.now(),
+        )
       : { availability: "missing", reason: "sidecar_missing" };
   } catch (error) {
     if (error?.code === "ENOENT") return { availability: "missing", reason: "sidecar_missing" };
@@ -232,6 +337,32 @@ function sanitizeFailure(failure) {
   };
 }
 
+function sanitizeAutomaticSummaryPolicy(policy) {
+  return {
+    state:
+      policy.state === "inhibited" || policy.state === "inhibition_receipt_expired"
+        ? policy.state
+        : "unknown",
+    wording: safeString(policy.wording),
+    contractVersion: safeString(policy.contractVersion),
+    provider: safeString(policy.provider),
+    reason: safeString(policy.reason),
+    observedAt: safeString(policy.observedAt),
+    validUntil: safeString(policy.validUntil),
+  };
+}
+
+function sanitizeHistoricalSummary(summary) {
+  return {
+    availability: DETAIL_AVAILABILITIES.has(summary.availability)
+      ? summary.availability
+      : "unavailable",
+    status: safeString(summary.status),
+    observedAt: safeString(summary.observedAt),
+    jobId: safeString(summary.jobId),
+  };
+}
+
 /**
  * Keeps the HTTP contract content-free even when a test or future adapter
  * provides an over-broad detail object. The server never serializes arbitrary
@@ -239,10 +370,11 @@ function sanitizeFailure(failure) {
  */
 export function sanitizeRarebitSummaryDetail(detail) {
   const source = object(detail);
-  return {
+  const sanitized = {
     availability: DETAIL_AVAILABILITIES.has(source.availability)
       ? source.availability
       : "unavailable",
+    ...optionalNumber("schemaVersion", source.schemaVersion),
     ...optionalString("reason", source.reason),
     ...optionalString("status", source.status),
     ...optionalString("jobId", source.jobId),
@@ -250,7 +382,64 @@ export function sanitizeRarebitSummaryDetail(detail) {
     ...optionalRecord("selection", source.selection, sanitizeSelection),
     ...optionalRecord("eligibility", source.eligibility, sanitizeEligibility),
     ...optionalRecord("provenance", source.provenance, sanitizeProvenance),
+    ...optionalBoolean("summaryNeedsHumanAttention", source.summaryNeedsHumanAttention),
     ...optionalString("summary", source.summary),
+    ...optionalRecord(
+      "automaticSummaryPolicy",
+      source.automaticSummaryPolicy,
+      sanitizeAutomaticSummaryPolicy,
+    ),
+    ...optionalRecord("historicalSummary", source.historicalSummary, sanitizeHistoricalSummary),
     ...optionalRecord("failure", source.failure, sanitizeFailure),
+  };
+  return {
+    ...sanitized,
+    attention: projectRarebitSummaryAttention(sanitized),
+  };
+}
+
+function attentionLineage(detail) {
+  const source = object(detail);
+  const selection = object(source.selection);
+  const provenance = object(source.provenance);
+  return {
+    kind: "rarebit_summary",
+    schemaVersion: safeNumber(source.schemaVersion),
+    jobId: safeString(source.jobId),
+    observedAt: safeString(source.observedAt),
+    selectorVersion: safeString(selection.selectorVersion),
+    manifestHash: safeString(selection.manifestHash),
+    promptVersion: safeString(provenance.promptVersion),
+    implementationVersion: safeString(provenance.implementationVersion),
+  };
+}
+
+function unknownAttention(detail, reason) {
+  return {
+    state: "unknown",
+    reason,
+    source: attentionLineage(detail),
+  };
+}
+
+/**
+ * Projects the explicit summary assessment into the fleet snapshot. The
+ * consumer never derives attention from summary prose. A historical record
+ * without the field, or a record that is no longer fresh and successful,
+ * stays unknown rather than becoming a false negative.
+ */
+export function projectRarebitSummaryAttention(detail) {
+  const source = object(detail);
+  if (source.availability === "stale") return unknownAttention(source, "summary_stale");
+  if (source.availability === "missing") return unknownAttention(source, "summary_missing");
+  if (source.availability !== "available") return unknownAttention(source, "summary_unavailable");
+  if (source.status !== "ok") return unknownAttention(source, "summary_not_successful");
+  if (source.schemaVersion !== 2) return unknownAttention(source, "unsupported_summary_schema");
+  if (typeof source.summaryNeedsHumanAttention !== "boolean")
+    return unknownAttention(source, "attention_field_missing");
+  return {
+    state: "known",
+    needsHumanAttention: source.summaryNeedsHumanAttention,
+    source: attentionLineage(source),
   };
 }

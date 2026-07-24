@@ -3,7 +3,11 @@ import { createServer } from "node:http";
 import { extname, join, relative, resolve, sep } from "node:path";
 import { collectAlphaSnapshot, createAlphaSourceWatcher } from "./alpha.js";
 import { collectSnapshot, SessionCache, SessionCatalog } from "./collector.js";
-import { readSessionRarebitSummary, sanitizeRarebitSummaryDetail } from "./rarebit-detail.js";
+import {
+  projectRarebitSummaryAttention,
+  readSessionRarebitSummary,
+  sanitizeRarebitSummaryDetail,
+} from "./rarebit-detail.js";
 import { createSourceWatcher } from "./watcher.js";
 import { resolveTrafficBaseUrl } from "./service-config.js";
 
@@ -149,6 +153,24 @@ function serveSnapshot(res, url, snapshotFor) {
   }
 }
 
+export function attachRarebitSummaryAttention(snapshot, readRarebitSummary) {
+  return {
+    ...snapshot,
+    sessions: (snapshot.sessions ?? []).map((session) => {
+      let detail;
+      try {
+        detail = readRarebitSummary(session);
+      } catch {
+        detail = { availability: "unavailable", reason: "sidecar_unreadable" };
+      }
+      return {
+        ...session,
+        rarebitSummaryAttention: projectRarebitSummaryAttention(detail),
+      };
+    }),
+  };
+}
+
 export function createTimelineServer({
   collect = collectSnapshot,
   reconciliationMs = 30_000,
@@ -161,6 +183,10 @@ export function createTimelineServer({
   watchRoots,
   trafficBaseUrl = resolveTrafficBaseUrl(),
 } = {}) {
+  const rarebitReadOptions = {
+    ...(collectionOptions.sessionsRoot ? { sessionRoot: collectionOptions.sessionsRoot } : {}),
+    ...(collectionOptions.rarebitRoot ? { rarebitRoot: collectionOptions.rarebitRoot } : {}),
+  };
   const cache = new SessionCache();
   const catalogCache = new SessionCatalog();
   const snapshots = new Map();
@@ -176,15 +202,18 @@ export function createTimelineServer({
     query = { window: "24h" },
   } = {}) => {
     const key = `${query.window}:${query.cursor ?? ""}:${query.from ?? ""}:${query.to ?? ""}`;
-    const refreshed = collect({
-      ...collectionOptions,
-      cache,
-      catalogCache,
-      window: query.window,
-      cursor: query.cursor,
-      from: query.from,
-      to: query.to,
-    });
+    const refreshed = attachRarebitSummaryAttention(
+      collect({
+        ...collectionOptions,
+        cache,
+        catalogCache,
+        window: query.window,
+        cursor: query.cursor,
+        from: query.from,
+        to: query.to,
+      }),
+      (session) => readRarebitSummary(session, rarebitReadOptions),
+    );
     snapshots.set(key, refreshed);
     if (!query.cursor && query.window === "24h") snapshot = refreshed;
     snapshot ??= refreshed;

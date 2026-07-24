@@ -121,8 +121,17 @@ through a unique same-cwd tmux-window/session-name match, unique process/session
 deterministic same-second spawn batches. A resumed team lead may be inferred only when it is the
 sole unmatched Pi sharing a qualified tmux window and cwd with multiple PID-validated teammates,
 followed by one recent named unclaimed session. The API exposes separate process and session binding
-evidence; the inspector shows PID, full session ID, match method/confidence, evidence source, and
-canonical JSONL source. It leaves the session ID explicitly unavailable when evidence is ambiguous.
+evidence; the inspector keeps full Session identity and owner-relevant state/usage/Summary structure
+in its default hierarchy, while PID, process instance, match method/confidence, evidence source,
+canonical JSONL source, and Summary lineage remain copyable in a closed diagnostic disclosure. It
+leaves the session ID explicitly unavailable when evidence is ambiguous.
+
+Lane identity typography uses only the typed live coordination role: explicit teammates are
+subordinate, while team leads, standalone Sessions, and unknown coordination remain primary. The
+visible compact line retains the Rarebit count and shows cumulative Session tokens and USD spend;
+partial native evidence is labeled as a `known` observed subtotal and missing evidence is shown as
+unavailable, never as an invented zero. Runtime state remains available through the state mark,
+accessible lane name, and inspector instead of being repeated as visible text.
 
 ## Code-quality gates
 
@@ -167,13 +176,16 @@ process liveness never becomes guessed `working` or `idle` state.
 - `/api/health` describes the latest collection pass; use lease age and `/api/trace` when diagnosing
   freshness.
 - Monitoring is metadata-only. Terminal content, prompts, tool arguments, and tool output are
-  intentionally unavailable to the dashboard.
+  intentionally unavailable to the dashboard. The bounded exception is a content-free, fresh,
+  explicit Rarebit Summary attention Boolean; it remains separate from liveness, work state, and
+  timeline marks.
 
 ## Metadata API
 
 - `GET /api/snapshot` returns schema-versioned sessions, turns, provider requests, Rarebit marker
-  metadata, live agents, and a compact provenance trace. The UI fails visibly on an incompatible
-  schema instead of treating renamed or missing collections as zero evidence.
+  metadata, tri-state Rarebit Summary attention metadata, live agents, and a compact provenance
+  trace. The UI fails visibly on an incompatible schema instead of treating renamed or missing
+  collections as zero evidence.
 - `GET /api/events` emits SSE invalidations; clients refetch the snapshot so there is only one state
   model.
 - `GET /api/trace` explains tmux queries, cache hits, source counts, and every rejected/stale

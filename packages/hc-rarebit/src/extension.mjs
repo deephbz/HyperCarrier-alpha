@@ -1,10 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { complete } from "@earendil-works/pi-ai/compat";
 
 export * from "./rarebit-core.mjs";
 export * from "./rarebit-model.mjs";
+export * from "./automatic-summary-policy.mjs";
 export * from "./rarebit-service.mjs";
 export * from "./rarebit-store.mjs";
 
@@ -20,9 +21,18 @@ import {
   rarebitCommandDescription,
 } from "./rarebit-command.mjs";
 import {
+  RAREBIT_CONVERSATION_SCHEMA_VERSION,
+  RAREBIT_RECALL_SCHEMA_VERSION,
+  materializeRarebitRecall,
+} from "./rarebit-recall.mjs";
+import {
   createDetachedMaterializer,
   registerRarebitLifecycle,
 } from "./lifecycle.mjs";
+import {
+  automaticSummaryInhibitionIdentity,
+  queryAutomaticSummaryPolicy,
+} from "./automatic-summary-policy.mjs";
 
 async function readSettings(path) {
   try {
@@ -76,9 +86,16 @@ export async function readConfiguredRarebitSettings({
 }
 
 export default function registerPiRarebit(pi, config = {}) {
-  const { settingsLoader = readConfiguredRarebitSettings, ...explicit } =
-    config;
+  const {
+    settingsLoader = readConfiguredRarebitSettings,
+    recallMaterializer = materializeRarebitRecall,
+    ...explicit
+  } = config;
   if (!pi?.on) throw new TypeError("A Pi ExtensionAPI with .on is required");
+  const eventPolicyQuery = (session) =>
+    queryAutomaticSummaryPolicy(pi.events, session, {
+      timeoutMs: explicit.automaticSummaryPolicyTimeoutMs,
+    });
 
   const notify = (ctx, text, level = "info") => {
     if (!ctx?.hasUI || typeof ctx?.ui?.notify !== "function") return;
@@ -181,6 +198,8 @@ export default function registerPiRarebit(pi, config = {}) {
     const result = await processRarebitSummary(ctx, {
       ...effective,
       forceSynthesis: force,
+      queryAutomaticSummaryPolicy:
+        explicit.queryAutomaticSummaryPolicy ?? eventPolicyQuery,
       onSynthesisTriggered: (detail) => {
         synthesisTriggered = true;
         const count = detail.rarebitCount ?? detail.rarebitCount;
@@ -219,7 +238,16 @@ export default function registerPiRarebit(pi, config = {}) {
   });
   let activeSession;
   let autoTitleOverride;
+  let pendingRecall;
   const ownerTitleEvidence = new Map();
+  const discardRecall = async (recall) => {
+    try {
+      await recall?.discard?.();
+    } catch {
+      // OS-temp cleanup is best-effort and must not attach stale context,
+      // block an unrelated prompt, or change the command's delivery outcome.
+    }
+  };
 
   const sameActiveSession = ({ sessionId, sessionFile }) =>
     Boolean(
@@ -292,9 +320,19 @@ export default function registerPiRarebit(pi, config = {}) {
 
   registerRarebitLifecycle(pi, schedule, {
     onSessionStart: (ctx) => {
+      if (pendingRecall) {
+        const stale = pendingRecall;
+        pendingRecall = undefined;
+        void discardRecall(stale.recall);
+      }
       activeSession = identityFrom(ctx);
     },
     onSessionShutdown: () => {
+      if (pendingRecall) {
+        const stale = pendingRecall;
+        pendingRecall = undefined;
+        void discardRecall(stale.recall);
+      }
       activeSession = undefined;
     },
     onFirstPersistedOwnerMessage: (ctx, ownerMessage) => {
@@ -310,6 +348,68 @@ export default function registerPiRarebit(pi, config = {}) {
           scheduleTitle({ ...ctx, rarebitOwnerMessage: ownerMessage });
       });
     },
+  });
+
+  const recallMatchesCurrentBranch = (recall, ctx) => {
+    const currentSessionId = String(
+      ctx?.sessionManager?.getHeader?.()?.id ?? ctx?.sessionId ?? "",
+    );
+    const currentSessionFile = ctx?.sessionManager?.getSessionFile?.();
+    const currentBranchLeafId =
+      ctx?.sessionManager?.getBranch?.()?.at(-1)?.id ?? null;
+    return (
+      currentSessionId === recall.sessionId &&
+      typeof currentSessionFile === "string" &&
+      resolve(currentSessionFile) === recall.sessionFile &&
+      currentBranchLeafId === recall.branchLeafId
+    );
+  };
+
+  const recallContextContent = (recall) =>
+    [
+      "Rarebit extension context:",
+      "This bundle contains exact selected historical messages from the current active Pi Session branch.",
+      `Conversation JSON: ${recall.conversationPath}`,
+      `Schema rarebit_conversation/v${RAREBIT_CONVERSATION_SCHEMA_VERSION}: chronological UTC hour buckets of ordered user/agent content; hour is null when source time is unavailable. Read first for conversational meaning.`,
+      `Detailed evidence JSON: ${recall.detailedPath}`,
+      `Schema rarebit_message_recall/v${RAREBIT_RECALL_SCHEMA_VERSION}: Session/branch/selection provenance, message IDs, timestamps, hashes, and lineage. Use for traceability, exact source/Session facts, or deeper investigation.`,
+      "Interpret this history using the ordinary user prompt sent separately for this turn.",
+    ].join("\n");
+
+  const recallReceipt = (pending) =>
+    [
+      `Rarebit recall prepared and sent with your prompt (${pending.recall.selectedMessageCount} messages)`,
+      `Conversation JSON: ${pending.recall.conversationPath}`,
+      `Detailed evidence JSON: ${pending.recall.detailedPath}`,
+      "Ordinary user prompt: sent separately and unchanged",
+      "Agent-facing extension context delivered (exact):",
+      pending.contextMessage.content,
+    ].join("\n");
+
+  pi.on("before_agent_start", async (event, ctx) => {
+    if (!pendingRecall) return;
+    const pending = pendingRecall;
+    pendingRecall = undefined;
+    if (event.prompt !== pending.prompt) {
+      await discardRecall(pending.recall);
+      notify(
+        ctx,
+        "Rarebit recall was not delivered: a different prompt started, so the prepared bundle was discarded",
+        "warning",
+      );
+      return;
+    }
+    if (!recallMatchesCurrentBranch(pending.recall, ctx)) {
+      await discardRecall(pending.recall);
+      notify(
+        ctx,
+        "Rarebit recall was not delivered: the active Pi Session or branch changed before prompt start",
+        "error",
+      );
+      return;
+    }
+    notify(ctx, recallReceipt(pending), "info");
+    return { message: pending.contextMessage };
   });
 
   pi.registerCommand?.("rarebit", {
@@ -328,12 +428,88 @@ export default function registerPiRarebit(pi, config = {}) {
         return;
       }
       const { subcommand, arguments: rest } = command;
+      if (subcommand === "dump") {
+        const prompt = rest[1];
+        if (typeof pi.sendUserMessage !== "function") {
+          notify(
+            ctx,
+            "Rarebit recall is unavailable: this Pi runtime cannot deliver a user prompt",
+            "error",
+          );
+          return;
+        }
+        if (ctx?.isIdle?.() === false) {
+          notify(
+            ctx,
+            "Rarebit recall is available when the current turn is idle; wait for it to finish, then retry",
+            "warning",
+          );
+          return;
+        }
+        try {
+          const recall = await recallMaterializer(ctx);
+          if (!recallMatchesCurrentBranch(recall, ctx)) {
+            await discardRecall(recall);
+            throw new Error(
+              "the active Pi Session or branch changed during materialization",
+            );
+          }
+          if (pendingRecall) {
+            const stale = pendingRecall;
+            pendingRecall = undefined;
+            await discardRecall(stale.recall);
+          }
+          pendingRecall = {
+            prompt,
+            recall,
+            contextMessage: {
+              customType: "rarebit-recall-context",
+              content: recallContextContent(recall),
+              display: false,
+              details: {
+                conversationPath: recall.conversationPath,
+                detailedPath: recall.detailedPath,
+                sessionId: recall.sessionId,
+                branchLeafId: recall.branchLeafId,
+                selectorVersion: recall.selectorVersion,
+                manifestHash: recall.manifestHash,
+                selectedMessageCount: recall.selectedMessageCount,
+              },
+            },
+          };
+          try {
+            pi.sendUserMessage(prompt);
+          } catch (error) {
+            pendingRecall = undefined;
+            await discardRecall(recall);
+            throw error;
+          }
+        } catch (error) {
+          notify(
+            ctx,
+            `Rarebit recall failed: ${error?.message ?? error}. The prompt was not sent; verify the current Session is persisted and the OS temp directory is writable, then retry.`,
+            "error",
+          );
+        }
+        return;
+      }
       const effective = await loadEffective(ctx);
       const policy = effective.summaryPolicy ?? DEFAULT_RAREBIT_SUMMARY_POLICY;
       if (
         subcommand === "status" ||
         (subcommand === "config" && rest.length === 0)
       ) {
+        const session = identityFrom(ctx);
+        const automaticPolicy =
+          session.sessionId && session.sessionFile
+            ? await (explicit.queryAutomaticSummaryPolicy ?? eventPolicyQuery)({
+                sessionId: session.sessionId,
+                durableAssociation: session.sessionFile,
+              })
+            : { decision: "abstain", queryStatus: "unpersisted_session" };
+        const policyStatus = automaticSummaryInhibitionIdentity(automaticPolicy)
+          ? `; automatic summary inhibited by team-management policy (${automaticPolicy.provider}/${automaticPolicy.reason})`
+          : "";
         const ratioSource = Object.hasOwn(policyOverrides, "maxRarebitRatio")
           ? "process_override"
           : "settings_or_default";
@@ -342,7 +518,7 @@ export default function registerPiRarebit(pi, config = {}) {
           : "settings_or_default";
         notify(
           ctx,
-          `Rarebit ${subcommand}: auto-title=${autoTitleOverride ?? effective.autoTitle ?? true}; max_rarebit_ratio=${policy.maxRarebitRatio} (${ratioSource}); min_total_length=${policy.minTotalLength} estimated tokens via ceil(chars/4) (${lengthSource}); measurement=${policy.measurementVersion}; model=${modelLabel(effective.model)} from ${effective.modelProvenance?.settingsKey ?? "explicit config"}`,
+          `Rarebit ${subcommand}: auto-title=${autoTitleOverride ?? effective.autoTitle ?? true}; max_rarebit_ratio=${policy.maxRarebitRatio} (${ratioSource}); min_total_length=${policy.minTotalLength} estimated tokens via ceil(chars/4) (${lengthSource}); measurement=${policy.measurementVersion}; model=${modelLabel(effective.model)} from ${effective.modelProvenance?.settingsKey ?? "explicit config"}${policyStatus}`,
           "info",
         );
         return;

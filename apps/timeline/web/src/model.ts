@@ -4,8 +4,10 @@ import type {
   GroupMode,
   Lane,
   Request,
+  RarebitSummaryAttention,
   ResponseOutcomeMarker,
   Session,
+  SessionUsageMetric,
   Snapshot,
   SnapshotWindow,
 } from "./types";
@@ -26,6 +28,15 @@ export const stateLabel = Object.fromEntries(
 export const stateClass = Object.fromEntries(
   Object.entries(statePresentation).map(([state, value]) => [state, value.className]),
 ) as Record<AgentState, string>;
+
+export function summaryAttentionPresentation(attention?: RarebitSummaryAttention) {
+  return attention?.state === "known" && attention.needsHumanAttention
+    ? {
+        label: "Rarebit Summary indicates human attention needed",
+        className: "lane-attention-needed",
+      }
+    : null;
+}
 
 /**
  * The complete, intentionally small search contract for a conversation
@@ -117,8 +128,10 @@ export function lanesFromSnapshot(snapshot: Snapshot): Lane[] {
           source: "live-extension",
           turnCount: 0,
           requestCount: 0,
-          cost: 0,
-          totalTokens: 0,
+          usage: {
+            tokens: { availability: "unavailable" as const },
+            cost: { availability: "unavailable" as const },
+          },
         },
         turns: [],
         requests: [],
@@ -281,6 +294,15 @@ export function laneContextPresentation(lane: Lane) {
   return { label, parts, sessionName, project, team, teamRoleName };
 }
 
+/**
+ * Coordination role is the sole hierarchy signal. Only an explicit teammate
+ * is subordinate; team leads, standalone Sessions, and unknown coordination
+ * retain the primary lane treatment.
+ */
+export function laneIdentityEmphasis(lane: Lane) {
+  return lane.live?.coordination?.role === "teammate" ? "teammate" : "primary";
+}
+
 function intelligentCoordinates(lane: Lane) {
   const context = laneContextPresentation(lane);
   return [
@@ -406,6 +428,30 @@ export const compact = (v: number) =>
     notation: "compact",
     maximumFractionDigits: 1,
   }).format(v);
+
+function usageMetricLabel(metric: SessionUsageMetric, format: (value: number) => string) {
+  if (metric.availability === "unavailable") return "—";
+  const formatted = format(metric.value);
+  if (metric.availability === "complete") return formatted;
+  return `known ${formatted}`;
+}
+
+export function tokenUsageLabel(metric: SessionUsageMetric) {
+  return usageMetricLabel(metric, compact);
+}
+
+export function costUsageLabel(metric: SessionUsageMetric) {
+  return usageMetricLabel(metric, money);
+}
+
+export function laneSecondaryLabel(lane: Lane) {
+  const { tokens, cost } = lane.session.usage;
+  return [
+    countLabel(lane.rarebits.length, "Rarebit"),
+    `${tokenUsageLabel(tokens)} tokens`,
+    costUsageLabel(cost),
+  ].join(" · ");
+}
 export const duration = (ms: number) =>
   ms < 60_000
     ? `${Math.max(1, Math.round(ms / 1000))}s`
@@ -442,14 +488,47 @@ function sessionIdentityConfidence(lane: Lane) {
   return live?.sessionBinding?.confidence ?? live?.sessionConfidence ?? "—";
 }
 
-export function inspectorDetails(lane: Lane): ReadonlyArray<readonly [string, string | number]> {
+function readableTimestamp(value?: string) {
+  const at = Date.parse(value ?? "");
+  return Number.isFinite(at) ? new Date(at).toLocaleString() : "Unknown";
+}
+
+export function inspectorOperationalDetails(
+  lane: Lane,
+): ReadonlyArray<readonly [string, string | number]> {
   const live = lane.live;
   const runtime = runtimePresentation(lane);
+  const lastObservedAt = live?.heartbeatAt ?? lane.session.endedAt;
+  const startedMillis = Date.parse(lane.session.startedAt);
+  const observedMillis = Date.parse(lastObservedAt);
+  const observedDuration =
+    Number.isFinite(startedMillis) && Number.isFinite(observedMillis)
+      ? duration(Math.max(0, observedMillis - startedMillis))
+      : "Unknown";
   return [
     ["Process state", runtime.processLabel],
     ["Work state", runtime.workLabel],
-    ["Session ID", live ? (live.sessionId ?? "Unavailable") : lane.session.id],
-    ["Alias", laneAlias(lane)],
+    ["Started", readableTimestamp(lane.session.startedAt)],
+    ["Last observed", readableTimestamp(lastObservedAt)],
+    ["Duration", observedDuration],
+    ["Turns", lane.session.turnCount],
+    ["Requests", lane.session.requestCount],
+    ["Total tokens", tokenUsageLabel(lane.session.usage.tokens)],
+    ["Spend", costUsageLabel(lane.session.usage.cost)],
+    ["Context usage", contextLabel(lane)],
+  ];
+}
+
+export function inspectorSessionIdentity(lane: Lane) {
+  return lane.live ? (lane.live.sessionId ?? "Unavailable") : lane.session.id;
+}
+
+export function inspectorDiagnosticDetails(
+  lane: Lane,
+): ReadonlyArray<readonly [string, string | number]> {
+  const live = lane.live;
+  return [
+    ["Working directory", lane.session.cwd],
     ["PID", live?.pid ?? "—"],
     ["Process instance", live?.processInstanceId ?? "—"],
     ["Source", lane.session.source],
@@ -458,13 +537,14 @@ export function inspectorDetails(lane: Lane): ReadonlyArray<readonly [string, st
     ["Session evidence", sessionEvidence(lane)],
     ["Session source", live?.sessionBinding?.sessionSource ?? lane.session.source],
     ["Process evidence", processEvidence(lane)],
-    ["Started", new Date(lane.start).toLocaleString()],
-    ["Last observed", new Date(live?.heartbeatAt ?? lane.session.endedAt).toLocaleString()],
-    ["Turns", lane.session.turnCount],
-    ["Requests", lane.session.requestCount],
-    ["Spend", money(lane.session.cost)],
-    ["Tokens", compact(lane.session.totalTokens)],
-    ["Duration", duration(lane.end - lane.start)],
-    ["Context", contextLabel(lane)],
+  ];
+}
+
+/** Compatibility seam for callers that still need the complete flat detail set. */
+export function inspectorDetails(lane: Lane): ReadonlyArray<readonly [string, string | number]> {
+  return [
+    ["Session ID", inspectorSessionIdentity(lane)],
+    ...inspectorOperationalDetails(lane),
+    ...inspectorDiagnosticDetails(lane),
   ];
 }

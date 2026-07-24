@@ -643,7 +643,10 @@ test("JSONL parsing emits metadata only and reconciles turn cost", () => {
     .map(JSON.stringify)
     .join("\n");
   const parsed = parseSessionJsonl(input, "fixture");
-  assert.equal(parsed.session.cost, 0.25);
+  assert.deepEqual(parsed.session.usage, {
+    tokens: { availability: "complete", value: 15 },
+    cost: { availability: "complete", value: 0.25 },
+  });
   assert.equal(parsed.turns[0].requestCount, 1);
   assert.equal(parsed.requests[0].totalTokens, 15);
   assert.deepEqual(
@@ -655,7 +658,53 @@ test("JSONL parsing emits metadata only and reconciles turn cost", () => {
   assert.ok(!JSON.stringify(parsed).includes(secret));
 
   const nativeUsage = input.replace('"totalTokens":15,', '"cacheRead":3,"cacheWrite":2,');
-  assert.equal(parseSessionJsonl(nativeUsage, "native").requests[0].totalTokens, 20);
+  const nativeParsed = parseSessionJsonl(nativeUsage, "native");
+  assert.equal(nativeParsed.requests[0].totalTokens, 20);
+  assert.deepEqual(nativeParsed.session.usage.tokens, {
+    availability: "complete",
+    value: 20,
+  });
+});
+
+test("Session usage preserves observed zero, partial subtotals, and independent absence", () => {
+  const header = {
+    type: "session",
+    id: "usage-evidence",
+    timestamp: "2026-01-01T00:00:00Z",
+    cwd: "/repo",
+  };
+  const assistant = (id, usage) => ({
+    type: "message",
+    id,
+    timestamp: `2026-01-01T00:00:0${id.length}Z`,
+    message: { role: "assistant", stopReason: "stop", usage },
+  });
+  const parse = (...entries) =>
+    parseSessionJsonl([header, ...entries].map(JSON.stringify).join("\n"), "usage-fixture");
+
+  assert.deepEqual(parse(assistant("zero", { totalTokens: 0, cost: { total: 0 } })).session.usage, {
+    tokens: { availability: "complete", value: 0 },
+    cost: { availability: "complete", value: 0 },
+  });
+  assert.deepEqual(
+    parse(
+      assistant("complete", { totalTokens: 1_000, cost: { total: 0 } }),
+      assistant("partial", { input: 500, cost: { input: 0.05 } }),
+      assistant("missing", undefined),
+    ).session.usage,
+    {
+      tokens: { availability: "partial", value: 1_500 },
+      cost: { availability: "partial", value: 0.05 },
+    },
+  );
+  assert.deepEqual(parse(assistant("tokens", { totalTokens: 7 })).session.usage, {
+    tokens: { availability: "complete", value: 7 },
+    cost: { availability: "unavailable" },
+  });
+  assert.deepEqual(parse().session.usage, {
+    tokens: { availability: "unavailable" },
+    cost: { availability: "unavailable" },
+  });
 });
 
 test("Rarebit markers share the summary predicate without serializing session prose", () => {
@@ -1138,7 +1187,7 @@ test("snapshot never exposes process argv or raw command errors", () => {
     reason: "lifecycle_evidence_unavailable",
   });
   assert.equal(snapshot.liveAgents[0].state, undefined);
-  assert.equal(snapshot.schemaVersion, 2);
+  assert.equal(snapshot.schemaVersion, 3);
   assert.deepEqual(snapshot.liveAgents[0].coordination, {
     kind: "pi-team",
     teamName: "alpha",

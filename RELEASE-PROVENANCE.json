@@ -1,18 +1,18 @@
 {
   "schemaVersion": 1,
   "sourceRepository": "HyperCarrier",
-  "sourceCommit": "c3480ab95b52bcfbfbba739535ea7bc5d263db3a",
-  "sourceTree": "469f9baf88c3a4de24dd8314eca168c74c798287",
+  "sourceCommit": "8cc820f669ed8b7268b817f09e1adffdf9dae728",
+  "sourceTree": "f75eefc4a90394ea6e3393ad317aab06c5b7ceed",
   "sourceWorktreeDirty": false,
-  "exportContentSha256": "49484a86dc6c4ff96d16a1aa937e935ea043e8301005942fb3660269b763c935",
-  "exportManifestSha256": "f48eccb175209b54c4171540f3929b8ebbf3e0063290a298949bfb85b0f099cb",
+  "exportContentSha256": "4f38b137241dc986b3710c56754813d75cee8277098ae829c3eaec6953ffb120",
+  "exportManifestSha256": "882dbd27cbbaacf393768eaf97f13c786727810dbcb712a5ad06f5af59d6c216",
   "dependencies": [
     {
       "name": "pi-teams",
       "repository": "https://github.com/deephbz/pi-teams",
       "version": "0.13.1-hypercarrier.0",
-      "commit": "fba1516b23a1efe959c53156704fcbb776164f32",
-      "tree": "0dffbda8b0c959d93cd1598bdca734481b3d4884",
+      "commit": "b1bbf4e6e4f243795ce45969a48028e207cf644a",
+      "tree": "a11129de7070598c8b84627ce9b3afcb2d4cc27a",
       "origin": "git@github.com:deephbz/pi-teams"
     }
   ],

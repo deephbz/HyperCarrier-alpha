@@ -1,5 +1,28 @@
 export type RarebitModel = { provider: string; id: string };
 
+export type RarebitAutomaticSummaryPolicyDecision =
+  | {
+      contractVersion: "rarebit-automatic-summary-policy/1";
+      decision: "inhibit";
+      queryStatus: "inhibited";
+      queryId: string;
+      provider: string;
+      reason: string;
+      observedAt: string;
+      validUntil: string;
+      queriedAt: string;
+      provenance: {
+        identity: string;
+        generation: string;
+        association: string;
+      };
+    }
+  | {
+      contractVersion: "rarebit-automatic-summary-policy/1";
+      decision: "abstain";
+      queryStatus: string;
+    };
+
 export type RarebitSummaryPolicy = {
   policyVersion?: string;
   measurementVersion?: string;
@@ -18,6 +41,11 @@ export type RarebitMeasurement = {
   estimatedRarebitTokens: number;
   rarebitRatio: number | null;
   rarebitOccurrenceCount: number;
+};
+
+export type RarebitSummarySynthesis = {
+  summary: string;
+  summaryNeedsHumanAttention: boolean;
 };
 
 export type RarebitOccurrence = {
@@ -62,17 +90,27 @@ export function composeRarebitTitlePrompt(
   selection: ReturnType<typeof selectRarebits>,
 ): string;
 export function normalizeRarebitSummary(value: unknown): string;
+export function normalizeRarebitSummarySynthesis(
+  value: unknown,
+  options?: { maxSectionChars?: number },
+): RarebitSummarySynthesis;
 export function normalizeRarebitTitle(value: unknown): string;
 export function titleWithDatePrefix(
   value: unknown,
   options: { date: string; maxChars?: number },
 ): string;
+export const RAREBIT_SUMMARY_SCHEMA_VERSION: 2;
+export const RAREBIT_SUMMARY_IMPLEMENTATION_VERSION: "hc-rarebit-summary-v2";
 export function processRarebitSummary(
   ctx: unknown,
   config?: {
     model?: RarebitModel;
     summaryPolicy?: RarebitSummaryPolicy;
     forceSynthesis?: boolean;
+    queryAutomaticSummaryPolicy?: (session: {
+      sessionId: string;
+      durableAssociation: string | null;
+    }) => Promise<RarebitAutomaticSummaryPolicyDecision>;
     modelClient?: {
       complete(request: {
         prompt: string;
