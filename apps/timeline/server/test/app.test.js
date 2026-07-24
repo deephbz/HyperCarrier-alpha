@@ -135,18 +135,18 @@ test("traffic launch config and health diagnostics remain a loopback adapter bou
     }),
     reconciliationMs: 60_000,
     watchSources: () => ({ close() {} }),
-    trafficBaseUrl: "http://127.0.0.1:4321",
+    trafficBaseUrl: "http://127.0.0.1:0",
   });
   await new Promise((resolve) => traffic.listen(0, "127.0.0.1", resolve));
   t.after(() => traffic.close());
   const base = `http://127.0.0.1:${traffic.address().port}`;
   assert.deepEqual(await (await fetch(`${base}/api/traffic/config`)).json(), {
-    baseUrl: "http://127.0.0.1:4321",
+    baseUrl: "http://127.0.0.1:0",
     path: "/traffic",
   });
   assert.deepEqual(await (await fetch(`${base}/api/health`)).json(), {
     ok: true,
-    traffic: { baseUrl: "http://127.0.0.1:4321", health: "http://127.0.0.1:4321/health" },
+    traffic: { baseUrl: "http://127.0.0.1:0", health: "http://127.0.0.1:0/health" },
   });
   assert.deepEqual(await (await fetch(`${base}/api/traffic/health`)).json(), {
     available: false,

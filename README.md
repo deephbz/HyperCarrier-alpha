@@ -1,10 +1,12 @@
 # HyperCarrier Alpha
 
 HyperCarrier is an experimental, single-user, local-first control plane for
-agent-assisted work. This public Alpha combines four independently useful
+agent-assisted work. This public Alpha combines five independently useful
 parts:
 
 - a Pi/tmux timeline and live-session dashboard;
+- Auto Compact, an opt-in Pi extension that preserves durable work before
+  delegating to Pi's native context compaction;
 - Rarebit, a sparse key-message projection with a Pi extension and CLI for
   derived summaries and Session-title proposals;
 - a Project distiller that joins explicit Project configuration, Beads Tasks,
@@ -13,10 +15,12 @@ parts:
 - an optional read-only traffic analysis module that resolves explicit Team or
   Agent scopes from local Pi Session evidence and explicit PiTeams attribution.
 
-The Alpha is read-only by default. It keeps runtime observations, reported
-agent output, Task records, Evergreen proposals, delivery evidence, and human
-attention assessment as separate axes instead of inventing one universal
-Project status.
+The observatory and distiller paths are read-only by default. Auto Compact is a
+separately loaded control extension; it keeps its notices distinct from Session
+truth and delegates actuation to Pi's native compactor. The Alpha keeps runtime
+observations, reported agent output, Task records, Evergreen proposals,
+delivery evidence, and human attention assessment as separate axes instead of
+inventing one universal Project status.
 
 ## Quick start
 
@@ -83,6 +87,19 @@ pi -e "$PWD/apps/timeline/extensions/timeline-lifecycle.mjs"
 Rarebit is a separate Pi package under `packages/hc-rarebit`. Its model-provider
 call is opt-in because selected user and assistant prose crosses the configured
 provider boundary.
+
+Auto Compact is a separate Pi extension under
+[`packages/hc-auto-compact`](packages/hc-auto-compact). After `npm ci`, load it
+directly from this checkout:
+
+```sh
+pi -e "$PWD/packages/hc-auto-compact/src/extension.mjs"
+```
+
+Use `/auto-compact status` inside Pi to inspect its effective configuration and
+runtime state. Once loaded, it is enabled by default at a 90% effective-context
+threshold. Its package README documents the cooperative handoff, durable
+settings, manual trigger, and failure behavior.
 
 PiTeams orchestration and its Beads-backed Task integration are maintained in
 [deephbz/pi-teams](https://github.com/deephbz/pi-teams).
