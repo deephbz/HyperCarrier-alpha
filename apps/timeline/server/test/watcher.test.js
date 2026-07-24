@@ -14,6 +14,7 @@ test("fixture roots replace only native Session and Team watch roots", () => {
     sessionsRoot,
     join(home, ".pi", "agent", "timeline", "events"),
     join(home, ".pi", "agent", "timeline", "live"),
+    join(home, ".pi", "agent", "rarebit"),
     teamsRoot,
   ]);
 });

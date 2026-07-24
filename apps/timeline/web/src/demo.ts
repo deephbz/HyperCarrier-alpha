@@ -10,6 +10,18 @@ import type {
 const origin = Date.now() - 8 * 3_600_000;
 const projects = ["api-service", "data-pipeline", "model-evaluation", "research-notes"];
 const states: AgentState[] = ["thinking", "tool", "waiting_input", "blocked", "idle", "settled"];
+
+function demoCoordination(index: number): LiveAgent["coordination"] {
+  if (index !== 1 && index !== 2) return undefined;
+  return {
+    kind: "pi-team",
+    teamName: "timeline",
+    agentName: index === 1 ? "worker" : "lead",
+    role: index === 1 ? "teammate" : "lead",
+    source: "demo",
+  };
+}
+
 export function demoSnapshot(): Snapshot {
   const sessions: Session[] = [],
     turns: Turn[] = [],
@@ -60,6 +72,23 @@ export function demoSnapshot(): Snapshot {
       cursor = ended;
     }
     const project = projects[i % projects.length];
+    const summaryAttention =
+      i % 13 === 2 || i % 13 === 4
+        ? {
+            state: "known" as const,
+            needsHumanAttention: i % 13 === 2,
+            source: {
+              kind: "rarebit_summary" as const,
+              schemaVersion: 2,
+              jobId: `demo-summary-${i}`,
+              observedAt: new Date(cursor).toISOString(),
+              selectorVersion: "demo-selector-v1",
+              manifestHash: `demo-manifest-${i}`,
+              promptVersion: "demo-summary-v2",
+              implementationVersion: "demo-v1",
+            },
+          }
+        : undefined;
     sessions.push({
       id,
       startedAt: new Date(started).toISOString(),
@@ -70,8 +99,11 @@ export function demoSnapshot(): Snapshot {
       name: i === 0 ? "timeline-lead" : i < 5 ? `timeline-worker-${i}` : `${project}-${i + 1}`,
       turnCount: n,
       requestCount: n,
-      cost,
-      totalTokens: tokens,
+      rarebitSummaryAttention: summaryAttention,
+      usage: {
+        tokens: { availability: "complete", value: tokens },
+        cost: { availability: "complete", value: cost },
+      },
     });
     rarebits.push(
       {
@@ -112,6 +144,7 @@ export function demoSnapshot(): Snapshot {
         model: "gpt-5.6-terra",
         context: { tokens: 20_000 + i * 13_000, window: 200_000, percent: 10 + i * 6.5 },
         confidence: "exact",
+        coordination: demoCoordination(i),
         pane: {
           serverSocket: "demo",
           sessionName: "agents",
@@ -122,7 +155,7 @@ export function demoSnapshot(): Snapshot {
       });
   }
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     generatedAt: new Date().toISOString(),
     sessions,
     turns,

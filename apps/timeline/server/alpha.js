@@ -658,7 +658,8 @@ export function loadProjectManifest({
   };
 }
 
-function linesFromJsonl(path, source, now) {
+function linesFromJsonl(path, source, now, { schemaVersions = [ALPHA_SCHEMA_VERSION] } = {}) {
+  const supportedSchemaVersions = new Set(schemaVersions);
   if (!path || !existsSync(path))
     return {
       records: [],
@@ -700,7 +701,7 @@ function linesFromJsonl(path, source, now) {
       if (
         value &&
         typeof value === "object" &&
-        (value.schemaVersion === undefined || value.schemaVersion === ALPHA_SCHEMA_VERSION)
+        (value.schemaVersion === undefined || supportedSchemaVersions.has(value.schemaVersion))
       )
         records.push({ value, line: index + 1 });
       else if (value && typeof value === "object")
@@ -905,7 +906,12 @@ function typedProjectPayload(payload, eventKind) {
 }
 
 export function readSummaryJsonl({ path, now = Date.now() } = {}) {
-  const parsed = linesFromJsonl(path, "summary", now);
+  // Summary v2 adds an explicit machine-facing attention assessment. Alpha
+  // continues to consume only its summary text, while retaining v1 and
+  // pre-version compatibility for existing source files.
+  const parsed = linesFromJsonl(path, "summary", now, {
+    schemaVersions: [1, 2],
+  });
   const rejected = [...parsed.rejected];
   const projected = [];
   for (const { value, line } of parsed.records) {

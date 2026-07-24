@@ -14,19 +14,31 @@ import {
   filterLanesByBoundedTime,
   groupKey,
   groupLabel,
-  inspectorDetails,
+  inspectorDiagnosticDetails,
+  inspectorOperationalDetails,
+  inspectorSessionIdentity,
   laneContextPresentation,
   laneDisplayLabel,
+  laneIdentityEmphasis,
   lanesFromSnapshot,
+  laneSecondaryLabel,
   mergeSnapshotPages,
   position,
   runtimePresentation,
   sessionMatchesQuery,
+  summaryAttentionPresentation,
   windowHours,
 } from "./model";
 import { demoSnapshot } from "./demo";
 import { parseTimelineSnapshot, SnapshotCompatibilityError } from "./snapshot-contract";
-import type { FilterMode, GroupMode, Lane, Snapshot, SnapshotWindow } from "./types";
+import type {
+  FilterMode,
+  GroupMode,
+  Lane,
+  RarebitSummaryAttention,
+  Snapshot,
+  SnapshotWindow,
+} from "./types";
 
 const rangeOptions: Array<{ value: SnapshotWindow; label: string }> = [
   { value: "15m", label: "Last 15m" },
@@ -427,8 +439,11 @@ function LaneRow({
   const runtime = runtimePresentation(lane);
   const context = laneContextPresentation(lane);
   const alias = laneDisplayLabel(lane, visibleLanes);
+  const identityEmphasis = laneIdentityEmphasis(lane);
+  const secondary = laneSecondaryLabel(lane);
   const paths = laneMarkerPaths(lane, domain);
   const outcomeSummary = laneOutcomeSummary(lane);
+  const attention = summaryAttentionPresentation(lane.session.rarebitSummaryAttention);
   return (
     <div className={`lane ${selected ? "selected" : ""}`}>
       <TrafficAgentToggle sessionId={lane.session.id} label={alias} />
@@ -436,11 +451,32 @@ function LaneRow({
         <button
           className="lane-select"
           onClick={onSelect}
-          aria-label={`${alias}, session ${lane.session.id}, context ${context.label}, ${runtime.label}, ${countLabel(lane.rarebits.length, "Rarebit")}`}
+          aria-label={`${alias}, session ${lane.session.id}, context ${context.label}, ${attention ? `${attention.label}, ` : ""}${runtime.label}, ${secondary}`}
         >
-          <span className={`state-dot ${runtime.className}`} aria-hidden="true" />
+          <span className="lane-status-cluster">
+            <span className="lane-attention-slot" aria-hidden={attention ? undefined : true}>
+              {attention ? (
+                <span
+                  className={`lane-attention ${attention.className}`}
+                  role="img"
+                  aria-label={attention.label}
+                  title={attention.label}
+                >
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <path className="lane-attention-shape" d="M8 1.5 14.5 8 8 14.5 1.5 8Z" />
+                    <path className="lane-attention-mark" d="M8 4.5v5M8 11.7v.1" />
+                  </svg>
+                </span>
+              ) : null}
+            </span>
+            <span className={`state-dot ${runtime.className}`} aria-hidden="true" />
+          </span>
           <span className="lane-copy">
-            <strong className="lane-context" aria-label={context.label} title={context.label}>
+            <strong
+              className={`lane-context lane-context-${identityEmphasis}`}
+              aria-label={context.label}
+              title={context.label}
+            >
               {context.parts.length === 0 ? (
                 <span className="lane-context-part lane-context-session">{context.label}</span>
               ) : (
@@ -464,9 +500,7 @@ function LaneRow({
           </span>
         </button>
         <div className="lane-secondary">
-          <small>
-            {runtime.label} · {countLabel(lane.rarebits.length, "Rarebit")}
-          </small>
+          <small>{secondary}</small>
           {lane.session.links && (
             <nav className="lane-links" aria-label={`Inspect ${alias}`}>
               <a
@@ -510,9 +544,19 @@ function LaneRow({
 
 type RarebitSummaryDetail = {
   availability: "available" | "stale" | "missing" | "unavailable";
+  attention?: RarebitSummaryAttention;
+  schemaVersion?: number;
   reason?: string;
   status?: "ok" | "ineligible" | "unavailable_overflow" | "failure" | string;
-  selection?: { occurrenceCount: number | null; uniquePayloadCount: number | null };
+  jobId?: string;
+  observedAt?: string;
+  summaryNeedsHumanAttention?: boolean;
+  selection?: {
+    selectorVersion: string | null;
+    manifestHash: string | null;
+    occurrenceCount: number | null;
+    uniquePayloadCount: number | null;
+  };
   eligibility?: {
     eligible: boolean;
     forced: boolean;
@@ -528,6 +572,20 @@ type RarebitSummaryDetail = {
     } | null;
   };
   summary?: string;
+  automaticSummaryPolicy?: {
+    state: "inhibited" | "inhibition_receipt_expired" | "unknown";
+    wording: string | null;
+    provider: string | null;
+    reason: string | null;
+    observedAt: string | null;
+    validUntil: string | null;
+  };
+  historicalSummary?: {
+    availability: "available" | "stale" | "missing" | "unavailable";
+    status: string | null;
+    observedAt: string | null;
+    jobId: string | null;
+  };
   failure?: { retryable: boolean; kind: string | null };
 };
 
@@ -575,7 +633,89 @@ function CopyablePair({ label, value }: { label: string; value: string | number 
   );
 }
 
-function RarebitSummary({ sessionId }: { sessionId: string }) {
+function RarebitAttentionTrace({
+  attention,
+}: {
+  attention: Lane["session"]["rarebitSummaryAttention"];
+}) {
+  const value =
+    attention?.state === "known"
+      ? attention.needsHumanAttention
+        ? "Needs attention"
+        : "No attention signaled"
+      : "Unknown";
+  return (
+    <>
+      <CopyablePair label="Lane attention signal" value={value} />
+      {attention?.source.schemaVersion !== null && attention?.source.schemaVersion !== undefined ? (
+        <CopyablePair label="Snapshot summary schema" value={attention.source.schemaVersion} />
+      ) : null}
+      {attention?.source.observedAt ? (
+        <CopyablePair label="Snapshot attention as of" value={attention.source.observedAt} />
+      ) : null}
+      {attention?.source.jobId ? (
+        <CopyablePair label="Snapshot summary job" value={attention.source.jobId} />
+      ) : null}
+      {attention?.source.manifestHash ? (
+        <CopyablePair label="Snapshot selection manifest" value={attention.source.manifestHash} />
+      ) : null}
+    </>
+  );
+}
+
+export type RarebitSummarySection = {
+  label: "Progress" | "Findings" | "Questions/Requests" | "Next step" | "Summary";
+  value: string;
+};
+
+export function rarebitSummarySections(summary?: string): RarebitSummarySection[] {
+  const value = summary?.trim();
+  if (!value) return [];
+  const structured = value.match(
+    /^Progress:\s*([\s\S]*?)\s*\|\s*Findings:\s*([\s\S]*?)\s*\|\s*Questions\/Requests:\s*([\s\S]*?)\s*\|\s*Next step:\s*([\s\S]*)$/i,
+  );
+  if (!structured) return [{ label: "Summary", value }];
+  return [
+    { label: "Progress", value: structured[1].trim() },
+    { label: "Findings", value: structured[2].trim() },
+    { label: "Questions/Requests", value: structured[3].trim() },
+    { label: "Next step", value: structured[4].trim() },
+  ];
+}
+
+function AutomaticSummaryPolicyNotice({
+  policy,
+  historicalSummary,
+}: {
+  policy: RarebitSummaryDetail["automaticSummaryPolicy"];
+  historicalSummary: RarebitSummaryDetail["historicalSummary"];
+}) {
+  if (!policy) return null;
+  const policyText =
+    policy.state === "inhibited"
+      ? `Automatic summary inhibited by team-management policy${policy.observedAt ? ` at ${policy.observedAt}` : ""}.`
+      : policy.state === "inhibition_receipt_expired"
+        ? `Latest automatic-summary inhibition receipt expired${policy.validUntil ? ` at ${policy.validUntil}` : ""}; current policy status requires a fresh query.`
+        : "Automatic-summary policy status is unknown.";
+  const historyText =
+    historicalSummary?.availability === "missing"
+      ? "No historical summary is available; Rarebit evidence and markers remain unchanged."
+      : historicalSummary
+        ? `Historical summary as of ${historicalSummary.observedAt ?? "an unknown time"}${
+            historicalSummary.availability === "stale"
+              ? " is stale against the latest recorded message."
+              : "; its freshness is independent of the inhibition."
+          }`
+        : null;
+  return (
+    <div className="summary-policy-notice" role="status">
+      <p>{policyText} This says nothing about attention, health, or readiness.</p>
+      {historyText ? <p>{historyText}</p> : null}
+    </div>
+  );
+}
+
+function useRarebitSummaryDetail(sessionId: string) {
   const [loaded, setLoaded] = useState<{
     sessionId: string;
     detail: RarebitSummaryDetail;
@@ -602,78 +742,425 @@ function RarebitSummary({ sessionId }: { sessionId: string }) {
       });
     return () => controller.abort();
   }, [sessionId]);
+  return detail;
+}
 
+const unknownAttentionReason: Record<string, string> = {
+  summary_stale: "the summary predates the latest recorded message",
+  summary_missing: "no summary materialization is available",
+  summary_unavailable: "the summary materialization is unavailable",
+  summary_not_successful: "summary synthesis did not complete successfully",
+  unsupported_summary_schema: "the historical summary has no supported attention contract",
+  attention_field_missing: "the historical summary has no attention field",
+};
+
+function attentionAssessment(attention: Lane["session"]["rarebitSummaryAttention"]) {
+  if (attention?.state === "known")
+    return attention.needsHumanAttention
+      ? {
+          state: "needed",
+          label: "Human attention needed",
+          detail: "The fresh Rarebit Summary explicitly requests a decision or unblock.",
+          symbol: "!",
+        }
+      : {
+          state: "clear",
+          label: "No human attention signaled",
+          detail: "The fresh Rarebit Summary explicitly reports no current attention requirement.",
+          symbol: "✓",
+        };
+  const reason = attention?.reason
+    ? unknownAttentionReason[attention.reason]
+    : "no attention assessment is present in this snapshot";
+  return {
+    state: "unknown",
+    label: "Summary attention unknown",
+    detail: `Unknown because ${reason}.`,
+    symbol: "?",
+  };
+}
+
+function summaryAvailability(detail: RarebitSummaryDetail | null) {
+  if (!detail)
+    return {
+      state: "loading",
+      label: "Loading derived summary…",
+      detail: "The lane and runtime evidence remain available while detail loads.",
+    };
+  if (detail.automaticSummaryPolicy && detail.historicalSummary?.availability === "missing")
+    return {
+      state: "unknown",
+      label:
+        detail.automaticSummaryPolicy.state === "inhibited"
+          ? "Automatic summary inhibited"
+          : "No current derived summary",
+      detail: "No historical Summary is available; attention remains unknown.",
+    };
+  if (detail.availability === "missing")
+    return {
+      state: "unknown",
+      label: "No materialized summary",
+      detail: "This Session has no Rarebit Summary sidecar.",
+    };
+  if (detail.status === "failure")
+    return {
+      state: "unavailable",
+      label: "Summary generation failed",
+      detail: `${detail.failure?.kind ?? "Unknown failure"}${detail.failure?.retryable ? " · retryable" : ""}.`,
+    };
+  if (detail.status === "unavailable_overflow")
+    return {
+      state: "unavailable",
+      label: "Summary not generated",
+      detail: "The complete selected evidence exceeded the configured synthesis limit.",
+    };
+  if (detail.availability === "unavailable")
+    return {
+      state: "unavailable",
+      label: "Summary unavailable",
+      detail:
+        detail.reason === "detail_request_failed"
+          ? "The detail request failed."
+          : "The materialized sidecar could not be read safely.",
+    };
+  if (detail.status === "ineligible")
+    return {
+      state: "unknown",
+      label: "Summary not synthesized",
+      detail: "Rarebits are materialized, but synthesis did not meet the configured policy.",
+    };
+  if (detail.availability === "stale")
+    return {
+      state: "stale",
+      label: "Summary is stale",
+      detail: "It predates the latest recorded Session message; its attention state is unknown.",
+    };
+  if (!detail.summary)
+    return {
+      state: "unknown",
+      label: "Summary content missing",
+      detail: "The materialization does not contain human-readable summary text.",
+    };
+  if (detail.schemaVersion !== 2)
+    return {
+      state: "legacy",
+      label: "Legacy derived summary",
+      detail:
+        "Readable historical summary text is available, but this record has no supported structured attention contract.",
+    };
+  return {
+    state: detail.automaticSummaryPolicy ? "historical" : "available",
+    label: detail.automaticSummaryPolicy ? "Historical derived summary" : "Fresh derived summary",
+    detail: detail.automaticSummaryPolicy
+      ? "A prior lossy projection retained separately from the current inhibition receipt."
+      : "A lossy projection over selected Rarebit evidence.",
+  };
+}
+
+function RarebitSummary({
+  detail,
+  attention,
+}: {
+  detail: RarebitSummaryDetail | null;
+  attention: Lane["session"]["rarebitSummaryAttention"];
+}) {
+  const availability = summaryAvailability(detail);
+  const assessment = attentionAssessment(attention);
+  const sections = rarebitSummarySections(detail?.summary);
   return (
     <section className="key-summary">
-      <p className="eyebrow">Rarebit Summary</p>
-      {!detail ? (
-        <p>Loading derived sidecar…</p>
-      ) : detail.availability === "missing" ? (
-        <p>No materialized summary sidecar for this Session.</p>
-      ) : (
-        <>
-          {detail.summary && <p className="derived-summary">{detail.summary}</p>}
-          <p>
-            {detail.availability === "stale"
-              ? "Summary is stale against the latest recorded message."
-              : detail.availability === "unavailable"
-                ? "Summary sidecar is unavailable."
-                : detail.status === "ineligible"
-                  ? "Rarebits are materialized; synthesis did not meet the configured policy."
-                  : "Derived summary is available."}
-          </p>
-          <dl>
-            <CopyablePair label="Materialization" value={detail.status ?? "unknown"} />
-            {detail.selection && (
-              <CopyablePair
-                label="Coverage"
-                value={`${detail.selection.occurrenceCount ?? "unknown"} selected / ${detail.selection.uniquePayloadCount ?? "unknown"} unique`}
-              />
-            )}
-            {detail.provenance?.model && (
-              <CopyablePair
-                label="Summary model"
-                value={`${detail.provenance.model.provider}/${detail.provenance.model.id}`}
-              />
-            )}
-            {detail.provenance?.synthesis?.usage && (
-              <CopyablePair
-                label="Usage"
-                value={`${detail.provenance.synthesis.usage.availability ?? "unavailable"}${
-                  detail.provenance.synthesis.usage.totalTokens === null
-                    ? ""
-                    : ` · ${compact(detail.provenance.synthesis.usage.totalTokens)} tokens`
-                }`}
-              />
-            )}
-          </dl>
-          {detail.failure && (
-            <p>
-              {detail.failure.kind ?? "Summary"} failure
-              {detail.failure.retryable ? "; retryable." : "."}
-            </p>
-          )}
-        </>
-      )}
+      <div className="section-heading">
+        <div>
+          <p className="eyebrow">Rarebit Summary</p>
+          <h3>What changed and what comes next</h3>
+        </div>
+        <span className={`summary-freshness summary-${availability.state}`}>
+          {availability.label}
+        </span>
+      </div>
+      <AutomaticSummaryPolicyNotice
+        policy={detail?.automaticSummaryPolicy}
+        historicalSummary={detail?.historicalSummary}
+      />
+      <div className={`attention-assessment attention-${assessment.state}`} role="status">
+        <span className="attention-assessment-symbol">
+          <span aria-hidden="true">{assessment.symbol}</span>
+        </span>
+        <span>
+          <strong>{assessment.label}</strong>
+          <small>{assessment.detail}</small>
+        </span>
+      </div>
+      <p className="summary-availability-detail">{availability.detail}</p>
+      {sections.length ? (
+        <dl className="summary-sections">
+          {sections.map((section) => (
+            <div key={section.label}>
+              <dt>{section.label}</dt>
+              <dd className={/^None stated\.?$/i.test(section.value) ? "summary-none" : undefined}>
+                {section.value || "None stated"}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
     </section>
   );
 }
 
+function OverviewFact({
+  label,
+  value,
+  detail,
+  wide = false,
+}: {
+  label: string;
+  value: string | number;
+  detail?: string;
+  wide?: boolean;
+}) {
+  return (
+    <div className={`overview-fact ${wide ? "overview-fact-wide" : ""}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      {detail ? <small>{detail}</small> : null}
+    </div>
+  );
+}
+
+function OperationalOverview({
+  lane,
+  attention,
+}: {
+  lane: Lane;
+  attention: RarebitSummaryAttention | undefined;
+}) {
+  const details = inspectorOperationalDetails(lane);
+  const assessment = attentionAssessment(attention);
+  return (
+    <section className="operational-overview" aria-labelledby="operational-overview-title">
+      <p className="eyebrow" id="operational-overview-title">
+        Operational overview
+      </p>
+      <div className="overview-grid">
+        <OverviewFact label={details[0][0]} value={details[0][1]} />
+        <OverviewFact
+          label={details[1][0]}
+          value={details[1][1]}
+          detail={lane.live?.activeTool ? `Current tool: ${lane.live.activeTool}` : undefined}
+        />
+        <OverviewFact
+          label="Rarebit Summary attention"
+          value={assessment.label}
+          detail={assessment.detail}
+          wide
+        />
+        {details.slice(2).map(([label, value]) => (
+          <OverviewFact key={label} label={label} value={value} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function AutomaticSummaryPolicyDiagnostics({ detail }: { detail: RarebitSummaryDetail }) {
+  return (
+    <>
+      {detail.automaticSummaryPolicy?.provider ? (
+        <CopyablePair
+          label="Automatic summary policy"
+          value={`${detail.automaticSummaryPolicy.provider}/${detail.automaticSummaryPolicy.reason ?? "unspecified"} · ${detail.automaticSummaryPolicy.state}`}
+        />
+      ) : null}
+      {detail.automaticSummaryPolicy?.validUntil ? (
+        <CopyablePair label="Policy valid until" value={detail.automaticSummaryPolicy.validUntil} />
+      ) : null}
+      {detail.historicalSummary ? (
+        <CopyablePair
+          label="Historical summary"
+          value={`${detail.historicalSummary.availability} · ${detail.historicalSummary.observedAt ?? "unknown time"} · ${detail.historicalSummary.jobId ?? "unknown job"}`}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function RarebitDiagnostics({
+  detail,
+  snapshotAttention,
+}: {
+  detail: RarebitSummaryDetail | null;
+  snapshotAttention: Lane["session"]["rarebitSummaryAttention"];
+}) {
+  if (!detail)
+    return (
+      <>
+        <p className="diagnostic-empty">
+          Rarebit Summary provenance is loading; the lane snapshot lineage follows.
+        </p>
+        <dl>
+          <RarebitAttentionTrace attention={snapshotAttention} />
+        </dl>
+      </>
+    );
+  return (
+    <dl>
+      <RarebitAttentionTrace attention={snapshotAttention} />
+      <CopyablePair label="Materialization" value={detail.status ?? "unknown"} />
+      <AutomaticSummaryPolicyDiagnostics detail={detail} />
+      {detail.jobId ? <CopyablePair label="Current summary job" value={detail.jobId} /> : null}
+      {detail.observedAt ? (
+        <CopyablePair label="Current summary observed" value={detail.observedAt} />
+      ) : null}
+      {detail.selection ? (
+        <>
+          <CopyablePair
+            label="Coverage"
+            value={`${detail.selection.occurrenceCount ?? "unknown"} selected / ${detail.selection.uniquePayloadCount ?? "unknown"} unique`}
+          />
+          {detail.selection.selectorVersion ? (
+            <CopyablePair label="Selector version" value={detail.selection.selectorVersion} />
+          ) : null}
+          {detail.selection.manifestHash ? (
+            <CopyablePair label="Selection manifest" value={detail.selection.manifestHash} />
+          ) : null}
+        </>
+      ) : null}
+      {detail.eligibility ? (
+        <>
+          <CopyablePair
+            label="Eligibility"
+            value={`${detail.eligibility.eligible ? "eligible" : "ineligible"}${detail.eligibility.forced ? " · forced" : ""}`}
+          />
+          {detail.eligibility.policyVersion ? (
+            <CopyablePair label="Eligibility policy" value={detail.eligibility.policyVersion} />
+          ) : null}
+          {detail.eligibility.reasons.length ? (
+            <CopyablePair
+              label="Eligibility reasons"
+              value={detail.eligibility.reasons.join(", ")}
+            />
+          ) : null}
+        </>
+      ) : null}
+      {detail.provenance?.model ? (
+        <CopyablePair
+          label="Summary model"
+          value={`${detail.provenance.model.provider}/${detail.provenance.model.id}`}
+        />
+      ) : null}
+      {detail.provenance?.promptVersion ? (
+        <CopyablePair label="Prompt version" value={detail.provenance.promptVersion} />
+      ) : null}
+      {detail.provenance?.implementationVersion ? (
+        <CopyablePair
+          label="Implementation version"
+          value={detail.provenance.implementationVersion}
+        />
+      ) : null}
+      {detail.provenance?.synthesis?.usage ? (
+        <CopyablePair
+          label="Synthesis usage"
+          value={`${detail.provenance.synthesis.usage.availability ?? "unavailable"}${
+            detail.provenance.synthesis.usage.totalTokens === null
+              ? ""
+              : ` · ${compact(detail.provenance.synthesis.usage.totalTokens)} tokens`
+          }`}
+        />
+      ) : null}
+      {detail.failure ? (
+        <CopyablePair
+          label="Summary failure"
+          value={`${detail.failure.kind ?? "Unknown"}${detail.failure.retryable ? " · retryable" : ""}`}
+        />
+      ) : null}
+    </dl>
+  );
+}
+
+function DiagnosticsDisclosure({
+  lane,
+  summaryDetail,
+}: {
+  lane: Lane;
+  summaryDetail: RarebitSummaryDetail | null;
+}) {
+  const details = inspectorDiagnosticDetails(lane);
+  const tmux = lane.live?.pane;
+  const model = lane.live?.model ?? lane.requests.at(-1)?.model ?? "Unknown";
+  const snapshotJob = lane.session.rarebitSummaryAttention?.source.jobId;
+  const detailJob = summaryDetail?.jobId;
+  const jobMismatch = Boolean(snapshotJob && detailJob && snapshotJob !== detailJob);
+  return (
+    <details className="inspector-diagnostics">
+      <summary tabIndex={0}>Native diagnostics &amp; provenance</summary>
+      <div className="diagnostics-body">
+        <section>
+          <p className="eyebrow">Session and process identity</p>
+          <dl>
+            {details.map(([label, value]) => (
+              <CopyablePair key={label} label={label} value={value} />
+            ))}
+            <CopyablePair label="Model" value={model} />
+          </dl>
+        </section>
+        {lane.live?.coordination ? (
+          <section>
+            <p className="eyebrow">Pi Team evidence</p>
+            <dl>
+              <CopyablePair label="Team" value={lane.live.coordination.teamName} />
+              <CopyablePair label="Agent" value={lane.live.coordination.agentName} />
+              <CopyablePair label="Role" value={lane.live.coordination.role} />
+              <CopyablePair label="Team source" value={lane.live.coordination.source} />
+            </dl>
+            <InspectorTrafficAction teamName={lane.live.coordination.teamName} />
+          </section>
+        ) : null}
+        {tmux ? (
+          <section>
+            <p className="eyebrow">tmux location</p>
+            <dl>
+              <CopyablePair
+                label="Pane"
+                value={`${tmux.sessionName}:${tmux.windowIndex}${tmux.windowName ? `:${tmux.windowName}` : ""}.${tmux.paneId}`}
+              />
+              <CopyablePair label="Pane cwd" value={tmux.cwd} />
+              <CopyablePair label="tmux socket" value={tmux.serverSocket} />
+            </dl>
+          </section>
+        ) : null}
+        <section>
+          <p className="eyebrow">Rarebit Summary provenance</p>
+          {jobMismatch ? (
+            <p className="diagnostic-warning" role="status">
+              Fleet snapshot job and fetched detail job differ. The owner view uses the fetched
+              detail assessment; the lane still reflects its earlier snapshot.
+            </p>
+          ) : null}
+          <RarebitDiagnostics
+            detail={summaryDetail}
+            snapshotAttention={lane.session.rarebitSummaryAttention}
+          />
+        </section>
+      </div>
+    </details>
+  );
+}
+
 function Inspector({ lane, onClose }: { lane: Lane; onClose: () => void }) {
-  const runtime = runtimePresentation(lane);
   const context = laneContextPresentation(lane);
-  const details = inspectorDetails(lane);
+  const summaryDetail = useRarebitSummaryDetail(lane.session.id);
+  const inspectorAttention = summaryDetail?.attention ?? lane.session.rarebitSummaryAttention;
   return (
     <aside className="inspector">
       <button className="close" onClick={onClose} aria-label="Close inspector">
         ×
       </button>
       <p className="eyebrow">Session detail</p>
-      <h2>{laneDisplayLabel(lane, [lane])}</h2>
-      <p className="inspector-context" aria-label="Session context">
-        {context.label}
-      </p>
-      <p className="path">{lane.session.cwd}</p>
+      <h2 className="inspector-context">{context.label}</h2>
+      <dl className="session-identity">
+        <CopyablePair label="Session ID" value={inspectorSessionIdentity(lane)} />
+      </dl>
       {lane.session.links && (
         <nav className="session-links" aria-label="Session detail views">
           <a href={lane.session.links.live} target="_blank" rel="noreferrer">
@@ -684,44 +1171,9 @@ function Inspector({ lane, onClose }: { lane: Lane; onClose: () => void }) {
           </a>
         </nav>
       )}
-      <div className="status-line">
-        <span className={`status-badge ${runtime.className}`}>
-          <span className={`state-dot ${runtime.className}`} aria-hidden="true" />
-          {runtime.label}
-        </span>
-        {lane.live?.activeTool ? <span>{lane.live.activeTool}</span> : null}
-      </div>
-      <RarebitSummary sessionId={lane.session.id} />
-      <dl>
-        {details.map(([label, value]) => (
-          <CopyablePair key={label} label={label} value={value} />
-        ))}
-      </dl>
-      {lane.live?.coordination && (
-        <section>
-          <p className="eyebrow">Pi Team</p>
-          <p>
-            {lane.live.coordination.teamName} · {lane.live.coordination.agentName} ·{" "}
-            {lane.live.coordination.role}
-          </p>
-          <InspectorTrafficAction teamName={lane.live.coordination.teamName} />
-        </section>
-      )}
-      {lane.live?.pane && (
-        <section>
-          <p className="eyebrow">tmux location</p>
-          <code>
-            {lane.live.pane.sessionName}:{lane.live.pane.windowIndex}
-            {lane.live.pane.windowName ? `:${lane.live.pane.windowName}` : ""}.
-            {lane.live.pane.paneId}
-          </code>
-          <p className="path">{lane.live.pane.cwd}</p>
-        </section>
-      )}
-      <section>
-        <p className="eyebrow">Model</p>
-        <p>{lane.live?.model ?? lane.requests.at(-1)?.model ?? "Unknown"}</p>
-      </section>
+      <OperationalOverview lane={lane} attention={inspectorAttention} />
+      <RarebitSummary detail={summaryDetail} attention={inspectorAttention} />
+      <DiagnosticsDisclosure lane={lane} summaryDetail={summaryDetail} />
     </aside>
   );
 }

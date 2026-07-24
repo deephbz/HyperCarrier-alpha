@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://hypercarrier.local/schemas/rarebit-v1.json",
+  "$id": "https://hypercarrier.local/schemas/rarebit-materialization.json",
   "title": "HyperCarrier Rarebit materialization record",
   "oneOf": [
     { "$ref": "#/definitions/summary" },
@@ -109,10 +109,16 @@
         "promptVersion"
       ],
       "properties": {
-        "schemaVersion": { "const": 1 },
+        "schemaVersion": { "enum": [1, 2] },
         "type": { "const": "rarebit_summary" },
         "status": {
-          "enum": ["ok", "ineligible", "unavailable_overflow", "failure"]
+          "enum": [
+            "ok",
+            "ineligible",
+            "inhibited",
+            "unavailable_overflow",
+            "failure"
+          ]
         },
         "implementationVersion": { "type": "string", "minLength": 1 },
         "synthesisMode": { "enum": ["automatic", "forced"] },
@@ -135,13 +141,81 @@
         "model": { "$ref": "#/definitions/model" },
         "modelProvenance": { "type": "object" },
         "promptVersion": { "type": "string", "minLength": 1 },
+        "automaticSummaryPolicy": {
+          "type": "object",
+          "required": [
+            "contractVersion",
+            "queryId",
+            "decision",
+            "queryStatus",
+            "provider",
+            "reason",
+            "observedAt",
+            "validUntil",
+            "queriedAt",
+            "provenance"
+          ],
+          "properties": {
+            "contractVersion": {
+              "const": "rarebit-automatic-summary-policy/1"
+            },
+            "queryId": { "type": "string", "minLength": 1 },
+            "decision": { "const": "inhibit" },
+            "queryStatus": { "const": "inhibited" },
+            "provider": { "type": "string", "minLength": 1 },
+            "reason": { "type": "string", "minLength": 1 },
+            "observedAt": { "type": "string", "format": "date-time" },
+            "validUntil": { "type": "string", "format": "date-time" },
+            "queriedAt": { "type": "string", "format": "date-time" },
+            "provenance": {
+              "type": "object",
+              "required": ["identity", "generation", "association"],
+              "properties": {
+                "identity": { "type": "string", "minLength": 1 },
+                "generation": { "type": "string", "minLength": 1 },
+                "association": { "type": "string", "minLength": 1 }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
         "summary": { "type": "string" },
+        "summaryNeedsHumanAttention": { "type": "boolean" },
         "synthesis": { "type": "object" },
         "overflow": { "type": "object" },
         "retryable": { "type": "boolean" },
         "error": { "type": "object" }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "required": ["schemaVersion", "status"],
+            "properties": {
+              "schemaVersion": { "const": 2 },
+              "status": { "const": "ok" }
+            }
+          },
+          "then": { "required": ["summaryNeedsHumanAttention"] }
+        },
+        {
+          "if": {
+            "required": ["schemaVersion"],
+            "properties": { "schemaVersion": { "const": 1 } }
+          },
+          "then": {
+            "not": { "required": ["summaryNeedsHumanAttention"] }
+          }
+        },
+        {
+          "if": {
+            "properties": { "status": { "const": "inhibited" } },
+            "required": ["status"]
+          },
+          "then": { "required": ["automaticSummaryPolicy"] }
+        }
+      ]
     },
     "title": {
       "type": "object",

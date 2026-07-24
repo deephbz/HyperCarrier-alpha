@@ -42,9 +42,18 @@ Configure a dedicated model rather than inheriting the interactive model:
 `ceil(all readable active-branch message characters / 4)`. `max_rarebit_ratio`
 is selected Rarebit characters divided by that same raw character denominator.
 Automatic synthesis requires both thresholds; it never silently falls back to
-the interactive `defaultModel`. The extension materializes in detached work at
-session start, after persisted direct owner input, and after normal settlement.
-It does not block prompt entry or add model-visible messages.
+the interactive `defaultModel`. The automatic lifecycle path materializes in
+detached work at session start, after persisted direct owner input, and after
+normal settlement. It does not block prompt entry or add model-visible
+messages.
+
+After intrinsic eligibility but before model resolution, the Pi shell emits the
+versioned `rarebit-automatic-summary-policy/1` query on Pi's shared extension
+event bus. Providers may only inhibit or abstain. Exactly one fresh compatible
+inhibition produces a private `inhibited` receipt; absence, timeout, failure,
+malformed/stale responses, or conflicting inhibitions fail open. The query is
+operation-specific: it does not affect deterministic extraction, explicit
+`/rarebit summarize`, Title, status/query, evidence, or attention semantics.
 
 `/rarebit summarize` requests a deliberate forced summary. `/rarebit title`
 is a deliberate generated retitle. Automatic title generation uses the exact
@@ -57,16 +66,33 @@ before applying the local `YYYYMMDD-` label. Use Pi's native `/name` command
 for a literal title.
 
 The extension exposes only `/rarebit`, with `status`, `config`, `auto-title`,
-`title`, and `summarize` subcommands. `config max_rarebit_ratio <0..1>` and
-`config min_total_length <nonnegative estimated tokens>` are validated
-process-local overrides; the settings file remains the durable default. Pi's
-native argument completion offers the subcommands, config keys, and `on`/`off`
-values from the same grammar used for parsing and usage help.
+`title`, `summarize`, and `dump` subcommands. `/rarebit dump messages
+<prompt...>` is human-only: while Pi is idle, it writes the exact active-branch
+Rarebit selection to a private per-invocation OS-temp directory. The lightweight
+`rarebit-conversation.json` groups ordered user/agent content into chronological
+UTC hour buckets, with a single `hour: null` bucket when source time is
+unavailable; the detailed `rarebit-evidence.json` retains Session, branch,
+selection, message identifiers, timestamps, hashes, and lineage. The extension
+adds a hidden context notice that names and explains both files, repeats that
+exact delivered notice in the human receipt, and sends `<prompt...>` unchanged
+as the separate ordinary user message. It registers no model-visible tool.
+Missing prompts, busy Sessions, changes during materialization, and
+extraction/materialization failures send neither message. A later different
+prompt or Session transition discards the pending bundle instead of inheriting
+its context. The temp directory is mode 0700 and both JSON files are mode 0600.
+
+`config max_rarebit_ratio <0..1>` and `config min_total_length <nonnegative
+estimated tokens>` are validated process-local overrides; the settings file
+remains the durable default. Pi's native argument completion offers the
+subcommands, config keys, and `on`/`off` values from the same grammar used for
+parsing and usage help.
 
 Private append-only materializations mirror Session paths beneath
 `~/.pi/agent/rarebit/materializations/`; short-lived cross-process job leases
 live beneath `~/.pi/agent/rarebit/jobs/`. They retain no raw selected prose,
 prompt, provider response body, headers, or credentials.
+Inhibition receipts retain only provider/reason, contract/freshness, and opaque
+identity/generation/association provenance.
 Directories are mode 0700; materialization and lease files are mode 0600.
 
 ## CLI

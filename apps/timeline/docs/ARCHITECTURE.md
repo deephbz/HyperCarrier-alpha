@@ -21,16 +21,22 @@ Intelligent projection is one group whose lanes sort by a presentation tuple (Te
 Session label, effective Project label). The fourth coordinate prefers an explicit Project label and
 otherwise uses the cwd basename as a workspace label; that fallback is not Project identity or
 association evidence. The lane title compactly joins only the tuple's present coordinates with `|`,
-while sorting retains all four fixed slots; neither operation merges distinct Session evidence.
-Process and work state remain separate. A validated process without lifecycle evidence reads
-`Running · work state unavailable`; only an accepted lifecycle lease may render working/idle/tool
-color. A stopped lane remains gray.
+while sorting retains all four fixed slots; neither operation merges distinct Session evidence. An
+explicit Pi Team `teammate` role uses smaller, lighter typography, while an explicit lead, a
+standalone Session, and unknown coordination retain the primary treatment. Process and work state
+remain separate. A validated process without lifecycle evidence reads
+`Running · work state unavailable` to assistive technology and the inspector; only an accepted
+lifecycle lease may render working/idle/tool color. The visible compact line does not repeat runtime
+text because the state mark already carries that visual signal. A stopped lane remains gray.
 
 Lane geometry composes two independent metadata projections. User markers come from Rarebit
 evidence, while every persisted assistant Request projects its raw `stopReason` as an outcome:
 `toolUse` is a small hollow circle, `stop` is a larger solid circle, and other terminal reasons are
 crosses while retaining their exact reason. Four SVG paths per lane preserve dense evidence without
-one focusable DOM node per Request; Rarebit counts and summaries remain separate.
+one focusable DOM node per Request. Rarebit Summary prose remains lazy, while a fresh explicit
+`summaryNeedsHumanAttention` Boolean may add one content-free, non-color-only lane annotation;
+absent, historical, stale, or unavailable values remain unknown and never alter runtime or marker
+semantics.
 
 ## Deployed stack and process topology
 
@@ -46,7 +52,8 @@ deployment adapter, not a new service.
 ```text
 ~/.pi/agent/sessions/**/*.jsonl ----+
 ~/.pi/agent/timeline/{events,live} -+     +--> timeline Node HTTP service
-~/.pi/teams/** ---------------------+---->|    snapshot/trace/SSE + React SPA
+~/.pi/agent/rarebit/materializations+---->|    snapshot/trace/SSE + React SPA
+~/.pi/teams/** ---------------------+
 tmux sockets + list-panes ----------+     |
 macOS process table ----------------+     +--> live-detail Node HTTP service
                                           |    Rarebit projection + JSONL SSE
@@ -114,6 +121,8 @@ native export is not generated or transported until the owner explicitly request
   attempts can spend without a durable assistant entry.
 - `ActivityInterval`: thinking, tool, waiting, idle, or failed over wall time.
 - `UsageSample`: request tokens, cache, cost, context, TPS, and timing.
+- `SessionUsageMetric`: a cumulative token or provider-spend projection whose availability is
+  `complete`, a `partial` observed subtotal, or `unavailable`; observed zero is not absence.
 
 Canonical ids are source-qualified raw ids, Pi session id, process boot, runtime id, and tmux pane
 id qualified by server. Names, filenames, titles, and PIDs alone are attributes, not identities. The
@@ -177,9 +186,11 @@ process-tree snapshot, and joins Pi descendants to panes. Extension leases are a
 when PID/process-start/pane/heartbeat all validate. Without an extension, process ancestry proves a
 live Pi process but JSONL session binding is explicitly heuristic or unknown.
 
-- `GET /api/snapshot`: schema version `2`, sessions, requests and raw stop reasons, Rarebit marker
-  metadata, process/work observations, live tmux state, and generation time. The frontend accepts
-  only its exact projection version and renders incompatibility as an operator-visible error.
+- `GET /api/snapshot`: schema version `3`, sessions with independently qualified cumulative token
+  and provider-spend metrics, requests and raw stop reasons, Rarebit marker metadata, the tri-state
+  content-free Rarebit Summary attention projection, process/work observations, live tmux state, and
+  generation time. The frontend accepts only its exact projection version and renders
+  incompatibility as an operator-visible error.
 - `GET /api/events`: SSE invalidation/status stream; clients refetch snapshot.
 - `GET /api/trace`: sources, checkpoints, candidates, rejection reasons, parse timing, redactions,
   and tmux diagnostics.
@@ -202,6 +213,12 @@ it is absent from API, trace, logs, and fixtures.
   are never silently coalesced.
 - Spend sums unique source-qualified provider attempts; durable assistant usage is the native
   fallback. Branch/all-entry scope is explicit in every summary.
+- Session tokens are complete when native `totalTokens` is observed or all four token components are
+  present. Token components without a complete total form a partial observed subtotal. Provider cost
+  is complete only when native `cost.total` is observed; component-only cost always remains a
+  partial observed subtotal even when every currently known component is present. Missing request
+  evidence makes an otherwise observed Session sum partial, and no observed values makes that metric
+  unavailable.
 - Current context occupancy is a context observation, not request input tokens.
 - Heatmap intensity uses a shared visible-domain scale. Zero and missing values are visually
   distinct.
@@ -226,17 +243,29 @@ history lazily.
 
 The lane has one fixed metadata projection rather than user-selectable detail or colour modes.
 Rarebit user occurrences and independent assistant response outcomes retain their declared shapes
-and roles; process/work state appears as a separate state cue. `Intelligent` is one group whose
-lanes are sorted and titled by the compact Team, role/member, Session-label, effective-Project
-tuple. Other grouping choices include project, cwd, session name, Pi Team, current tmux
-session/window/pane, state, and none. A separate field/value filter composes with time, alive-only,
-and free-text ID/name/cwd search.
+and roles; process/work state appears as a separate state cue and accessible name rather than
+duplicated visible text. A fresh explicit true Rarebit Summary assessment adds a compact labelled
+diamond immediately before the independent liveness dot in the left-side status cluster, not on the
+time track; false and unknown render no icon but keep the reserved slot so dense lane identity
+remains aligned, while their data states stay distinct in the snapshot. `Intelligent` is one group
+whose lanes are sorted and titled by the compact Team, role/member, Session-label, effective-Project
+tuple. Only the typed `teammate` coordination role is visually subordinate. The compact line retains
+the Rarebit count and adds cumulative Session tokens and USD spend using compact established units:
+`known` prefixes a partial observed subtotal without turning rounded display into a bound, and `—`
+marks unavailable evidence. Other grouping choices include project, cwd, session name, Pi Team,
+current tmux session/window/pane, state, and none. A separate field/value filter composes with time,
+alive-only, and free-text ID/name/cwd search.
 
 Selecting one exact Session opens an inspector that requests its allowlisted Rarebit Summary sidecar
-lazily. Missing, stale, selection-only, overflow, and failed derivations remain explicit. Raw
-transcript and technical request/TPS detail stay in the separately linked Live Detail and TPS
-surfaces instead of enlarging the fleet snapshot. Messenger-mesh grouping and lane virtualization
-remain future work.
+lazily. Its default owner projection orders canonical Session context and copyable identity,
+independent process/work/attention state, times and usage, then the four labelled Summary sections.
+Missing, legacy, stale, selection-only, overflow, and failed derivations remain explicit. Process
+joins, source paths, confidence/evidence, tmux coordinates, and Summary materialization/model/job/
+selection lineage remain copyable under a collapsed diagnostic/provenance disclosure; a changed
+Summary job between the fleet snapshot and selected detail is called out instead of silently joining
+them. Raw transcript and technical request/TPS detail stay in the separately linked Live Detail and
+TPS surfaces instead of enlarging the fleet snapshot. Messenger-mesh grouping and lane
+virtualization remain future work.
 
 ## Verification anchors
 

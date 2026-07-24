@@ -6,11 +6,12 @@ import {
   composeRarebitTitlePrompt,
   evaluateRarebitSummaryEligibility,
   measureRarebits,
-  normalizeRarebitSummary,
   normalizeRarebitSummaryPolicy,
+  normalizeRarebitSummarySynthesis,
   normalizeRarebitTitle,
   rarebitJobIdentity,
   selectRarebits,
+  sha256,
   titleWithDatePrefix,
 } from "./rarebit-core.mjs";
 import {
@@ -23,8 +24,14 @@ import {
   extractRarebitSynthesisReceipt,
   resolveRarebitModelConfiguration,
 } from "./rarebit-model.mjs";
+import {
+  RAREBIT_AUTOMATIC_SUMMARY_POLICY_CONTRACT,
+  automaticSummaryInhibitionIdentity,
+} from "./automatic-summary-policy.mjs";
 
 export const RAREBIT_IMPLEMENTATION_VERSION = "hc-rarebit-v1";
+export const RAREBIT_SUMMARY_IMPLEMENTATION_VERSION = "hc-rarebit-summary-v2";
+export const RAREBIT_SUMMARY_SCHEMA_VERSION = 2;
 export const DEFAULT_RAREBIT_MAX_PROMPT_CHARS = 200_000;
 
 function sessionFileFrom(ctx) {
@@ -87,8 +94,44 @@ export async function processRarebitSummary(ctx, config = {}) {
   const eligibility = evaluateRarebitSummaryEligibility(measurement, policy);
   const forceSynthesis = config.forceSynthesis === true;
   const synthesisMode = forceSynthesis ? "forced" : "automatic";
-  const shouldSynthesize = eligibility.eligible || forceSynthesis;
   const branchRef = branchIdentity(branch);
+  let automaticSummaryPolicy = {
+    decision: "abstain",
+    queryStatus: forceSynthesis
+      ? "forced_request"
+      : eligibility.eligible
+        ? "provider_absent"
+        : "intrinsically_ineligible",
+    contractVersion: RAREBIT_AUTOMATIC_SUMMARY_POLICY_CONTRACT,
+  };
+  let inhibitionIdentity = null;
+  if (
+    eligibility.eligible &&
+    !forceSynthesis &&
+    typeof config.queryAutomaticSummaryPolicy === "function"
+  ) {
+    try {
+      const queried = await config.queryAutomaticSummaryPolicy({
+        sessionId,
+        durableAssociation: sessionFile,
+      });
+      const queriedIdentity = automaticSummaryInhibitionIdentity(queried);
+      if (queried?.decision === "inhibit" && queriedIdentity) {
+        automaticSummaryPolicy = queried;
+        inhibitionIdentity = queriedIdentity;
+      } else if (queried?.decision === "abstain")
+        automaticSummaryPolicy = queried;
+    } catch {
+      automaticSummaryPolicy = {
+        decision: "abstain",
+        queryStatus: "provider_failure",
+        contractVersion: RAREBIT_AUTOMATIC_SUMMARY_POLICY_CONTRACT,
+      };
+    }
+  }
+  const inhibited = inhibitionIdentity !== null;
+  const shouldSynthesize =
+    (eligibility.eligible && !inhibited) || forceSynthesis;
   const modelResolution = shouldSynthesize
     ? resolveRarebitModelConfiguration(config)
     : {
@@ -105,7 +148,7 @@ export async function processRarebitSummary(ctx, config = {}) {
     strategy: "complete_or_explicit_overflow",
     maxPromptChars,
   };
-  const jobId = rarebitJobIdentity({
+  const synthesisJobId = rarebitJobIdentity({
     operation: "summary",
     mode: synthesisMode,
     sessionId,
@@ -116,12 +159,23 @@ export async function processRarebitSummary(ctx, config = {}) {
     promptVersion,
     model: modelResolution.model,
   });
+  const jobId = inhibited
+    ? sha256({
+        version: "rarebit-automatic-summary-inhibition-job-v1",
+        synthesisJobId,
+        policy: inhibitionIdentity,
+      })
+    : synthesisJobId;
   const base = {
-    schemaVersion: 1,
+    schemaVersion: RAREBIT_SUMMARY_SCHEMA_VERSION,
     type: "rarebit_summary",
-    status: shouldSynthesize ? "pending" : "ineligible",
+    status: inhibited
+      ? "inhibited"
+      : shouldSynthesize
+        ? "pending"
+        : "ineligible",
     implementationVersion:
-      config.implementationVersion ?? RAREBIT_IMPLEMENTATION_VERSION,
+      config.implementationVersion ?? RAREBIT_SUMMARY_IMPLEMENTATION_VERSION,
     synthesisMode,
     inputCoveragePolicy,
     jobId,
@@ -137,6 +191,7 @@ export async function processRarebitSummary(ctx, config = {}) {
     model: modelResolution.model,
     modelProvenance: modelResolution.provenance,
     promptVersion,
+    ...(inhibited ? { automaticSummaryPolicy } : {}),
   };
   if (!sessionFile) {
     return {
@@ -217,13 +272,17 @@ export async function processRarebitSummary(ctx, config = {}) {
       prompt,
       model: modelResolution.model,
     });
-    const summary = normalizeRarebitSummary(extractModelText(response));
+    const synthesisResult = normalizeRarebitSummarySynthesis(
+      extractModelText(response),
+    );
     return {
       duplicate: false,
       record: await settleRarebitJob(reservation, {
         ...base,
         status: "ok",
-        summary,
+        summary: synthesisResult.summary,
+        summaryNeedsHumanAttention:
+          synthesisResult.summaryNeedsHumanAttention,
         synthesis: extractRarebitSynthesisReceipt(response, {
           requestedModel: modelResolution.model,
           startedAt,

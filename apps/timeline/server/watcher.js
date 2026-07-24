@@ -10,12 +10,18 @@ export function defaultWatchRoots(home = homedir()) {
  * Process-local collection roots. Session and Team fixtures replace only their
  * native counterparts; lifecycle observations retain their native locations.
  */
-export function timelineWatchRoots({ sessionsRoot, teamsRoot, home = homedir() } = {}) {
+export function timelineWatchRoots({
+  sessionsRoot,
+  teamsRoot,
+  rarebitRoot,
+  home = homedir(),
+} = {}) {
   const agent = join(home, ".pi", "agent");
   return [
     sessionsRoot ?? join(agent, "sessions"),
     join(agent, "timeline", "events"),
     join(agent, "timeline", "live"),
+    rarebitRoot ?? join(agent, "rarebit"),
     teamsRoot ?? join(home, ".pi", "teams"),
   ];
 }

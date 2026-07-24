@@ -147,6 +147,112 @@ test("same-branch eligibility checks do not replace synthesis outcomes", () => {
   assert.equal(readSessionRarebitSummary(session, options).status, "ineligible");
 });
 
+test("current inhibition remains separate from visible historical summary and private identity provenance", () => {
+  const options = roots();
+  options.now = () => Date.parse("2026-01-01T00:03:00.500Z");
+  const session = {
+    id: "s1",
+    source: join(options.sessionRoot, "cwd", "s1.jsonl"),
+    lastMessageAt: "2026-01-01T00:03:00Z",
+  };
+  const path = rarebitMaterializationPath(session.source, options);
+  mkdirSync(join(path, ".."), { recursive: true });
+  const historical = record("s1", "ok", {
+    observedAt: "2026-01-01T00:01:00Z",
+    branch: { leafId: "old-leaf", entryIds: ["old-leaf"] },
+  });
+  const inhibited = record("s1", "inhibited", {
+    summary: undefined,
+    observedAt: "2026-01-01T00:03:00Z",
+    branch: { leafId: "new-leaf", entryIds: ["old-leaf", "new-leaf"] },
+    model: null,
+    automaticSummaryPolicy: {
+      contractVersion: "rarebit-automatic-summary-policy/1",
+      queryId: "query-private",
+      decision: "inhibit",
+      queryStatus: "inhibited",
+      provider: "pi-teams",
+      reason: "current_teammate_membership",
+      observedAt: "2026-01-01T00:03:00Z",
+      validUntil: "2026-01-01T00:03:01Z",
+      queriedAt: "2026-01-01T00:03:00Z",
+      provenance: {
+        identity: "private-team-identity",
+        generation: "private-membership-generation",
+        association: "private-session-association",
+      },
+    },
+  });
+  writeFileSync(path, `${JSON.stringify(historical)}\n${JSON.stringify(inhibited)}\n`);
+  const detail = readSessionRarebitSummary(session, options);
+  assert.equal(detail.status, "inhibited");
+  assert.equal(detail.summary, "Derived summary only.");
+  assert.deepEqual(detail.historicalSummary, {
+    availability: "stale",
+    status: "ok",
+    observedAt: "2026-01-01T00:01:00Z",
+    jobId: "b".repeat(64),
+  });
+  assert.deepEqual(detail.automaticSummaryPolicy, {
+    state: "inhibited",
+    wording: "automatic summary inhibited by team-management policy",
+    contractVersion: "rarebit-automatic-summary-policy/1",
+    provider: "pi-teams",
+    reason: "current_teammate_membership",
+    observedAt: "2026-01-01T00:03:00Z",
+    validUntil: "2026-01-01T00:03:01Z",
+  });
+  assert.equal(JSON.stringify(detail).includes("private-team-identity"), false);
+  assert.equal(JSON.stringify(detail).includes("private-membership-generation"), false);
+
+  options.now = () => Date.parse("2026-01-01T00:03:01.001Z");
+  const expired = readSessionRarebitSummary(session, options);
+  assert.equal(expired.automaticSummaryPolicy.state, "inhibition_receipt_expired");
+  assert.equal(
+    expired.automaticSummaryPolicy.wording,
+    "latest automatic-summary inhibition receipt has expired",
+  );
+  assert.equal(expired.summary, "Derived summary only.");
+});
+
+test("inhibition without history keeps the receipt separate from missing summary availability", () => {
+  const options = roots();
+  const session = {
+    id: "s1",
+    source: join(options.sessionRoot, "cwd", "s1.jsonl"),
+    lastMessageAt: "2026-01-01T00:03:00Z",
+  };
+  const path = rarebitMaterializationPath(session.source, options);
+  mkdirSync(join(path, ".."), { recursive: true });
+  const inhibited = record("s1", "inhibited", {
+    summary: undefined,
+    observedAt: "2026-01-01T00:03:00Z",
+    automaticSummaryPolicy: {
+      contractVersion: "rarebit-automatic-summary-policy/1",
+      queryId: "query-private",
+      decision: "inhibit",
+      queryStatus: "inhibited",
+      provider: "pi-teams",
+      reason: "current_teammate_membership",
+      observedAt: "2026-01-01T00:03:00Z",
+      validUntil: "2026-01-01T00:03:01Z",
+      queriedAt: "2026-01-01T00:03:00Z",
+      provenance: {
+        identity: "private-team-identity",
+        generation: "private-membership-generation",
+        association: "private-session-association",
+      },
+    },
+  });
+  writeFileSync(path, `${JSON.stringify(inhibited)}\n`);
+  const detail = readSessionRarebitSummary(session, options);
+  assert.equal(detail.status, "inhibited");
+  assert.equal(detail.availability, "missing");
+  assert.deepEqual(detail.historicalSummary, { availability: "missing" });
+  assert.equal(detail.automaticSummaryPolicy.state, "inhibition_receipt_expired");
+  assert.equal("summary" in detail, false);
+});
+
 test("source outside the native session root is not addressable", () => {
   assert.deepEqual(readSessionRarebitSummary({ id: "s1", source: "/tmp/untrusted/s1.jsonl" }), {
     availability: "missing",

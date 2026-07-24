@@ -436,7 +436,11 @@ test("TUI notices state input cardinality, clearly estimated trigger tokens, and
       model: { provider: "test-provider", id: "cheap-model" },
       modelClient: {
         complete: async () => ({
-          text: "Progress: done | Findings: evidence | Questions/Requests: None stated | Next step: inspect",
+          text: JSON.stringify({
+            summary:
+              "Progress: done | Findings: evidence | Questions/Requests: None stated | Next step: inspect",
+            summaryNeedsHumanAttention: false,
+          }),
           provider: "test-provider",
           model: "cheap-model",
           usage: { input: 120, output: 34 },
@@ -483,7 +487,11 @@ test("updated notice never substitutes the local estimate for absent provider us
       model: { provider: "requested-provider", id: "requested-model" },
       modelClient: {
         complete: async () => ({
-          text: "Progress: done | Findings: evidence | Questions/Requests: None stated | Next step: inspect",
+          text: JSON.stringify({
+            summary:
+              "Progress: done | Findings: evidence | Questions/Requests: None stated | Next step: inspect",
+            summaryNeedsHumanAttention: false,
+          }),
           provider: "actual-provider",
           responseModel: "actual-model",
         }),

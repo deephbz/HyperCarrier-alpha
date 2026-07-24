@@ -14,6 +14,18 @@ function objectValue(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+function isUsageMetric(value: unknown) {
+  const metric = objectValue(value);
+  if (!metric) return false;
+  if (metric.availability === "unavailable") return metric.value === undefined;
+  return (
+    (metric.availability === "complete" || metric.availability === "partial") &&
+    typeof metric.value === "number" &&
+    Number.isFinite(metric.value) &&
+    metric.value >= 0
+  );
+}
+
 /**
  * Fail visibly at the HTTP adapter boundary. A stale backend must never be
  * interpreted as a legitimate empty projection by a newer frontend.
@@ -37,6 +49,17 @@ export function parseTimelineSnapshot(value: unknown): Snapshot {
         `Timeline snapshot v${TIMELINE_SNAPSHOT_SCHEMA_VERSION} is missing required ${field} evidence.`,
       );
     }
+  }
+  const sessions = record.sessions as unknown[];
+  if (
+    sessions.some((session) => {
+      const usage = objectValue(objectValue(session)?.usage);
+      return !usage || !isUsageMetric(usage.tokens) || !isUsageMetric(usage.cost);
+    })
+  ) {
+    throw new SnapshotCompatibilityError(
+      `Timeline snapshot v${TIMELINE_SNAPSHOT_SCHEMA_VERSION} is missing required per-Session usage evidence.`,
+    );
   }
   return record as unknown as Snapshot;
 }

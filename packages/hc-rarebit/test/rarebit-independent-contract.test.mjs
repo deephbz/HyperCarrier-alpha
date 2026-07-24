@@ -77,7 +77,11 @@ test("automatic ineligible does not suppress forced synthesis, whose duplicate r
       complete: async () => {
         calls += 1;
         return {
-          text: "Progress: one | Findings: two | Questions/Requests: None stated | Next step: three",
+          text: JSON.stringify({
+            summary:
+              "Progress: one | Findings: two | Questions/Requests: None stated | Next step: three",
+            summaryNeedsHumanAttention: false,
+          }),
         };
       },
     },
@@ -126,7 +130,11 @@ test("overflow receipt does not suppress a retry with a larger complete-input li
       complete: async () => {
         calls += 1;
         return {
-          text: "Progress: retried | Findings: complete | Questions/Requests: None stated | Next step: inspect",
+          text: JSON.stringify({
+            summary:
+              "Progress: retried | Findings: complete | Questions/Requests: None stated | Next step: inspect",
+            summaryNeedsHumanAttention: false,
+          }),
         };
       },
     },

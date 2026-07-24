@@ -15,6 +15,11 @@ describe("Timeline snapshot compatibility", () => {
     expect(() => parseTimelineSnapshot({ ...demoSnapshot(), rarebits: undefined })).toThrow(
       /missing required rarebits evidence/,
     );
+    const missingUsage = demoSnapshot();
+    delete (missingUsage.sessions[0] as Partial<(typeof missingUsage.sessions)[number]>).usage;
+    expect(() => parseTimelineSnapshot(missingUsage)).toThrow(
+      /missing required per-Session usage evidence/,
+    );
     expect(() => parseTimelineSnapshot(null)).toThrow(SnapshotCompatibilityError);
   });
 });

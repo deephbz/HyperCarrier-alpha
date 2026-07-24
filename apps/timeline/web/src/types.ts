@@ -1,6 +1,39 @@
 export type AgentState =
   "idle" | "thinking" | "tool" | "waiting_input" | "blocked" | "settled" | "failed" | "unknown";
-export const TIMELINE_SNAPSHOT_SCHEMA_VERSION = 2 as const;
+export const TIMELINE_SNAPSHOT_SCHEMA_VERSION = 3 as const;
+export interface RarebitSummaryAttentionSource {
+  kind: "rarebit_summary";
+  schemaVersion: number | null;
+  jobId: string | null;
+  observedAt: string | null;
+  selectorVersion: string | null;
+  manifestHash: string | null;
+  promptVersion: string | null;
+  implementationVersion: string | null;
+}
+export type RarebitSummaryAttention =
+  | {
+      state: "known";
+      needsHumanAttention: boolean;
+      source: RarebitSummaryAttentionSource;
+    }
+  | {
+      state: "unknown";
+      reason:
+        | "summary_stale"
+        | "summary_missing"
+        | "summary_unavailable"
+        | "summary_not_successful"
+        | "unsupported_summary_schema"
+        | "attention_field_missing";
+      source: RarebitSummaryAttentionSource;
+    };
+export type SessionUsageMetric =
+  { availability: "complete" | "partial"; value: number } | { availability: "unavailable" };
+export interface SessionUsage {
+  tokens: SessionUsageMetric;
+  cost: SessionUsageMetric;
+}
 export type GroupMode =
   | "context"
   | "project"
@@ -42,9 +75,14 @@ export interface Session {
   projectName?: string;
   turnCount: number;
   requestCount: number;
-  cost: number;
-  totalTokens: number;
+  /** Cumulative native assistant usage, with absence and observed subtotals preserved. */
+  usage: SessionUsage;
   links?: { live: string; tps: string };
+  /**
+   * Content-free projection of the newest Rarebit Summary's explicit
+   * attention assessment. Missing legacy snapshot data is also unknown.
+   */
+  rarebitSummaryAttention?: RarebitSummaryAttention;
 }
 export type SnapshotWindow = "15m" | "1h" | "6h" | "24h" | "all";
 export interface SnapshotPage {

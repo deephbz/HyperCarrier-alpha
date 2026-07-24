@@ -10,6 +10,11 @@ const number = (usage, validate) => ({
   validate,
 });
 
+const rest = (usage) => ({
+  kind: "rest",
+  usage,
+});
+
 export const RAREBIT_COMMAND_GRAMMAR = Object.freeze({
   name: "rarebit",
   defaultSubcommand: "status",
@@ -18,6 +23,13 @@ export const RAREBIT_COMMAND_GRAMMAR = Object.freeze({
       name: "status",
       description: "Show effective Rarebit configuration",
       forms: [[]],
+    },
+    {
+      name: "dump",
+      description: "Recall active-branch Rarebit messages with a prompt",
+      forms: [
+        [literal("messages", "Recall selected messages"), rest("<prompt...>")],
+      ],
     },
     {
       name: "config",
@@ -99,15 +111,14 @@ export function rarebitCommandUsage(
 
 const matchToken = (definition, rawValue) => {
   if (definition.kind === "literal") return rawValue === definition.value;
+  if (definition.kind === "rest") return String(rawValue).trim().length > 0;
   const value = Number(rawValue);
   return Number.isFinite(value) && definition.validate(value);
 };
 
 export function parseRarebitCommand(input, grammar = RAREBIT_COMMAND_GRAMMAR) {
-  const tokens = String(input ?? "")
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean);
+  const rawInput = String(input ?? "");
+  const tokens = rawInput.trim().split(/\s+/).filter(Boolean);
   const subcommandName = tokens[0] ?? grammar.defaultSubcommand;
   const definition = grammar.subcommands.find(
     ({ name }) => name === subcommandName,
@@ -117,6 +128,46 @@ export function parseRarebitCommand(input, grammar = RAREBIT_COMMAND_GRAMMAR) {
       ok: false,
       error: "unknown_subcommand",
       usage: rarebitCommandUsage(undefined, grammar),
+    };
+  }
+
+  const freeform = definition.forms.find(
+    (form) => form.at(-1)?.kind === "rest",
+  );
+  if (freeform) {
+    const prefix = freeform.slice(0, -1);
+    const leading = rawInput.trimStart();
+    const subcommandEnd = leading.search(/\s/);
+    const rawArguments = subcommandEnd < 0 ? "" : leading.slice(subcommandEnd);
+    let remaining = rawArguments;
+    const parsed = [];
+    let prefixMatches = true;
+    for (const token of prefix) {
+      const separator = remaining.match(/^\s+/)?.[0] ?? "";
+      remaining = remaining.slice(separator.length);
+      const value = remaining.match(/^\S+/)?.[0];
+      if (!value || !matchToken(token, value)) {
+        prefixMatches = false;
+        break;
+      }
+      parsed.push(value);
+      remaining = remaining.slice(value.length);
+    }
+    if (prefixMatches && /^\s/.test(remaining)) {
+      const prompt = remaining.slice(1);
+      if (matchToken(freeform.at(-1), prompt)) {
+        return {
+          ok: true,
+          subcommand: definition.name,
+          arguments: [...parsed, prompt],
+        };
+      }
+    }
+    return {
+      ok: false,
+      error: "invalid_arguments",
+      subcommand: definition.name,
+      usage: rarebitCommandUsage(definition.name, grammar),
     };
   }
 

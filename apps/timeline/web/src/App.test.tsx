@@ -126,8 +126,8 @@ describe("dashboard controls", () => {
     );
     render(<App />);
     await user.click(screen.getByRole("button", { name: /timeline-lead, session demo-0/ }));
-    expect(screen.getByRole("heading", { name: "timeline-lead" })).toBeTruthy();
-    expect(screen.getByText("Session ID")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "timeline-lead | api-service" })).toBeTruthy();
+    expect(screen.getAllByText("Session ID")).toHaveLength(1);
     expect(screen.getAllByText("demo-0").length).toBeGreaterThan(0);
     const inspector = document.querySelector(".inspector");
     const footer = document.querySelector("footer");
@@ -166,7 +166,7 @@ describe("dashboard controls", () => {
     );
   });
 
-  it("gives the tuple its own two-line primary row and keeps only state and Rarebits secondary", () => {
+  it("keeps runtime state accessible while the compact secondary shows only Rarebits and usage", () => {
     const { container } = render(<App />);
     const lanes = [...container.querySelectorAll(".lane")];
     expect(lanes.length).toBeGreaterThan(0);
@@ -176,16 +176,47 @@ describe("dashboard controls", () => {
       const title = lane.querySelector(".lane-context");
       const secondary = lane.querySelector(".lane-secondary small");
       expect(title?.textContent?.trim()).not.toBe("");
-      expect(secondary?.textContent).toMatch(/Running|Stopped/);
       expect(secondary?.textContent).toMatch(/\d+ Rarebits?/);
-      expect(secondary?.textContent).not.toMatch(/Session|outcomes/i);
+      expect(secondary?.textContent).toMatch(/\d+(?:\.\d+)?[KMB]? tokens/);
+      expect(secondary?.textContent).toMatch(/\$/);
+      expect(secondary?.textContent).not.toMatch(
+        /Running|Stopped|Idle|Thinking|Using tool|Waiting|Blocked|Settled|Failed|Unknown|Session|outcomes/i,
+      );
     }
+    const leadButton = screen.getByRole("button", { name: /timeline-lead, session demo-0/ });
+    expect(leadButton.getAttribute("aria-label")).toContain("Running · Thinking");
 
     expect(timelineStyles).toMatch(
       /\.lane-context\s*\{.*?display:\s*-webkit-box.*?white-space:\s*normal.*?-webkit-line-clamp:\s*2/s,
     );
     expect(timelineStyles).toMatch(
       /\.lane-secondary\s*\{.*?display:\s*flex.*?height:\s*20px.*?\.lane-links\s*\{.*?flex:\s*0 0 auto.*?opacity:\s*0\.35/s,
+    );
+    expect(timelineStyles).toMatch(
+      /@media \(max-width: 600px\).*?\.lane-secondary small\s*\{\s*font-size:\s*var\(--text-2xs\)/s,
+    );
+  });
+
+  it("uses a typography-only subordinate treatment for explicit teammates", () => {
+    render(<App />);
+    const teammate = screen
+      .getByRole("button", { name: /timeline-worker-1, session demo-1/ })
+      .querySelector(".lane-context");
+    const lead = screen
+      .getByRole("button", { name: /timeline-worker-2, session demo-2/ })
+      .querySelector(".lane-context");
+    const standalone = screen
+      .getByRole("button", { name: /timeline-lead, session demo-0/ })
+      .querySelector(".lane-context");
+
+    expect(teammate?.classList.contains("lane-context-teammate")).toBe(true);
+    expect(lead?.classList.contains("lane-context-primary")).toBe(true);
+    expect(standalone?.classList.contains("lane-context-primary")).toBe(true);
+    expect(timelineStyles).toMatch(
+      /\.lane-context-teammate\s*\{.*?font-size:\s*var\(--text-xs\);.*?font-weight:\s*450/s,
+    );
+    expect(timelineStyles).toMatch(
+      /\.lane-context-teammate \.lane-context-part\s*\{\s*font-weight:\s*inherit/s,
     );
   });
 
@@ -219,9 +250,7 @@ describe("dashboard controls", () => {
     );
     render(<App />);
     await user.click(screen.getByRole("button", { name: /timeline-lead, session demo-0/ }));
-    expect(screen.getByLabelText("Session context").textContent).toBe(
-      "timeline-lead | api-service",
-    );
+    expect(screen.getByRole("heading", { name: "timeline-lead | api-service" })).toBeTruthy();
   });
 
   it("keeps dense lane actions separate while enlarging primary inspector controls", () => {
@@ -311,10 +340,77 @@ describe("dashboard controls", () => {
     );
     expect(await screen.findByText("Derived summary only.")).toBeTruthy();
     const summary = screen.getByText("Rarebit Summary").closest("section");
-    const technicalDetail = screen.getByTitle("Click to copy Session ID");
+    const diagnostics = screen.getByText("Native diagnostics & provenance").closest("details");
     expect(
-      summary?.compareDocumentPosition(technicalDetail) & Node.DOCUMENT_POSITION_FOLLOWING,
+      summary?.compareDocumentPosition(diagnostics as Node) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+
+  it("shows current automatic inhibition separately from stale historical summary and attention", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          availability: "stale",
+          status: "inhibited",
+          summary: "Historical teammate summary.",
+          automaticSummaryPolicy: {
+            state: "inhibited",
+            provider: "pi-teams",
+            reason: "current_teammate_membership",
+            observedAt: "2026-07-24T01:02:03.000Z",
+            validUntil: "2026-07-24T01:02:04.000Z",
+          },
+          historicalSummary: {
+            availability: "stale",
+            status: "ok",
+            observedAt: "2026-07-23T01:02:03.000Z",
+            jobId: "history-job",
+          },
+        }),
+      }),
+    );
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: /timeline-lead, session demo-0/ }));
+    expect(await screen.findByText("Historical teammate summary.")).toBeTruthy();
+    expect(screen.getByText(/Automatic summary inhibited by team-management policy/)).toBeTruthy();
+    expect(
+      screen.getByText(/This says nothing about attention, health, or readiness/),
+    ).toBeTruthy();
+    expect(screen.getByText(/Historical summary as of 2026-07-23/)).toBeTruthy();
+    expect(document.querySelectorAll("path.user-marker").length).toBeGreaterThan(0);
+  });
+
+  it("labels an expired inhibition receipt as historical policy evidence", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          availability: "missing",
+          status: "inhibited",
+          automaticSummaryPolicy: {
+            state: "inhibition_receipt_expired",
+            provider: "pi-teams",
+            reason: "current_teammate_membership",
+            observedAt: "2026-07-24T01:02:03.000Z",
+            validUntil: "2026-07-24T01:02:04.000Z",
+          },
+          historicalSummary: { availability: "missing" },
+        }),
+      }),
+    );
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: /timeline-lead, session demo-0/ }));
+    expect(
+      await screen.findByText(/Latest automatic-summary inhibition receipt expired/),
+    ).toBeTruthy();
+    expect(screen.getByText(/current policy status requires a fresh query/)).toBeTruthy();
+    expect(screen.getByText(/No historical summary is available/)).toBeTruthy();
+    expect(screen.queryByText(/^Automatic summary inhibited by team-management policy/)).toBeNull();
   });
 
   it("copies a detail value on row click but preserves text-selection interaction", async () => {

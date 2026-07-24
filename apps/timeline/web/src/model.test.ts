@@ -8,9 +8,12 @@ import {
   position,
   filterKey,
   groupKey,
+  inspectorDiagnosticDetails,
   inspectorDetails,
   laneAlias,
   laneContextPresentation,
+  laneIdentityEmphasis,
+  laneSecondaryLabel,
   lanesFromSnapshot,
   runtimePresentation,
   responseOutcomesFromRequests,
@@ -18,6 +21,11 @@ import {
 } from "./model";
 import { demoSnapshot } from "./demo";
 import type { Lane, Snapshot } from "./types";
+const observedUsage = (tokens = 1, cost = 0) =>
+  ({
+    tokens: { availability: "complete", value: tokens },
+    cost: { availability: "complete", value: cost },
+  }) as const;
 const lane = {
   session: {
     id: "s",
@@ -28,8 +36,7 @@ const lane = {
     source: "x",
     turnCount: 1,
     requestCount: 1,
-    cost: 1,
-    totalTokens: 10,
+    usage: observedUsage(10, 1),
   },
   turns: [],
   requests: [],
@@ -55,7 +62,7 @@ describe("timeline model", () => {
   it("keeps live agents visible before their session log is discoverable", () => {
     const snapshot = {
       generatedAt: "2026-01-01T01:00:00Z",
-      schemaVersion: 2,
+      schemaVersion: 3,
       sessions: [],
       turns: [],
       requests: [],
@@ -75,6 +82,10 @@ describe("timeline model", () => {
     expect(lanes).toHaveLength(1);
     expect(lanes[0].session.id).toBe("live:p1");
     expect(lanes[0].live?.processInstanceId).toBe("p1");
+    expect(lanes[0].session.usage).toEqual({
+      tokens: { availability: "unavailable" },
+      cost: { availability: "unavailable" },
+    });
   });
 
   it("uses the context tuple only as presentation and keeps runtime state distinct", () => {
@@ -162,6 +173,96 @@ describe("timeline model", () => {
     expect(laneContextPresentation(noProjectCoordinate).label).toBe("Unlabelled session");
   });
 
+  it("de-emphasizes only an explicit teammate coordination role", () => {
+    const teammate = {
+      ...lane,
+      live: {
+        processInstanceId: "teammate",
+        pid: 1,
+        cwd: lane.session.cwd,
+        confidence: "exact",
+        coordination: {
+          kind: "pi-team",
+          teamName: "alpha",
+          agentName: "builder",
+          role: "teammate",
+          source: "fixture",
+        },
+      },
+    } as Lane;
+    const lead = {
+      ...teammate,
+      live: {
+        ...teammate.live!,
+        processInstanceId: "lead",
+        coordination: { ...teammate.live!.coordination!, role: "lead" },
+      },
+    } as Lane;
+    const unknown = {
+      ...teammate,
+      live: {
+        ...teammate.live!,
+        processInstanceId: "unknown",
+        coordination: { ...teammate.live!.coordination!, role: "unknown" },
+      },
+    } as unknown as Lane;
+
+    expect(laneIdentityEmphasis(teammate)).toBe("teammate");
+    expect(laneIdentityEmphasis(lead)).toBe("primary");
+    expect(laneIdentityEmphasis(lane)).toBe("primary");
+    expect(laneIdentityEmphasis(unknown)).toBe("primary");
+  });
+
+  it("formats complete, partial, zero, and unavailable Session usage independently", () => {
+    const withUsage = (usage: Lane["session"]["usage"]) =>
+      ({
+        ...lane,
+        session: { ...lane.session, usage },
+        rarebits: [{}, {}],
+      }) as Lane;
+
+    expect(
+      laneSecondaryLabel(
+        withUsage({
+          tokens: { availability: "complete", value: 1_250_000 },
+          cost: { availability: "complete", value: 12.345 },
+        }),
+      ),
+    ).toBe("2 Rarebits · 1.3M tokens · $12.35");
+    expect(
+      laneSecondaryLabel(
+        withUsage({
+          tokens: { availability: "complete", value: 0 },
+          cost: { availability: "complete", value: 0 },
+        }),
+      ),
+    ).toBe("2 Rarebits · 0 tokens · $0.00");
+    expect(
+      laneSecondaryLabel(
+        withUsage({
+          tokens: { availability: "partial", value: 12_500 },
+          cost: { availability: "unavailable" },
+        }),
+      ),
+    ).toBe("2 Rarebits · known 12.5K tokens · —");
+    expect(
+      laneSecondaryLabel(
+        withUsage({
+          tokens: { availability: "partial", value: 12_450 },
+          cost: { availability: "partial", value: 12.345 },
+        }),
+      ),
+    ).toBe("2 Rarebits · known 12.5K tokens · known $12.35");
+    expect(
+      laneSecondaryLabel(
+        withUsage({
+          tokens: { availability: "unavailable" },
+          cost: { availability: "partial", value: 0.004 },
+        }),
+      ),
+    ).toBe("2 Rarebits · — tokens · known <$0.01");
+  });
+
   it("keeps dense response outcomes independent from sparse Rarebit evidence", () => {
     const requests = [
       ...Array.from({ length: 69 }, (_, index) => ({
@@ -246,7 +347,7 @@ describe("bounded timeline filtering", () => {
   const now = Date.parse("2026-01-01T12:00:00Z");
   const snapshot = {
     generatedAt: "2026-01-01T12:00:00Z",
-    schemaVersion: 2,
+    schemaVersion: 3,
     sessions: [
       {
         id: "old-recent-message",
@@ -257,8 +358,7 @@ describe("bounded timeline filtering", () => {
         source: "pi-jsonl",
         turnCount: 1,
         requestCount: 1,
-        cost: 0,
-        totalTokens: 1,
+        usage: observedUsage(),
       },
       {
         id: "recent-start-stale-message",
@@ -269,8 +369,7 @@ describe("bounded timeline filtering", () => {
         source: "pi-jsonl",
         turnCount: 1,
         requestCount: 1,
-        cost: 0,
-        totalTokens: 1,
+        usage: observedUsage(),
       },
       {
         id: "live-stale-message",
@@ -281,8 +380,7 @@ describe("bounded timeline filtering", () => {
         source: "pi-jsonl",
         turnCount: 1,
         requestCount: 1,
-        cost: 0,
-        totalTokens: 1,
+        usage: observedUsage(),
       },
       {
         id: "missing-message-time",
@@ -293,8 +391,7 @@ describe("bounded timeline filtering", () => {
         source: "pi-jsonl",
         turnCount: 1,
         requestCount: 1,
-        cost: 0,
-        totalTokens: 1,
+        usage: observedUsage(),
       },
     ],
     turns: [],
@@ -365,7 +462,7 @@ describe("event indexes", () => {
   it("associates turns, requests, and per-turn request markers without repeated scans", () => {
     const snapshot = {
       generatedAt: "2026-01-01T12:00:00Z",
-      schemaVersion: 2,
+      schemaVersion: 3,
       sessions: [
         {
           id: "a",
@@ -376,8 +473,7 @@ describe("event indexes", () => {
           source: "pi-jsonl",
           turnCount: 1,
           requestCount: 1,
-          cost: 0,
-          totalTokens: 1,
+          usage: observedUsage(),
         },
         {
           id: "b",
@@ -388,8 +484,7 @@ describe("event indexes", () => {
           source: "pi-jsonl",
           turnCount: 1,
           requestCount: 1,
-          cost: 0,
-          totalTokens: 1,
+          usage: observedUsage(),
         },
       ],
       turns: [
@@ -471,7 +566,13 @@ describe("dense browser demo", () => {
     const dense = snapshot.sessions.find((session) => session.turnCount >= 200);
     expect(snapshot.sessions).toHaveLength(60);
     expect(dense?.turnCount).toBe(240);
-    expect(dense?.totalTokens).toBeGreaterThan(10_000_000);
+    expect(dense?.usage.tokens).toMatchObject({
+      availability: "complete",
+      value: expect.any(Number),
+    });
+    expect(
+      dense?.usage.tokens.availability === "unavailable" ? 0 : dense?.usage.tokens.value,
+    ).toBeGreaterThan(10_000_000);
     expect(snapshot.turns.filter((turn) => turn.sessionId === dense?.id)).toHaveLength(240);
   });
 });
@@ -486,8 +587,7 @@ describe("session search contract", () => {
     source: "pi-jsonl",
     turnCount: 1,
     requestCount: 1,
-    cost: 0,
-    totalTokens: 1,
+    usage: observedUsage(),
   };
 
   it("matches full and partial session IDs", () => {
@@ -554,10 +654,10 @@ describe("coordination and tmux grouping", () => {
     expect(filterKey(coordinated, "state")).toBe("Running · Idle");
   });
   it("builds coherent identity details through one pure seam", () => {
-    const details = new Map(inspectorDetails(coordinated));
-    expect(details.get("Alias")).toBe("builder");
+    const details = new Map(inspectorDiagnosticDetails(coordinated));
+    expect(details.has("Alias")).toBe(false);
     expect(details.get("PID")).toBe(12);
-    expect(details.get("Session ID")).toBe("Unavailable");
+    expect(details.has("Session ID")).toBe(false);
     expect(details.get("Process instance")).toBe("p1");
   });
   it("keeps exact PiTeams Session identity separate from process-only runtime confidence", () => {

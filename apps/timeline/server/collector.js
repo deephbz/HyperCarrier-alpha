@@ -14,7 +14,7 @@ import { rarebitMetadata } from "@hypercarrier/hc-rarebit/core";
 import { readPiTeams } from "./pi-teams.js";
 
 export const SIDECAR_LEASE_MS = 30_000;
-export const SNAPSHOT_SCHEMA_VERSION = 2;
+export const SNAPSHOT_SCHEMA_VERSION = 3;
 const MAX_CLOCK_SKEW_MS = 5_000;
 const PI_TEAMS_PROCESS_START_TOLERANCE_MS = 2_500;
 const SOLO_SESSION_STARTUP_GRACE_MS = 120_000;
@@ -683,6 +683,38 @@ export function readLifecycleLeases({
   };
 }
 
+function observedUsageNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function tokenUsageMetric(usage) {
+  if (!usage || typeof usage !== "object") return { availability: "unavailable" };
+  const total = observedUsageNumber(usage.totalTokens);
+  if (total !== undefined) return { availability: "complete", value: total };
+  const components = ["input", "output", "cacheRead", "cacheWrite"].map((key) =>
+    observedUsageNumber(usage[key]),
+  );
+  const observed = components.filter((value) => value !== undefined);
+  if (observed.length === 0) return { availability: "unavailable" };
+  return {
+    availability: observed.length === components.length ? "complete" : "partial",
+    value: observed.reduce((sum, value) => sum + value, 0),
+  };
+}
+
+function costUsageMetric(usage) {
+  const cost = usage?.cost;
+  if (!cost || typeof cost !== "object") return { availability: "unavailable" };
+  const total = observedUsageNumber(cost.total);
+  if (total !== undefined) return { availability: "complete", value: total };
+  const components = ["input", "output", "cacheRead", "cacheWrite"]
+    .map((key) => observedUsageNumber(cost[key]))
+    .filter((value) => value !== undefined);
+  return components.length
+    ? { availability: "partial", value: components.reduce((sum, value) => sum + value, 0) }
+    : { availability: "unavailable" };
+}
+
 function sumUsage(usage = {}) {
   const input = Number(usage.input ?? 0),
     output = Number(usage.output ?? 0);
@@ -695,6 +727,23 @@ function sumUsage(usage = {}) {
     cacheWrite,
     totalTokens: Number(usage.totalTokens ?? input + output + cacheRead + cacheWrite),
     cost: Number(usage.cost?.total ?? 0),
+    metrics: {
+      tokens: tokenUsageMetric(usage),
+      cost: costUsageMetric(usage),
+    },
+  };
+}
+
+function aggregateUsageMetric(metrics) {
+  const observed = metrics.filter((metric) => metric.availability !== "unavailable");
+  if (observed.length === 0) return { availability: "unavailable" };
+  return {
+    availability:
+      observed.length === metrics.length &&
+      observed.every((metric) => metric.availability === "complete")
+        ? "complete"
+        : "partial",
+    value: observed.reduce((sum, metric) => sum + metric.value, 0),
   };
 }
 
@@ -707,6 +756,7 @@ function createSessionParseState(source) {
     rarebits: [],
     rejected: [],
     currentTurnIndex: undefined,
+    usageMetrics: { tokens: [], cost: [] },
     lastMessageAt: undefined,
     lastMessageAtMs: undefined,
     lineNumber: 0,
@@ -720,6 +770,10 @@ function cloneSessionParseState(state) {
     session: state.session ? { ...state.session } : undefined,
     turns: state.turns.map((turn) => ({ ...turn })),
     requests: state.requests.map((request) => ({ ...request })),
+    usageMetrics: {
+      tokens: state.usageMetrics.tokens.map((metric) => ({ ...metric })),
+      cost: state.usageMetrics.cost.map((metric) => ({ ...metric })),
+    },
     rarebits: state.rarebits.map((marker) => ({ ...marker })),
     rejected: state.rejected.map((rejection) => ({ ...rejection })),
   };
@@ -775,6 +829,8 @@ function parseSessionLine(state, line) {
     recordLastMessageAt(state, entry.timestamp);
     const currentTurn = state.turns[state.currentTurnIndex];
     const usage = sumUsage(entry.message.usage);
+    state.usageMetrics.tokens.push(usage.metrics.tokens);
+    state.usageMetrics.cost.push(usage.metrics.cost);
     state.requests.push({
       id: entry.id,
       sessionId: state.session?.id,
@@ -783,7 +839,12 @@ function parseSessionLine(state, line) {
       model: entry.message.model,
       provider: entry.message.provider,
       stopReason: entry.message.stopReason,
-      ...usage,
+      input: usage.input,
+      output: usage.output,
+      cacheRead: usage.cacheRead,
+      cacheWrite: usage.cacheWrite,
+      totalTokens: usage.totalTokens,
+      cost: usage.cost,
     });
     if (currentTurn) {
       currentTurn.endedAt = entry.timestamp;
@@ -807,8 +868,10 @@ function materializeSessionParseState(state) {
     };
   session.turnCount = turns.length;
   session.requestCount = requests.length;
-  session.cost = requests.reduce((sum, item) => sum + item.cost, 0);
-  session.totalTokens = requests.reduce((sum, item) => sum + item.totalTokens, 0);
+  session.usage = {
+    tokens: aggregateUsageMetric(state.usageMetrics.tokens),
+    cost: aggregateUsageMetric(state.usageMetrics.cost),
+  };
   session.endedAt = requests.at(-1)?.at ?? session.startedAt;
   session.lastMessageAt = state.lastMessageAt;
   session.links = sessionLinks(session.id);
@@ -868,7 +931,7 @@ function readAppendedBytes(path, start, end) {
   }
 }
 
-const SESSION_CACHE_VERSION = 3;
+const SESSION_CACHE_VERSION = 4;
 const SESSION_CATALOG_VERSION = 1;
 
 function cacheStamp(stat) {
@@ -905,8 +968,10 @@ function parseCatalogHeader(bytes, source) {
           source,
           turnCount: 0,
           requestCount: 0,
-          cost: 0,
-          totalTokens: 0,
+          usage: {
+            tokens: { availability: "unavailable" },
+            cost: { availability: "unavailable" },
+          },
           links: sessionLinks(entry.id),
         };
       }

@@ -79,7 +79,11 @@ test("fake Rarebit model reaches canonical Alpha HTTP and HTML without network",
         complete: async () => {
           modelCalls += 1;
           return {
-            text: "Progress: deterministic path implemented | Findings: registry projection works | Questions/Requests: None stated | Next step: owner test",
+            text: JSON.stringify({
+              summary:
+                "Progress: deterministic path implemented | Findings: registry projection works | Questions/Requests: None stated | Next step: owner test",
+              summaryNeedsHumanAttention: true,
+            }),
           };
         },
       },
