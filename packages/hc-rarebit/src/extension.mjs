@@ -13,7 +13,13 @@ import {
   processRarebitSummary,
   processRarebitTitle,
 } from "./rarebit-service.mjs";
-import { DEFAULT_RAREBIT_SUMMARY_POLICY, sha256 } from "./rarebit-core.mjs";
+import {
+  DEFAULT_RAREBIT_SUMMARY_POLICY,
+  selectRarebits,
+  sha256,
+} from "./rarebit-core.mjs";
+import { projectRarebitSessionActivity } from "./rarebit-activity.mjs";
+import { createHerdrActivityReporter } from "./herdr-activity.mjs";
 import { resolveRarebitSettings } from "./rarebit-settings.mjs";
 import {
   getRarebitArgumentCompletions,
@@ -96,6 +102,12 @@ export default function registerPiRarebit(pi, config = {}) {
     queryAutomaticSummaryPolicy(pi.events, session, {
       timeoutMs: explicit.automaticSummaryPolicyTimeoutMs,
     });
+  const activityReporter =
+    explicit.activityReporter ?? createHerdrActivityReporter();
+  const projectActivity = (ctx) =>
+    projectRarebitSessionActivity(
+      selectRarebits(ctx?.sessionManager?.getBranch?.() ?? []),
+    );
 
   const notify = (ctx, text, level = "info") => {
     if (!ctx?.hasUI || typeof ctx?.ui?.notify !== "function") return;
@@ -321,9 +333,20 @@ export default function registerPiRarebit(pi, config = {}) {
   registerRarebitLifecycle(pi, schedule, {
     onSessionStart: (ctx) => {
       activeSession = identityFrom(ctx);
+      activityReporter.start(projectActivity(ctx));
+    },
+    onSessionTree: (ctx) => {
+      activityReporter.update(projectActivity(ctx));
+    },
+    onSelectedUserPersisted: (ctx) => {
+      activityReporter.update(projectActivity(ctx));
+    },
+    onAgentSettled: (ctx) => {
+      activityReporter.update(projectActivity(ctx));
     },
     onSessionShutdown: () => {
       activeSession = undefined;
+      activityReporter.stop();
     },
     onFirstPersistedOwnerMessage: (ctx, ownerMessage) => {
       const sessionId = identityFrom(ctx).sessionId;
@@ -339,6 +362,9 @@ export default function registerPiRarebit(pi, config = {}) {
       });
     },
   });
+
+  // The optional Herdr adapter above derives timestamps from the exact active
+  // branch and never creates a receipt or changes materialization lifecycle.
 
   const recallMatchesCurrentBranch = (recall, ctx) => {
     const currentSessionId = String(
@@ -365,7 +391,6 @@ export default function registerPiRarebit(pi, config = {}) {
       `Schema rarebit_message_recall/v${RAREBIT_RECALL_SCHEMA_VERSION}: Session/branch/selection provenance, message IDs, timestamps, hashes, and lineage. Use for traceability, exact source/Session facts, or deeper investigation.`,
       "Interpret this history using the ordinary user prompt sent separately for this turn.",
     ].join("\n");
-
 
   pi.registerCommand?.("rarebit", {
     description: rarebitCommandDescription(),

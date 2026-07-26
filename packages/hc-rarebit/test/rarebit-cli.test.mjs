@@ -141,6 +141,7 @@ test("title generates only a proposal with an explicit date prefix and never mut
         summaryPolicy: {},
       }),
       runPiModel: async () => "Title: Slow-path investigation",
+      rarebitRoot: join(file, "..", "rarebit-test-state"),
     },
   );
   assert.equal(result.status, "proposal");

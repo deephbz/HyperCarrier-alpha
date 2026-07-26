@@ -1,6 +1,7 @@
 import {
   RAREBIT_SESSION_STATUS_REASONS,
-  RAREBIT_SUMMARY_LIFECYCLE_BOUNDARIES,
+  RAREBIT_SUMMARY_RECEIPT_LIFECYCLE_BOUNDARIES,
+  sha256,
 } from "./rarebit-core.mjs";
 
 const TERMINAL_STATUSES = new Set([
@@ -85,27 +86,71 @@ function isOccurrence(value) {
   );
 }
 
-function validSelection(selection, { request = false } = {}) {
-  const occurrences = selection?.occurrences;
+function plainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function exactKeys(value, required, optional = []) {
+  if (!plainObject(value)) return false;
+  const allowed = new Set([...required, ...optional]);
+  return (
+    required.every((key) => Object.hasOwn(value, key)) &&
+    Object.keys(value).every((key) => allowed.has(key))
+  );
+}
+
+function nonEmptyString(value) {
+  return typeof value === "string" && value.length > 0;
+}
+
+function sha256String(value) {
+  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+}
+
+function validSelection(selection, { request = false, compact = false } = {}) {
+  if (compact) {
+    if (
+      !exactKeys(selection, [
+        "manifestHash",
+        "selectorVersion",
+        "occurrenceCount",
+        "uniquePayloadCount",
+        "latestUserSourceEntryId",
+      ]) ||
+      !sha256String(selection.manifestHash) ||
+      !nonEmptyString(selection.selectorVersion) ||
+      !Number.isInteger(selection.occurrenceCount) ||
+      selection.occurrenceCount < 0 ||
+      !Number.isInteger(selection.uniquePayloadCount) ||
+      selection.uniquePayloadCount < 0 ||
+      selection.uniquePayloadCount > selection.occurrenceCount ||
+      !(
+        selection.latestUserSourceEntryId === null ||
+        nonEmptyString(selection.latestUserSourceEntryId)
+      )
+    )
+      return false;
+    return !request || nonEmptyString(selection.latestUserSourceEntryId);
+  }
   if (
     !selection ||
-    typeof selection.manifestHash !== "string" ||
-    !selection.manifestHash ||
-    typeof selection.selectorVersion !== "string" ||
-    !selection.selectorVersion ||
-    !Array.isArray(occurrences) ||
-    !occurrences.every(isOccurrence)
+    !sha256String(selection.manifestHash) ||
+    !nonEmptyString(
+      selection.selectorVersion ?? selection.manifest?.selectorVersion,
+    )
   )
+    return false;
+  const occurrences = selection.occurrences;
+  if (!Array.isArray(occurrences) || !occurrences.every(isOccurrence))
     return false;
   const ids = new Set();
   for (const occurrence of occurrences) {
     if (!request && occurrence.sourceEntryId === null) continue;
     if (
-      typeof occurrence.sourceEntryId !== "string" ||
-      !occurrence.sourceEntryId
+      !nonEmptyString(occurrence.sourceEntryId) ||
+      ids.has(occurrence.sourceEntryId)
     )
       return false;
-    if (ids.has(occurrence.sourceEntryId)) return false;
     ids.add(occurrence.sourceEntryId);
   }
   if (!request) return true;
@@ -113,26 +158,232 @@ function validSelection(selection, { request = false } = {}) {
   return last?.role === "user" && last.outcome === "user";
 }
 
-/** Returns a v3 receipt validity result without consulting Summary prose. */
+function validBranch(branch) {
+  return (
+    exactKeys(branch, ["leafId", "entryCount", "pathHash"]) &&
+    (branch.leafId === null || nonEmptyString(branch.leafId)) &&
+    Number.isInteger(branch.entryCount) &&
+    branch.entryCount >= 0 &&
+    sha256String(branch.pathHash)
+  );
+}
+
+function validModel(model) {
+  return (
+    model === null ||
+    (exactKeys(model, ["provider", "id"]) &&
+      nonEmptyString(model.provider) &&
+      nonEmptyString(model.id))
+  );
+}
+
+function validModelProvenance(value) {
+  return (
+    exactKeys(value, ["source", "status"], ["settingsKey"]) &&
+    nonEmptyString(value.source) &&
+    nonEmptyString(value.status) &&
+    (!Object.hasOwn(value, "settingsKey") || nonEmptyString(value.settingsKey))
+  );
+}
+
+function validError(value) {
+  return (
+    exactKeys(value, ["name", "message"]) &&
+    nonEmptyString(value.name) &&
+    typeof value.message === "string"
+  );
+}
+
+function validOverflow(value) {
+  return (
+    exactKeys(value, ["promptChars", "maxPromptChars", "strategy"]) &&
+    Number.isInteger(value.promptChars) &&
+    value.promptChars >= 0 &&
+    Number.isInteger(value.maxPromptChars) &&
+    value.maxPromptChars > 0 &&
+    value.strategy === "none"
+  );
+}
+
+function validInputCoveragePolicy(value) {
+  return (
+    exactKeys(value, ["strategy", "maxPromptChars"]) &&
+    value.strategy === "complete_or_explicit_overflow" &&
+    Number.isInteger(value.maxPromptChars) &&
+    value.maxPromptChars > 0
+  );
+}
+
+function nullableStringValue(value) {
+  return value === null || typeof value === "string";
+}
+
+function nullableNonNegative(value) {
+  return value === null || (Number.isFinite(value) && value >= 0);
+}
+
+function validSynthesisReceipt(value) {
+  const providerKeys = [
+    "responseProvider",
+    "responseProviderSource",
+    "responseModel",
+    "responseModelSource",
+    "responseId",
+    "responseIdSource",
+    "requestId",
+    "requestIdSource",
+  ];
+  const usageKeys = [
+    "inputTokens",
+    "outputTokens",
+    "totalTokens",
+    "cacheReadTokens",
+    "cacheWriteTokens",
+    "reasoningTokens",
+    "estimatedCostUsd",
+  ];
+  return (
+    exactKeys(value, [
+      "schemaVersion",
+      "kind",
+      "outcome",
+      "requestedModel",
+      "timing",
+      "provider",
+      "usage",
+    ]) &&
+    value.schemaVersion === 1 &&
+    value.kind === "rarebit_model_synthesis" &&
+    nonEmptyString(value.outcome) &&
+    validModel(value.requestedModel) &&
+    exactKeys(value.timing, [
+      "startedAt",
+      "completedAt",
+      "durationMs",
+      "provenance",
+    ]) &&
+    nullableStringValue(value.timing.startedAt) &&
+    nullableStringValue(value.timing.completedAt) &&
+    nullableNonNegative(value.timing.durationMs) &&
+    value.timing.provenance === "local_monotonic_clock" &&
+    exactKeys(value.provider, providerKeys) &&
+    providerKeys.every((key) => nullableStringValue(value.provider[key])) &&
+    exactKeys(value.usage, ["availability", ...usageKeys, "provenance"]) &&
+    ["unavailable", "partial", "reported"].includes(value.usage.availability) &&
+    usageKeys.every((key) => nullableNonNegative(value.usage[key])) &&
+    exactKeys(value.usage.provenance, usageKeys) &&
+    usageKeys.every((key) => nullableStringValue(value.usage.provenance[key]))
+  );
+}
+
+function validAutomaticSummaryPolicy(value) {
+  return (
+    exactKeys(value, [
+      "contractVersion",
+      "decision",
+      "queryStatus",
+      "queryId",
+      "provider",
+      "reason",
+      "observedAt",
+      "validUntil",
+      "queriedAt",
+      "provenance",
+    ]) &&
+    value.contractVersion === "rarebit-automatic-summary-policy/1" &&
+    value.decision === "inhibit" &&
+    value.queryStatus === "inhibited" &&
+    [
+      value.queryId,
+      value.provider,
+      value.reason,
+      value.observedAt,
+      value.validUntil,
+      value.queriedAt,
+    ].every(nonEmptyString) &&
+    exactKeys(value.provenance, ["identity", "generation", "association"]) &&
+    [
+      value.provenance.identity,
+      value.provenance.generation,
+      value.provenance.association,
+    ].every(nonEmptyString)
+  );
+}
+
+/** Validate the exact schema-v4 Summary receipt without consulting prose. */
 export function validateRarebitArtifactReceipt(record) {
+  const common = [
+    "schemaVersion",
+    "type",
+    "status",
+    "jobId",
+    "sessionId",
+    "branch",
+    "observedAt",
+    "selection",
+    "lifecycleBoundary",
+    "implementationVersion",
+    "synthesisMode",
+    "inputCoveragePolicy",
+    "promptVersion",
+    "model",
+    "modelProvenance",
+  ];
+  const variantKeys = {
+    ok: ["summary", "sessionStatus", "statusReason", "synthesis"],
+    ineligible: [],
+    inhibited: ["automaticSummaryPolicy"],
+    unavailable_overflow: ["overflow"],
+    failure: ["retryable", "error"],
+  };
   if (
-    !record ||
-    typeof record !== "object" ||
-    record.type !== "rarebit_summary" ||
-    record.schemaVersion !== 3 ||
+    !plainObject(record) ||
     !TERMINAL_STATUSES.has(record.status) ||
-    typeof record.sessionId !== "string" ||
-    !record.sessionId ||
-    !RAREBIT_SUMMARY_LIFECYCLE_BOUNDARIES.includes(record.lifecycleBoundary) ||
-    typeof record.observedAt !== "string" ||
-    !Number.isFinite(Date.parse(record.observedAt)) ||
+    !exactKeys(record, [...common, ...variantKeys[record.status]]) ||
+    record.type !== "rarebit_summary" ||
+    record.schemaVersion !== 4 ||
+    !sha256String(record.jobId) ||
+    !nonEmptyString(record.sessionId) ||
+    record.implementationVersion !== "hc-rarebit-summary-v4" ||
+    !nonEmptyString(record.promptVersion) ||
+    !validBranch(record.branch) ||
     !validSelection(record.selection, {
       request: record.lifecycleBoundary === "owner_request",
-    })
+      compact: true,
+    }) ||
+    !RAREBIT_SUMMARY_RECEIPT_LIFECYCLE_BOUNDARIES.includes(
+      record.lifecycleBoundary,
+    ) ||
+    !nonEmptyString(record.observedAt) ||
+    !Number.isFinite(Date.parse(record.observedAt)) ||
+    !["forced", "automatic"].includes(record.synthesisMode) ||
+    !validInputCoveragePolicy(record.inputCoveragePolicy) ||
+    !validModel(record.model) ||
+    !validModelProvenance(record.modelProvenance)
   )
     return { valid: false, reason: "malformed" };
+
+  if (
+    record.status === "inhibited" &&
+    !validAutomaticSummaryPolicy(record.automaticSummaryPolicy)
+  )
+    return { valid: false, reason: "malformed" };
+  if (record.status === "failure") {
+    if (typeof record.retryable !== "boolean" || !validError(record.error))
+      return { valid: false, reason: "malformed" };
+    return { valid: true, record };
+  }
+  if (record.status === "unavailable_overflow") {
+    if (!validOverflow(record.overflow))
+      return { valid: false, reason: "malformed" };
+    return { valid: true, record };
+  }
   if (record.status !== "ok") return { valid: true, record };
-  if (typeof record.summary !== "string")
+  if (
+    typeof record.summary !== "string" ||
+    !record.summary.trim() ||
+    !validSynthesisReceipt(record.synthesis)
+  )
     return { valid: false, reason: "malformed" };
   const legal = RAREBIT_SESSION_STATUS_REASONS[record.sessionStatus]?.includes(
     record.statusReason,
@@ -149,34 +400,128 @@ export function validateRarebitArtifactReceipt(record) {
   return { valid: true, record };
 }
 
-function sameOccurrence(left, right) {
-  return (
-    left.occurrenceId === right.occurrenceId &&
-    left.sourceEntryId === right.sourceEntryId &&
-    left.order === right.order &&
-    left.role === right.role &&
-    left.outcome === right.outcome &&
-    left.contentHash === right.contentHash
-  );
+export function validateRarebitTitleReceipt(record) {
+  const common = [
+    "schemaVersion",
+    "type",
+    "status",
+    "jobId",
+    "implementationVersion",
+    "sessionId",
+    "branch",
+    "selectionManifestHash",
+    "titleEvidence",
+    "promptVersion",
+    "model",
+    "modelProvenance",
+    "applicationMode",
+    "priorTitle",
+    "title",
+    "observedAt",
+  ];
+  const resultKeys =
+    record?.status === "failure" ? ["retryable", "error"] : ["synthesis"];
+  if (
+    !plainObject(record) ||
+    ![
+      "proposal",
+      "applied",
+      "skipped_session_changed",
+      "skipped_title_changed",
+      "skipped_existing_title",
+      "failure",
+    ].includes(record.status) ||
+    !exactKeys(record, [...common, ...resultKeys]) ||
+    record.schemaVersion !== 4 ||
+    record.type !== "rarebit_title" ||
+    !sha256String(record.jobId) ||
+    record.implementationVersion !== "hc-rarebit-title-v4" ||
+    !nonEmptyString(record.sessionId) ||
+    !validBranch(record.branch) ||
+    !sha256String(record.selectionManifestHash) ||
+    !exactKeys(record.titleEvidence, ["provenance", "sourceEntryId"]) ||
+    !nonEmptyString(record.titleEvidence.provenance) ||
+    !(
+      record.titleEvidence.sourceEntryId === null ||
+      nonEmptyString(record.titleEvidence.sourceEntryId)
+    ) ||
+    !nonEmptyString(record.promptVersion) ||
+    !validModel(record.model) ||
+    !validModelProvenance(record.modelProvenance) ||
+    !["apply", "proposal"].includes(record.applicationMode) ||
+    !(record.priorTitle === null || typeof record.priorTitle === "string") ||
+    !nonEmptyString(record.observedAt) ||
+    !Number.isFinite(Date.parse(record.observedAt))
+  )
+    return { valid: false, reason: "malformed" };
+  if (record.status === "failure") {
+    if (
+      record.title !== null ||
+      typeof record.retryable !== "boolean" ||
+      !validError(record.error)
+    )
+      return { valid: false, reason: "malformed" };
+    return { valid: true, record };
+  }
+  const titleExpected =
+    record.status === "proposal" || record.status === "applied";
+  if (
+    (titleExpected ? !nonEmptyString(record.title) : record.title !== null) ||
+    !validSynthesisReceipt(record.synthesis)
+  )
+    return { valid: false, reason: "malformed" };
+  return { valid: true, record };
 }
 
-function requestApplies(record, selection) {
-  if (record.selection.selectorVersion !== selection.selectorVersion)
-    return false;
-  const cut = record.selection.occurrences;
-  const current = selection.occurrences;
-  if (cut.length > current.length) return false;
+function prefixManifest(selection, count) {
   if (
-    !cut.every((occurrence, index) =>
-      sameOccurrence(occurrence, current[index]),
-    )
+    !Array.isArray(selection?.occurrences) ||
+    !Array.isArray(selection?.payloads)
+  )
+    return null;
+  const occurrences = selection.occurrences
+    .slice(0, count)
+    .map(({ text, ...value }) => value);
+  const ids = new Set(occurrences.map((occurrence) => occurrence.occurrenceId));
+  const payloads = selection.payloads
+    .map(({ text, ...payload }) => ({
+      ...payload,
+      occurrenceIds: payload.occurrenceIds.filter((id) => ids.has(id)),
+    }))
+    .filter((payload) => payload.occurrenceIds.length);
+  return sha256({
+    selectorVersion:
+      selection.selectorVersion ?? selection.manifest?.selectorVersion,
+    occurrences,
+    payloads,
+  });
+}
+
+export function exactSelectionApplies(receiptSelection, selection) {
+  return (
+    receiptSelection?.manifestHash === selection?.manifestHash &&
+    receiptSelection?.selectorVersion ===
+      (selection?.selectorVersion ?? selection?.manifest?.selectorVersion)
+  );
+}
+export function requestPrefixApplies(receiptSelection, selection) {
+  if (
+    receiptSelection?.selectorVersion !==
+    (selection?.selectorVersion ?? selection?.manifest?.selectorVersion)
   )
     return false;
-  const anchor = cut.at(-1);
-  const currentUsers = current.filter(
-    (occurrence) => occurrence.role === "user" && occurrence.outcome === "user",
+  const count = receiptSelection?.occurrenceCount;
+  return (
+    Number.isInteger(count) &&
+    count <= selection.occurrences.length &&
+    prefixManifest(selection, count) === receiptSelection.manifestHash &&
+    selection.occurrences
+      .filter(
+        (occurrence) =>
+          occurrence.role === "user" && occurrence.outcome === "user",
+      )
+      .at(-1)?.sourceEntryId === receiptSelection.latestUserSourceEntryId
   );
-  return currentUsers.at(-1)?.sourceEntryId === anchor.sourceEntryId;
 }
 
 function newerThan(left, right) {
@@ -267,7 +612,7 @@ export function projectRarebitArtifactState({
     ({ record, valid: isValid }) =>
       !isValid &&
       record?.type === "rarebit_summary" &&
-      record.schemaVersion !== 3,
+      record.schemaVersion !== 4,
   )
     ? "unsupported"
     : parsed.some(
@@ -368,15 +713,13 @@ export function projectRarebitArtifactState({
   const current = valid.filter(
     ({ record }) => record.sessionId === native.sessionId,
   );
-  const exact = current.filter(
-    ({ record }) =>
-      record.selection.manifestHash === native.selection.manifestHash &&
-      record.selection.selectorVersion === native.selection.selectorVersion,
+  const exact = current.filter(({ record }) =>
+    exactSelectionApplies(record.selection, native.selection),
   );
   const requests = current.filter(
     ({ record }) =>
       record.lifecycleBoundary === "owner_request" &&
-      requestApplies(record, native.selection),
+      requestPrefixApplies(record.selection, native.selection),
   );
   const activeRequest = newest(requests);
   const settled = newest(
@@ -392,7 +735,7 @@ export function projectRarebitArtifactState({
       retry: null,
     });
   if (activeRequest) {
-    const cutLength = activeRequest.record.selection.occurrences.length;
+    const cutLength = activeRequest.record.selection.occurrenceCount;
     const settlementPending = native.selection.occurrences
       .slice(cutLength)
       .some(

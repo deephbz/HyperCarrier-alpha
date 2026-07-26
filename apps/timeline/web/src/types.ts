@@ -1,30 +1,25 @@
-export const TIMELINE_SNAPSHOT_SCHEMA_VERSION = 4 as const;
-export interface RarebitSummaryAttentionSource {
-  kind: "rarebit_summary";
-  schemaVersion: number | null;
-  jobId: string | null;
-  observedAt: string | null;
-  selectorVersion: string | null;
-  manifestHash: string | null;
-  promptVersion: string | null;
-  implementationVersion: string | null;
-}
-export type RarebitSummaryAttention =
+import type {
+  RarebitSessionAssessmentRef,
+  RarebitVisualPresentation,
+} from "@hypercarrier/hc-rarebit";
+
+export const TIMELINE_SNAPSHOT_SCHEMA_VERSION = 5 as const;
+/** Exact package `assessmentRef`; Timeline serializes it without re-derivation. */
+export type RarebitSummaryStatusSource = RarebitSessionAssessmentRef;
+/** Package-derived Summary status; it is not runtime, Task, or Project state. */
+export type RarebitSummaryStatus =
   | {
-      state: "known";
-      needsHumanAttention: boolean;
-      source: RarebitSummaryAttentionSource;
+      state: "available";
+      status: "user_requested" | "finished" | "needs_attention" | "ineligible" | "error";
+      reason: string | null;
+      sourcePending: boolean;
+      presentation: Readonly<RarebitVisualPresentation>;
+      source: RarebitSummaryStatusSource;
     }
   | {
       state: "unknown";
-      reason:
-        | "summary_stale"
-        | "summary_missing"
-        | "summary_unavailable"
-        | "summary_not_successful"
-        | "unsupported_summary_schema"
-        | "attention_field_missing";
-      source: RarebitSummaryAttentionSource;
+      reason: "summary_missing" | "summary_unavailable" | "summary_status_missing";
+      source: RarebitSummaryStatusSource;
     };
 export type SessionUsageMetric =
   { availability: "complete" | "partial"; value: number } | { availability: "unavailable" };
@@ -76,11 +71,8 @@ export interface Session {
   /** Cumulative native assistant usage, with absence and observed subtotals preserved. */
   usage: SessionUsage;
   links?: { live: string; tps: string };
-  /**
-   * Content-free projection of the newest Rarebit Summary's explicit
-   * attention assessment. Missing legacy snapshot data is also unknown.
-   */
-  rarebitSummaryAttention?: RarebitSummaryAttention;
+  /** Content-free current Summary status from the package-owned v4 projection. */
+  rarebitSummaryStatus?: RarebitSummaryStatus;
 }
 export type SnapshotWindow = "15m" | "1h" | "6h" | "24h" | "all";
 export interface SnapshotPage {

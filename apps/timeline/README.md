@@ -160,8 +160,8 @@ completion, context occupancy, or progress.
   source counts, and freshness.
 - Monitoring is metadata-only. Terminal content, prompts, tool arguments, and tool output are
   intentionally unavailable to the dashboard. The bounded exception is a content-free, fresh,
-  explicit Rarebit Summary attention Boolean; it remains separate from liveness, work state, and
-  timeline marks.
+  package-owned five-status Rarebit Summary projection; it remains separate from liveness, work
+  state, and timeline marks.
 
 ## Metadata API
 

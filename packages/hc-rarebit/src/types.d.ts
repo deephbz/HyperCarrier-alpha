@@ -96,6 +96,23 @@ export type RarebitOccurrence = {
   text: string;
 };
 
+export type RarebitSessionActivityOccurrence = {
+  sourceEntryId: string | null;
+  timestamp: string | null;
+};
+export type RarebitSessionActivity = {
+  schemaVersion: 1;
+  selectorVersion: string | null;
+  selectionManifestHash: string | null;
+  latestUser: RarebitSessionActivityOccurrence | null;
+  latestAgentStop: RarebitSessionActivityOccurrence | null;
+};
+export function projectRarebitSessionActivity(selection: {
+  occurrences?: RarebitOccurrence[];
+  manifest?: { selectorVersion?: string };
+  manifestHash?: string;
+}): RarebitSessionActivity;
+
 export type RarebitVisualTone =
   | "neutral"
   | "user"
@@ -175,16 +192,150 @@ export function titleWithDatePrefix(
   value: unknown,
   options: { date: string; maxChars?: number },
 ): string;
-export const RAREBIT_SUMMARY_SCHEMA_VERSION: 3;
-export const RAREBIT_SUMMARY_IMPLEMENTATION_VERSION: "hc-rarebit-summary-v3";
+export type RarebitBranchRef = {
+  leafId: string | null;
+  entryCount: number;
+  pathHash: string;
+};
+export type RarebitSelectionRef = {
+  manifestHash: string;
+  selectorVersion: string;
+  occurrenceCount: number;
+  uniquePayloadCount: number;
+  latestUserSourceEntryId: string | null;
+};
+export type RarebitModelProvenance = {
+  source: string;
+  status: string;
+  settingsKey?: string;
+};
+export type RarebitInputCoveragePolicy = {
+  strategy: "complete_or_explicit_overflow";
+  maxPromptChars: number;
+};
+export type RarebitSynthesisReceipt = {
+  schemaVersion: 1;
+  kind: "rarebit_model_synthesis";
+  outcome: string;
+  requestedModel: RarebitModel | null;
+  timing: {
+    startedAt: string | null;
+    completedAt: string | null;
+    durationMs: number | null;
+    provenance: "local_monotonic_clock";
+  };
+  provider: {
+    responseProvider: string | null;
+    responseProviderSource: string | null;
+    responseModel: string | null;
+    responseModelSource: string | null;
+    responseId: string | null;
+    responseIdSource: string | null;
+    requestId: string | null;
+    requestIdSource: string | null;
+  };
+  usage: {
+    availability: "unavailable" | "partial" | "reported";
+    inputTokens: number | null;
+    outputTokens: number | null;
+    totalTokens: number | null;
+    cacheReadTokens: number | null;
+    cacheWriteTokens: number | null;
+    reasoningTokens: number | null;
+    estimatedCostUsd: number | null;
+    provenance: {
+      inputTokens: string | null;
+      outputTokens: string | null;
+      totalTokens: string | null;
+      cacheReadTokens: string | null;
+      cacheWriteTokens: string | null;
+      reasoningTokens: string | null;
+      estimatedCostUsd: string | null;
+    };
+  };
+};
+type RarebitSummaryReceiptCommon = {
+  schemaVersion: 4;
+  type: "rarebit_summary";
+  jobId: string;
+  sessionId: string;
+  branch: RarebitBranchRef;
+  observedAt: string;
+  selection: RarebitSelectionRef;
+  lifecycleBoundary:
+    "owner_request" | "agent_settled" | "session_start" | "manual";
+  implementationVersion: "hc-rarebit-summary-v4";
+  synthesisMode: "forced" | "automatic";
+  inputCoveragePolicy: RarebitInputCoveragePolicy;
+  promptVersion: string;
+  model: RarebitModel | null;
+  modelProvenance: RarebitModelProvenance;
+};
+export type RarebitSummaryReceiptV4 =
+  | (RarebitSummaryReceiptCommon & {
+      status: "ok";
+      summary: string;
+      sessionStatus: "user_requested" | "finished" | "needs_attention";
+      statusReason:
+        | "owner_request_recorded"
+        | "all_requests_accomplished"
+        | "decision"
+        | "input"
+        | "approval"
+        | "blocker"
+        | "unfinished";
+      synthesis: RarebitSynthesisReceipt;
+    })
+  | (RarebitSummaryReceiptCommon & { status: "ineligible" })
+  | (RarebitSummaryReceiptCommon & {
+      status: "inhibited";
+      automaticSummaryPolicy: Extract<
+        RarebitAutomaticSummaryPolicyDecision,
+        { decision: "inhibit" }
+      >;
+    })
+  | (RarebitSummaryReceiptCommon & {
+      status: "unavailable_overflow";
+      overflow: {
+        promptChars: number;
+        maxPromptChars: number;
+        strategy: "none";
+      };
+    })
+  | (RarebitSummaryReceiptCommon & {
+      status: "failure";
+      retryable: boolean;
+      error: { name: string; message: string };
+    });
+export type RarebitHeadV1 = {
+  type: "rarebit_head";
+  protocolVersion: 1;
+  sessionId: string;
+  receiptOffset: number;
+  receiptLength: number;
+  receiptHash: string;
+};
+export type RarebitNativeObservation =
+  | {
+      availability: "available";
+      sessionId: string;
+      selection: ReturnType<typeof selectRarebits> & {
+        selectorVersion: string;
+      };
+    }
+  | { availability: "missing" | "unreadable" };
+
+export const RAREBIT_SUMMARY_SCHEMA_VERSION: 4;
+export const RAREBIT_SUMMARY_IMPLEMENTATION_VERSION: "hc-rarebit-summary-v4";
 export function processRarebitSummary(
   ctx: unknown,
   config?: {
     model?: RarebitModel;
     summaryPolicy?: RarebitSummaryPolicy;
     forceSynthesis?: boolean;
-    lifecycleBoundary?:
-      "owner_request" | "agent_settled" | "session_start" | "manual";
+    // New derivation accepts only evidence-transition or explicit boundaries;
+    // RarebitSummaryReceiptV4 retains session_start for historical reads.
+    lifecycleBoundary?: "owner_request" | "agent_settled" | "manual";
     queryAutomaticSummaryPolicy?: (session: {
       sessionId: string;
       durableAssociation: string | null;
@@ -199,7 +350,17 @@ export function processRarebitSummary(
 ): Promise<{
   duplicate: boolean;
   inFlight?: boolean;
-  record: Record<string, unknown>;
+  skipped?: boolean;
+  record:
+    | (RarebitSummaryReceiptV4 & { path?: string })
+    | {
+        schemaVersion: 4;
+        type: "rarebit_summary";
+        status: "skipped_ephemeral_session";
+        reason: "ephemeral_session";
+        jobId: string;
+        sessionId: string;
+      };
 }>;
 export type RarebitSessionAssessmentRef = {
   jobId: string | null;
@@ -213,20 +374,6 @@ export type RarebitSessionAssessmentRef = {
   observedAt: string | null;
   schemaVersion: number | null;
   implementationVersion: string | null;
-};
-
-export function selectRarebitSummaryReceipt(input: {
-  records: Record<string, unknown>[];
-  selection: ReturnType<typeof selectRarebits>;
-}): Record<string, unknown> | null;
-
-export function projectRarebitSessionStatus(input: {
-  records: Record<string, unknown>[];
-  selection: ReturnType<typeof selectRarebits>;
-  now?: number;
-  maxAgeMs?: number | null;
-}): RarebitSessionStatus & {
-  assessmentRef: RarebitSessionAssessmentRef | null;
 };
 
 export type RarebitArtifactAvailability =
@@ -265,27 +412,117 @@ export type RarebitArtifactState = {
     deadlineExpired: boolean;
   } | null;
 };
-export function validateRarebitArtifactReceipt(record: unknown): {
-  valid: boolean;
-  reason?: "malformed";
-  record?: Record<string, unknown>;
-};
+export function validateRarebitArtifactReceipt(
+  record: unknown,
+):
+  | { valid: true; record: RarebitSummaryReceiptV4 }
+  | { valid: false; reason: "malformed" };
 export function projectRarebitArtifactState(input?: {
-  native?: {
-    availability: RarebitArtifactAvailability;
-    sessionId?: string;
-    selection?: Pick<ReturnType<typeof selectRarebits>, "manifestHash"> & {
-      selectorVersion: string;
-      occurrences: RarebitOccurrence[];
-    };
-  };
+  native?: RarebitNativeObservation;
   materialization?: {
     availability: RarebitArtifactAvailability;
-    records: Record<string, unknown>[];
+    records: unknown[];
   };
   expectation?: "owner_request" | "agent_settled" | "snapshot";
   deadlineExpired?: boolean;
 }): RarebitArtifactState;
+
+export type RarebitSidecarDiagnostics = {
+  tornTail: boolean;
+  reason?:
+    | "sidecar_missing"
+    | "sidecar_empty"
+    | "sidecar_head_missing"
+    | "sidecar_head_invalid"
+    | "sidecar_uncommitted_tail"
+    | "sidecar_unreadable";
+  tailOffset?: number;
+};
+export type RarebitSidecarCurrent = {
+  availability: RarebitArtifactAvailability;
+  path: string;
+  receipt: RarebitSummaryReceiptV4 | null;
+  records: RarebitSummaryReceiptV4[];
+  head: RarebitHeadV1 | null;
+  diagnostics: RarebitSidecarDiagnostics;
+  artifactState: RarebitArtifactState;
+};
+export function readRarebitCurrent(input: {
+  sessionFile: string;
+  native?: RarebitNativeObservation;
+  expectation?: "owner_request" | "agent_settled" | "snapshot";
+  deadlineExpired?: boolean;
+  sessionRoot?: string;
+  rarebitRoot?: string;
+  allowExternalSession?: boolean;
+}): Promise<RarebitSidecarCurrent>;
+export function readRarebitHistory(input: {
+  sessionFile: string;
+  fromOffset?: number;
+  limit?: number;
+  sessionRoot?: string;
+  rarebitRoot?: string;
+  allowExternalSession?: boolean;
+}): Promise<{
+  availability: RarebitArtifactAvailability;
+  path: string;
+  records: Array<{
+    offset: number;
+    record: RarebitSummaryReceiptV4 | RarebitTitleReceiptV4;
+  }>;
+  nextOffset: number | null;
+}>;
+export function exactSelectionApplies(
+  receiptSelection: RarebitSelectionRef,
+  selection: ReturnType<typeof selectRarebits>,
+): boolean;
+export function requestPrefixApplies(
+  receiptSelection: RarebitSelectionRef,
+  selection: ReturnType<typeof selectRarebits>,
+): boolean;
+
+type RarebitTitleReceiptCommon = {
+  schemaVersion: 4;
+  type: "rarebit_title";
+  jobId: string;
+  implementationVersion: "hc-rarebit-title-v4";
+  sessionId: string;
+  branch: RarebitBranchRef;
+  selectionManifestHash: string;
+  titleEvidence: { provenance: string; sourceEntryId: string | null };
+  promptVersion: string;
+  model: RarebitModel | null;
+  modelProvenance: RarebitModelProvenance;
+  applicationMode: "apply" | "proposal";
+  priorTitle: string | null;
+  observedAt: string;
+};
+export type RarebitTitleReceiptV4 =
+  | (RarebitTitleReceiptCommon & {
+      status: "proposal" | "applied";
+      title: string;
+      synthesis: RarebitSynthesisReceipt;
+    })
+  | (RarebitTitleReceiptCommon & {
+      status:
+        | "skipped_session_changed"
+        | "skipped_title_changed"
+        | "skipped_existing_title";
+      title: null;
+      synthesis: RarebitSynthesisReceipt;
+    })
+  | (RarebitTitleReceiptCommon & {
+      status: "failure";
+      title: null;
+      retryable: boolean;
+      error: { name: string; message: string };
+    });
+
+export function validateRarebitTitleReceipt(
+  record: unknown,
+):
+  | { valid: true; record: RarebitTitleReceiptV4 }
+  | { valid: false; reason: "malformed" };
 
 export function processRarebitTitle(
   ctx: unknown,
@@ -321,5 +558,7 @@ export function processRarebitTitle(
 ): Promise<{
   duplicate: boolean;
   inFlight?: boolean;
-  record: Record<string, unknown>;
+  record:
+    | (RarebitTitleReceiptV4 & { path?: string })
+    | (RarebitTitleReceiptCommon & { status: "pending"; title: null });
 }>;

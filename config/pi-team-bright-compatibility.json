@@ -3,12 +3,12 @@
   "component": "pi-team-bright",
   "source": {
     "repository": "https://github.com/deephbz/pi-team-bright.git",
-    "commit": "f7b7c65e293ee2c9239f694f823c749d64ff7743",
-    "tree": "0c87a0059f8e3a6a9a1d28c57d1506db17d9fac4"
+    "commit": "2ea3f9764b09663b17d263cd6923204d8261accc",
+    "tree": "5faff3b51871b4ef65bd0f7a035770a4a79c6a82"
   },
   "package": {
     "name": "@hypercarrier/pi-team-bright",
-    "version": "0.15.0-rc.1"
+    "version": "0.16.0-rc.1"
   },
   "publication": {
     "state": "unpublished",
@@ -29,16 +29,17 @@
   "childVerification": {
     "ciWorkflow": ".github/workflows/ci.yml",
     "receipts": [
-      {"name": "clean-clone", "command": "npm ci", "result": "passed"},
-      {"name": "identity-cleared-suite", "command": "env -u PI_TEAM_NAME -u PI_AGENT_NAME -u PI_AGENT_LAUNCH_ID npm test", "result": "passed: 54 files / 433 tests"},
-      {"name": "packed-artifact", "command": "npm run verify:package", "result": "passed"},
-      {"name": "observation-consumer", "command": "scoped ESM/CommonJS/TypeScript observation import", "result": "passed"}
+      {"name": "hosted-fast-lane", "command": "TERM_PROGRAM=iTerm.app npm test", "result": "passed on Node 22 and 24 in CI run 30205065998"},
+      {"name": "hosted-exhaustive-complement", "command": "TERM_PROGRAM=iTerm.app npm run test:exhaustive-only", "result": "passed on Node 22 and 24 in CI run 30205065998"},
+      {"name": "test-lane-closure", "command": "npm run test:lanes", "result": "passed in feature CI run 30205065998, closure CI run 30206367640, and final dry-run 30206475865"},
+      {"name": "generated-package-closure", "command": "npm run verify:package", "result": "passed on Node 22 and 24 in CI run 30206367640; generated dist bytes remained clean"},
+      {"name": "nonce-correlated-publish-dry-run", "command": "TERM_PROGRAM=iTerm.app npm run test:full", "result": "passed at final child main in run 30206475865; publish skipped; private correlation evidence is retained in the release receipt"}
     ]
   },
   "gitlink": {
     "path": "packages/pi-team-bright",
     "mode": "160000",
-    "commit": "f7b7c65e293ee2c9239f694f823c749d64ff7743"
+    "commit": "2ea3f9764b09663b17d263cd6923204d8261accc"
   },
   "parentVerification": {
     "state": "verified",

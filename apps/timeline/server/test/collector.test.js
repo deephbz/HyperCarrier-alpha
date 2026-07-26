@@ -1033,7 +1033,9 @@ test("snapshot never exposes process argv or raw command errors", async () => {
     sockets: ["/tmp/a"],
     sessionFiles: [],
     teamsRoot,
-    readPiTeamsObservation: async () => { throw new Error("provider unavailable"); },
+    readPiTeamsObservation: async () => {
+      throw new Error("provider unavailable");
+    },
     processes: [
       { pid: 100, ppid: 1, command: "zsh" },
       { pid: 120, ppid: 100, command: `node /x/pi-coding-agent -p ${sentinel}` },
@@ -1043,7 +1045,7 @@ test("snapshot never exposes process argv or raw command errors", async () => {
   assert.equal(JSON.stringify(snapshot).includes(sentinel), false);
   assert.deepEqual(snapshot.processes[0].process, { pid: 120, state: "running" });
   assert.equal(snapshot.processes[0].link, undefined);
-  assert.equal(snapshot.schemaVersion, 4);
+  assert.equal(snapshot.schemaVersion, 5);
   assert.equal(snapshot.processes[0].coordination, undefined);
   assert.equal(
     snapshot.processes[0].issues.some((entry) => entry.code.startsWith("coordination_")),

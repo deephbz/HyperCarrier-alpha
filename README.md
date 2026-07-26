@@ -75,7 +75,11 @@ unavailable.
 
 Rarebit is a separate Pi package under `packages/hc-rarebit`. Its model-provider
 call is opt-in because selected user and assistant prose crosses the configured
-provider boundary.
+provider boundary. When Pi runs under Herdr, Rarebit can report two optional
+recency clocks: latest selected owner message, then latest selected agent stop.
+They aren't liveness, progress, or delivery state. The package README documents
+the token contract, and [`config/herdr.example.toml`](config/herdr.example.toml)
+shows the corresponding Herdr sidebar row.
 
 Auto Compact is a separate Pi extension under
 [`packages/hc-auto-compact`](packages/hc-auto-compact). After `npm ci`, load it

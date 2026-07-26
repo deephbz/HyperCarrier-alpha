@@ -71,19 +71,29 @@ export function demoSnapshot(): Snapshot {
       cursor = ended;
     }
     const project = projects[i % projects.length];
-    const summaryAttention =
+    const rarebitSummaryStatus =
       i % 13 === 2 || i % 13 === 4
         ? {
-            state: "known" as const,
-            needsHumanAttention: i % 13 === 2,
+            state: "available" as const,
+            status: (i % 13 === 2 ? "needs_attention" : "finished") as const,
+            reason: "demo",
+            sourcePending: false,
+            presentation:
+              i % 13 === 2
+                ? { mark: "◆!", label: "needs you", tone: "attention", salience: "attention" }
+                : { mark: null, label: "appears finished", tone: "neutral", salience: "ordinary" },
             source: {
-              kind: "rarebit_summary" as const,
-              schemaVersion: 2,
+              sessionId: id,
+              branchLeafId: null,
+              selectionManifestHash: `demo-manifest-${i}`,
+              lifecycleBoundary: "agent_settled",
+              model: null,
+              schemaVersion: 4,
               jobId: `demo-summary-${i}`,
               observedAt: new Date(cursor).toISOString(),
               selectorVersion: "demo-selector-v1",
               manifestHash: `demo-manifest-${i}`,
-              promptVersion: "demo-summary-v2",
+              promptVersion: "demo-summary-v4",
               implementationVersion: "demo-v1",
             },
           }
@@ -98,7 +108,7 @@ export function demoSnapshot(): Snapshot {
       name: i === 0 ? "timeline-lead" : i < 5 ? `timeline-worker-${i}` : `${project}-${i + 1}`,
       turnCount: n,
       requestCount: n,
-      rarebitSummaryAttention: summaryAttention,
+      rarebitSummaryStatus,
       usage: {
         tokens: { availability: "complete", value: tokens },
         cost: { availability: "complete", value: cost },
@@ -153,7 +163,7 @@ export function demoSnapshot(): Snapshot {
       });
   }
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     generatedAt: new Date().toISOString(),
     sessions,
     turns,

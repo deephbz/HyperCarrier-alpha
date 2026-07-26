@@ -1,6 +1,6 @@
 import {
   DEFAULT_RAREBIT_SUMMARY_POLICY,
-  RAREBIT_SUMMARY_LIFECYCLE_BOUNDARIES,
+  RAREBIT_SUMMARY_WRITABLE_LIFECYCLE_BOUNDARIES,
   RAREBIT_SUMMARY_PROMPT_VERSION,
   RAREBIT_TITLE_PROMPT_VERSION,
   composeRarebitSummaryPrompt,
@@ -30,9 +30,9 @@ import {
   automaticSummaryInhibitionIdentity,
 } from "./automatic-summary-policy.mjs";
 
-export const RAREBIT_IMPLEMENTATION_VERSION = "hc-rarebit-v1";
-export const RAREBIT_SUMMARY_IMPLEMENTATION_VERSION = "hc-rarebit-summary-v3";
-export const RAREBIT_SUMMARY_SCHEMA_VERSION = 3;
+export const RAREBIT_TITLE_IMPLEMENTATION_VERSION = "hc-rarebit-title-v4";
+export const RAREBIT_SUMMARY_IMPLEMENTATION_VERSION = "hc-rarebit-summary-v4";
+export const RAREBIT_SUMMARY_SCHEMA_VERSION = 4;
 export const DEFAULT_RAREBIT_MAX_PROMPT_CHARS = 200_000;
 
 function sessionFileFrom(ctx) {
@@ -51,7 +51,11 @@ function branchIdentity(branch) {
   const ids = (Array.isArray(branch) ? branch : []).map((entry) =>
     String(entry?.id ?? ""),
   );
-  return { leafId: ids.at(-1) ?? null, entryIds: ids };
+  return {
+    leafId: ids.at(-1) ?? null,
+    entryCount: ids.length,
+    pathHash: sha256(ids),
+  };
 }
 
 function extractModelText(response) {
@@ -68,13 +72,28 @@ function extractModelText(response) {
 }
 
 function machineSelection(selection) {
+  const latestUser = [...selection.occurrences]
+    .reverse()
+    .find(
+      (occurrence) =>
+        occurrence.role === "user" && occurrence.outcome === "user",
+    );
   return {
     manifestHash: selection.manifestHash,
     selectorVersion: selection.manifest.selectorVersion,
     occurrenceCount: selection.occurrences.length,
     uniquePayloadCount: selection.payloads.length,
-    occurrences: selection.manifest.occurrences,
-    payloads: selection.manifest.payloads,
+    latestUserSourceEntryId: latestUser?.sourceEntryId ?? null,
+  };
+}
+
+function machineModelProvenance(value) {
+  return {
+    source: String(value?.source ?? "unknown"),
+    status: String(value?.status ?? "unknown"),
+    ...(typeof value?.settingsKey === "string"
+      ? { settingsKey: value.settingsKey }
+      : {}),
   };
 }
 
@@ -95,9 +114,10 @@ export async function processRarebitSummary(ctx, config = {}) {
   const eligibility = evaluateRarebitSummaryEligibility(measurement, policy);
   const forceSynthesis = config.forceSynthesis === true;
   const synthesisMode = forceSynthesis ? "forced" : "automatic";
-  const lifecycleBoundary =
-    config.lifecycleBoundary ?? (forceSynthesis ? "manual" : "session_start");
-  if (!RAREBIT_SUMMARY_LIFECYCLE_BOUNDARIES.includes(lifecycleBoundary))
+  const lifecycleBoundary = config.lifecycleBoundary ?? "manual";
+  if (
+    !RAREBIT_SUMMARY_WRITABLE_LIFECYCLE_BOUNDARIES.includes(lifecycleBoundary)
+  )
     throw new TypeError("Unsupported Summary lifecycle boundary");
   const branchRef = branchIdentity(branch);
   let automaticSummaryPolicy = {
@@ -190,13 +210,8 @@ export async function processRarebitSummary(ctx, config = {}) {
     branch: branchRef,
     observedAt: new Date().toISOString(),
     selection: machineSelection(selection),
-    measurement,
-    eligibility: {
-      ...eligibility,
-      forced: forceSynthesis && !eligibility.eligible,
-    },
     model: modelResolution.model,
-    modelProvenance: modelResolution.provenance,
+    modelProvenance: machineModelProvenance(modelResolution.provenance),
     promptVersion,
     ...(inhibited ? { automaticSummaryPolicy } : {}),
   };
@@ -214,10 +229,19 @@ export async function processRarebitSummary(ctx, config = {}) {
   const reservation = await reserveRarebitJob({
     jobId,
     sessionFile,
+    native: {
+      availability: "available",
+      sessionId,
+      selection: {
+        ...selection,
+        selectorVersion: selection.manifest.selectorVersion,
+      },
+    },
     rarebitRoot: config.rarebitRoot,
     sessionRoot: config.sessionRoot,
     allowExternalSession: config.allowExternalSession === true,
     leaseMs: config.leaseMs,
+    hooks: config.storeHooks,
   });
   if (!reservation.acquired)
     return {
@@ -268,7 +292,10 @@ export async function processRarebitSummary(ctx, config = {}) {
       sessionId,
       sessionFile,
       branchLeafId: branchRef.leafId,
-      eligibility: base.eligibility,
+      eligibility: {
+        ...eligibility,
+        forced: forceSynthesis && !eligibility.eligible,
+      },
       rarebitCount: selection.occurrences.length,
       model: modelResolution.model,
       estimatedInputTokens: Math.ceil(prompt.length / 4),
@@ -426,12 +453,12 @@ export async function processRarebitTitle(ctx, config = {}) {
     model: modelResolution.model,
   });
   const base = {
-    schemaVersion: 1,
+    schemaVersion: 4,
     type: "rarebit_title",
     status: "pending",
     jobId,
     implementationVersion:
-      config.implementationVersion ?? RAREBIT_IMPLEMENTATION_VERSION,
+      config.implementationVersion ?? RAREBIT_TITLE_IMPLEMENTATION_VERSION,
     sessionId,
     branch: branchRef,
     selectionManifestHash: selection.manifestHash,
@@ -445,7 +472,7 @@ export async function processRarebitTitle(ctx, config = {}) {
     },
     promptVersion,
     model: modelResolution.model,
-    modelProvenance: modelResolution.provenance,
+    modelProvenance: machineModelProvenance(modelResolution.provenance),
     applicationMode,
     priorTitle: config.priorTitle ?? null,
     title: null,
@@ -458,6 +485,7 @@ export async function processRarebitTitle(ctx, config = {}) {
     sessionRoot: config.sessionRoot,
     allowExternalSession: config.allowExternalSession === true,
     leaseMs: config.leaseMs,
+    hooks: config.storeHooks,
   });
   if (!reservation.acquired)
     return {

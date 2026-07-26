@@ -6,7 +6,7 @@ import type {
   ProcessObservation,
   Lane,
   Request,
-  RarebitSummaryAttention,
+  RarebitSummaryStatus,
   ResponseOutcomeMarker,
   Session,
   SessionUsageMetric,
@@ -17,10 +17,11 @@ import type {
 /** Session and OS-process projections share one discriminated lane pipeline. */
 export type TimelineLane = Lane;
 
-export function summaryAttentionPresentation(attention?: RarebitSummaryAttention) {
-  return attention?.state === "known" && attention.needsHumanAttention
+/** Only a verified, current `needs_attention` package status is visually salient. */
+export function summaryStatusPresentation(summary?: RarebitSummaryStatus) {
+  return summary?.state === "available" && summary.presentation.salience === "attention"
     ? {
-        label: "Rarebit Summary indicates human attention needed",
+        label: `Rarebit Summary ${summary.presentation.label}`,
         className: "lane-attention-needed",
       }
     : null;
