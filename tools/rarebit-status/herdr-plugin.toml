@@ -1,0 +1,59 @@
+id = "rarebit-status"
+name = "Rarebit Status"
+version = "0.4.0"
+min_herdr_version = "0.7.5"
+description = "Exact-Session Rarebit status and two-tab evidence deck"
+platforms = ["linux", "macos"]
+
+[[startup]]
+command = ["node", "scripts/startup.mjs"]
+
+[[actions]]
+id = "open"
+title = "Rarebit Status: open deck"
+contexts = ["global", "workspace", "tab", "pane"]
+command = ["node", "scripts/open.mjs"]
+
+[[actions]]
+id = "refresh-current"
+title = "Rarebit Status: refresh current pane"
+contexts = ["pane"]
+command = ["node", "scripts/action.mjs", "refresh-current"]
+
+[[actions]]
+id = "refresh-all"
+title = "Rarebit Status: refresh all exact Session bindings"
+contexts = ["global", "workspace", "tab", "pane"]
+command = ["node", "scripts/action.mjs", "refresh-all"]
+
+[[actions]]
+id = "clear-current"
+title = "Rarebit Status: clear current pane"
+contexts = ["pane"]
+command = ["node", "scripts/action.mjs", "clear-current"]
+
+[[actions]]
+id = "show-notification"
+title = "Rarebit Status: show current notification"
+contexts = ["pane"]
+command = ["node", "scripts/action.mjs", "show-notification"]
+
+[[events]]
+on = "pane.agent_detected"
+command = ["node", "scripts/event.mjs"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["node", "scripts/event.mjs"]
+
+[[events]]
+on = "pane.closed"
+command = ["node", "scripts/event.mjs"]
+
+[[panes]]
+id = "rarebit-deck"
+title = "Rarebit Status: Summary + timeline"
+placement = "popup"
+width = "90%"
+height = "88%"
+command = ["node", "scripts/rarebit-dashboard.mjs"]

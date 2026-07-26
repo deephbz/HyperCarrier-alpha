@@ -1,0 +1,35 @@
+id = "agent-view-presets"
+name = "Agent View Presets"
+version = "0.1.0"
+min_herdr_version = "0.7.5"
+description = "Operator-selected filters for Herdr's built-in Agent view"
+platforms = ["linux", "macos"]
+
+[[startup]]
+command = ["node", "scripts/startup.mjs"]
+
+[[actions]]
+id = "toggle-teammates"
+title = "Agent view: toggle PiTeams teammates"
+contexts = ["global", "workspace", "tab", "pane"]
+command = ["node", "scripts/action.mjs", "toggle-teammates"]
+
+[[actions]]
+id = "no-teammates"
+title = "Agent view: hide PiTeams teammates"
+contexts = ["global", "workspace", "tab", "pane"]
+command = ["node", "scripts/action.mjs", "no-teammates"]
+
+[[actions]]
+id = "all-agents"
+title = "Agent view: show all agents"
+contexts = ["global", "workspace", "tab", "pane"]
+command = ["node", "scripts/action.mjs", "all-agents"]
+
+[[events]]
+on = "pane.agent_detected"
+command = ["node", "scripts/event.mjs"]
+
+[[events]]
+on = "pane.closed"
+command = ["node", "scripts/event.mjs"]
