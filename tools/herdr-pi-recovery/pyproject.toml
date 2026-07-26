@@ -1,0 +1,16 @@
+[project]
+name = "herdr-pi-recovery"
+version = "0.1.0"
+description = "Snapshot and restore Herdr pane-to-Pi-session correspondence"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+herdr-pi-recovery = "herdr_recovery.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/herdr_recovery"]

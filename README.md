@@ -78,8 +78,9 @@ call is opt-in because selected user and assistant prose crosses the configured
 provider boundary. When Pi runs under Herdr, Rarebit can report two optional
 recency clocks: latest selected owner message, then latest selected agent stop.
 They aren't liveness, progress, or delivery state. The package README documents
-the token contract, and [`config/herdr.example.toml`](config/herdr.example.toml)
-shows the corresponding Herdr sidebar row.
+the token contract. [`config/herdr.example.toml`](config/herdr.example.toml) is
+a validated complete configuration; merge its fenced plugin blocks into existing
+preferences rather than overwriting them wholesale.
 
 Auto Compact is a separate Pi extension under
 [`packages/hc-auto-compact`](packages/hc-auto-compact). After `npm ci`, load it
@@ -93,6 +94,32 @@ Use `/auto-compact status` inside Pi to inspect its effective configuration and
 runtime state. Once loaded, it is enabled by default at a 90% effective-context
 threshold. Its package README documents the cooperative handoff, durable
 settings, manual trigger, and failure behavior.
+
+## Optional Herdr tools
+
+Three local tools are included for Herdr operators. They require [Herdr](https://github.com/deephbz/herdr) 0.7.5 or newer; the two plugins also use the Node.js runtime already required above. `agent-view-presets` reads local PiTeams membership files, and `rarebit-status` additionally requires a Pi checkout configured with this checkout's `packages/hc-rarebit` package. The recovery CLI requires Python 3.12 or newer and [uv](https://docs.astral.sh/uv/).
+
+From the public checkout root, link and enable the plugins:
+
+```sh
+herdr plugin link "$PWD/tools/agent-view-presets"
+herdr plugin enable agent-view-presets
+herdr plugin action invoke agent-view-presets.no-teammates
+
+herdr plugin link "$PWD/tools/rarebit-status"
+herdr plugin enable rarebit-status
+herdr plugin action invoke rarebit-status.open
+```
+
+Run the recovery CLI without a private-machine path:
+
+```sh
+uv run --locked --project tools/herdr-pi-recovery herdr-pi-recovery doctor
+uv run --locked --project tools/herdr-pi-recovery herdr-pi-recovery dump
+uv run --locked --project tools/herdr-pi-recovery herdr-pi-recovery plan
+```
+
+`restore --execute` changes live Herdr panes, so inspect the default dry-run plan first. Each tool's README documents its boundary and recovery behavior.
 
 Pi Team Bright orchestration and its Beads-backed Task integration are maintained in
 [deephbz/pi-team-bright](https://github.com/deephbz/pi-team-bright). Clone this Alpha with `git clone --recurse-submodules`; a non-recursive clone intentionally lacks `packages/pi-team-bright` until `git submodule update --init --recursive` is run. The gitlink composes public source at its verified revision; `@hypercarrier/pi-team-bright` remains unpublished on npm.

@@ -1,0 +1,12 @@
+version = 1
+revision = 3
+requires-python = ">=3.12"
+
+[options]
+exclude-newer = "2026-07-18T08:27:20.158811Z"
+exclude-newer-span = "P7D"
+
+[[package]]
+name = "herdr-pi-recovery"
+version = "0.1.0"
+source = { editable = "." }
