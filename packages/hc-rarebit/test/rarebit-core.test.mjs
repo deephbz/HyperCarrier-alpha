@@ -142,7 +142,7 @@ test("job identity varies with an operation's semantic inputs, not raw source pa
   };
   assert.equal(rarebitJobIdentity(base), rarebitJobIdentity({ ...base }));
   assert.notEqual(
-    rarebitJobIdentity({ ...base, promptVersion: "rarebit-summary-v3" }),
+    rarebitJobIdentity({ ...base, promptVersion: "rarebit-summary-future" }),
     rarebitJobIdentity({
       ...base,
       promptVersion: RAREBIT_SUMMARY_PROMPT_VERSION,
@@ -191,11 +191,26 @@ test("shared imperative summary service persists a derived receipt without raw s
     },
   });
   assert.equal(result.record.status, "ok");
-  assert.equal(result.record.eligibility.forced, true);
-  assert.equal(result.record.synthesis.usage.totalTokens, 5);
+  assert.equal("eligibility" in result.record, false);
+  assert.equal(result.record.synthesis.usage.inputTokens, 3);
+  assert.equal(result.record.synthesis.usage.outputTokens, 2);
   assert.equal(JSON.stringify(result.record).includes("owner context"), false);
   const persisted = await readFile(result.record.path, "utf8");
   assert.equal(persisted.includes("owner context"), false);
+});
+
+test("new Summary derivation rejects the retired session_start boundary", async () => {
+  await assert.rejects(
+    processRarebitSummary(undefined, { lifecycleBoundary: "session_start" }),
+    /Unsupported Summary lifecycle boundary/,
+  );
+  assert.throws(
+    () =>
+      composeRarebitSummaryPrompt(selectRarebits([]), {
+        lifecycleBoundary: "session_start",
+      }),
+    /Unsupported Summary lifecycle boundary/,
+  );
 });
 
 test("writer-aligned JSON Schema accepts every persisted Rarebit terminal status", async () => {
@@ -225,9 +240,11 @@ test("writer-aligned JSON Schema accepts every persisted Rarebit terminal status
       },
       { sessionRoot, rarebitRoot, ...config },
     );
-    const persisted = JSON.parse(
-      (await readFile(result.record.path, "utf8")).trim().split("\n").at(-1),
-    );
+    const persisted = (await readFile(result.record.path, "utf8"))
+      .trim()
+      .split("\n")
+      .map(JSON.parse)
+      .find((record) => record.type === "rarebit_summary");
     assert.equal(
       validate(persisted),
       true,

@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { extname, join, relative, resolve, sep } from "node:path";
 import { collectSnapshot, SessionCache, SessionCatalog } from "./collector.js";
 import {
-  projectRarebitSummaryAttention,
+  projectRarebitSummaryStatus,
   readSessionRarebitSummary,
   sanitizeRarebitSummaryDetail,
 } from "./rarebit-detail.js";
@@ -116,19 +116,19 @@ async function serveSnapshot(res, url, snapshotFor) {
   }
 }
 
-export function attachRarebitSummaryAttention(snapshot, readRarebitSummary) {
-  return {
-    ...snapshot,
-    sessions: (snapshot.sessions ?? []).map((session) => {
+export async function attachRarebitSummaryStatus(snapshot, readRarebitSummary) {
+  const sessions = await Promise.all(
+    (snapshot.sessions ?? []).map(async (session) => {
       let detail;
       try {
-        detail = readRarebitSummary(session);
+        detail = await readRarebitSummary(session);
       } catch {
         detail = { availability: "unavailable", reason: "sidecar_unreadable" };
       }
-      return { ...session, rarebitSummaryAttention: projectRarebitSummaryAttention(detail) };
+      return { ...session, rarebitSummaryStatus: projectRarebitSummaryStatus(detail) };
     }),
-  };
+  );
+  return { ...snapshot, sessions };
 }
 
 export function createTimelineServer({
@@ -158,7 +158,7 @@ export function createTimelineServer({
     query = { window: "24h" },
   } = {}) => {
     const key = `${query.window}:${query.cursor ?? ""}:${query.from ?? ""}:${query.to ?? ""}`;
-    const refreshed = attachRarebitSummaryAttention(
+    const refreshed = await attachRarebitSummaryStatus(
       await collect({
         ...collectionOptions,
         cache,
@@ -219,7 +219,7 @@ export function createTimelineServer({
         known.find((item) => item.id === sessionId) ??
         (snapshot ?? (await refresh())).sessions.find((item) => item.id === sessionId);
       if (!session) return json(res, 404, { error: "session_not_found" });
-      return json(res, 200, sanitizeRarebitSummaryDetail(readRarebitSummary(session)));
+      return json(res, 200, sanitizeRarebitSummaryDetail(await readRarebitSummary(session)));
     }
     if (req.method === "GET" && url.pathname === "/api/events") {
       res.writeHead(200, {

@@ -42,10 +42,10 @@ Lane geometry composes two independent metadata projections. User markers come f
 evidence, while every persisted assistant Request projects its raw `stopReason` as an outcome:
 `toolUse` is a small hollow circle, `stop` is a larger solid circle, and other terminal reasons are
 crosses while retaining their exact reason. Four SVG paths per lane preserve dense evidence without
-one focusable DOM node per Request. Rarebit Summary prose remains lazy, while a fresh explicit
-`summaryNeedsHumanAttention` Boolean may add one content-free, non-color-only lane annotation;
-absent, historical, stale, or unavailable values remain unknown and never alter runtime or marker
-semantics.
+one focusable DOM node per Request. Rarebit Summary prose remains lazy, while a fresh explicit the
+package-owned v4 current Summary projection may add a content-free lane annotation; only verified,
+non-source-pending `needs_attention` is salient; absent, historical, stale, or unavailable values
+remain unknown and never alter runtime or marker semantics.
 
 ## Deployed stack and process topology
 
@@ -56,7 +56,7 @@ the in-memory snapshot is a rebuildable projection. Timeline never opens PiTeams
 
 ```text
 ~/.pi/agent/sessions/**/*.jsonl ----+
-~/.pi/agent/rarebit/materializations+---->|    snapshot/trace/SSE + React SPA
+~/.pi/agent/rarebit/materializations-v4+->|    snapshot/trace/SSE + React SPA
 pi-teams/observation ---------------+
 tmux sockets + list-panes ----------+     |
 macOS process table ----------------+     +--> live-detail Node HTTP service

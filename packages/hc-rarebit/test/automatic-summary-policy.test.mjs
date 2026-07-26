@@ -276,7 +276,7 @@ test("only an exact current inhibition prevents automatic model work and persist
     },
   });
   assert.equal(inhibited.record.status, "inhibited");
-  assert.equal(inhibited.record.eligibility.eligible, true);
+  assert.equal("eligibility" in inhibited.record, false);
   assert.equal(inhibited.record.automaticSummaryPolicy.provider, "pi-teams");
   assert.equal(modelCalls, 0);
   assert.equal(queryCalls, 1);
@@ -447,6 +447,12 @@ test("both extension load orders inhibit lifecycle synthesis and status reports 
         isProjectTrusted: () => true,
       };
       handlers.get("session_start")({}, ctx);
+      handlers.get("input")({ source: "interactive", text: "trigger" }, ctx);
+      handlers.get("message_end")(
+        { message: { role: "user", content: "trigger" } },
+        ctx,
+      );
+      handlers.get("before_provider_request")({}, ctx);
       const path = rarebitMaterializationPath(fixture.sessionFile, {
         sessionRoot: fixture.sessionRoot,
         rarebitRoot: join(fixture.root, "rarebit"),

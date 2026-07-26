@@ -257,6 +257,8 @@ export async function runRarebitCli(options, dependencies = {}) {
         summaryPolicy: runtime.summaryPolicy,
         forceSynthesis: options.force === true,
         allowExternalSession: true,
+        rarebitRoot: dependencies.rarebitRoot,
+        sessionRoot: dependencies.sessionRoot,
         modelClient: {
           complete: async ({ prompt }) => ({
             text: await runtime.complete(prompt),
@@ -282,6 +284,8 @@ export async function runRarebitCli(options, dependencies = {}) {
       evidenceProvenance: "branch_user_fallback",
       titleDate: sessionDate(loaded.session, options.date),
       allowExternalSession: true,
+      rarebitRoot: dependencies.rarebitRoot,
+      sessionRoot: dependencies.sessionRoot,
       modelClient: {
         complete: async ({ prompt }) => ({
           text: await runtime.complete(prompt),

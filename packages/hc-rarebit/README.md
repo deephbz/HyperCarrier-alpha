@@ -23,8 +23,8 @@ Rarebit predicate, branch measurement and eligibility policy, prompt
 composition, output normalization, and deterministic job identity. The shared
 imperative services own model invocation, private append-only receipts, and
 cross-process dedupe for both Summary and Title. The Pi extension contributes
-lifecycle triggers, TUI notifications, and an explicit Session-label apply
-adapter; `hc-rarebit` contributes argument parsing, native-Session lookup, JSON
+lifecycle triggers, TUI notifications, an explicit Session-label apply adapter,
+and an optional Herdr recency HUD adapter; `hc-rarebit` contributes argument parsing, native-Session lookup, JSON
 output, and proposal-only Title behavior. Neither shell redefines selection,
 policy, prompts, model receipts, or persistence.
 
@@ -47,13 +47,15 @@ Configure a dedicated model rather than inheriting the interactive model:
 `ceil(all readable active-branch message characters / 4)`. `max_rarebit_ratio`
 is selected Rarebit characters divided by that same raw character denominator.
 Automatic synthesis requires both thresholds; it never silently falls back to
-the interactive `defaultModel`. The automatic lifecycle path materializes in
-detached work at session start, after persisted direct owner input, and after
-normal settlement. Each receipt preserves that lifecycle boundary: an
-`owner_request` Summary is always `user_requested/owner_request_recorded`,
-while settled/manual/start summaries classify complete selected evidence as
-`finished/all_requests_accomplished` or `needs_attention` with a decision,
-input, approval, blocker, or unfinished reason. Settled classification sees
+the interactive `defaultModel`. The only automatic lifecycle paths materialize
+in detached work after persisted direct owner input and after normal settlement.
+`session_start` (including reload or resume) initializes extension/session/title
+bookkeeping only: it never schedules a Summary, queries policy, resolves or
+calls a model, writes a receipt, or notifies. Each new receipt preserves its
+writable lifecycle boundary: an `owner_request` Summary is always
+`user_requested/owner_request_recorded`, while settled/manual summaries classify
+complete selected evidence as `finished/all_requests_accomplished` or
+`needs_attention` with a decision, input, approval, blocker, or unfinished reason. Settled classification sees
 only selected user and assistant boundary prose: tool calls/results are
 intentionally absent, so their absence is not evidence that work failed. A
 final assistant handoff that says or conventionally signals completion, such as
@@ -82,6 +84,11 @@ revalidate the exact active Session and unchanged prior title immediately
 before applying the local `YYYYMMDD-` label. Use Pi's native `/name` command
 for a literal title.
 
+When Pi runs under Herdr, the optional adapter reports `rarebit_user_age` and
+`rarebit_stop_age` metadata tokens from the latest selected user-role and
+assistant-stop occurrence. It refreshes every 30 seconds with a 90-second TTL;
+these are recency clocks only, not liveness, progress, or delivery state.
+
 The extension exposes only `/rarebit`, with `status`, `config`, `auto-title`,
 `title`, `summarize`, and `recall` subcommands. `/rarebit recall <prompt...>`
 is human-only: while Pi is idle, it writes the exact active-branch Rarebit
@@ -103,11 +110,10 @@ remains the durable default. Pi's native argument completion offers the
 subcommands, config keys, and `on`/`off` values from the same grammar used for
 parsing and usage help.
 
-Successful v3 receipts contain free-form `summary`, `sessionStatus`, and
-`statusReason`; they don't require Progress/Findings/Questions/Next-step
-sections. The legacy `projectRarebitSessionStatus` query projects one exact
-current selection; v1/v2 receipts remain readable historical evidence but
-project as `error/unsupported`.
+Successful v4 compact receipts contain free-form `summary`, `sessionStatus`,
+and `statusReason`; they don't require Progress/Findings/Questions/Next-step
+sections. Summary and Title derivations use the current v4 protocol, and no
+receipt contains branch-entry, occurrence, or payload arrays.
 
 Live consumers use the exported `projectRarebitArtifactState` producer state
 machine instead. Native Session JSONL owns the current branch and selection,
@@ -115,21 +121,32 @@ while the exact mirrored sidecar owns receipt status, Summary, and lifecycle
 lineage. Its typed input distinguishes `available`, `missing`, and `unreadable`
 for each artifact, and its result exposes sync state, flat projection,
 applicability, artifact references, and retry guidance. Owner-request receipts
-remain applicable through assistant continuations only when their persisted
-occurrence sequence is the strict current prefix and their final user occurrence
-is still the latest user occurrence. Only `agent_settled` ends that generation;
-exact `session_start` and `manual` receipts may assess an exact selection but do
-not settle it. Sidecar-only projections are explicitly source-pending, never
-claims of native currentness; session conflicts and malformed/legacy v3 inputs
-fail closed. The projector never reads Summary prose.
+remain applicable through assistant continuations only when the package
+recomputes their compact manifest reference as the strict current native prefix
+and their user anchor is still the latest user. Only `agent_settled` ends that generation; historical valid v4
+`session_start` receipts remain readable immutable evidence but cannot be newly
+derived, while `manual` receipts may assess an exact selection without settling it. Sidecar-only projections are explicitly source-pending, never
+claims of native currentness; session conflicts, malformed receipts, and
+unsupported protocol versions fail closed. The projector never reads Summary
+prose.
 
-Private append-only materializations mirror Session paths beneath
-`~/.pi/agent/rarebit/materializations/`; short-lived cross-process job leases
-live beneath `~/.pi/agent/rarebit/jobs/`. They retain no raw selected prose,
-prompt, provider response body, headers, or credentials.
+Private append-only v4 materializations mirror Session paths beneath
+`~/.pi/agent/rarebit/materializations-v4/`. Each compact receipt is followed by
+one `rarebit_head` containing its absolute UTF-8 byte offset, newline-inclusive
+length, and SHA-256 hash. `readRarebitCurrent` reads only a bounded file tail
+and the referenced receipt; `readRarebitHistory` is the explicit bounded audit
+path. A torn final tail leaves the preceding complete head current, while a
+complete invalid head fails closed as `sidecar_head_invalid`. Other
+materialization namespaces aren't read or translated. Job claims live beneath
+`~/.pi/agent/rarebit/jobs-v4/`. Receipts retain no raw selected prose, prompt,
+provider response body, headers, or credentials.
 Inhibition receipts retain only provider/reason, contract/freshness, and opaque
 identity/generation/association provenance.
 Directories are mode 0700; materialization and lease files are mode 0600.
+Session commit locks are opaque-token fences and are never reclaimed by age.
+If a process crash leaves `<sidecar>.commit-lock`, first verify that no Rarebit
+writer for that exact Session is alive, then remove only that lock file; normal
+writers otherwise fail closed rather than risking an ABA overwrite.
 
 ## CLI
 

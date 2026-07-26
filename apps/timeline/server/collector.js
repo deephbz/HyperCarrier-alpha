@@ -20,7 +20,7 @@ import {
   resolveAssociations,
 } from "./layered.js";
 
-export const SNAPSHOT_SCHEMA_VERSION = 4;
+export const SNAPSHOT_SCHEMA_VERSION = 5;
 const PI_TEAMS_PROCESS_START_TOLERANCE_MS = 2_500;
 const SOLO_SESSION_STARTUP_GRACE_MS = 120_000;
 const TMUX_FIELD_SEPARATOR = "::PI_TIMELINE_FIELD::";

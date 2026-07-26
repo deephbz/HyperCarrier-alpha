@@ -898,9 +898,8 @@ h1 {
   line-height: 1.25;
   text-align: center;
 }
-.summary-stale,
 .summary-unavailable,
-.summary-legacy {
+.summary-unknown {
   border-style: dashed;
 }
 .attention-assessment {
@@ -947,8 +946,12 @@ h1 {
   font-size: var(--text-2xs);
   line-height: 1.4;
 }
-.attention-needed .attention-assessment-symbol {
+.attention-needed .attention-assessment-symbol,
+.attention-attention .attention-assessment-symbol {
   color: #9a3412;
+}
+.attention-diagnostic .attention-assessment-symbol {
+  color: #991b1b;
 }
 .attention-clear .attention-assessment-symbol {
   border-radius: 50%;

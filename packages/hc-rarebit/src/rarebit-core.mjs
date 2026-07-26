@@ -10,12 +10,24 @@ export const RAREBIT_SUMMARY_PROMPT_VERSION = "rarebit-summary-v4";
 export const RAREBIT_TITLE_PROMPT_VERSION = "rarebit-title-v1";
 export const RAREBIT_JOB_IDENTITY_VERSION = "rarebit-job-identity-v2";
 
-export const RAREBIT_SUMMARY_LIFECYCLE_BOUNDARIES = Object.freeze([
+// v4 receipts are immutable historical evidence, so readers retain the former
+// session_start boundary. New derivation is intentionally narrower: process
+// attachment is not a Session-evidence transition.
+export const RAREBIT_SUMMARY_RECEIPT_LIFECYCLE_BOUNDARIES = Object.freeze([
   "owner_request",
   "agent_settled",
   "session_start",
   "manual",
 ]);
+export const RAREBIT_SUMMARY_WRITABLE_LIFECYCLE_BOUNDARIES = Object.freeze([
+  "owner_request",
+  "agent_settled",
+  "manual",
+]);
+// Backwards-compatible reader alias; writers must use the explicit writable
+// boundary set above.
+export const RAREBIT_SUMMARY_LIFECYCLE_BOUNDARIES =
+  RAREBIT_SUMMARY_RECEIPT_LIFECYCLE_BOUNDARIES;
 
 export const RAREBIT_SESSION_STATUS_REASONS = Object.freeze({
   user_requested: ["owner_request_recorded"],
@@ -268,7 +280,9 @@ export function composeRarebitSummaryPrompt(
   } = {},
 ) {
   void promptVersion;
-  if (!RAREBIT_SUMMARY_LIFECYCLE_BOUNDARIES.includes(lifecycleBoundary))
+  if (
+    !RAREBIT_SUMMARY_WRITABLE_LIFECYCLE_BOUNDARIES.includes(lifecycleBoundary)
+  )
     throw new TypeError("Unsupported Summary lifecycle boundary");
   const ownerRequest = lifecycleBoundary === "owner_request";
   return [

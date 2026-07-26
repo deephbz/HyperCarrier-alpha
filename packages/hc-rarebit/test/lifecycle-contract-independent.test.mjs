@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { access, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -101,6 +101,53 @@ test("provider prompt exposes semantic ordered messages, not machine lineage met
   assert.doesNotMatch(
     prompt,
     /\/private\/session-entry|machine-producer-identity/,
+  );
+});
+
+test("eligible populated session_start only initializes bookkeeping and derives no Summary", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hc-rarebit-start-"));
+  const sessionFile = join(root, "session.jsonl");
+  const handlers = new Map();
+  const notices = [];
+  let policyCalls = 0;
+  let modelCalls = 0;
+  registerPiRarebit(
+    { on: (event, handler) => handlers.set(event, handler) },
+    {
+      sessionRoot: root,
+      rarebitRoot: join(root, "rarebit"),
+      summaryPolicy: { minTotalLength: 0, maxRarebitRatio: 1 },
+      model: { provider: "test", id: "cheap" },
+      queryAutomaticSummaryPolicy: async () => {
+        policyCalls += 1;
+        return { decision: "abstain", queryStatus: "test" };
+      },
+      modelClient: {
+        complete: async () => {
+          modelCalls += 1;
+          return { text: "must not run" };
+        },
+      },
+    },
+  );
+  const ctx = {
+    ...contextFor(branchWithMachineMetadata(), sessionFile),
+    hasUI: true,
+    ui: { notify: (text) => notices.push(text) },
+  };
+  handlers.get("session_start")({}, ctx);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(policyCalls, 0);
+  assert.equal(modelCalls, 0);
+  assert.deepEqual(notices, []);
+  await assert.rejects(
+    access(
+      rarebitMaterializationPath(sessionFile, {
+        sessionRoot: root,
+        rarebitRoot: join(root, "rarebit"),
+      }),
+    ),
+    { code: "ENOENT" },
   );
 });
 
@@ -450,14 +497,18 @@ test("TUI notices state input cardinality, clearly estimated trigger tokens, and
     },
   );
 
-  handlers.get("session_start")(
-    {},
-    {
-      ...contextFor(branchWithMachineMetadata(), outputPath),
-      hasUI: true,
-      ui: { notify: (text, level) => notices.push({ text, level }) },
-    },
+  const ctx = {
+    ...contextFor(branchWithMachineMetadata(), outputPath),
+    hasUI: true,
+    ui: { notify: (text, level) => notices.push({ text, level }) },
+  };
+  handlers.get("session_start")({}, ctx);
+  handlers.get("input")({ source: "interactive", text: "trigger" }, ctx);
+  handlers.get("message_end")(
+    { message: { role: "user", content: "trigger" } },
+    ctx,
   );
+  handlers.get("before_provider_request")({}, ctx);
   await waitFor(
     () => notices.length >= 2,
     "detached synthesis did not report both notices",
@@ -501,14 +552,18 @@ test("updated notice never substitutes the local estimate for absent provider us
     },
   );
 
-  handlers.get("session_start")(
-    {},
-    {
-      ...contextFor(branchWithMachineMetadata(), outputPath),
-      hasUI: true,
-      ui: { notify: (text, level) => notices.push({ text, level }) },
-    },
+  const ctx = {
+    ...contextFor(branchWithMachineMetadata(), outputPath),
+    hasUI: true,
+    ui: { notify: (text, level) => notices.push({ text, level }) },
+  };
+  handlers.get("session_start")({}, ctx);
+  handlers.get("input")({ source: "interactive", text: "trigger" }, ctx);
+  handlers.get("message_end")(
+    { message: { role: "user", content: "trigger" } },
+    ctx,
   );
+  handlers.get("before_provider_request")({}, ctx);
   await waitFor(
     () => notices.length >= 2,
     "detached synthesis did not report both notices",

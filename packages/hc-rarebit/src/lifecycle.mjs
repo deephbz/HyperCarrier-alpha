@@ -16,11 +16,7 @@ function messageText(event) {
     .join("\n");
 }
 
-function snapshotMaterializationContext(
-  ctx,
-  mayNotify = () => true,
-  lifecycleBoundary = "session_start",
-) {
+function snapshotMaterializationContext(ctx, mayNotify, lifecycleBoundary) {
   const sessionManager = ctx?.sessionManager;
   const header = sessionManager?.getHeader?.();
   const branch = sessionManager?.getBranch?.();
@@ -123,6 +119,7 @@ export function registerRarebitLifecycle(pi, schedule, options = {}) {
     followUp: [],
   };
   let persistedUserInputAwaitingProvider = false;
+  let selectedUserMessageAwaitingProvider = false;
   let pendingLifecycleBoundary = "owner_request";
   let normalStopAwaitingSettlement = false;
   let firstOwnerInputAwaitingProvider;
@@ -175,6 +172,7 @@ export function registerRarebitLifecycle(pi, schedule, options = {}) {
     options.onSessionStart?.(ctx);
     clearInputOrigins();
     persistedUserInputAwaitingProvider = false;
+    selectedUserMessageAwaitingProvider = false;
     normalStopAwaitingSettlement = false;
     firstOwnerInputAwaitingProvider = undefined;
     ownerMessageSeen = (ctx?.sessionManager?.getBranch?.() ?? []).some(
@@ -182,14 +180,9 @@ export function registerRarebitLifecycle(pi, schedule, options = {}) {
     );
     sessionGeneration += 1;
     sessionLive = true;
-    const generation = sessionGeneration;
-    schedule(
-      snapshotMaterializationContext(
-        ctx,
-        () => sessionLive && sessionGeneration === generation,
-        "session_start",
-      ),
-    );
+    // Session attachment initializes exact-session and title bookkeeping only.
+    // It must never derive a Summary: resume/reload changes the adapter, not
+    // the selected Session evidence.
   });
 
   pi.on("agent_start", () => {
@@ -217,6 +210,10 @@ export function registerRarebitLifecycle(pi, schedule, options = {}) {
 
   pi.on("message_end", (event) => {
     if (!isUserMessage(event)) return;
+    // Pi invokes this hook before it appends the entry. The later provider
+    // boundary is the first point where an activity consumer may read the
+    // new exact active branch without missing this selected user occurrence.
+    selectedUserMessageAwaitingProvider = true;
     const origin = consumeInputOrigin(messageText(event));
     if (isUserSubmissionOrigin(origin)) {
       persistedUserInputAwaitingProvider = true;
@@ -237,7 +234,23 @@ export function registerRarebitLifecycle(pi, schedule, options = {}) {
     }
   });
 
+  pi.on("session_tree", (event, ctx) => {
+    try {
+      options.onSessionTree?.(ctx, event);
+    } catch {
+      // Tree recency is an optional projection, not materialization truth.
+    }
+  });
+
   pi.on("before_provider_request", (_event, ctx) => {
+    if (selectedUserMessageAwaitingProvider) {
+      selectedUserMessageAwaitingProvider = false;
+      try {
+        options.onSelectedUserPersisted?.(ctx);
+      } catch {
+        // Activity/UI projections are optional and must not alter provider I/O.
+      }
+    }
     if (!persistedUserInputAwaitingProvider) return;
     persistedUserInputAwaitingProvider = false;
     // Pi persists message_end(user) before this provider boundary. Snapshot
@@ -273,11 +286,17 @@ export function registerRarebitLifecycle(pi, schedule, options = {}) {
     if (terminalAssistant?.stopReason === "aborted") {
       clearInputOrigins();
       persistedUserInputAwaitingProvider = false;
+      selectedUserMessageAwaitingProvider = false;
       firstOwnerInputAwaitingProvider = undefined;
     }
   });
 
   pi.on("agent_settled", (_event, ctx) => {
+    try {
+      options.onAgentSettled?.(ctx);
+    } catch {
+      // Activity/UI projections are optional and must not alter settlement.
+    }
     if (!normalStopAwaitingSettlement) return;
     normalStopAwaitingSettlement = false;
 
@@ -294,6 +313,7 @@ export function registerRarebitLifecycle(pi, schedule, options = {}) {
   pi.on("session_shutdown", () => {
     clearInputOrigins();
     persistedUserInputAwaitingProvider = false;
+    selectedUserMessageAwaitingProvider = false;
     firstOwnerInputAwaitingProvider = undefined;
     normalStopAwaitingSettlement = false;
     sessionLive = false;
