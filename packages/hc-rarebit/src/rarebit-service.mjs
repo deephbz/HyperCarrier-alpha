@@ -1,5 +1,6 @@
 import {
   DEFAULT_RAREBIT_SUMMARY_POLICY,
+  RAREBIT_SUMMARY_LIFECYCLE_BOUNDARIES,
   RAREBIT_SUMMARY_PROMPT_VERSION,
   RAREBIT_TITLE_PROMPT_VERSION,
   composeRarebitSummaryPrompt,
@@ -30,8 +31,8 @@ import {
 } from "./automatic-summary-policy.mjs";
 
 export const RAREBIT_IMPLEMENTATION_VERSION = "hc-rarebit-v1";
-export const RAREBIT_SUMMARY_IMPLEMENTATION_VERSION = "hc-rarebit-summary-v2";
-export const RAREBIT_SUMMARY_SCHEMA_VERSION = 2;
+export const RAREBIT_SUMMARY_IMPLEMENTATION_VERSION = "hc-rarebit-summary-v3";
+export const RAREBIT_SUMMARY_SCHEMA_VERSION = 3;
 export const DEFAULT_RAREBIT_MAX_PROMPT_CHARS = 200_000;
 
 function sessionFileFrom(ctx) {
@@ -94,6 +95,10 @@ export async function processRarebitSummary(ctx, config = {}) {
   const eligibility = evaluateRarebitSummaryEligibility(measurement, policy);
   const forceSynthesis = config.forceSynthesis === true;
   const synthesisMode = forceSynthesis ? "forced" : "automatic";
+  const lifecycleBoundary =
+    config.lifecycleBoundary ?? (forceSynthesis ? "manual" : "session_start");
+  if (!RAREBIT_SUMMARY_LIFECYCLE_BOUNDARIES.includes(lifecycleBoundary))
+    throw new TypeError("Unsupported Summary lifecycle boundary");
   const branchRef = branchIdentity(branch);
   let automaticSummaryPolicy = {
     decision: "abstain",
@@ -156,6 +161,7 @@ export async function processRarebitSummary(ctx, config = {}) {
     selection,
     policy,
     inputPolicy: inputCoveragePolicy,
+    lifecycleBoundary,
     promptVersion,
     model: modelResolution.model,
   });
@@ -177,6 +183,7 @@ export async function processRarebitSummary(ctx, config = {}) {
     implementationVersion:
       config.implementationVersion ?? RAREBIT_SUMMARY_IMPLEMENTATION_VERSION,
     synthesisMode,
+    lifecycleBoundary,
     inputCoveragePolicy,
     jobId,
     sessionId,
@@ -239,7 +246,10 @@ export async function processRarebitSummary(ctx, config = {}) {
         }),
       };
     }
-    const prompt = composeRarebitSummaryPrompt(selection, { promptVersion });
+    const prompt = composeRarebitSummaryPrompt(selection, {
+      promptVersion,
+      lifecycleBoundary,
+    });
     if (prompt.length > maxPromptChars) {
       return {
         duplicate: false,
@@ -275,14 +285,27 @@ export async function processRarebitSummary(ctx, config = {}) {
     const synthesisResult = normalizeRarebitSummarySynthesis(
       extractModelText(response),
     );
+    if (
+      synthesisResult.sessionStatus === "user_requested" &&
+      lifecycleBoundary !== "owner_request"
+    )
+      throw new TypeError(
+        "user_requested is legal only at the owner_request lifecycle boundary",
+      );
     return {
       duplicate: false,
       record: await settleRarebitJob(reservation, {
         ...base,
         status: "ok",
         summary: synthesisResult.summary,
-        summaryNeedsHumanAttention:
-          synthesisResult.summaryNeedsHumanAttention,
+        sessionStatus:
+          lifecycleBoundary === "owner_request"
+            ? "user_requested"
+            : synthesisResult.sessionStatus,
+        statusReason:
+          lifecycleBoundary === "owner_request"
+            ? "owner_request_recorded"
+            : synthesisResult.statusReason,
         synthesis: extractRarebitSynthesisReceipt(response, {
           requestedModel: modelResolution.model,
           startedAt,

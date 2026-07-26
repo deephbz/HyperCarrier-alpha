@@ -20,12 +20,15 @@ import {
   laneContextPresentation,
   laneDisplayLabel,
   laneIdentityEmphasis,
+  laneMatchesQuery,
+  laneSelectionKey,
   lanesFromSnapshot,
   laneSecondaryLabel,
   mergeSnapshotPages,
   position,
+  primaryProcess,
   runtimePresentation,
-  sessionMatchesQuery,
+  tmuxLocation,
   summaryAttentionPresentation,
   windowHours,
 } from "./model";
@@ -35,7 +38,9 @@ import type {
   FilterMode,
   GroupMode,
   Lane,
+  ProcessLane,
   RarebitSummaryAttention,
+  SessionLane,
   Snapshot,
   SnapshotWindow,
 } from "./types";
@@ -156,18 +161,30 @@ function filterVisibleLanes({
 }) {
   return filterLanesByBoundedTime(lanes, from, to).filter(
     (lane) =>
-      (!alive || Boolean(lane.live)) &&
+      (!alive || lane.kind === "process" || Boolean(lane.primaryProcess)) &&
       (!filterValue || filterKey(lane, filterMode) === filterValue) &&
-      sessionMatchesQuery(lane.session, query),
+      laneMatchesQuery(lane, query),
   );
 }
 
 function groupedLanes(lanes: Lane[], mode: GroupMode) {
   if (!lanes.length) return [];
   if (mode === "context") {
+    const sessions = lanes.filter((lane): lane is SessionLane => lane.kind === "session");
+    const processes = lanes.filter((lane): lane is ProcessLane => lane.kind === "process");
     return [
-      ["Intelligent", { label: "Intelligent", lanes: [...lanes].sort(compareIntelligentLanes) }],
-    ] as const;
+      ...(sessions.length
+        ? [
+            [
+              "Intelligent",
+              { label: "Intelligent", lanes: [...sessions].sort(compareIntelligentLanes) },
+            ],
+          ]
+        : []),
+      ...(processes.length
+        ? [["Unbound live processes", { label: "Unbound live processes", lanes: processes }]]
+        : []),
+    ] as Array<[string, { label: string; lanes: Lane[] }]>;
   }
   const groups = new Map<string, { label: string; lanes: Lane[] }>();
   for (const lane of lanes) {
@@ -430,8 +447,8 @@ function LaneRow({
   selected,
   onSelect,
 }: {
-  lane: Lane;
-  visibleLanes: Lane[];
+  lane: SessionLane;
+  visibleLanes: SessionLane[];
   domain: [number, number];
   selected: boolean;
   onSelect: () => void;
@@ -484,7 +501,9 @@ function LaneRow({
                   <Fragment key={`${part.coordinate}:${part.value}`}>
                     {index > 0 && (
                       <span className="lane-context-separator" aria-hidden="true">
-                        {" | "}
+                        {index === 1 && context.identitySource === "verified-team-member"
+                          ? " / "
+                          : " | "}
                       </span>
                     )}
                     <span
@@ -500,7 +519,12 @@ function LaneRow({
           </span>
         </button>
         <div className="lane-secondary">
-          <small>{secondary}</small>
+          <small>
+            {lane.primaryProcess?.link
+              ? `${lane.primaryProcess.link.grade === "provider_verified" ? "Provider-verified link" : "Heuristic link"} · `
+              : ""}
+            {secondary}
+          </small>
           {lane.session.links && (
             <nav className="lane-links" aria-label={`Inspect ${alias}`}>
               <a
@@ -944,11 +968,7 @@ function OperationalOverview({
       </p>
       <div className="overview-grid">
         <OverviewFact label={details[0][0]} value={details[0][1]} />
-        <OverviewFact
-          label={details[1][0]}
-          value={details[1][1]}
-          detail={lane.live?.activeTool ? `Current tool: ${lane.live.activeTool}` : undefined}
-        />
+        <OverviewFact label={details[1][0]} value={details[1][1]} />
         <OverviewFact
           label="Rarebit Summary attention"
           value={assessment.label}
@@ -1082,12 +1102,13 @@ function DiagnosticsDisclosure({
   lane,
   summaryDetail,
 }: {
-  lane: Lane;
+  lane: SessionLane;
   summaryDetail: RarebitSummaryDetail | null;
 }) {
   const details = inspectorDiagnosticDetails(lane);
-  const tmux = lane.live?.pane;
-  const model = lane.live?.model ?? lane.requests.at(-1)?.model ?? "Unknown";
+  const process = primaryProcess(lane);
+  const tmux = tmuxLocation(process);
+  const model = lane.requests.at(-1)?.model ?? "Unknown";
   const snapshotJob = lane.session.rarebitSummaryAttention?.source.jobId;
   const detailJob = summaryDetail?.jobId;
   const jobMismatch = Boolean(snapshotJob && detailJob && snapshotJob !== detailJob);
@@ -1104,16 +1125,16 @@ function DiagnosticsDisclosure({
             <CopyablePair label="Model" value={model} />
           </dl>
         </section>
-        {lane.live?.coordination ? (
+        {process?.coordination ? (
           <section>
             <p className="eyebrow">Pi Team evidence</p>
             <dl>
-              <CopyablePair label="Team" value={lane.live.coordination.teamName} />
-              <CopyablePair label="Agent" value={lane.live.coordination.agentName} />
-              <CopyablePair label="Role" value={lane.live.coordination.role} />
-              <CopyablePair label="Team source" value={lane.live.coordination.source} />
+              <CopyablePair label="Team" value={process.coordination.teamName} />
+              <CopyablePair label="Agent" value={process.coordination.agentName} />
+              <CopyablePair label="Role" value={process.coordination.role} />
+              <CopyablePair label="Team source" value={process.coordination.source} />
             </dl>
-            <InspectorTrafficAction teamName={lane.live.coordination.teamName} />
+            <InspectorTrafficAction teamName={process.coordination.teamName} />
           </section>
         ) : null}
         {tmux ? (
@@ -1147,7 +1168,7 @@ function DiagnosticsDisclosure({
   );
 }
 
-function Inspector({ lane, onClose }: { lane: Lane; onClose: () => void }) {
+function Inspector({ lane, onClose }: { lane: SessionLane; onClose: () => void }) {
   const context = laneContextPresentation(lane);
   const summaryDetail = useRarebitSummaryDetail(lane.session.id);
   const inspectorAttention = summaryDetail?.attention ?? lane.session.rarebitSummaryAttention;
@@ -1174,6 +1195,104 @@ function Inspector({ lane, onClose }: { lane: Lane; onClose: () => void }) {
       <OperationalOverview lane={lane} attention={inspectorAttention} />
       <RarebitSummary detail={summaryDetail} attention={inspectorAttention} />
       <DiagnosticsDisclosure lane={lane} summaryDetail={summaryDetail} />
+    </aside>
+  );
+}
+
+function processLinkLabel(process: ProcessLane["process"]) {
+  if (!process.link) return "No verified link";
+  return process.link.grade === "provider_verified" ? "Provider-verified link" : "Heuristic link";
+}
+
+export function ProcessLaneRow({
+  lane,
+  selected,
+  onSelect,
+}: {
+  lane: ProcessLane;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const { process } = lane;
+  const locations =
+    process.locations.map((location) => location.provider).join(", ") || "OS observation";
+  return (
+    <div className={`lane process-lane ${selected ? "selected" : ""}`}>
+      <div className="lane-label">
+        <button
+          className="lane-select"
+          onClick={onSelect}
+          aria-label={`Process ${process.pid}, running, work state unavailable`}
+        >
+          <strong>
+            Running · PID {process.pid} · {processLinkLabel(process)}
+          </strong>
+          <small>
+            {process.processStartedAt ?? process.observedAt} ·{" "}
+            {process.cwd ?? "working directory unavailable"}
+          </small>
+          <small>
+            {locations}
+            {process.issues.length
+              ? ` · ${process.issues.map((entry) => entry.message).join(", ")}`
+              : ""}
+          </small>
+        </button>
+      </div>
+      <div
+        className="lane-track"
+        aria-label={`Process ${process.pid}; no Session markers`}
+        onClick={onSelect}
+      />
+    </div>
+  );
+}
+
+export function ProcessInspector({ lane, onClose }: { lane: ProcessLane; onClose: () => void }) {
+  const { process } = lane;
+  return (
+    <aside className="inspector">
+      <button className="close" onClick={onClose} aria-label="Close inspector">
+        ×
+      </button>
+      <p className="eyebrow">Process observation</p>
+      <h2 className="inspector-context">PID {process.pid}</h2>
+      <p>Running OS process; work state is unavailable. This is not Session detail.</p>
+      <dl className="session-identity">
+        <CopyablePair label="Process instance" value={process.id} />
+        <CopyablePair label="PID" value={process.pid} />
+        <CopyablePair label="Started" value={process.processStartedAt ?? "Unknown"} />
+        <CopyablePair label="Observed" value={process.observedAt} />
+        <CopyablePair label="Working directory" value={process.cwd ?? "Unavailable"} />
+        <CopyablePair label="Link" value={processLinkLabel(process)} />
+        {process.link ? (
+          <>
+            <CopyablePair label="Associated Session" value={process.link.sessionId} />
+            <CopyablePair label="Link method" value={process.link.method} />
+            <CopyablePair label="Link observed" value={process.link.observedAt} />
+            <CopyablePair label="Link provenance" value={process.link.provenance.join(", ")} />
+          </>
+        ) : null}
+        <CopyablePair
+          label="Locations"
+          value={
+            process.locations.map((location) => location.provider).join(", ") ||
+            "No qualified location"
+          }
+        />
+        <CopyablePair
+          label="Coordination"
+          value={
+            process.coordination
+              ? `${process.coordination.teamName} / ${process.coordination.agentName}`
+              : "Unavailable"
+          }
+        />
+        <CopyablePair
+          label="Issues"
+          value={process.issues.map((entry) => entry.message).join(", ") || "None observed"}
+        />
+      </dl>
     </aside>
   );
 }
@@ -1325,17 +1444,19 @@ export function App() {
     [filtered, rangeHours, now, customStartMs, customEndMs],
   );
   const groups = useMemo(() => groupedLanes(filtered, group), [filtered, group]);
-  const selectedLane = all.find((l) => l.session.id === selected);
-  const rarebitCount = filtered.reduce((total, lane) => total + lane.rarebits.length, 0);
+  const selectedLane = all.find((lane) => laneSelectionKey(lane) === selected);
+  const rarebitCount = filtered.reduce(
+    (total, lane) => total + (lane.kind === "session" ? lane.rarebits.length : 0),
+    0,
+  );
   const loadOlder = async () => {
-    if (selection.window !== "all" || loadingOlder) return;
     const cursor = olderPages.at(-1)?.page?.nextCursor ?? snapshot?.page?.nextCursor;
-    if (!cursor) return;
+    if (selection.window !== "all" || loadingOlder || !cursor) return;
     setLoadingOlder(true);
     try {
       const params = new URLSearchParams({ window: "all", before: cursor });
-      if (Number.isFinite(customStartMs)) params.set("from", String(customStartMs));
-      if (Number.isFinite(customEndMs)) params.set("to", String(customEndMs));
+      addTimeParameter(params, "from", finiteTime(customStartMs));
+      addTimeParameter(params, "to", finiteTime(customEndMs));
       const response = await fetch(`/api/snapshot?${params.toString()}`);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const page = parseTimelineSnapshot(await response.json());
@@ -1361,7 +1482,13 @@ export function App() {
           </div>
           <div className="headline-metrics">
             <span>
-              <b>{filtered.filter((l) => l.live).length}</b> live
+              <b>
+                {
+                  filtered.filter((lane) => lane.kind === "process" || Boolean(lane.primaryProcess))
+                    .length
+                }
+              </b>{" "}
+              live
             </span>
             {snapshot && !compatibilityError ? (
               <span>{countLabel(rarebitCount, "Rarebit")}</span>
@@ -1407,7 +1534,7 @@ export function App() {
         />
         <TrafficLaunch
           snapshot={snapshot}
-          filtered={filtered}
+          filtered={filtered.filter((lane): lane is SessionLane => lane.kind === "session")}
           onShowAll={() => {
             setWindowMode("all");
             setCustomStart("");
@@ -1449,27 +1576,48 @@ export function App() {
                   <div className="group-head">
                     <strong>{value.label}</strong>
                     <span>
-                      {countLabel(value.lanes.length, "session")} ·{" "}
-                      {value.lanes.filter((l) => l.live).length} live ·{" "}
+                      {countLabel(value.lanes.length, "lane")} ·{" "}
+                      {
+                        value.lanes.filter(
+                          (lane) => lane.kind === "process" || Boolean(lane.primaryProcess),
+                        ).length
+                      }{" "}
+                      live ·{" "}
                       {countLabel(
-                        value.lanes.reduce((total, lane) => total + lane.rarebits.length, 0),
+                        value.lanes.reduce(
+                          (total, lane) =>
+                            total + (lane.kind === "session" ? lane.rarebits.length : 0),
+                          0,
+                        ),
                         "Rarebit",
                       )}
                     </span>
                   </div>
-                  {value.lanes.map((l) => (
-                    <LaneRow
-                      key={l.session.id}
-                      lane={l}
-                      visibleLanes={filtered}
-                      domain={domain}
-                      selected={selected === l.session.id}
-                      onSelect={() => setSelected(l.session.id)}
-                    />
-                  ))}
+                  {value.lanes.map((lane) =>
+                    lane.kind === "session" ? (
+                      <LaneRow
+                        key={laneSelectionKey(lane)}
+                        lane={lane}
+                        visibleLanes={filtered.filter(
+                          (item): item is SessionLane => item.kind === "session",
+                        )}
+                        domain={domain}
+                        selected={selected === laneSelectionKey(lane)}
+                        onSelect={() => setSelected(laneSelectionKey(lane))}
+                      />
+                    ) : (
+                      <ProcessLaneRow
+                        key={laneSelectionKey(lane)}
+                        lane={lane}
+                        selected={selected === laneSelectionKey(lane)}
+                        onSelect={() => setSelected(laneSelectionKey(lane))}
+                      />
+                    ),
+                  )}
                 </section>
               ))
             )}
+
             {hasOlder && (
               <div className="load-older">
                 <button onClick={() => void loadOlder()} disabled={loadingOlder}>
@@ -1478,7 +1626,12 @@ export function App() {
               </div>
             )}
           </div>
-          {selectedLane && <Inspector lane={selectedLane} onClose={() => setSelected(null)} />}
+          {selectedLane?.kind === "session" && (
+            <Inspector lane={selectedLane} onClose={() => setSelected(null)} />
+          )}
+          {selectedLane?.kind === "process" && (
+            <ProcessInspector lane={selectedLane} onClose={() => setSelected(null)} />
+          )}
         </div>
         <footer>
           <span>User + response outcomes · Rarebit evidence remains separate · metadata only</span>

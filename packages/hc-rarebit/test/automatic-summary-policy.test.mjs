@@ -261,7 +261,8 @@ test("only an exact current inhibition prevents automatic model work and persist
           text: JSON.stringify({
             summary:
               "Progress: done | Findings: exact | Questions/Requests: none | Next step: inspect",
-            summaryNeedsHumanAttention: false,
+            sessionStatus: "finished",
+            statusReason: "all_requests_accomplished",
           }),
         };
       },
@@ -354,7 +355,8 @@ test("injected incomplete or stale inhibitions fail open at the service boundary
               text: JSON.stringify({
                 summary:
                   "Progress: synthesized | Findings: fail open | Questions/Requests: none | Next step: inspect",
-                summaryNeedsHumanAttention: false,
+                sessionStatus: "finished",
+                statusReason: "all_requests_accomplished",
               }),
             };
           },
@@ -383,7 +385,8 @@ test("intrinsic ineligibility and manual force bypass the external policy query"
           text: JSON.stringify({
             summary:
               "Progress: manual | Findings: works | Questions/Requests: none | Next step: inspect",
-            summaryNeedsHumanAttention: false,
+            sessionStatus: "finished",
+            statusReason: "all_requests_accomplished",
           }),
         };
       },

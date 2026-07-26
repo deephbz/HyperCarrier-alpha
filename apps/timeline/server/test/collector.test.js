@@ -24,8 +24,6 @@ import {
   queryProcesses,
   queryTmux,
   readSessionCatalogMetadata,
-  readLifecycleLeases,
-  readLiveSidecars,
   selectSessionWindow,
 } from "../collector.js";
 
@@ -333,10 +331,10 @@ test("tmux window binding refuses duplicate named sessions in one cwd", () => {
   assert.equal(agent.sessionBinding, undefined);
 });
 
-test("solo pre-lifecycle Pi binds one Session created 47 seconds after process start", () => {
+test("solo Pi binds one Session created 47 seconds after process start", () => {
   const workState = {
     availability: "unobserved",
-    reason: "lifecycle_evidence_unavailable",
+    reason: "process_only_observation",
   };
   const agent = {
     pid: 77129,
@@ -439,141 +437,6 @@ test("same-second teammate spawn batch receives distinct session IDs by stable o
   assert.ok(agents.every((item) => item.sessionConfidence === "inferred_process_start_batch"));
 });
 
-test("sidecars require a live process, valid lease, pane, and ancestry", () => {
-  const root = mkdtempSync(join(tmpdir(), "pi-sidecar-"));
-  const pane = parseTmuxPanes(paneLine, "/tmp/a")[0];
-  const processes = [
-    { pid: 100, ppid: 1, tty: "t", command: "zsh" },
-    { pid: 120, ppid: 100, tty: "t", command: "pi" },
-  ];
-  const base = {
-    schemaVersion: 1,
-    processInstanceId: "host:120:1",
-    processStartedAt: "2026-07-11T10:00:00.000Z",
-    pid: 120,
-    sessionId: "s1",
-    heartbeatAt: "2026-07-11T12:00:00.000Z",
-    leaseMs: 15_000,
-    model: { provider: "test", id: "safe-model" },
-    unexpected: "SIDECAR_SECRET",
-    tmux: { serverSocket: "/tmp/a", paneId: "%3" },
-  };
-  writeFileSync(join(root, "good.json"), JSON.stringify(base));
-  writeFileSync(
-    join(root, "stale.json"),
-    JSON.stringify({ ...base, processInstanceId: "old", heartbeatAt: "2026-07-11T11:00:00.000Z" }),
-  );
-  writeFileSync(
-    join(root, "future.json"),
-    JSON.stringify({
-      ...base,
-      processInstanceId: "future",
-      heartbeatAt: "2026-07-11T13:00:00.000Z",
-      leaseMs: 999_999_999,
-    }),
-  );
-  writeFileSync(join(root, "bad.json"), "{");
-  const result = readLiveSidecars({
-    dir: root,
-    now: Date.parse("2026-07-11T12:00:10Z"),
-    panes: [pane],
-    processes,
-    alive: () => true,
-  });
-  assert.equal(result.accepted.length, 1);
-  assert.deepEqual(result.rejected.map((item) => item.reason).sort(), [
-    "lease_expired",
-    "lease_expired",
-    "malformed_json",
-  ]);
-  assert.equal(result.accepted[0].model, "safe-model");
-  assert.equal(JSON.stringify(result.accepted).includes("SIDECAR_SECRET"), false);
-  const expired = readLiveSidecars({
-    dir: root,
-    now: Date.parse("2026-07-11T12:00:16Z"),
-    panes: [pane],
-    processes,
-    alive: () => true,
-  });
-  assert.equal(expired.accepted.length, 0);
-});
-
-test("lifecycle event logs materialize an exact leased live record", () => {
-  const root = mkdtempSync(join(tmpdir(), "pi-events-"));
-  const pane = parseTmuxPanes(paneLine, "/tmp/a")[0];
-  const events = [
-    {
-      type: "process_started",
-      processBootId: "boot",
-      pid: 120,
-      processStartedAt: "2026-07-11T10:00:00Z",
-      at: "2026-07-11T10:00:00Z",
-      cwd: "/repo",
-      tmux: { serverSocket: "/tmp/a", paneId: "%3" },
-    },
-    {
-      type: "session_attached",
-      at: "2026-07-11T11:00:00Z",
-      sessionId: "s1",
-      sessionFile: "/sessions/s1.jsonl",
-      name: "agent-a",
-      cwd: "/repo",
-      tmux: { serverSocket: "/tmp/a", paneId: "%3" },
-    },
-    { type: "state_observed", at: "2026-07-11T12:00:00Z", state: "tool", tool: "bash" },
-    {
-      type: "heartbeat",
-      at: "2026-07-11T12:00:05Z",
-      leaseMs: 15_000,
-      sessionId: "s1",
-      state: "tool",
-      context: { tokens: 10, window: 100, percent: 10 },
-    },
-  ].map((event) => ({ schemaVersion: 1, ...event }));
-  writeFileSync(join(root, "boot.jsonl"), events.map(JSON.stringify).join("\n"));
-  const result = readLifecycleLeases({
-    dir: root,
-    now: Date.parse("2026-07-11T12:00:10Z"),
-    panes: [pane],
-    processes: [
-      { pid: 100, ppid: 1, command: "zsh" },
-      {
-        pid: 120,
-        ppid: 100,
-        startTime: "2026-07-11T10:00:00Z",
-        command: "node /x/pi-coding-agent",
-      },
-    ],
-    alive: () => true,
-  });
-  assert.equal(result.accepted.length, 1);
-  assert.equal(result.accepted[0].sessionId, "s1");
-  assert.equal(result.accepted[0].state, "tool");
-  assert.equal(result.accepted[0].activeTool, "bash");
-});
-
-test("lifecycle inputs reject unsupported schema versions", () => {
-  const sidecars = mkdtempSync(join(tmpdir(), "pi-sidecar-schema-"));
-  writeFileSync(
-    join(sidecars, "future.json"),
-    JSON.stringify({ schemaVersion: 2, pid: 1, processInstanceId: "p", processStartedAt: "x" }),
-  );
-  assert.equal(
-    readLiveSidecars({ dir: sidecars }).rejected[0].reason,
-    "unsupported_schema_version",
-  );
-
-  const events = mkdtempSync(join(tmpdir(), "pi-event-schema-"));
-  writeFileSync(
-    join(events, "future.jsonl"),
-    `${JSON.stringify({ schemaVersion: 2, type: "process_started" })}\n`,
-  );
-  assert.equal(
-    readLifecycleLeases({ dir: events }).rejected[0].reason,
-    "unsupported_schema_version",
-  );
-});
-
 test("PID-validated PiTeams Session locator binds exactly only with matching generation and pane", () => {
   const session = {
     id: "session-exact",
@@ -595,6 +458,7 @@ test("PID-validated PiTeams Session locator binds exactly only with matching gen
     runtimeMembershipId: "membership-1",
     runtimeStartedAt: "2026-07-16T04:07:19.800Z",
     configuredTerminalId: "%314",
+    terminalTarget: { backend: "tmux", kind: "pane", id: "%314" },
     source: "/teams/example/config.json",
   };
   inferLiveMetadata([agent], [session], [membership], []);
@@ -866,7 +730,7 @@ test("history cursor remains stable when Sessions share the same lastMessageAt",
   assert.deepEqual([...second.selected], ["c"]);
 });
 
-test("bounded collection skips full JSONL parsing for catalog entries outside the response window", () => {
+test("bounded collection skips full JSONL parsing for catalog entries outside the response window", async () => {
   const root = mkdtempSync(join(tmpdir(), "pi-catalog-window-"));
   const path = join(root, "old.jsonl");
   writeFileSync(
@@ -891,7 +755,7 @@ test("bounded collection skips full JSONL parsing for catalog entries outside th
       .map(JSON.stringify)
       .join("\n"),
   );
-  const snapshot = collectSnapshot({
+  const snapshot = await collectSnapshot({
     sessionFiles: [path],
     cache: { read: () => assert.fail("old Session must not be full-parsed") },
     catalogCache: new SessionCatalog(),
@@ -1137,10 +1001,8 @@ test("session cache rebuilds after truncation, replacement, or a malformed compl
   });
 });
 
-test("snapshot never exposes process argv or raw command errors", () => {
+test("snapshot never exposes process argv or raw command errors", async () => {
   const sentinel = "SENTINEL_PROMPT_SECRET_42";
-  const sidecarRoot = mkdtempSync(join(tmpdir(), "pi-empty-live-"));
-  const eventsRoot = mkdtempSync(join(tmpdir(), "pi-empty-events-"));
   const teamsRoot = mkdtempSync(join(tmpdir(), "pi-teams-live-"));
   mkdirSync(join(teamsRoot, "alpha"));
   writeFileSync(
@@ -1166,37 +1028,33 @@ test("snapshot never exposes process argv or raw command errors", () => {
     if (args.includes("list-panes")) return paneOutput;
     throw new Error(sentinel);
   };
-  const snapshot = collectSnapshot({
+  const snapshot = await collectSnapshot({
     run,
     sockets: ["/tmp/a"],
     sessionFiles: [],
-    dir: sidecarRoot,
-    eventsDir: eventsRoot,
     teamsRoot,
+    readPiTeamsObservation: async () => { throw new Error("provider unavailable"); },
     processes: [
       { pid: 100, ppid: 1, command: "zsh" },
       { pid: 120, ppid: 100, command: `node /x/pi-coding-agent -p ${sentinel}` },
     ],
   });
-  assert.equal(snapshot.liveAgents.length, 1);
+  assert.equal(snapshot.processes.length, 1);
   assert.equal(JSON.stringify(snapshot).includes(sentinel), false);
-  assert.deepEqual(snapshot.liveAgents[0].process, { pid: 120, state: "running" });
-  assert.equal(snapshot.liveAgents[0].processState, "running");
-  assert.deepEqual(snapshot.liveAgents[0].workState, {
-    availability: "unobserved",
-    reason: "lifecycle_evidence_unavailable",
-  });
-  assert.equal(snapshot.liveAgents[0].state, undefined);
-  assert.equal(snapshot.schemaVersion, 3);
-  assert.deepEqual(snapshot.liveAgents[0].coordination, {
-    kind: "pi-team",
-    teamName: "alpha",
-    agentName: "builder",
-    role: "teammate",
-    ready: undefined,
-    source: join(teamsRoot, "alpha", "config.json"),
-  });
-  assert.equal(snapshot.trace.piTeams.liveMatches, 1);
+  assert.deepEqual(snapshot.processes[0].process, { pid: 120, state: "running" });
+  assert.equal(snapshot.processes[0].link, undefined);
+  assert.equal(snapshot.schemaVersion, 4);
+  assert.equal(snapshot.processes[0].coordination, undefined);
+  assert.equal(
+    snapshot.processes[0].issues.some((entry) => entry.code.startsWith("coordination_")),
+    false,
+  );
+  assert.equal(snapshot.trace.piTeams.directClaims, 0);
+  assert.equal(snapshot.trace.piTeams.availability, "unavailable");
+  assert.equal(
+    snapshot.trace.rejected.some((entry) => entry.reason === "provider_unavailable"),
+    true,
+  );
   assert.equal(JSON.stringify(snapshot.teamMemberships).includes("sessionFile"), false);
   assert.equal(JSON.stringify(snapshot.teamMemberships).includes("private-builder"), false);
 

@@ -439,7 +439,8 @@ test("TUI notices state input cardinality, clearly estimated trigger tokens, and
           text: JSON.stringify({
             summary:
               "Progress: done | Findings: evidence | Questions/Requests: None stated | Next step: inspect",
-            summaryNeedsHumanAttention: false,
+            sessionStatus: "finished",
+            statusReason: "all_requests_accomplished",
           }),
           provider: "test-provider",
           model: "cheap-model",
@@ -490,7 +491,8 @@ test("updated notice never substitutes the local estimate for absent provider us
           text: JSON.stringify({
             summary:
               "Progress: done | Findings: evidence | Questions/Requests: None stated | Next step: inspect",
-            summaryNeedsHumanAttention: false,
+            sessionStatus: "finished",
+            statusReason: "all_requests_accomplished",
           }),
           provider: "actual-provider",
           responseModel: "actual-model",

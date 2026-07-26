@@ -3,6 +3,8 @@ import test from "node:test";
 
 import {
   AUTO_COMPACT_TOOL_NAME,
+  AUTO_COMPACT_WIDGET_KEY,
+  buildPreCompactPrompt,
   createAutoCompactController,
   utilizationAtOrAboveThreshold,
 } from "../src/controller.mjs";
@@ -27,6 +29,7 @@ function makeHarness({
   activeTools = ["read"],
   sendMessageError,
   sendMessageErrorFor,
+  sendUserMessageError,
   notifyError,
   setWidgetError,
 } = {}) {
@@ -34,6 +37,8 @@ function makeHarness({
   const commands = new Map();
   const tools = new Map();
   const messages = [];
+  const userMessages = [];
+  const deliveries = [];
   const notices = [];
   const widgetCalls = [];
   const widgets = new Map();
@@ -72,6 +77,12 @@ function makeHarness({
       )
         throw sendMessageError;
       messages.push({ message, options });
+      deliveries.push({ kind: "custom", message, options });
+    },
+    sendUserMessage(prompt) {
+      if (sendUserMessageError) throw sendUserMessageError;
+      userMessages.push(prompt);
+      deliveries.push({ kind: "user", prompt });
     },
   };
   const ctx = {
@@ -122,6 +133,8 @@ function makeHarness({
     commands,
     tools,
     messages,
+    userMessages,
+    deliveries,
     notices,
     widgetCalls,
     widgets,
@@ -144,8 +157,10 @@ async function triggerAutomatic(harness) {
   await harness.handlers.get("turn_end")({}, harness.ctx);
 }
 
-async function triggerManual(harness) {
-  await harness.commands.get("auto-compact").handler("run", harness.ctx);
+async function triggerManual(harness, prompt) {
+  await harness.commands
+    .get("auto-compact")
+    .handler(prompt === undefined ? "run" : `run ${prompt}`, harness.ctx);
 }
 
 async function ready(harness) {
@@ -154,44 +169,11 @@ async function ready(harness) {
     .execute(`call-${Date.now()}`, {}, undefined, undefined, harness.ctx);
 }
 
-function assertVisibleHandoffReceipt(harness, { pathPattern, customGuidance }) {
-  const handoff = harness.messages.find(
-    ({ message }) => message.customType === "auto_compact_handoff",
-  );
-  assert.ok(handoff, "hidden handoff message was not sent");
-  const notice = harness.notices.at(-1);
-  assert.ok(notice, "visible handoff summary was not shown");
-  assert.equal(notice.level, "info");
-  assert.doesNotMatch(
-    notice.text,
-    /framework-generated hidden context/,
-    "the transient notice must not duplicate the persistent prompt",
-  );
-
-  const card = onlyWidgetText(harness);
-  const delimiter =
-    "Agent instruction (framework-generated hidden context; not user input):\n";
-  const delimiterIndex = card.indexOf(delimiter);
-  assert.notEqual(delimiterIndex, -1, "card must label the agent instruction");
-  const visibleSummary = card.slice(0, delimiterIndex);
-  const projectedInstruction = card.slice(delimiterIndex + delimiter.length);
-  assert.match(visibleSummary, pathPattern);
-  assert.match(visibleSummary, /waiting/i);
-  assert.match(visibleSummary, /preserv/i);
-  assert.match(visibleSummary, /report.*ready/i);
-  assert.equal(
-    projectedInstruction,
-    handoff.message.content,
-    "visible receipt must project the exact hidden instruction",
-  );
-  assert.ok(
-    projectedInstruction.includes(customGuidance),
-    "configured preservation guidance must survive in both projections",
-  );
-  assert.doesNotMatch(
-    card,
-    /lifecycle(?:Id)?|contextWindow|startedAt|handoff #\d+/i,
-  );
+function assertCompactHud(harness, expected) {
+  const hud = onlyWidgetText(harness);
+  assert.equal(hud, expected, "HUD must be one exact current-state line");
+  assert.doesNotMatch(hud, /\n|preserv|outcome|instruction|hidden context/i);
+  return hud;
 }
 
 function lifecycleStages(text) {
@@ -237,30 +219,28 @@ function assertExactInstruction(text, hiddenContent) {
   );
 }
 
-function assertExactCardInstruction(text, hiddenContent) {
-  const delimiter =
-    "Agent instruction (framework-generated hidden context; not user input):\n";
-  const delimiterIndex = text.indexOf(delimiter);
-  assert.notEqual(
-    delimiterIndex,
-    -1,
-    "persistent card must label the hidden agent instruction",
-  );
+
+function assertLifecycleWidgetCleared(harness) {
   assert.equal(
-    text.slice(delimiterIndex + delimiter.length),
-    hiddenContent,
-    "card instruction suffix must equal the hidden message byte-for-byte",
+    harness.widgets.has(AUTO_COMPACT_WIDGET_KEY),
+    false,
+    "terminal workflow must remove the Auto Compact card",
   );
+  assert.deepEqual(harness.widgetCalls.at(-1), {
+    key: AUTO_COMPACT_WIDGET_KEY,
+    content: undefined,
+    options: undefined,
+  });
 }
 
 function onlyWidgetText(harness) {
-  assert.equal(harness.widgets.size, 1, "one persistent Auto Compact card");
+  assert.equal(harness.widgets.size, 1, "one active Auto Compact card");
   const [{ content }] = [...harness.widgets.values()];
   assert.ok(Array.isArray(content), "persistent card must use text lines");
   assert.equal(
     content.length,
     1,
-    "exact prompt must use one multiline component below Pi's array cap",
+    "HUD must use exactly one text entry",
   );
   return content.join("\n");
 }
@@ -317,7 +297,7 @@ test("automatic mode respects disabled settings and the inclusive configured bou
   assert.equal(below.controller.snapshot().state, "handoff_pending");
 });
 
-test("automatic crossing starts one hidden handoff with fixed preservation semantics", async () => {
+test("automatic crossing starts one visible handoff with fixed preservation semantics", async () => {
   const harness = makeHarness({
     prompt: "Also record the active experiment receipt.",
   });
@@ -325,8 +305,8 @@ test("automatic crossing starts one hidden handoff with fixed preservation seman
 
   assert.equal(harness.messages.length, 1);
   const [{ message, options }] = harness.messages;
-  assert.equal(message.customType, "auto_compact_handoff");
-  assert.equal(message.display, false);
+  assert.equal(message.customType, "auto-compact.handoff");
+  assert.equal(message.display, true);
   assert.deepEqual(message.details, { projection: "handoff" });
   assert.deepEqual(options, { triggerTurn: true, deliverAs: "steer" });
   assert.match(message.content, /approaching the configured limit/i);
@@ -355,188 +335,67 @@ test("manual run uses the same handoff while automatic mode is disabled", async 
   const harness = makeHarness({ enabled: false });
   await triggerManual(harness);
   assert.equal(harness.messages.length, 1);
-  assert.equal(harness.messages[0].message.customType, "auto_compact_handoff");
+  assert.equal(harness.messages[0].message.customType, "auto-compact.handoff");
   assert.equal(harness.controller.snapshot().lifecycle.trigger, "manual");
   assert.match(harness.notices.at(-1).text, /AUTO COMPACT · MANUAL/);
 });
 
-test("automatic and manual handoffs show exact visible receipts for the hidden instruction", async () => {
-  const automaticGuidance =
-    "Record the automatic experiment receipt before reporting ready.";
-  const automatic = makeHarness({ prompt: automaticGuidance });
-  await triggerAutomatic(automatic);
-  assertVisibleHandoffReceipt(automatic, {
-    pathPattern: /AUTO COMPACT · AUTOMATIC/,
-    customGuidance: automaticGuidance,
-  });
-
-  const manualGuidance =
-    "Record the manual experiment receipt before reporting ready.";
-  const manual = makeHarness({ enabled: false, prompt: manualGuidance });
-  await triggerManual(manual);
-  assertVisibleHandoffReceipt(manual, {
-    pathPattern: /AUTO COMPACT · MANUAL/,
-    customGuidance: manualGuidance,
-  });
-});
-
-test("automatic and manual UI progress from HANDOFF through COMPACT to PICKUP and retain a last-run receipt", async () => {
+test("automatic and manual handoffs preserve the exact visible Session event and compact HUD", async () => {
   for (const scenario of [
-    {
-      path: "automatic",
-      start: triggerAutomatic,
-      heading: /threshold|automatic/i,
-    },
-    { path: "manual", start: triggerManual, heading: /manual/i },
+    { trigger: "AUTOMATIC", start: triggerAutomatic },
+    { trigger: "MANUAL", start: triggerManual },
   ]) {
-    const guidance = `Preserve the ${scenario.path} visual receipt exactly.`;
-    const harness = makeHarness({
-      enabled: scenario.path !== "manual",
-      prompt: guidance,
-    });
+    const harness = makeHarness({ enabled: scenario.trigger === "AUTOMATIC" });
     await scenario.start(harness);
-    assert.equal(harness.notices.length, 1);
-    const handoffMessage = harness.messages.find(
-      ({ message }) => message.customType === "auto_compact_handoff",
-    ).message;
-
-    const startedNotice = harness.notices.at(-1).text;
-    assert.doesNotMatch(
-      startedNotice,
-      /framework-generated hidden context/,
-      "the persistent card is the sole full-prompt receipt in TUI mode",
-    );
-    const started = onlyWidgetText(harness);
-    assert.match(started, /AUTO COMPACT · (AUTOMATIC|MANUAL)/);
-    assert.match(started, scenario.heading);
-    const startedStages = lifecycleStages(started);
-    assert.match(startedStages.handoff, /●.*active/i);
-    assert.match(started, /waiting.*ready/i);
-    assert.match(startedStages.compact, /○/);
-    assert.match(startedStages.pickup, /○/);
-    assert.equal((started.match(/\bactive\b/gi) ?? []).length, 1);
-    assertExactInstruction(started, handoffMessage.content);
-    assertNoUiDiagnostics(started);
-
-    harness.setConfiguredPrompt("Later configuration must not rewrite a run.");
-    await harness.commands.get("auto-compact").handler("status", harness.ctx);
-    assert.equal(harness.notices.length, 2);
-    const currentStatus = harness.notices.at(-1).text;
-    assert.match(currentStatus, /current/i);
-    const currentStages = lifecycleStages(currentStatus);
-    assert.match(currentStages.handoff, /●.*active/i);
-    assert.match(currentStages.compact, /○/);
-    assert.match(currentStages.pickup, /○/);
-    assertExactInstruction(currentStatus, handoffMessage.content);
-    assert.doesNotMatch(currentStatus, /Later configuration/);
-    assertNoUiDiagnostics(currentStatus);
-
-    await ready(harness);
-    harness.handlers.get("agent_settled")({}, harness.ctx);
-    assert.equal(harness.notices.length, 3);
-    const compacting = harness.notices.at(-1).text;
-    const compactingStages = lifecycleStages(compacting);
-    assert.match(compactingStages.handoff, /✓/);
-    assert.match(compactingStages.compact, /●.*active/i);
-    assert.match(compactingStages.pickup, /○/);
-    assert.equal((compacting.match(/\bactive\b/gi) ?? []).length, 1);
-    assertNoUiDiagnostics(compacting);
-
-    harness.compactCalls[0].onComplete();
-    assert.equal(harness.notices.length, 4);
-    const completed = harness.notices.at(-1).text;
-    const completedStages = lifecycleStages(completed);
-    assert.match(completedStages.handoff, /✓/);
-    assert.match(completedStages.compact, /✓/);
-    assert.match(completedStages.pickup, /✓/);
-    assert.match(completed, /resume.*unfinished|stop normally/i);
-    assertNoUiDiagnostics(completed);
-
-    await harness.commands.get("auto-compact").handler("status", harness.ctx);
-    assert.equal(harness.notices.length, 5);
-    const lastStatus = harness.notices.at(-1).text;
-    assert.match(lastStatus, /last/i);
-    const lastStages = lifecycleStages(lastStatus);
-    assert.match(lastStages.handoff, /✓/);
-    assert.match(lastStages.compact, /✓/);
-    assert.match(lastStages.pickup, /✓/);
-    assertExactInstruction(lastStatus, handoffMessage.content);
-    assertNoUiDiagnostics(lastStatus);
-  }
-});
-
-test("automatic and manual runs persist the exact instruction in a transitioning TUI card", async () => {
-  for (const scenario of [
-    {
-      path: "automatic",
-      start: triggerAutomatic,
-      heading: /AUTO COMPACT · AUTOMATIC/,
-    },
-    {
-      path: "manual",
-      start: triggerManual,
-      heading: /AUTO COMPACT · MANUAL/,
-    },
-  ]) {
-    const guidance =
-      scenario.path === "automatic"
-        ? Array.from(
-            { length: 12 },
-            (_, index) => `Automatic guidance line ${index + 1}.`,
-          ).join("\n")
-        : "Preserve the manual persistent card snapshot.";
-    const harness = makeHarness({
-      enabled: scenario.path !== "manual",
-      prompt: guidance,
-    });
-    await scenario.start(harness);
-    const handoffMessage = harness.messages[0].message;
-
-    const initialCard = onlyWidgetText(harness);
-    assert.match(initialCard, scenario.heading);
-    const initialStages = lifecycleStages(initialCard);
-    assert.match(initialStages.handoff, /●.*active/i);
-    assert.match(initialStages.compact, /○/);
-    assert.match(initialStages.pickup, /○/);
-    assertExactCardInstruction(initialCard, handoffMessage.content);
-    assertNoUiDiagnostics(initialCard);
-    assert.ok(initialCard.includes(guidance));
-    const [widgetKey] = harness.widgets.keys();
-    assert.equal(widgetKey, "hc-auto-compact-lifecycle");
-    assert.equal(harness.widgetCalls[0].options, undefined);
+    const handoff = harness.messages[0];
+    assert.equal(handoff.message.display, true);
+    assert.equal(handoff.message.customType, "auto-compact.handoff");
+    assert.deepEqual(handoff.message.details, { projection: "handoff" });
     assert.equal(
-      new Set(harness.widgetCalls.map(({ key }) => key)).size,
-      1,
-      "all card transitions must update one stable widget",
+      handoff.message.content,
+      buildPreCompactPrompt("Preserve the exact current work."),
     );
-
-    harness.setConfiguredPrompt("Later settings must not rewrite the card.");
-    await harness.commands.get("auto-compact").handler("status", harness.ctx);
-    assert.equal(onlyWidgetText(harness), initialCard);
-    assertExactInstruction(harness.notices.at(-1).text, handoffMessage.content);
-    assert.doesNotMatch(onlyWidgetText(harness), /Later settings/);
+    assert.deepEqual(handoff.options, { triggerTurn: true, deliverAs: "steer" });
+    assertCompactHud(
+      harness,
+      `AUTO COMPACT · ${scenario.trigger} · HANDOFF — awaiting readiness`,
+    );
+    assert.doesNotMatch(onlyWidgetText(harness), /preserv|outcome|instruction|\n/i);
 
     await ready(harness);
+    assertCompactHud(
+      harness,
+      `AUTO COMPACT · ${scenario.trigger} · READY — awaiting turn end`,
+    );
     harness.handlers.get("agent_settled")({}, harness.ctx);
-    const compactingCard = onlyWidgetText(harness);
-    const compactingStages = lifecycleStages(compactingCard);
-    assert.match(compactingStages.handoff, /✓/);
-    assert.match(compactingStages.compact, /●.*active/i);
-    assert.match(compactingStages.pickup, /○/);
-    assert.doesNotMatch(compactingCard, /framework-generated hidden context/);
-    assertNoUiDiagnostics(compactingCard);
+    assertCompactHud(harness, `AUTO COMPACT · ${scenario.trigger} · COMPACTING`);
 
     harness.compactCalls[0].onComplete();
-    const completedCard = onlyWidgetText(harness);
-    const completedStages = lifecycleStages(completedCard);
-    assert.match(completedStages.handoff, /✓/);
-    assert.match(completedStages.compact, /✓/);
-    assert.match(completedStages.pickup, /✓/);
-    assert.match(completedCard, /resume.*unfinished|stop if complete/i);
-    assert.doesNotMatch(completedCard, /framework-generated hidden context/);
-    assertNoUiDiagnostics(completedCard);
-    assert.equal([...harness.widgets.keys()][0], widgetKey);
+    assert.ok(
+      harness.widgetCalls.some(
+        ({ content }) =>
+          content?.[0] ===
+          `AUTO COMPACT · ${scenario.trigger} · PICKUP — requesting continuation`,
+      ),
+      "pickup must render as a compact current-state HUD before terminal cleanup",
+    );
+    assertLifecycleWidgetCleared(harness);
+    await harness.commands.get("auto-compact").handler("status", harness.ctx);
+    assertExactInstruction(harness.notices.at(-1).text, handoff.message.content);
   }
+});
+
+test("unresolved external compaction has a one-line current-owner HUD", async () => {
+  const harness = makeHarness();
+  await triggerManual(harness);
+  harness.handlers.get("session_before_compact")(
+    { reason: "manual", willRetry: false },
+    harness.ctx,
+  );
+  assertCompactHud(
+    harness,
+    "AUTO COMPACT · MANUAL · EXTERNAL COMPACTION — resolving interrupted handoff",
+  );
 });
 
 test("session start removes a ready tool that Pi activated during registration", () => {
@@ -629,16 +488,22 @@ test("successful native compaction injects pickup exactly once and high usage st
   callbacks.onComplete();
   callbacks.onComplete();
   const pickups = harness.messages.filter(
-    ({ message }) => message.customType === "auto_compact_pickup",
+    ({ message }) => message.customType === "auto-compact.pickup",
   );
   assert.equal(pickups.length, 1);
-  assert.equal(pickups[0].message.display, false);
+  assert.equal(pickups[0].message.customType, "auto-compact.pickup");
+  assert.equal(pickups[0].message.display, true);
   assert.deepEqual(pickups[0].message.details, { projection: "pickup" });
   assert.deepEqual(pickups[0].options, { triggerTurn: true });
-  assert.match(pickups[0].message.content, /Resume the prior request/i);
-  assert.match(pickups[0].message.content, /stop normally/i);
+  assert.equal(
+    pickups[0].message.content,
+    "Auto Compact finished Pi's native compaction. Resume the prior request if work remains; if the request is complete, stop normally.",
+  );
+  assert.match(harness.notices.at(-1).text, /pickup instruction requested/i);
+  assert.doesNotMatch(harness.notices.at(-1).text, /pickup instruction sent/i);
   assert.equal(harness.controller.snapshot().state, "idle");
   assert.deepEqual(harness.activeTools(), ["read"]);
+  assert.deepEqual(harness.userMessages, []);
 
   harness.setUsage({
     tokens: null,
@@ -648,7 +513,7 @@ test("successful native compaction injects pickup exactly once and high usage st
   await triggerAutomatic(harness);
   assert.equal(
     harness.messages.filter(
-      ({ message }) => message.customType === "auto_compact_handoff",
+      ({ message }) => message.customType === "auto-compact.handoff",
     ).length,
     1,
     "unknown post-compact accounting must not start a handoff",
@@ -658,7 +523,7 @@ test("successful native compaction injects pickup exactly once and high usage st
   await triggerAutomatic(harness);
   assert.equal(
     harness.messages.filter(
-      ({ message }) => message.customType === "auto_compact_handoff",
+      ({ message }) => message.customType === "auto-compact.handoff",
     ).length,
     1,
     "remaining above the threshold must not start a second lifecycle",
@@ -670,11 +535,51 @@ test("successful native compaction injects pickup exactly once and high usage st
   await triggerAutomatic(harness);
   assert.equal(
     harness.messages.filter(
-      ({ message }) => message.customType === "auto_compact_handoff",
+      ({ message }) => message.customType === "auto-compact.handoff",
     ).length,
     2,
     "dropping below then crossing again rearms automatic mode",
   );
+});
+
+test("prompted manual run sends its visible pickup before one unchanged continuation prompt", async () => {
+  const harness = makeHarness();
+  const prompt = "Continue the exact task; preserve  spacing.  ";
+  await triggerManual(harness, prompt);
+  await ready(harness);
+  harness.handlers.get("agent_settled")({}, harness.ctx);
+  harness.compactCalls[0].onComplete();
+
+  const pickup = harness.messages.at(-1);
+  assert.equal(pickup.message.customType, "auto-compact.pickup");
+  assert.deepEqual(pickup.options, { triggerTurn: false });
+  assert.deepEqual(harness.userMessages, [prompt]);
+  assert.deepEqual(harness.deliveries.slice(-2), [
+    { kind: "custom", message: pickup.message, options: { triggerTurn: false } },
+    { kind: "user", prompt },
+  ]);
+  assert.match(harness.notices.at(-1).text, /prompted continuation requested/i);
+  assert.doesNotMatch(harness.notices.at(-1).text, /prompted continuation sent/i);
+  assert.equal(harness.controller.snapshot().state, "idle");
+});
+
+test("prompted continuation send failure does not claim pickup success", async () => {
+  const harness = makeHarness({
+    sendUserMessageError: new Error("continuation unavailable"),
+  });
+  await triggerManual(harness, "Continue the task");
+  await ready(harness);
+  harness.handlers.get("agent_settled")({}, harness.ctx);
+  harness.compactCalls[0].onComplete();
+
+  assert.deepEqual(harness.userMessages, []);
+  assert.deepEqual(
+    harness.messages.at(-1).options,
+    { triggerTurn: false },
+  );
+  const stages = lifecycleStages(harness.notices.at(-1).text);
+  assert.match(stages.pickup, /×.*failed/i);
+  assert.doesNotMatch(harness.notices.at(-1).text, /prompted continuation sent/i);
 });
 
 test("compaction error and synchronous failure reset without pickup", async () => {
@@ -686,12 +591,13 @@ test("compaction error and synchronous failure reset without pickup", async () =
   assert.equal(asynchronous.controller.snapshot().state, "idle");
   assert.equal(
     asynchronous.messages.some(
-      ({ message }) => message.customType === "auto_compact_pickup",
+      ({ message }) => message.customType === "auto-compact.pickup",
     ),
     false,
   );
   assert.match(asynchronous.notices.at(-1).text, /failed/i);
   assert.doesNotMatch(asynchronous.notices.at(-1).text, /provider refused/);
+  assertLifecycleWidgetCleared(asynchronous);
 
   const synchronous = makeHarness();
   synchronous.ctx.compact = () => {
@@ -703,9 +609,10 @@ test("compaction error and synchronous failure reset without pickup", async () =
   assert.equal(synchronous.controller.snapshot().state, "idle");
   assert.match(synchronous.notices.at(-1).text, /failed/i);
   assert.doesNotMatch(synchronous.notices.at(-1).text, /compact unavailable/);
+  assertLifecycleWidgetCleared(synchronous);
 });
 
-test("compaction error marks COMPACT failed and never presents PICKUP as sent", async () => {
+test("compaction error marks COMPACT failed and never presents PICKUP as requested", async () => {
   const harness = makeHarness({ prompt: "Preserve the error-path receipt." });
   await triggerManual(harness);
   const handoffMessage = harness.messages[0].message;
@@ -719,12 +626,13 @@ test("compaction error marks COMPACT failed and never presents PICKUP as sent", 
   assert.match(stages.handoff, /✓/);
   assert.match(stages.compact, /×.*failed/i);
   assert.match(stages.pickup, /—/);
-  assert.doesNotMatch(stages.pickup, /✓|done|sent/i);
+  assert.doesNotMatch(stages.pickup, /✓|done|requested/i);
   assert.doesNotMatch(failure, /native compactor failed/);
   assertNoUiDiagnostics(failure);
+  assertLifecycleWidgetCleared(harness);
   assert.equal(
     harness.messages.filter(
-      ({ message }) => message.customType === "auto_compact_pickup",
+      ({ message }) => message.customType === "auto-compact.pickup",
     ).length,
     0,
   );
@@ -739,7 +647,7 @@ test("compaction error marks COMPACT failed and never presents PICKUP as sent", 
 test("pickup injection failure records PICKUP failed without changing completed compaction", async () => {
   const harness = makeHarness({
     sendMessageError: new Error("pickup injection unavailable"),
-    sendMessageErrorFor: "auto_compact_pickup",
+    sendMessageErrorFor: "auto-compact.pickup",
   });
   await triggerAutomatic(harness);
   const handoffMessage = harness.messages[0].message;
@@ -754,6 +662,7 @@ test("pickup injection failure records PICKUP failed without changing completed 
   assert.match(stages.pickup, /×.*failed/i);
   assert.doesNotMatch(failure, /pickup injection unavailable/);
   assert.equal(harness.controller.snapshot().state, "idle");
+  assertLifecycleWidgetCleared(harness);
 
   await harness.commands.get("auto-compact").handler("status", harness.ctx);
   const status = harness.notices.at(-1).text;
@@ -852,9 +761,14 @@ test("external compaction completion supersedes an interrupted handoff exactly o
     assert.match(interruptedStages.compact, /—/);
     assert.match(interruptedStages.pickup, /—/);
     assertNoUiDiagnostics(interruptedNotice);
+    assert.equal(harness.widgets.size, 1, "external resolution keeps its card visible");
+    assertCompactHud(
+      harness,
+      "AUTO COMPACT · AUTOMATIC · EXTERNAL COMPACTION — resolving interrupted handoff",
+    );
     assert.equal(
       harness.messages.filter(
-        ({ message }) => message.customType === "auto_compact_pickup",
+        ({ message }) => message.customType === "auto-compact.pickup",
       ).length,
       0,
       "supersession is projected only after native compaction succeeds",
@@ -875,10 +789,15 @@ test("external compaction completion supersedes an interrupted handoff exactly o
     );
 
     const pickups = harness.messages.filter(
-      ({ message }) => message.customType === "auto_compact_pickup",
+      ({ message }) => message.customType === "auto-compact.pickup",
     );
     assert.equal(pickups.length, 1, scenario.reason);
-    assert.equal(pickups[0].message.display, false, scenario.reason);
+    assert.equal(
+      pickups[0].message.customType,
+      "auto-compact.pickup",
+      scenario.reason,
+    );
+    assert.equal(pickups[0].message.display, true, scenario.reason);
     assert.deepEqual(
       pickups[0].message.details,
       { projection: "pickup", supersedes: "handoff" },
@@ -889,13 +808,19 @@ test("external compaction completion supersedes an interrupted handoff exactly o
       { triggerTurn: scenario.triggerTurn },
       scenario.reason,
     );
-    assert.match(pickups[0].message.content, /handoff is no longer active/i);
-    assert.match(pickups[0].message.content, /Ignore that earlier handoff/i);
-    assert.match(pickups[0].message.content, /Resume the prior request/i);
+    assert.equal(
+      pickups[0].message.content,
+      "The earlier Auto Compact handoff is no longer active because a separate native Pi compaction finished. Ignore that earlier handoff notice and its readiness instruction. Resume the prior request if work remains; if the request is complete, stop normally.",
+      scenario.reason,
+    );
     assert.equal(harness.controller.snapshot().state, "idle");
     assert.deepEqual(harness.activeTools(), ["read"]);
+    assert.deepEqual(harness.userMessages, []);
+    assertLifecycleWidgetCleared(harness);
 
     const supersededNotice = harness.notices.at(-1).text;
+    assert.match(supersededNotice, /pickup instruction requested/i);
+    assert.doesNotMatch(supersededNotice, /pickup instruction sent/i);
     const supersededStages = lifecycleStages(supersededNotice);
     assert.match(supersededStages.handoff, /↷/);
     assert.match(supersededStages.compact, /✓.*external/i);
@@ -929,6 +854,7 @@ test("external compaction after readiness preserves completed HANDOFF truth", as
     assert.doesNotMatch(interruptedStages.handoff, /↷|interrupted/i);
     assert.match(interruptedStages.compact, /↷.*interrupted/i);
     assert.match(interruptedStages.pickup, /—/);
+    assert.equal(harness.widgets.size, 1, "external resolution keeps its card visible");
 
     const completed = {
       reason: scenario.reason,
@@ -943,9 +869,10 @@ test("external compaction after readiness preserves completed HANDOFF truth", as
     assert.doesNotMatch(completedStages.handoff, /↷|interrupted/i);
     assert.match(completedStages.compact, /✓.*external/i);
     assert.match(completedStages.pickup, /✓/);
+    assertLifecycleWidgetCleared(harness);
     assert.equal(
       harness.messages.filter(
-        ({ message }) => message.customType === "auto_compact_pickup",
+        ({ message }) => message.customType === "auto-compact.pickup",
       ).length,
       1,
     );
@@ -985,7 +912,7 @@ test("our own native compaction projects one pickup across Pi completion and cal
   harness.handlers.get("session_compact")(nativeCompletion, harness.ctx);
   assert.equal(
     harness.messages.filter(
-      ({ message }) => message.customType === "auto_compact_pickup",
+      ({ message }) => message.customType === "auto-compact.pickup",
     ).length,
     0,
     "the ctx.compact callback owns pickup for this lifecycle",
@@ -994,13 +921,45 @@ test("our own native compaction projects one pickup across Pi completion and cal
   harness.compactCalls[0].onComplete();
   harness.handlers.get("session_compact")(nativeCompletion, harness.ctx);
   const pickups = harness.messages.filter(
-    ({ message }) => message.customType === "auto_compact_pickup",
+    ({ message }) => message.customType === "auto-compact.pickup",
   );
   assert.equal(pickups.length, 1);
   assert.deepEqual(pickups[0].message.details, { projection: "pickup" });
   assert.deepEqual(pickups[0].options, { triggerTurn: true });
   assert.equal(harness.controller.snapshot().state, "idle");
   assert.deepEqual(harness.activeTools(), ["read"]);
+});
+
+test("corrective external pickup failure clears the card but retains status", async () => {
+  const harness = makeHarness({
+    sendMessageError: new Error("pickup injection unavailable"),
+    sendMessageErrorFor: "auto-compact.pickup",
+  });
+  await triggerManual(harness);
+  const handoffMessage = harness.messages[0].message;
+  harness.handlers.get("session_before_compact")(
+    { reason: "manual", willRetry: false },
+    harness.ctx,
+  );
+  harness.handlers.get("session_compact")(
+    {
+      reason: "manual",
+      willRetry: false,
+      fromExtension: false,
+      compactionEntry: { type: "compaction" },
+    },
+    harness.ctx,
+  );
+  assertLifecycleWidgetCleared(harness);
+  const failure = harness.notices.at(-1).text;
+  assert.match(lifecycleStages(failure).pickup, /×.*failed/i);
+  assert.doesNotMatch(failure, /pickup injection unavailable/);
+
+  await harness.commands.get("auto-compact").handler("status", harness.ctx);
+  const status = harness.notices.at(-1).text;
+  assert.match(status, /Last workflow/);
+  assert.match(lifecycleStages(status).pickup, /×.*failed/i);
+  assertExactInstruction(status, handoffMessage.content);
 });
 
 test("late external completion cannot supersede a newer active run", async () => {
@@ -1027,7 +986,7 @@ test("late external completion cannot supersede a newer active run", async () =>
   );
   assert.equal(
     harness.messages.filter(
-      ({ message }) => message.customType === "auto_compact_pickup",
+      ({ message }) => message.customType === "auto-compact.pickup",
     ).length,
     0,
   );
@@ -1039,6 +998,68 @@ test("late external completion cannot supersede a newer active run", async () =>
   assert.match(status, /current/i);
   assert.match(lifecycleStages(status).handoff, /●.*active/i);
   assertExactInstruction(status, newerHandoff.content);
+});
+
+test("replacing an unresolved external compaction clears its card and fences late completion", async () => {
+  const harness = makeHarness();
+  await triggerManual(harness);
+  const handoffMessage = harness.messages[0].message;
+  harness.handlers.get("session_before_compact")(
+    { reason: "manual", willRetry: false },
+    harness.ctx,
+  );
+  assertCompactHud(
+    harness,
+    "AUTO COMPACT · MANUAL · EXTERNAL COMPACTION — resolving interrupted handoff",
+  );
+
+  harness.handlers.get("session_before_compact")(
+    { reason: "overflow", willRetry: true },
+    harness.ctx,
+  );
+  assertLifecycleWidgetCleared(harness);
+  const messageCount = harness.messages.length;
+  const noticeCount = harness.notices.length;
+  harness.handlers.get("session_compact")(
+    {
+      reason: "manual",
+      willRetry: false,
+      fromExtension: false,
+      compactionEntry: { type: "compaction" },
+    },
+    harness.ctx,
+  );
+  assert.equal(harness.messages.length, messageCount);
+  assert.equal(harness.notices.length, noticeCount);
+  assertLifecycleWidgetCleared(harness);
+
+  await harness.commands.get("auto-compact").handler("status", harness.ctx);
+  const status = harness.notices.at(-1).text;
+  assert.match(status, /Last workflow/);
+  assert.match(lifecycleStages(status).handoff, /↷.*interrupted/i);
+  assertExactInstruction(status, handoffMessage.content);
+});
+
+test("session boundaries during native compaction clear the card and fence late callbacks", async () => {
+  for (const event of ["session_start", "session_shutdown", "session_tree"]) {
+    const harness = makeHarness();
+    await triggerManual(harness);
+    await ready(harness);
+    harness.handlers.get("agent_settled")({}, harness.ctx);
+    const callbacks = harness.compactCalls[0];
+    const noticeCount = harness.notices.length;
+    const messageCount = harness.messages.length;
+
+    harness.handlers.get(event)({}, harness.ctx);
+    assert.equal(harness.controller.snapshot().state, "idle", event);
+    assertLifecycleWidgetCleared(harness);
+
+    callbacks.onComplete();
+    callbacks.onError(new Error("late failure"));
+    assert.equal(harness.messages.length, messageCount, event);
+    assert.equal(harness.notices.length, noticeCount, event);
+    assertLifecycleWidgetCleared(harness);
+  }
 });
 
 test("session shutdown and tree changes invalidate pending or ready callbacks", async () => {
@@ -1108,12 +1129,77 @@ test("/off invalidates a pending or ready lifecycle before compaction", async ()
     harness.handlers.get("agent_settled")({}, harness.ctx);
     assert.equal(harness.controller.snapshot().state, "idle");
     assert.equal(harness.compactCalls.length, 0);
+    assertLifecycleWidgetCleared(harness);
     assert.deepEqual(harness.writes, [{ enabled: false }]);
     assert.deepEqual(harness.activeTools(), ["read"]);
     await harness.commands.get("auto-compact").handler("status", harness.ctx);
     const status = harness.notices.at(-1).text;
     assert.match(status, /last/i);
     scenario.assertStages(lifecycleStages(status));
+  }
+});
+
+test("deferred /off completion cannot replace a newer active workflow card", async () => {
+  for (const outcome of ["success", "failure"]) {
+    const write = deferred();
+    const harness = makeHarness({
+      settingsWriter: async () => write.promise,
+    });
+    await triggerManual(harness);
+    const off = harness.commands.get("auto-compact").handler("off", harness.ctx);
+    await Promise.resolve();
+
+    harness.setConfiguredPrompt(`Preserve newer ${outcome} workflow.`);
+    await triggerManual(harness);
+    const newerHandoff = harness.messages.at(-1).message;
+    assertCompactHud(
+      harness,
+      "AUTO COMPACT · MANUAL · HANDOFF — awaiting readiness",
+    );
+
+    if (outcome === "success") write.resolve({ scope: "project" });
+    else write.reject(new Error("settings unavailable"));
+    await off;
+
+    assertCompactHud(
+      harness,
+      "AUTO COMPACT · MANUAL · HANDOFF — awaiting readiness",
+    );
+    await harness.commands.get("auto-compact").handler("status", harness.ctx);
+    assert.match(harness.notices.at(-1).text, /Current workflow/);
+    assertExactInstruction(harness.notices.at(-1).text, newerHandoff.content);
+  }
+});
+
+test("deferred /off completion cannot project across a Session boundary", async () => {
+  for (const event of ["session_start", "session_shutdown", "session_tree"]) {
+    for (const outcome of ["success", "failure"]) {
+      const write = deferred();
+      const harness = makeHarness({
+        settingsWriter: async () => write.promise,
+      });
+      await triggerManual(harness);
+      const off = harness.commands.get("auto-compact").handler("off", harness.ctx);
+      await Promise.resolve();
+
+      harness.handlers.get(event)({}, harness.ctx);
+      harness.setConfiguredPrompt(`Preserve ${event} ${outcome} workflow.`);
+      await triggerManual(harness);
+      const currentHandoff = harness.messages.at(-1).message;
+      const noticeCount = harness.notices.length;
+      const cardBeforeWrite = onlyWidgetText(harness);
+
+      if (outcome === "success") write.resolve({ scope: "project" });
+      else write.reject(new Error("settings unavailable"));
+      await off;
+
+      assert.equal(harness.notices.length, noticeCount, `${event} ${outcome}`);
+      assert.equal(onlyWidgetText(harness), cardBeforeWrite, `${event} ${outcome}`);
+      assertCompactHud(
+        harness,
+        "AUTO COMPACT · MANUAL · HANDOFF — awaiting readiness",
+      );
+    }
   }
 });
 
@@ -1132,14 +1218,14 @@ test("/off during native compaction disables future handoffs but lets the curren
   assert.equal(harness.controller.snapshot().state, "idle");
   assert.equal(
     harness.messages.filter(
-      ({ message }) => message.customType === "auto_compact_pickup",
+      ({ message }) => message.customType === "auto-compact.pickup",
     ).length,
     1,
   );
   await triggerAutomatic(harness);
   assert.equal(
     harness.messages.filter(
-      ({ message }) => message.customType === "auto_compact_handoff",
+      ({ message }) => message.customType === "auto-compact.handoff",
     ).length,
     1,
   );
@@ -1207,7 +1293,8 @@ test("handoff injection failure emits a failed rail without a false instruction 
   assert.equal(harness.controller.snapshot().state, "idle");
   assert.deepEqual(harness.activeTools(), ["read"]);
   assert.equal(harness.notices.length, 1);
-  assert.match(harness.notices[0].text, /could not be sent/i);
+  assertLifecycleWidgetCleared(harness);
+  assert.match(harness.notices[0].text, /could not be requested/i);
   assert.doesNotMatch(harness.notices[0].text, /Agent instruction/);
   const stages = lifecycleStages(harness.notices[0].text);
   assert.match(stages.handoff, /×.*failed/i);
@@ -1238,7 +1325,7 @@ test("TUI notification failure never changes the control lifecycle", async () =>
   assert.deepEqual(harness.activeTools(), ["read"]);
   assert.equal(
     harness.messages.filter(
-      ({ message }) => message.customType === "auto_compact_pickup",
+      ({ message }) => message.customType === "auto-compact.pickup",
     ).length,
     1,
   );
@@ -1254,7 +1341,7 @@ test("TUI card failure falls back to an exact notice without changing the lifecy
 
   assert.equal(harness.controller.snapshot().state, "handoff_pending");
   assert.equal(harness.messages.length, 1);
-  assert.equal(harness.messages[0].message.customType, "auto_compact_handoff");
+  assert.equal(harness.messages[0].message.customType, "auto-compact.handoff");
   assert.equal(harness.widgets.size, 0);
   assertExactInstruction(
     harness.notices.at(-1).text,

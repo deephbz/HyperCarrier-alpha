@@ -1,6 +1,4 @@
-export type AgentState =
-  "idle" | "thinking" | "tool" | "waiting_input" | "blocked" | "settled" | "failed" | "unknown";
-export const TIMELINE_SNAPSHOT_SCHEMA_VERSION = 3 as const;
+export const TIMELINE_SNAPSHOT_SCHEMA_VERSION = 4 as const;
 export interface RarebitSummaryAttentionSource {
   kind: "rarebit_summary";
   schemaVersion: number | null;
@@ -138,71 +136,45 @@ export interface RarebitMarker {
   producer: string | null;
   timestamp: string | null;
 }
-export interface LiveAgent {
-  processInstanceId: string;
+export interface CoordinationEvidence {
+  kind: "pi-team";
+  teamName: string;
+  agentName: string;
+  role: "lead" | "teammate";
+  ready?: boolean;
+  source: string;
+}
+export interface ProcessObservation {
+  id: string;
   pid: number;
-  sessionId?: string;
-  sessionName?: string;
-  sessionConfidence?:
-    | "inferred_tmux_window_name"
-    | "inferred_process_start"
-    | "inferred_process_start_batch"
-    | "inferred_unique_recent_session"
-    | "inferred_recent_named_session";
-  sessionBinding?: {
-    confidence: "exact" | NonNullable<LiveAgent["sessionConfidence"]>;
-    kind:
-      | "lifecycle_extension"
-      | "pi_teams_session_file"
-      | "tmux_window_name"
-      | "process_start"
-      | "process_start_batch"
-      | "unique_recent_session"
-      | "recent_named_session";
-    evidenceSource?: string;
-    sessionSource?: string;
-    tmuxSource?: string;
-    processSource?: string;
-    value?: string;
-  };
-  processBinding?: { confidence: "exact"; source: "ps"; pid: number };
   processStartedAt?: string;
-  cwd: string;
-  /** Exact lifecycle state only; process-only observations omit this field. */
-  state?: AgentState;
-  processState: "running";
-  process?: { pid: number; state: "running" };
-  workState:
-    | {
-        availability: "observed";
-        state: AgentState;
-        evidenceSource: string;
-        observedAt?: string;
-      }
-    | { availability: "unobserved"; reason: "lifecycle_evidence_unavailable" };
-  activeTool?: string;
-  heartbeatAt?: string;
-  model?: string;
-  context?: { tokens?: number; window?: number; percent?: number };
-  confidence: string;
-  coordination?: {
-    kind: "pi-team";
-    teamName: string;
-    agentName: string;
-    role: "lead" | "teammate";
-    ready?: boolean;
-    confidence?: "inferred_shared_window";
-    source: string;
+  observedAt: string;
+  cwd?: string;
+  process: { pid: number; state: "running" };
+  locations: Array<{ provider: "tmux" | "herdr"; cwd?: string; [key: string]: unknown }>;
+  coordination?: CoordinationEvidence;
+  link?: {
+    sessionId: string;
+    grade: "provider_verified" | "heuristic";
+    method: string;
+    observedAt: string;
+    provenance: string[];
   };
-  pane?: {
-    serverSocket: string;
-    sessionName: string;
-    windowId?: string;
-    windowIndex: number;
-    windowName?: string;
-    paneId: string;
-    cwd: string;
-  };
+  issues: Array<{
+    code:
+      | "process_start_unknown"
+      | "association_conflict"
+      | "association_ambiguous"
+      | "provider_session_unavailable"
+      | "provider_process_ambiguous"
+      | "provider_claim_malformed"
+      | "provider_claim_future"
+      | "provider_claim_stale"
+      | "coordination_ambiguous"
+      | "coordination_stale"
+      | "coordination_target_mismatch";
+    message: string;
+  }>;
 }
 export interface Snapshot {
   schemaVersion: typeof TIMELINE_SNAPSHOT_SCHEMA_VERSION;
@@ -211,7 +183,7 @@ export interface Snapshot {
   turns: Turn[];
   requests: Request[];
   rarebits: RarebitMarker[];
-  liveAgents: LiveAgent[];
+  processes: ProcessObservation[];
   teams?: Array<{ name: string; createdAt?: string; source: string; memberCount: number }>;
   teamMemberships?: Array<{
     teamName: string;
@@ -234,14 +206,18 @@ export interface Snapshot {
     };
   };
 }
-export interface Lane {
+export interface SessionLane {
+  kind: "session";
   session: Session;
   turns: Turn[];
   requests: Request[];
   requestsByTurn: ReadonlyMap<string, Request[]>;
   rarebits: RarebitMarker[];
   responseOutcomes: ResponseOutcomeMarker[];
-  live?: LiveAgent;
+  /** All current OS Process observations linked to this historical Session. */
+  processes: ProcessObservation[];
+  /** Deterministic presentation choice; this never changes Process identity. */
+  primaryProcess?: ProcessObservation;
   /**
    * Evidence used for bounded timeline filtering. Historical sessions require
    * a recorded message; a live-only lane may use a runtime observation until
@@ -251,3 +227,13 @@ export interface Lane {
   start: number;
   end: number;
 }
+export interface ProcessLane {
+  kind: "process";
+  process: ProcessObservation;
+  /** A process has only observed runtime time, never Session-message time. */
+  boundedTimeAnchor: { at: number; source: "runtime-observation" };
+  start: number;
+  end: number;
+}
+/** Timeline lanes are discriminated; Process lanes never carry Session evidence. */
+export type Lane = SessionLane | ProcessLane;

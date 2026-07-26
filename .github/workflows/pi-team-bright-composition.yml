@@ -1,0 +1,27 @@
+name: Pi Team Bright public composition
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: node scripts/verify-pi-team-bright-composition.mjs --debug
+      - run: npm test
+      - run: npm run build:timeline
+      - run: npm run build:traffic
