@@ -1,115 +1,187 @@
-import { readFileSync, readdirSync } from "node:fs";
-import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, normalize } from "node:path";
+import { pathToFileURL } from "node:url";
 
-function safeEntries(path) {
-  try {
-    return readdirSync(path, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-}
+const OBSERVATION_SCHEMA = "pi-teams-observation/1";
+const DEFAULT_DEADLINE_MS = 1_000;
 
-function safeJson(path) {
-  try {
-    return JSON.parse(readFileSync(path, "utf8"));
-  } catch {
-    return undefined;
-  }
-}
-
-function safePid(path) {
-  try {
-    const value = Number(String(readFileSync(path, "utf8")).trim());
-    return Number.isInteger(value) && value > 0 ? value : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function memberPid(teamDir, member, runtime, livePids) {
-  const lead = member.agentType === "lead";
-  const path = lead ? join(teamDir, "lead-session.json") : join(teamDir, `${member.name}.pid`);
-  const recorded = lead ? safeJson(path)?.pid : safePid(path);
-  const candidate = Number(runtime?.pid ?? recorded);
-  const valid =
-    Number.isInteger(candidate) && candidate > 0 && (!livePids || livePids.has(candidate));
-  return { pid: valid ? candidate : undefined, path: recorded === undefined ? undefined : path };
-}
-
-function terminalId(member) {
-  if (typeof member.tmuxPaneId === "string" && member.tmuxPaneId) return member.tmuxPaneId;
-  if (typeof member.windowId === "string" && member.windowId) return member.windowId;
-  return undefined;
-}
-
-function projectMember(team, teamDir, member, livePids) {
-  const runtimePath = join(teamDir, "runtime", `${member.name}.json`);
-  const runtime = safeJson(runtimePath);
-  const pid = memberPid(teamDir, member, runtime, livePids);
-  const heartbeat = Number(runtime?.lastHeartbeatAt);
-  const runtimeStartedAt = Number(runtime?.startedAt);
-  const membershipId =
-    typeof member.membershipId === "string" && member.membershipId
-      ? member.membershipId
-      : undefined;
-  const runtimeMembershipId =
-    typeof runtime?.membershipId === "string" && runtime.membershipId
-      ? runtime.membershipId
-      : undefined;
+function safeIssue(issue) {
+  if (!issue || typeof issue !== "object" || typeof issue.code !== "string") return undefined;
   return {
-    teamName: team.name,
-    agentName: member.name,
-    role: member.agentType === "lead" ? "lead" : "teammate",
-    cwd: typeof member.cwd === "string" ? member.cwd : undefined,
-    model: typeof member.model === "string" ? member.model : undefined,
-    configuredTerminalId: terminalId(member),
-    pid: pid.pid,
-    ready: typeof runtime?.ready === "boolean" ? runtime.ready : undefined,
-    lastHeartbeatAt: Number.isFinite(heartbeat) ? new Date(heartbeat).toISOString() : undefined,
-    source: team.source,
-    runtimeSource: runtime ? runtimePath : undefined,
-    pidSource: pid.path,
-    // Internal cross-source locator. The collector uses it only for a
-    // currently PID-validated Membership and strips it from the HTTP snapshot.
-    sessionFile:
-      typeof member.sessionFile === "string" && isAbsolute(member.sessionFile)
-        ? member.sessionFile
-        : undefined,
-    isActive: member.isActive === true,
-    membershipId,
-    runtimeMembershipId,
-    runtimeStartedAt: Number.isFinite(runtimeStartedAt)
-      ? new Date(runtimeStartedAt).toISOString()
-      : undefined,
+    provider: "pi_teams",
+    reason: issue.code,
+    scope:
+      issue.scope === "snapshot" || issue.scope === "team" || issue.scope === "membership"
+        ? issue.scope
+        : "snapshot",
+    ...(typeof issue.teamName === "string" ? { teamName: issue.teamName } : {}),
+    ...(typeof issue.memberName === "string" ? { agentName: issue.memberName } : {}),
   };
 }
 
-export function readPiTeams({ root = join(homedir(), ".pi", "teams"), livePids } = {}) {
-  const teams = [];
+function terminalTarget(value) {
+  if (
+    !value ||
+    typeof value.backend !== "string" ||
+    (value.kind !== "pane" && value.kind !== "window") ||
+    typeof value.targetId !== "string"
+  )
+    return undefined;
+  return { backend: value.backend, kind: value.kind, id: value.targetId };
+}
+
+function projectMembership(episode, source, parentTeamName) {
+  if (
+    !episode ||
+    typeof episode.membershipId !== "string" ||
+    episode.teamName !== parentTeamName ||
+    typeof episode.memberName !== "string" ||
+    (episode.coordinationRole !== "lead" && episode.coordinationRole !== "teammate") ||
+    (episode.lifecycle?.state !== "current" && episode.lifecycle?.state !== "ended")
+  )
+    return undefined;
+  const binding = episode.processBinding;
+  const exactGeneration =
+    binding &&
+    binding.membershipId === episode.membershipId &&
+    Number.isInteger(binding.pid) &&
+    binding.pid > 1 &&
+    typeof binding.processStartedAt === "string";
+  const target = terminalTarget(episode.terminalTarget);
+  return {
+    teamName: episode.teamName,
+    agentName: episode.memberName,
+    role: episode.coordinationRole,
+    configuredTerminalId: target?.id,
+    terminalTarget: target,
+    pid: exactGeneration ? binding.pid : undefined,
+    ready:
+      exactGeneration && typeof episode.readiness === "boolean" ? episode.readiness : undefined,
+    source,
+    sessionFile:
+      episode.session?.kind === "pi-jsonl-path" &&
+      typeof episode.session.locator === "string" &&
+      isAbsolute(episode.session.locator) &&
+      normalize(episode.session.locator) === episode.session.locator
+        ? episode.session.locator
+        : undefined,
+    isActive: episode.lifecycle.state === "current",
+    membershipId: episode.membershipId,
+    runtimeMembershipId: exactGeneration ? binding.membershipId : undefined,
+    runtimeStartedAt: exactGeneration ? binding.processStartedAt : undefined,
+    lifecycle: episode.lifecycle,
+  };
+}
+
+function unavailable(reason) {
+  return {
+    teams: [],
+    memberships: [],
+    rejected: [{ provider: "pi_teams", reason, scope: "snapshot" }],
+    observation: {
+      schema: OBSERVATION_SCHEMA,
+      availability: "unavailable",
+      producerVersion: undefined,
+      issueCount: 1,
+    },
+  };
+}
+
+async function defaultProjector(options) {
+  const configured = process.env.PI_TIMELINE_PI_TEAMS_OBSERVATION_MODULE;
+  const specifier = configured
+    ? configured.startsWith("/")
+      ? pathToFileURL(configured).href
+      : configured
+    : "@hypercarrier/pi-team-bright/observation";
+  const module = await import(specifier);
+  if (typeof module.readObservationSnapshot !== "function")
+    throw new Error("pi_teams_observation_projector_missing");
+  return module.readObservationSnapshot(options);
+}
+
+function safeIssues(issues) {
+  return (Array.isArray(issues) ? issues : []).map(safeIssue).filter(Boolean);
+}
+
+function projectTeam(team, source) {
+  if (!team || typeof team.teamName !== "string" || !Array.isArray(team.memberships))
+    return {
+      rejected: [{ provider: "pi_teams", reason: "invalid_team_observation", scope: "team" }],
+    };
   const memberships = [];
-  const rejected = [];
-  for (const directory of safeEntries(root).filter((entry) => entry.isDirectory())) {
-    const teamDir = join(root, directory.name);
-    const configPath = join(teamDir, "config.json");
-    const config = safeJson(configPath);
-    if (!config || typeof config.name !== "string" || !Array.isArray(config.members)) {
-      rejected.push({ source: configPath, reason: "invalid_team_config" });
+  const rejected = safeIssues(team.issues);
+  for (const episode of team.memberships) {
+    const membership = projectMembership(episode, source, team.teamName);
+    if (!membership) {
+      rejected.push({
+        provider: "pi_teams",
+        reason: "invalid_membership_observation",
+        scope: "team",
+        teamName: team.teamName,
+      });
       continue;
     }
-    const team = {
-      name: config.name,
-      createdAt: Number.isFinite(Number(config.createdAt))
-        ? new Date(Number(config.createdAt)).toISOString()
-        : undefined,
-      source: configPath,
-      memberCount: config.members.length,
-    };
-    teams.push(team);
-    for (const member of config.members) {
-      if (!member || typeof member.name !== "string") continue;
-      memberships.push(projectMember(team, teamDir, member, livePids));
-    }
+    memberships.push(membership);
+    rejected.push(...safeIssues(episode.issues));
   }
-  return { teams, memberships, rejected };
+  return {
+    team: { name: team.teamName, source, memberCount: team.memberships.length },
+    memberships,
+    rejected,
+  };
+}
+
+function availability(value) {
+  return value === "available" || value === "partial" || value === "unavailable"
+    ? value
+    : "unavailable";
+}
+
+/**
+ * Consume PiTeams' public recorded-evidence projection. This adapter never
+ * treats recorded Process generation or readiness as OS liveness.
+ */
+export async function readPiTeams({
+  root,
+  deadlineMs = DEFAULT_DEADLINE_MS,
+  signal,
+  readObservationSnapshot = defaultProjector,
+} = {}) {
+  let snapshot;
+  try {
+    snapshot = await readObservationSnapshot({
+      ...(root ? { teamsRoot: root } : {}),
+      deadlineMs,
+      ...(signal ? { signal } : {}),
+    });
+  } catch {
+    return unavailable("provider_unavailable");
+  }
+  if (!snapshot || snapshot.schema !== OBSERVATION_SCHEMA)
+    return unavailable("unsupported_observation_schema");
+  if (!Array.isArray(snapshot.teams) || !Array.isArray(snapshot.issues))
+    return unavailable("invalid_observation_snapshot");
+
+  const source = `${snapshot.schema}:${snapshot.producerVersion ?? "unknown"}`;
+  const teams = [];
+  const memberships = [];
+  const rejected = safeIssues(snapshot.issues);
+  for (const teamObservation of snapshot.teams) {
+    const projected = projectTeam(teamObservation, source);
+    if (projected.team) teams.push(projected.team);
+    memberships.push(...(projected.memberships ?? []));
+    rejected.push(...projected.rejected);
+  }
+  return {
+    teams,
+    memberships,
+    rejected,
+    observation: {
+      schema: snapshot.schema,
+      producerVersion: snapshot.producerVersion,
+      availability: availability(snapshot.availability),
+      issueCount: rejected.length,
+      generatedAt: typeof snapshot.generatedAt === "string" ? snapshot.generatedAt : undefined,
+    },
+  };
 }

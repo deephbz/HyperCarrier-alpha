@@ -12,10 +12,15 @@ import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { rarebitMetadata } from "@hypercarrier/hc-rarebit/core";
 import { readPiTeams } from "./pi-teams.js";
+import {
+  applyTmuxLocations,
+  observePiProcesses,
+  piTeamsClaims,
+  readHerdrProvider,
+  resolveAssociations,
+} from "./layered.js";
 
-export const SIDECAR_LEASE_MS = 30_000;
-export const SNAPSHOT_SCHEMA_VERSION = 3;
-const MAX_CLOCK_SKEW_MS = 5_000;
+export const SNAPSHOT_SCHEMA_VERSION = 4;
 const PI_TEAMS_PROCESS_START_TOLERANCE_MS = 2_500;
 const SOLO_SESSION_STARTUP_GRACE_MS = 120_000;
 const TMUX_FIELD_SEPARATOR = "::PI_TIMELINE_FIELD::";
@@ -194,6 +199,14 @@ export function mapPiProcessesToPanes(panes, processes) {
 const qualifiedWindow = (pane) => `${pane.serverSocket}:${pane.sessionId}:${pane.windowId}`;
 
 function terminalMatches(membership, pane) {
+  if (membership.terminalTarget) {
+    if (membership.terminalTarget.backend !== "tmux") return false;
+    if (membership.terminalTarget.kind === "pane")
+      return membership.terminalTarget.id === pane?.paneId;
+    if (membership.terminalTarget.kind === "window")
+      return membership.terminalTarget.id === pane?.windowId;
+    return false;
+  }
   if (membership.configuredTerminalId?.startsWith("%"))
     return membership.configuredTerminalId === pane?.paneId;
   if (membership.configuredTerminalId?.startsWith("@"))
@@ -354,8 +367,7 @@ export function inferLiveMetadata(liveAgents, sessions, memberships, teams, now 
   }
 
   // A newly created Pi session starts with its process. This is a stronger
-  // correlation than cwd/title matching and works for teammates without the
-  // lifecycle extension.
+  // correlation than cwd/title matching.
   for (const agent of liveAgents.filter((item) => !item.sessionId && item.processStartedAt)) {
     const started = Date.parse(agent.processStartedAt);
     const candidates = sessions.filter(
@@ -417,8 +429,7 @@ export function inferLiveMetadata(liveAgents, sessions, memberships, teams, now 
       });
   }
 
-  // Compatibility join for a solo Pi that started before lifecycle package
-  // adoption. It is intentionally weaker than the exact/title/start-time
+  // The solo fallback is intentionally weaker than the exact/title/start-time
   // joins above and therefore requires one unbound process and one forward-
   // time Session candidate in the cwd. It binds identity only; callers retain
   // the process-only work-state projection.
@@ -444,243 +455,6 @@ export function inferLiveMetadata(liveAgents, sessions, memberships, teams, now 
     }
   }
   return liveAgents;
-}
-
-function processAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// Live files are local extension input, not an API schema. Project an explicit
-// metadata allowlist so a malformed or future extension field cannot leak.
-function projectLiveRecord(record, source) {
-  return {
-    schemaVersion: Number(record.schemaVersion ?? 1),
-    processInstanceId: record.processInstanceId,
-    processStartedAt: record.processStartedAt,
-    pid: record.pid,
-    sessionId: record.sessionId,
-    sessionFile: record.sessionFile,
-    sessionName: record.sessionName,
-    cwd: record.cwd,
-    state: record.state,
-    activeTool: record.activeTool,
-    heartbeatAt: record.heartbeatAt,
-    model: typeof record.model === "string" ? record.model : record.model?.id,
-    context: record.context
-      ? {
-          tokens: Number(record.context.tokens ?? 0),
-          window: Number(record.context.window ?? 0),
-          percent: Number(record.context.percent ?? 0),
-        }
-      : undefined,
-    tmux: record.tmux
-      ? { serverSocket: record.tmux.serverSocket, paneId: record.tmux.paneId }
-      : undefined,
-    source,
-    confidence: "exact",
-  };
-}
-
-function leaseIsFresh(at, leaseMs, now) {
-  const observedAt = Date.parse(at ?? "");
-  const declared = Number(leaseMs);
-  const boundedLease = Number.isFinite(declared)
-    ? Math.max(1_000, Math.min(declared, SIDECAR_LEASE_MS))
-    : SIDECAR_LEASE_MS;
-  return (
-    Number.isFinite(observedAt) &&
-    observedAt <= now + MAX_CLOCK_SKEW_MS &&
-    now - observedAt <= boundedLease
-  );
-}
-
-export function readLiveSidecars({
-  dir = join(homedir(), ".pi", "agent", "timeline", "live"),
-  now = Date.now(),
-  panes = [],
-  processes = [],
-  alive = processAlive,
-} = {}) {
-  const accepted = [];
-  const rejected = [];
-  const processByPid = new Map(processes.map((item) => [item.pid, item]));
-  const paneByQualifiedId = new Map(
-    panes.map((item) => [`${item.serverSocket}:${item.paneId}`, item]),
-  );
-  for (const file of safeReadDir(dir).filter((name) => name.endsWith(".json"))) {
-    const path = join(dir, file);
-    let record;
-    try {
-      record = JSON.parse(readFileSync(path, "utf8"));
-    } catch {
-      rejected.push({ source: path, reason: "malformed_json" });
-      continue;
-    }
-    const reject = (reason) => rejected.push({ source: path, reason, pid: record?.pid });
-    if (record.schemaVersion !== 1) {
-      reject("unsupported_schema_version");
-      continue;
-    }
-    if (!Number.isInteger(record.pid) || !record.processInstanceId || !record.processStartedAt) {
-      reject("invalid_identity");
-      continue;
-    }
-    if (record.state === "stopped") {
-      reject("process_stopped");
-      continue;
-    }
-    if (!alive(record.pid) || !processByPid.has(record.pid)) {
-      reject("process_not_alive");
-      continue;
-    }
-    const observedProcess = processByPid.get(record.pid);
-    if (
-      observedProcess.startTime &&
-      (!Number.isFinite(Date.parse(record.processStartedAt)) ||
-        Math.abs(Date.parse(observedProcess.startTime) - Date.parse(record.processStartedAt)) >
-          2_000)
-    ) {
-      reject("process_instance_mismatch");
-      continue;
-    }
-    if (!leaseIsFresh(record.heartbeatAt ?? record.lastEventAt, record.leaseMs, now)) {
-      reject("lease_expired");
-      continue;
-    }
-    if (record.tmux?.serverSocket && record.tmux?.paneId) {
-      const key = `${record.tmux.serverSocket}:${record.tmux.paneId}`;
-      const pane = paneByQualifiedId.get(key);
-      if (!pane) {
-        reject("pane_missing");
-        continue;
-      }
-      const ancestry = mapPiProcessesToPanes([pane], processes).some(
-        ({ process }) => process.pid === record.pid,
-      );
-      if (!ancestry) {
-        reject("pane_ancestry_mismatch");
-        continue;
-      }
-    }
-    accepted.push(projectLiveRecord(record, path));
-  }
-  return { accepted, rejected };
-}
-
-function lifecycleRecord(started, heartbeat, attached, named, state) {
-  const attachedTmux = attached?.tmux;
-  const startedTmux = started.tmux;
-  return {
-    processInstanceId: started.processBootId,
-    processStartedAt: started.processStartedAt,
-    pid: started.pid,
-    sessionId: heartbeat.sessionId ?? attached?.sessionId,
-    sessionFile: attached?.sessionFile,
-    sessionName: named ? named.name : attached?.name,
-    cwd: attached?.cwd ?? started.cwd,
-    model: heartbeat.model ?? attached?.model,
-    context: heartbeat.context,
-    state: state?.state ?? heartbeat.state ?? "idle",
-    activeTool: state?.tool ?? heartbeat.tool,
-    heartbeatAt: heartbeat.at,
-    tmux: {
-      serverSocket:
-        attachedTmux?.serverSocket ??
-        attachedTmux?.socket ??
-        startedTmux?.serverSocket ??
-        startedTmux?.socket,
-      paneId: attachedTmux?.paneId ?? startedTmux?.paneId,
-    },
-  };
-}
-
-function lifecycleCandidate(path, now) {
-  let events;
-  try {
-    events = readFileSync(path, "utf8")
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line));
-  } catch {
-    return { rejection: { source: path, reason: "malformed_lifecycle_jsonl" } };
-  }
-  if (events.some((event) => event.schemaVersion !== 1)) {
-    return { rejection: { source: path, reason: "unsupported_schema_version" } };
-  }
-  const started = events.find((event) => event.type === "process_started");
-  const heartbeat = events.findLast((event) => event.type === "heartbeat");
-  const attached = events.findLast((event) => event.type === "session_attached");
-  const named = events.findLast(
-    (event) =>
-      event.type === "session_named" &&
-      event.attachmentId === attached?.attachmentId &&
-      event.sessionId === attached?.sessionId,
-  );
-  const state = events.findLast((event) => event.type === "state_observed");
-  const stopped = events.findLast((event) => event.type === "process_stopping");
-  if (!started?.pid || !started.processStartedAt || !started.processBootId) {
-    return { rejection: { source: path, reason: "missing_process_started" } };
-  }
-  if (stopped && Date.parse(stopped.at) >= Date.parse(heartbeat?.at ?? "")) {
-    return { rejection: { source: path, reason: "process_stopped" } };
-  }
-  if (!heartbeat || !leaseIsFresh(heartbeat.at, heartbeat.leaseMs, now)) {
-    return { rejection: { source: path, reason: "lease_expired", pid: started.pid } };
-  }
-  return {
-    candidate: { path, record: lifecycleRecord(started, heartbeat, attached, named, state) },
-  };
-}
-
-function validateLifecycleCandidate(candidate, { alive, processByPid, paneById, processes }) {
-  const { record, path } = candidate;
-  const reject = (reason) => ({ rejection: { source: path, reason, pid: record.pid } });
-  if (!alive(record.pid) || !processByPid.has(record.pid)) return reject("process_not_alive");
-  const observedProcess = processByPid.get(record.pid);
-  const recordedStart = Date.parse(record.processStartedAt);
-  if (
-    observedProcess.startTime &&
-    (!Number.isFinite(recordedStart) ||
-      Math.abs(Date.parse(observedProcess.startTime) - recordedStart) > 2_000)
-  ) {
-    return reject("process_instance_mismatch");
-  }
-  const pane = paneById.get(`${record.tmux.serverSocket}:${record.tmux.paneId}`);
-  if (!pane) return reject("pane_missing");
-  const belongsToPane = mapPiProcessesToPanes([pane], processes).some(
-    ({ process }) => process.pid === record.pid,
-  );
-  return belongsToPane
-    ? { accepted: projectLiveRecord(record, path) }
-    : reject("pane_ancestry_mismatch");
-}
-
-export function readLifecycleLeases({
-  dir = join(homedir(), ".pi", "agent", "timeline", "events"),
-  now = Date.now(),
-  panes = [],
-  processes = [],
-  alive = processAlive,
-} = {}) {
-  const parsed = safeReadDir(dir)
-    .filter((name) => name.endsWith(".jsonl"))
-    .map((file) => lifecycleCandidate(join(dir, file), now));
-  const processByPid = new Map(processes.map((item) => [item.pid, item]));
-  const paneById = new Map(panes.map((item) => [`${item.serverSocket}:${item.paneId}`, item]));
-  const checked = parsed.map((result) =>
-    result.candidate
-      ? validateLifecycleCandidate(result.candidate, { alive, processByPid, paneById, processes })
-      : result,
-  );
-  return {
-    accepted: checked.flatMap((result) => (result.accepted ? [result.accepted] : [])),
-    rejected: checked.flatMap((result) => (result.rejection ? [result.rejection] : [])),
-  };
 }
 
 function observedUsageNumber(value) {
@@ -1309,9 +1083,10 @@ export function selectSessionWindow(
   };
 }
 
-export function collectSnapshot(options = {}) {
+export async function collectSnapshot(options = {}) {
   const started = performance.now();
-  const tmux = queryTmux(options.run, options.sockets);
+  // The OS scan is the fleet inventory. Terminal providers enrich only the
+  // ProcessObservations already present in this scan.
   let processes = [];
   const rejected = [];
   try {
@@ -1319,15 +1094,14 @@ export function collectSnapshot(options = {}) {
   } catch (error) {
     rejected.push({ source: "ps", reason: "command_failed", error: errorSummary(error) });
   }
+  const tmux = queryTmux(options.run, options.sockets);
   const mapped = mapPiProcessesToPanes(tmux.panes, processes);
-  const mappedPids = new Set(mapped.map(({ process }) => process.pid));
-  const piTeams = readPiTeams({ root: options.teamsRoot, livePids: mappedPids });
-  const sidecars = readLiveSidecars({ ...options, panes: tmux.panes, processes });
-  const lifecycle = readLifecycleLeases({
-    ...options,
-    dir: options.eventsDir,
-    panes: tmux.panes,
-    processes,
+  const osPiProcesses = processes.filter((process) => isPiProcess(process.command));
+  const piTeams = await readPiTeams({
+    root: options.teamsRoot,
+    deadlineMs: options.piTeamsDeadlineMs,
+    signal: options.piTeamsSignal,
+    readObservationSnapshot: options.readPiTeamsObservation,
   });
   const cache = options.cache ?? new SessionCache();
   const catalogCache = options.catalogCache ?? new SessionCatalog();
@@ -1384,133 +1158,65 @@ export function collectSnapshot(options = {}) {
   );
   const allCatalogSessions = catalogSessions.map((item) => item.session);
 
-  // The atomic hot projection is the authoritative current observation when
-  // both representations exist; append-only lifecycle events remain the
-  // historical source and fallback.
-  const exactRecords = [...lifecycle.accepted, ...sidecars.accepted];
-  const exactByPid = new Map(exactRecords.map((item) => [item.pid, item]));
-  const sessionById = new Map(allCatalogSessions.map((item) => [item.id, item]));
-  const teamMembershipsByPid = new Map();
-  for (const membership of piTeams.memberships.filter((item) => item.pid)) {
-    const candidates = teamMembershipsByPid.get(membership.pid) ?? [];
-    candidates.push(membership);
-    teamMembershipsByPid.set(membership.pid, candidates);
-  }
-  const liveAgents = mapped.map(({ process, pane }) => {
-    const exact = exactByPid.get(process.pid);
-    const candidates = teamMembershipsByPid.get(process.pid) ?? [];
-    const membership = candidates.length === 1 ? candidates[0] : undefined;
-    const coordination = membership
-      ? {
-          kind: "pi-team",
-          teamName: membership.teamName,
-          agentName: membership.agentName,
-          role: membership.role,
-          ready: membership.ready,
-          source: membership.source,
-        }
-      : undefined;
-    const processBinding = { confidence: "exact", source: "ps", pid: process.pid };
-    const processObservation = { pid: process.pid, state: "running" };
-    return exact
-      ? {
-          ...exact,
-          pane,
-          coordination,
-          process: processObservation,
-          processState: "running",
-          workState: {
-            availability: "observed",
-            state: exact.state,
-            evidenceSource: exact.source,
-            observedAt: exact.heartbeatAt,
-          },
-          processBinding,
-          sessionBinding: exact.sessionId
-            ? {
-                confidence: "exact",
-                kind: "lifecycle_extension",
-                evidenceSource: exact.source,
-                sessionSource: sessionById.get(exact.sessionId)?.source,
-              }
-            : undefined,
-        }
-      : {
-          processInstanceId: `pid:${process.pid}`,
-          processStartedAt: process.startTime,
-          pid: process.pid,
-          cwd: pane.cwd,
-          pane,
-          coordination,
-          process: processObservation,
-          processState: "running",
-          workState: {
-            availability: "unobserved",
-            reason: "lifecycle_evidence_unavailable",
-          },
-          processBinding,
-          confidence: "process_only",
-        };
+  const generatedAt = new Date().toISOString();
+  const processObservations = observePiProcesses(osPiProcesses, generatedAt);
+  applyTmuxLocations(processObservations, mapped);
+  const teamEvidence = piTeamsClaims(processObservations, piTeams.memberships, allCatalogSessions);
+  for (const observation of processObservations)
+    observation.coordination = teamEvidence.decoration.get(observation.id);
+  const herdr = readHerdrProvider({
+    run: options.run,
+    catalogSessions: allCatalogSessions,
+    observations: processObservations,
+    processes,
   });
-  inferLiveMetadata(liveAgents, allCatalogSessions, piTeams.memberships, piTeams.teams);
-  const visibleLiveAgents = liveAgents.filter(
-    // A live sidecar can truthfully bind a just-created Session before that
-    // JSONL is discoverable. Keep that runtime-only evidence instead of
-    // treating the catalog's temporary absence as a stopped process.
-    (agent) =>
-      !agent.sessionId ||
-      !sessionById.has(agent.sessionId) ||
-      selection.selected.has(agent.sessionId),
-  );
+  resolveAssociations({
+    observations: processObservations,
+    catalogSessions: allCatalogSessions,
+    claims: [...teamEvidence.claims, ...herdr.claims],
+  });
+  // The OS inventory is independent of history paging: a linked Session may
+  // be outside this response window while its currently running Process remains true.
+  const visibleProcesses = processObservations;
   return {
     schemaVersion: SNAPSHOT_SCHEMA_VERSION,
-    generatedAt: new Date().toISOString(),
+    generatedAt,
     sessions,
     turns,
     requests,
     rarebits,
-    liveAgents: visibleLiveAgents,
+    processes: visibleProcesses,
     teams: piTeams.teams,
-    teamMemberships: piTeams.memberships.map((membership) => ({
-      teamName: membership.teamName,
-      agentName: membership.agentName,
-      role: membership.role,
-      pid: membership.pid,
-      source: membership.source,
-    })),
+    teamMemberships: piTeams.memberships
+      .filter((membership) => membership.isActive)
+      .map((membership) => ({
+        teamName: membership.teamName,
+        agentName: membership.agentName,
+        role: membership.role,
+        pid: membership.pid,
+        source: membership.source,
+      })),
     trace: {
       durationMs: performance.now() - started,
       tmux: tmux.diagnostics,
       processCount: processes.length,
-      sidecars: { accepted: sidecars.accepted.length, rejected: sidecars.rejected.length },
-      lifecycle: { accepted: lifecycle.accepted.length, rejected: lifecycle.rejected.length },
+      observedPiProcesses: processObservations.length,
       piTeams: {
         teams: piTeams.teams.length,
         memberships: piTeams.memberships.length,
-        liveMatches: liveAgents.filter((agent) => agent.coordination).length,
-        inferredLeads: liveAgents.filter(
-          (agent) => agent.coordination?.confidence === "inferred_shared_window",
-        ).length,
-        ambiguousPids: [...teamMembershipsByPid.values()].filter((items) => items.length > 1)
-          .length,
+        directClaims: teamEvidence.claims.length,
+        ...piTeams.observation,
       },
-      sessionBindings: {
-        exact: liveAgents.filter((agent) => agent.sessionId && !agent.sessionConfidence).length,
-        inferredTmuxWindowName: liveAgents.filter(
-          (agent) => agent.sessionConfidence === "inferred_tmux_window_name",
+      providers: {
+        tmux: { sockets: tmux.diagnostics.length, panes: mapped.length },
+        herdr: herdr.trace,
+      },
+      sessionLinks: {
+        providerVerified: processObservations.filter(
+          (item) => item.link?.grade === "provider_verified",
         ).length,
-        inferredProcessStart: liveAgents.filter(
-          (agent) => agent.sessionConfidence === "inferred_process_start",
-        ).length,
-        inferredProcessStartBatch: liveAgents.filter(
-          (agent) => agent.sessionConfidence === "inferred_process_start_batch",
-        ).length,
-        inferredUniqueRecent: liveAgents.filter(
-          (agent) => agent.sessionConfidence === "inferred_unique_recent_session",
-        ).length,
-        inferredRecentNamed: liveAgents.filter(
-          (agent) => agent.sessionConfidence === "inferred_recent_named_session",
-        ).length,
+        heuristic: processObservations.filter((item) => item.link?.grade === "heuristic").length,
+        unlinked: processObservations.filter((item) => !item.link).length,
       },
       sessionFiles: sessionFiles.length,
       catalogSessions: allCatalogSessions.length,
@@ -1522,7 +1228,7 @@ export function collectSnapshot(options = {}) {
       },
       cacheHits,
       sessionCache: sessionCacheTrace,
-      rejected: [...rejected, ...sidecars.rejected, ...lifecycle.rejected, ...piTeams.rejected],
+      rejected: [...rejected, ...piTeams.rejected],
     },
     page: selection.page,
   };

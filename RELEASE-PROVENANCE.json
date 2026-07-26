@@ -1,20 +1,24 @@
 {
   "schemaVersion": 1,
   "sourceRepository": "HyperCarrier",
-  "sourceCommit": "1b2d6aeb238d7f5cf566766a7b84e249402a3f88",
-  "sourceTree": "e1c2338590562fd503cb4e0a36d30e3735e18550",
+  "sourceCommit": "9fcf12ebc9d49ecca6250d8ca8e34a11f5d6bb6a",
+  "sourceTree": "7e5a74f2121f8605eb22a04f7b045fd7ca96430d",
   "sourceWorktreeDirty": false,
-  "exportContentSha256": "b667aa45b4817a2037c366ad0eeea6870ccb1d770b64768800b636e10ee61005",
-  "exportManifestSha256": "96cf4e46c20313b580d171c688ad748675c0688192a1e3fc7c636c3969873feb",
-  "dependencies": [
+  "exportContentSha256": "62e2597185f7fd975a9a77d00207c95c60cf1a6bd5df0ec90cb449a00d562ded",
+  "exportManifestSha256": "db9e8f8fc9c99c793860d8e148723d59e4288029cf28f83acb2bcbed4b36825f",
+  "dependencies": [],
+  "submodules": [
     {
-      "name": "pi-teams",
-      "repository": "https://github.com/deephbz/pi-teams",
-      "version": "0.13.1-hypercarrier.0",
-      "commit": "b1bbf4e6e4f243795ce45969a48028e207cf644a",
-      "tree": "a11129de7070598c8b84627ce9b3afcb2d4cc27a",
-      "origin": "git@github.com:deephbz/pi-teams"
+      "name": "packages/pi-team-bright",
+      "path": "packages/pi-team-bright",
+      "repository": "https://github.com/deephbz/pi-team-bright.git",
+      "commit": "f7b7c65e293ee2c9239f694f823c749d64ff7743",
+      "tree": "0c87a0059f8e3a6a9a1d28c57d1506db17d9fac4",
+      "package": {
+        "name": "@hypercarrier/pi-team-bright",
+        "version": "0.15.0-rc.1"
+      }
     }
   ],
-  "exporter": "scripts/export-public.mjs@1"
+  "exporter": "scripts/export-public.mjs@2"
 }

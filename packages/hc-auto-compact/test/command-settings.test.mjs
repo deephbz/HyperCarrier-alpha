@@ -38,12 +38,19 @@ test("command grammar defaults to status and keeps a small explicit surface", ()
     subcommand: "threshold",
     threshold: 87.5,
   });
+  assert.deepEqual(
+    parseAutoCompactCommand("run Continue exactly; keep  spacing.  "),
+    {
+      ok: true,
+      subcommand: "run",
+      prompt: "Continue exactly; keep  spacing.  ",
+    },
+  );
 
   for (const input of [
     "unknown",
     "status extra",
     "on extra",
-    "run now",
     "threshold",
     "threshold 80 extra",
   ]) {

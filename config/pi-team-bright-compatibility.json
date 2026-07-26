@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "component": "pi-team-bright",
+  "source": {
+    "repository": "https://github.com/deephbz/pi-team-bright.git",
+    "commit": "f7b7c65e293ee2c9239f694f823c749d64ff7743",
+    "tree": "0c87a0059f8e3a6a9a1d28c57d1506db17d9fac4"
+  },
+  "package": {
+    "name": "@hypercarrier/pi-team-bright",
+    "version": "0.15.0-rc.1"
+  },
+  "publication": {
+    "state": "unpublished",
+    "npmIntegrity": null
+  },
+  "pi": {
+    "peerRanges": {
+      "@earendil-works/pi-ai": "^0.80.10",
+      "@earendil-works/pi-coding-agent": "^0.80.10",
+      "@earendil-works/pi-tui": "^0.80.10",
+      "typebox": "^1.1.38"
+    }
+  },
+  "beads": {
+    "launcher": {"package": "@beads/bd", "version": "1.1.0", "bin": "bin/bd.js", "source": "src/utils/beads.ts"},
+    "archive": {"materializer": "scripts/materialize-beads-linux-amd64.cjs", "url": "https://github.com/gastownhall/beads/releases/download/v1.1.0/beads_1.1.0_linux_amd64.tar.gz", "sha256": "b0f3dd607c3fb989ee08d0a6854fba80d0402971eb108f9af6170bc14d491a34"}
+  },
+  "childVerification": {
+    "ciWorkflow": ".github/workflows/ci.yml",
+    "receipts": [
+      {"name": "clean-clone", "command": "npm ci", "result": "passed"},
+      {"name": "identity-cleared-suite", "command": "env -u PI_TEAM_NAME -u PI_AGENT_NAME -u PI_AGENT_LAUNCH_ID npm test", "result": "passed: 54 files / 433 tests"},
+      {"name": "packed-artifact", "command": "npm run verify:package", "result": "passed"},
+      {"name": "observation-consumer", "command": "scoped ESM/CommonJS/TypeScript observation import", "result": "passed"}
+    ]
+  },
+  "gitlink": {
+    "path": "packages/pi-team-bright",
+    "mode": "160000",
+    "commit": "f7b7c65e293ee2c9239f694f823c749d64ff7743"
+  },
+  "parentVerification": {
+    "state": "verified",
+    "verifier": "scripts/verify-pi-team-bright-composition.mjs",
+    "requiredCheckout": "recursive"
+  }
+}

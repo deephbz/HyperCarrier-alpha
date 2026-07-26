@@ -43,7 +43,7 @@ export function parseTimelineSnapshot(value: unknown): Snapshot {
       `Timeline snapshot schema mismatch: this UI expects v${TIMELINE_SNAPSHOT_SCHEMA_VERSION}, but the backend returned ${actual}. Restart the Timeline stack so its backend and built frontend use the same release.`,
     );
   }
-  for (const field of ["sessions", "turns", "requests", "rarebits", "liveAgents"] as const) {
+  for (const field of ["sessions", "turns", "requests", "rarebits", "processes"] as const) {
     if (!Array.isArray(record[field])) {
       throw new SnapshotCompatibilityError(
         `Timeline snapshot v${TIMELINE_SNAPSHOT_SCHEMA_VERSION} is missing required ${field} evidence.`,

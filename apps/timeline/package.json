@@ -4,15 +4,6 @@
   "private": true,
   "license": "MIT",
   "type": "module",
-  "files": [
-    "extensions/timeline-lifecycle.mjs",
-    "extensions/README.md"
-  ],
-  "pi": {
-    "extensions": [
-      "./extensions/timeline-lifecycle.mjs"
-    ]
-  },
   "scripts": {
     "start": "node server/index.js",
     "start:timeline": "node server/index.js",
@@ -26,11 +17,11 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",
-    "duplicates": "jscpd server web/src extensions --min-lines 8 --min-tokens 60 --threshold 3 --reporters console",
-    "coverage:node": "c8 --all --src server --src extensions --reporter=text --reporter=json --reports-dir=coverage/node node --test server/test/*.test.js test/*.test.mjs",
+    "duplicates": "jscpd server web/src --min-lines 8 --min-tokens 60 --threshold 3 --reporters console",
+    "coverage:node": "c8 --all --src server --reporter=text --reporter=json --reports-dir=coverage/node node --test server/test/*.test.js test/*.test.mjs",
     "coverage:web": "vitest run --config web/vitest.config.js --coverage.enabled --coverage.provider=v8 --coverage.reporter=text --coverage.reporter=json --coverage.reportsDirectory=coverage/web",
     "coverage": "npm run coverage:node && npm run coverage:web",
-    "crap:node": "crap4ts --coverage coverage/node/coverage-final.json --src . --include 'server/**/*.js' 'extensions/**/*.mjs' --exclude '**/*.test.*' --threshold 30 --top 20",
+    "crap:node": "crap4ts --coverage coverage/node/coverage-final.json --src . --include 'server/**/*.js' --exclude '**/*.test.*' --threshold 30 --top 20",
     "crap:web": "crap4ts --coverage coverage/web/coverage-final.json --src web/src --exclude '**/*.test.*' --threshold 30 --top 20",
     "crap": "npm run crap:node && npm run crap:web",
     "quality": "npm run format:check && npm run lint && npm run duplicates && npm run coverage && npm run crap && npm test && npm run build:web",
@@ -40,8 +31,8 @@
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "file:../../vendor/pi-exporter/earendil-works-pi-coding-agent-0.80.10-2c31ffc1.tgz",
-    "@hypercarrier/hc-project-distill": "0.1.0",
     "@hypercarrier/hc-rarebit": "0.1.0",
+    "@hypercarrier/pi-team-bright": "0.15.0-rc.1",
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.3",

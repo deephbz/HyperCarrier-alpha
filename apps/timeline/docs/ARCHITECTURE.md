@@ -2,9 +2,17 @@
 
 ## Outcome
 
-The application is a local, metadata-only observatory for Pi sessions. It does not replace tmux,
-pi-messenger, or pi-teams, and it never exposes prompt, completion, tool argument, or tool output
-content.
+The application is a local, metadata-only observatory for historical Pi Sessions and live
+process-birth-qualified ProcessObservations. It does not replace tmux, Herdr, pi-messenger, or
+pi-teams, and it never exposes prompt, completion, tool argument, terminal payload, stderr, or tool
+output content. The OS process scan is primary; tmux and Herdr are optional location/direct-claim
+providers, while Timeline consumes PiTeams' bounded read-only `pi-teams-observation/1` projector
+instead of its private files. Recorded PiTeams Process/readiness evidence is never liveness;
+Timeline independently verifies OS Process birth and terminal placement. PiTeams exact claims stay
+separate from coordination decoration, and the resolver applies fresh agreeing direct claims before
+recomputed bounded heuristics. A terminal-scoped Herdr Session path may locate every descendant
+Process but becomes a direct claim only when exactly one observed Pi Process is in that pane;
+ambiguity remains lane-local and unlinked. Direct provider conflict also remains unlinked.
 
 The default `/api/snapshot` is a 24-hour activity projection, keyed only by the latest persisted
 user or assistant message timestamp. A server-owned, stat-invalidated catalog performs a bounded
@@ -24,10 +32,11 @@ association evidence. The lane title compactly joins only the tuple's present co
 while sorting retains all four fixed slots; neither operation merges distinct Session evidence. An
 explicit Pi Team `teammate` role uses smaller, lighter typography, while an explicit lead, a
 standalone Session, and unknown coordination retain the primary treatment. Process and work state
-remain separate. A validated process without lifecycle evidence reads
-`Running · work state unavailable` to assistive technology and the inspector; only an accepted
-lifecycle lease may render working/idle/tool color. The visible compact line does not repeat runtime
-text because the state mark already carries that visual signal. A stopped lane remains gray.
+remain separate. A validated process reads `Running · work state unavailable` to assistive
+technology and the inspector. Timeline does not collect or infer working/idle/tool state. The
+visible compact line does not repeat runtime text because the state mark already carries that visual
+signal. A historical lane without an associated Process observation remains gray but is not called
+stopped.
 
 Lane geometry composes two independent metadata projections. User markers come from Rarebit
 evidence, while every persisted assistant Request projects its raw `stopReason` as an outcome:
@@ -42,18 +51,13 @@ semantics.
 
 The production dashboard is deliberately small: Node.js reads local source artifacts and serves a
 Vite-built React application. There is no Express, Next.js, container layer, or application
-database. Native Pi JSONL and tmux/team artifacts remain canonical; the in-memory snapshot is a
-rebuildable projection.
-
-The Timeline directory is also a Pi extension package. A host may add that directory once to Pi's
-`packages` setting; Pi then loads the declared lifecycle extension for new processes. This is a
-deployment adapter, not a new service.
+database. Native Pi JSONL, OS observations, and producer-owned PiTeams records remain authoritative;
+the in-memory snapshot is a rebuildable projection. Timeline never opens PiTeams' private storage.
 
 ```text
 ~/.pi/agent/sessions/**/*.jsonl ----+
-~/.pi/agent/timeline/{events,live} -+     +--> timeline Node HTTP service
 ~/.pi/agent/rarebit/materializations+---->|    snapshot/trace/SSE + React SPA
-~/.pi/teams/** ---------------------+
+pi-teams/observation ---------------+
 tmux sockets + list-panes ----------+     |
 macOS process table ----------------+     +--> live-detail Node HTTP service
                                           |    Rarebit projection + JSONL SSE
@@ -106,20 +110,14 @@ native export is not generated or transported until the owner explicitly request
 
 - `Host`: one localhost machine identity and boot epoch.
 - `OsProcessBoot`: host + PID + OS process start time. PID alone is reusable.
-- `ExtensionRuntime`: one loaded extension lifetime; reload/session replacement can create several
-  runtimes inside one OS process.
 - `ConversationSession`: durable Pi JSONL header identity.
-- `SessionAttachment`: validity interval relating a runtime and conversation.
 - `TmuxPane`: tmux server/socket + stable pane id. A pane can outlive sessions.
 - `TmuxBinding`: validity interval relating a process boot to a pane.
 - `Project`: normalized cwd plus optional Git root/worktree.
 - `CoordinationMembership`: typed messenger-mesh or Pi-team relation.
 - `UserSubmission`: persisted user input; the user-facing turn count.
-- `AgentRun`: `agent_start` through fully settled `agent_settled`.
-- `ModelStep`: Pi `turn_start` through `turn_end`; tool loops produce several.
 - `ProviderRequest`: one provider attempt/assistant response. It is source- qualified because
   attempts can spend without a durable assistant entry.
-- `ActivityInterval`: thinking, tool, waiting, idle, or failed over wall time.
 - `UsageSample`: request tokens, cache, cost, context, TPS, and timing.
 - `SessionUsageMetric`: a cumulative token or provider-spend projection whose availability is
   `complete`, a `partial` observed subtotal, or `unavailable`; observed zero is not absence.
@@ -138,55 +136,33 @@ WorkStateAvailability = observed | unobserved
 WorkState = idle | thinking | tool | waiting_input | settled | failed
 ```
 
-Live state is a leased observation backed by heartbeat freshness, process start identity, and pane
-existence. Graceful stop and inferred disappearance are not conflated. Events record `eventTime`,
-collector `observedAt`, and optional process-monotonic time. Derived intervals carry
-`confidence: exact | inferred`.
+Live observation is process-only: current Pi process ancestry proves liveness/location, while work
+state remains explicitly unavailable. Process disappearance is not a work conclusion.
 
 ## Raw sources and data DAG
 
 ```text
-Pi session JSONL -----------+
-Pi lifecycle sidecars ------+--> normalize/dedupe --> snapshot + SSE --> UI
-all local tmux servers ------+          |                              |
-pi-messenger registry/feed -+          +--> trace diagnostics         +--> lanes
-pi-teams roster/tasks ------+                                         +--> summaries
+Pi Session JSONL -------------------+
+all local tmux servers --------------+          |                    |
+OS Process observations -------------+          +--> trace           +--> lanes
+PiTeams observation/1 projection ----+                               +--> summaries
 ```
 
-Raw append-only records are source of truth. Snapshots and aggregates are rebuildable materialized
+Each producer's raw records remain its source of truth. Timeline receives only PiTeams' versioned,
+read-only Membership-evidence projection; snapshots and aggregates are rebuildable materialized
 views. Every normalized row carries provenance and a derivation version.
-
-## Lifecycle envelope
-
-The optional extension writes private append-only NDJSON under `~/.pi/agent/timeline/events/`. Each
-event uses an envelope:
-
-```ts
-interface EventEnvelope<T> {
-  schemaVersion: 1;
-  eventId: string;
-  source: { kind: string; instance: string; rawId: string; path?: string };
-  eventTime: string;
-  observedAt: string;
-  monotonicNs?: string;
-  hostId: string;
-  payload: T;
-}
-```
-
-Payloads include runtime start/heartbeat/stop, session attachment/name, coordination membership,
-agent-run start/settle, model-step start/end, state change, context observation, and compaction
-observation. Usage is not duplicated unless required for transient live display; native assistant
-usage and optional TPS entries remain canonical.
 
 ## Collector and API
 
 The collector enumerates default and named tmux sockets, runs `list-panes -a` per server, takes one
-process-tree snapshot, and joins Pi descendants to panes. Extension leases are authoritative only
-when PID/process-start/pane/heartbeat all validate. Without an extension, process ancestry proves a
-live Pi process but JSONL session binding is explicitly heuristic or unknown.
+process-tree snapshot, and joins Pi descendants to panes. It then awaits the optional PiTeams public
+projector under its total deadline and cancellation contract. `partial` retains completed Teams;
+`unavailable` removes no native Session or OS Process lane. Process ancestry proves a live Pi
+process but not work state. JSONL Session binding is exact only through current PiTeams evidence
+whose recorded PID/start, typed terminal target, and exact native Session locator also match
+Timeline's independent observations; native correlation is explicitly inferred or unknown.
 
-- `GET /api/snapshot`: schema version `3`, sessions with independently qualified cumulative token
+- `GET /api/snapshot`: schema version `4`, sessions with independently qualified cumulative token
   and provider-spend metrics, requests and raw stop reasons, Rarebit marker metadata, the tri-state
   content-free Rarebit Summary attention projection, process/work observations, live tmux state, and
   generation time. The frontend accepts only its exact projection version and renders
@@ -230,7 +206,7 @@ offset, prefix/tail hash, and parser-contract version and handle truncation, rot
 files, inode reuse, malformed rows, and partial trailing lines. Re-ingestion is idempotent.
 
 The collector retains hot state and serves compact metadata. A persistent SQLite index is allowed
-for lease/checkpoint/restart correctness; raw files stay canonical. DuckDB/browser analytics remains
+for checkpoint/restart correctness; raw files stay canonical. DuckDB/browser analytics remains
 optional until measured latency justifies it. Synthetic verification covers at least 12 sessions,
 200+ user submissions in dense sessions, multiple compactions, and 10M+ aggregate tokens.
 
@@ -274,8 +250,8 @@ virtualization remain future work.
 3. Live processes map to pane PID trees across all discoverable tmux sockets.
 4. Re-ingestion and restart reconciliation are idempotent.
 5. No content sentinel crosses any metadata surface.
-6. Fixtures cover stale/crash, reload/session switch, resume in another pane, retry/branch spend,
-   malformed logs, and messenger/team membership.
+6. Fixtures cover Session parsing/cache behavior, resume in another pane, retry/branch spend,
+   malformed logs, and Team membership.
 7. Synthetic 10M-token fixtures meet measured correctness/performance budgets.
 8. Chrome review verifies timeline legibility, filters, zoom, grouping, responsive layout, keyboard
    focus, contrast, and empty/error/live states.
