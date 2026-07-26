@@ -198,6 +198,7 @@ export default function registerPiRarebit(pi, config = {}) {
     const result = await processRarebitSummary(ctx, {
       ...effective,
       forceSynthesis: force,
+      lifecycleBoundary: force ? "manual" : ctx?.lifecycleBoundary,
       queryAutomaticSummaryPolicy:
         explicit.queryAutomaticSummaryPolicy ?? eventPolicyQuery,
       onSynthesisTriggered: (detail) => {
@@ -238,7 +239,6 @@ export default function registerPiRarebit(pi, config = {}) {
   });
   let activeSession;
   let autoTitleOverride;
-  let pendingRecall;
   const ownerTitleEvidence = new Map();
   const discardRecall = async (recall) => {
     try {
@@ -320,19 +320,9 @@ export default function registerPiRarebit(pi, config = {}) {
 
   registerRarebitLifecycle(pi, schedule, {
     onSessionStart: (ctx) => {
-      if (pendingRecall) {
-        const stale = pendingRecall;
-        pendingRecall = undefined;
-        void discardRecall(stale.recall);
-      }
       activeSession = identityFrom(ctx);
     },
     onSessionShutdown: () => {
-      if (pendingRecall) {
-        const stale = pendingRecall;
-        pendingRecall = undefined;
-        void discardRecall(stale.recall);
-      }
       activeSession = undefined;
     },
     onFirstPersistedOwnerMessage: (ctx, ownerMessage) => {
@@ -376,41 +366,6 @@ export default function registerPiRarebit(pi, config = {}) {
       "Interpret this history using the ordinary user prompt sent separately for this turn.",
     ].join("\n");
 
-  const recallReceipt = (pending) =>
-    [
-      `Rarebit recall prepared and sent with your prompt (${pending.recall.selectedMessageCount} messages)`,
-      `Conversation JSON: ${pending.recall.conversationPath}`,
-      `Detailed evidence JSON: ${pending.recall.detailedPath}`,
-      "Ordinary user prompt: sent separately and unchanged",
-      "Agent-facing extension context delivered (exact):",
-      pending.contextMessage.content,
-    ].join("\n");
-
-  pi.on("before_agent_start", async (event, ctx) => {
-    if (!pendingRecall) return;
-    const pending = pendingRecall;
-    pendingRecall = undefined;
-    if (event.prompt !== pending.prompt) {
-      await discardRecall(pending.recall);
-      notify(
-        ctx,
-        "Rarebit recall was not delivered: a different prompt started, so the prepared bundle was discarded",
-        "warning",
-      );
-      return;
-    }
-    if (!recallMatchesCurrentBranch(pending.recall, ctx)) {
-      await discardRecall(pending.recall);
-      notify(
-        ctx,
-        "Rarebit recall was not delivered: the active Pi Session or branch changed before prompt start",
-        "error",
-      );
-      return;
-    }
-    notify(ctx, recallReceipt(pending), "info");
-    return { message: pending.contextMessage };
-  });
 
   pi.registerCommand?.("rarebit", {
     description: rarebitCommandDescription(),
@@ -428,12 +383,15 @@ export default function registerPiRarebit(pi, config = {}) {
         return;
       }
       const { subcommand, arguments: rest } = command;
-      if (subcommand === "dump") {
-        const prompt = rest[1];
-        if (typeof pi.sendUserMessage !== "function") {
+      if (subcommand === "recall") {
+        const prompt = rest[0];
+        if (
+          typeof pi.sendMessage !== "function" ||
+          typeof pi.sendUserMessage !== "function"
+        ) {
           notify(
             ctx,
-            "Rarebit recall is unavailable: this Pi runtime cannot deliver a user prompt",
+            "Rarebit recall is unavailable: this Pi runtime cannot deliver the recall event and user prompt",
             "error",
           );
           return;
@@ -446,48 +404,40 @@ export default function registerPiRarebit(pi, config = {}) {
           );
           return;
         }
+        let recall;
+        let recallEventRequested = false;
         try {
-          const recall = await recallMaterializer(ctx);
+          recall = await recallMaterializer(ctx);
           if (!recallMatchesCurrentBranch(recall, ctx)) {
-            await discardRecall(recall);
             throw new Error(
               "the active Pi Session or branch changed during materialization",
             );
           }
-          if (pendingRecall) {
-            const stale = pendingRecall;
-            pendingRecall = undefined;
-            await discardRecall(stale.recall);
-          }
-          pendingRecall = {
-            prompt,
-            recall,
-            contextMessage: {
-              customType: "rarebit-recall-context",
-              content: recallContextContent(recall),
-              display: false,
-              details: {
-                conversationPath: recall.conversationPath,
-                detailedPath: recall.detailedPath,
-                sessionId: recall.sessionId,
-                branchLeafId: recall.branchLeafId,
-                selectorVersion: recall.selectorVersion,
-                manifestHash: recall.manifestHash,
-                selectedMessageCount: recall.selectedMessageCount,
-              },
+          const contextMessage = {
+            customType: "rarebit.recall",
+            content: recallContextContent(recall),
+            display: true,
+            details: {
+              conversationPath: recall.conversationPath,
+              detailedPath: recall.detailedPath,
+              sessionId: recall.sessionId,
+              branchLeafId: recall.branchLeafId,
+              selectorVersion: recall.selectorVersion,
+              manifestHash: recall.manifestHash,
+              selectedMessageCount: recall.selectedMessageCount,
             },
           };
-          try {
-            pi.sendUserMessage(prompt);
-          } catch (error) {
-            pendingRecall = undefined;
-            await discardRecall(recall);
-            throw error;
-          }
+          pi.sendMessage(contextMessage, { triggerTurn: false });
+          recallEventRequested = true;
+          pi.sendUserMessage(prompt);
         } catch (error) {
+          if (!recallEventRequested) await discardRecall(recall);
+          const failure = recallEventRequested
+            ? "The recall event was requested, but the paired prompt could not be requested synchronously; the runtime may have persisted the event."
+            : "The recall event and prompt were not requested.";
           notify(
             ctx,
-            `Rarebit recall failed: ${error?.message ?? error}. The prompt was not sent; verify the current Session is persisted and the OS temp directory is writable, then retry.`,
+            `Rarebit recall failed: ${error?.message ?? error}. ${failure} Verify the current Session is persisted and the OS temp directory is writable, then retry.`,
             "error",
           );
         }

@@ -14,7 +14,7 @@
   stack-safe exporter patch. It remains Pi-owned native HTML and will be replaced by a conforming
   upstream release after that release passes the same deep-tree and exact-entry regressions.
 - The optional TPS adapter expects a separately built `pi-tps-web` renderer;
-  the timeline, live detail, and Alpha Project view do not require it.
+  the timeline and live detail views do not require it.
 - An explicitly configured Rarebit model receives the complete selected user
   and assistant Rarebit prose under the configured summary policy. Use a
   trusted/local provider or leave model synthesis disabled for sensitive

@@ -59,8 +59,7 @@ health route.
 
 Then open:
 
-- `http://127.0.0.1:4318/?demo=1` for the synthetic session timeline;
-- `http://127.0.0.1:4318/alpha?demo=1` for the synthetic HyperCarrier Project view.
+- `http://127.0.0.1:4318/?demo=1` for the synthetic session timeline.
 
 Demo mode is explicit and never silently replaces a failed live query. It is a
 client-side display mode; the local server APIs may still collect configured or
@@ -69,20 +68,10 @@ process with no user Session files.
 
 ## Use real local data
 
-Copy the example registry to an ignored local file and edit it for your
-Projects:
-
-```sh
-cp config/project-registry.example.json config/project-registry.local.json
-PI_TIMELINE_PROJECT_REGISTRY="$PWD/config/project-registry.local.json" npm start
-```
-
-Load the optional lifecycle extension in a Pi process for stronger live-state
-and process/session identity evidence:
-
-```sh
-pi -e "$PWD/apps/timeline/extensions/timeline-lifecycle.mjs"
-```
+Timeline loads no Pi extension. It discovers live Pi processes through tmux and
+the operating system, shows liveness/location with explicitly unavailable work
+state, and keeps Session correlation conservative; an ambiguous binding remains
+unavailable.
 
 Rarebit is a separate Pi package under `packages/hc-rarebit`. Its model-provider
 call is opt-in because selected user and assistant prose crosses the configured
@@ -101,8 +90,8 @@ runtime state. Once loaded, it is enabled by default at a 90% effective-context
 threshold. Its package README documents the cooperative handoff, durable
 settings, manual trigger, and failure behavior.
 
-PiTeams orchestration and its Beads-backed Task integration are maintained in
-[deephbz/pi-teams](https://github.com/deephbz/pi-teams).
+Pi Team Bright orchestration and its Beads-backed Task integration are maintained in
+[deephbz/pi-team-bright](https://github.com/deephbz/pi-team-bright). Clone this Alpha with `git clone --recurse-submodules`; a non-recursive clone intentionally lacks `packages/pi-team-bright` until `git submodule update --init --recursive` is run. The gitlink composes public source at its verified revision; `@hypercarrier/pi-team-bright` remains unpublished on npm.
 
 ## Trust model
 
@@ -118,8 +107,7 @@ PiTeams orchestration and its Beads-backed Task integration are maintained in
   not prove that model-generated claims are true or accepted.
 
 See [Concepts](docs/CONCEPTS.md), [Architecture](docs/ARCHITECTURE.md),
-[Alpha operation](docs/ALPHA.md), [Traffic analysis](docs/TRAFFIC.md), and
-[Known limitations](docs/KNOWN-LIMITATIONS.md).
+[Traffic analysis](docs/TRAFFIC.md), and [Known limitations](docs/KNOWN-LIMITATIONS.md).
 
 ## Privacy and security
 

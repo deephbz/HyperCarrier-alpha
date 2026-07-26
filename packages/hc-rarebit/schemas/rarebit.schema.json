@@ -26,6 +26,30 @@
       },
       "additionalProperties": false
     },
+    "rarebitOccurrence": {
+      "type": "object",
+      "required": [
+        "occurrenceId",
+        "sourceEntryId",
+        "order",
+        "role",
+        "outcome",
+        "producer",
+        "timestamp",
+        "contentHash"
+      ],
+      "properties": {
+        "occurrenceId": { "type": "string", "minLength": 1 },
+        "sourceEntryId": { "type": ["string", "null"] },
+        "order": { "type": "integer", "minimum": 0 },
+        "role": { "enum": ["user", "assistant"] },
+        "outcome": { "enum": ["user", "stop", "continuation"] },
+        "producer": { "type": ["string", "null"] },
+        "timestamp": { "type": ["string", "null"] },
+        "contentHash": { "$ref": "#/definitions/sha256" }
+      },
+      "additionalProperties": false
+    },
     "selection": {
       "type": "object",
       "required": [
@@ -41,7 +65,10 @@
         "selectorVersion": { "type": "string", "minLength": 1 },
         "occurrenceCount": { "type": "integer", "minimum": 0 },
         "uniquePayloadCount": { "type": "integer", "minimum": 0 },
-        "occurrences": { "type": "array" },
+        "occurrences": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/rarebitOccurrence" }
+        },
         "payloads": { "type": "array" }
       },
       "additionalProperties": false
@@ -109,7 +136,7 @@
         "promptVersion"
       ],
       "properties": {
-        "schemaVersion": { "enum": [1, 2] },
+        "schemaVersion": { "enum": [1, 2, 3] },
         "type": { "const": "rarebit_summary" },
         "status": {
           "enum": [
@@ -122,6 +149,9 @@
         },
         "implementationVersion": { "type": "string", "minLength": 1 },
         "synthesisMode": { "enum": ["automatic", "forced"] },
+        "lifecycleBoundary": {
+          "enum": ["owner_request", "agent_settled", "session_start", "manual"]
+        },
         "inputCoveragePolicy": {
           "type": "object",
           "required": ["strategy", "maxPromptChars"],
@@ -182,6 +212,20 @@
         },
         "summary": { "type": "string" },
         "summaryNeedsHumanAttention": { "type": "boolean" },
+        "sessionStatus": {
+          "enum": ["user_requested", "finished", "needs_attention"]
+        },
+        "statusReason": {
+          "enum": [
+            "owner_request_recorded",
+            "all_requests_accomplished",
+            "decision",
+            "input",
+            "approval",
+            "blocker",
+            "unfinished"
+          ]
+        },
         "synthesis": { "type": "object" },
         "overflow": { "type": "object" },
         "retryable": { "type": "boolean" },
@@ -189,6 +233,86 @@
       },
       "additionalProperties": false,
       "allOf": [
+        {
+          "if": {
+            "required": ["schemaVersion"],
+            "properties": { "schemaVersion": { "const": 3 } }
+          },
+          "then": {
+            "required": ["lifecycleBoundary"],
+            "not": { "required": ["summaryNeedsHumanAttention"] }
+          }
+        },
+        {
+          "if": {
+            "required": ["schemaVersion", "status"],
+            "properties": {
+              "schemaVersion": { "const": 3 },
+              "status": { "const": "ok" }
+            }
+          },
+          "then": {
+            "required": ["summary", "sessionStatus", "statusReason"],
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "sessionStatus": { "const": "user_requested" }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "statusReason": { "const": "owner_request_recorded" },
+                    "lifecycleBoundary": { "const": "owner_request" }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "lifecycleBoundary": { "const": "owner_request" }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "sessionStatus": { "const": "user_requested" },
+                    "statusReason": { "const": "owner_request_recorded" }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": { "sessionStatus": { "const": "finished" } }
+                },
+                "then": {
+                  "properties": {
+                    "statusReason": { "const": "all_requests_accomplished" }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "sessionStatus": { "const": "needs_attention" }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "statusReason": {
+                      "enum": [
+                        "decision",
+                        "input",
+                        "approval",
+                        "blocker",
+                        "unfinished"
+                      ]
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
         {
           "if": {
             "required": ["schemaVersion", "status"],
@@ -204,9 +328,7 @@
             "required": ["schemaVersion"],
             "properties": { "schemaVersion": { "const": 1 } }
           },
-          "then": {
-            "not": { "required": ["summaryNeedsHumanAttention"] }
-          }
+          "then": { "not": { "required": ["summaryNeedsHumanAttention"] } }
         },
         {
           "if": {

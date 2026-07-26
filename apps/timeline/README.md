@@ -1,10 +1,12 @@
 # Pi Session Timeline
 
-Local, metadata-only monitoring for Pi agents running in tmux. The collector discovers every tmux
-server socket owned by the current user, joins pane process trees to Pi processes, incrementally
-reads native Pi JSONL, and validates exact live state from the bundled lifecycle extension's leases.
-It also reads `~/.pi/teams` configs, runtime records, and PID evidence to correlate live processes
-with Pi Team and teammate names.
+Local, metadata-only monitoring for Pi sessions and OS-observed Pi processes. One OS-wide process
+scan is the fleet inventory; tmux and optional Herdr 0.7.5 snapshot/process-info reads add qualified
+locations, while PiTeams may add exact binding claims and separate coordination decoration. Direct
+claims resolve before bounded heuristics, and every selected association states whether it is
+**Provider-verified** or **Heuristic**. An unlinked process remains a first-class unbound process,
+never a synthetic Session. `PI_TIMELINE_HERDR_BIN` may override the read-only Herdr binary; absence
+or failure is isolated and reported only through redacted provider trace metadata.
 
 ```bash
 npm test
@@ -43,10 +45,10 @@ Each session inspector links to two independent detail services:
 - **TPS inspector** (`:4320/?auto=1&session=<id>`) is optional and serves a separately built
   `pi-tps-web` application against that session's native JSONL.
 
-The timeline, live-detail, and Alpha Project surfaces do not require the TPS renderer. The TPS
-adapter and raw telemetry route remain healthy without it, while `/api/health` reports
-`renderer:false` and the renderer route returns an actionable 404. HyperCarrier pins the external
-renderer contract in `integrations/pi-tps-web.json`; build that exact artifact separately:
+The timeline and live-detail surfaces do not require the TPS renderer. The TPS adapter and raw
+telemetry route remain healthy without it, while `/api/health` reports `renderer:false` and the
+renderer route returns an actionable 404. HyperCarrier pins the external renderer contract in
+`integrations/pi-tps-web.json`; build that exact artifact separately:
 
 ```bash
 git clone https://github.com/monotykamary/pi-tps-web.git /path/to/pi-tps-web
@@ -63,9 +65,9 @@ The pinned revision declares MIT in its README and package metadata but contains
 HyperCarrier therefore references the separately built artifact and does not vendor or redistribute
 that source; re-check upstream licensing before changing the distribution model.
 
-Refresh is event-driven: the server watches Pi session JSONL and lifecycle lease directories,
-debounces write bursts, refreshes the snapshot, and sends an SSE invalidation to browsers. A
-30-second reconciliation covers tmux/process changes that do not produce a filesystem event;
+Refresh is event-driven: the server watches Pi session JSONL, Rarebit materializations, and PiTeams
+metadata, debounces write bursts, refreshes the snapshot, and sends an SSE invalidation to browsers.
+A 30-second reconciliation covers tmux/process changes that do not produce a filesystem event;
 override it with `PI_TIMELINE_RECONCILIATION_MS` when debugging.
 
 The server binds only to `127.0.0.1`; there is no LAN/public listener mode in this Alpha.
@@ -103,28 +105,22 @@ that still maps to an observed live Pi process; configured pane IDs are retained
 because they can be stale after respawn. Historical sessions without live team/tmux evidence are
 placed in explicit “No … evidence” groups rather than guessed.
 
-The Alpha Project view reads the canonical product registry selected by
-`PI_TIMELINE_PROJECT_REGISTRY` / `HC_PROJECT_REGISTRY`. In this monorepo, start from
-`config/project-registry.example.json` and keep the machine-local registry outside version control.
-The view consumes configured rarebit/event JSONL and distiller proposal bundle metadata without a
-timeline-owned manifest or conversion step.
-
 The separate **Filter** and **Value** controls use the same field ontology as grouping for project,
 cwd, session name, Pi Team, tmux session/window, and state. They compose with time range,
 alive-only, and free-text search instead of replacing those constraints.
 
-Live lane labels show the bound Pi session ID. Exact lifecycle bindings take precedence; teammates
-without the lifecycle extension can first bind through their current PiTeams Membership's exact
-Session file, but only when active Membership identity, runtime generation, PID/process start,
-configured pane, and a unique catalog source all agree. Remaining processes may be correlated
-through a unique same-cwd tmux-window/session-name match, unique process/session start evidence, or
-deterministic same-second spawn batches. A resumed team lead may be inferred only when it is the
-sole unmatched Pi sharing a qualified tmux window and cwd with multiple PID-validated teammates,
-followed by one recent named unclaimed session. The API exposes separate process and session binding
-evidence; the inspector keeps full Session identity and owner-relevant state/usage/Summary structure
-in its default hierarchy, while PID, process instance, match method/confidence, evidence source,
-canonical JSONL source, and Summary lineage remain copyable in a closed diagnostic disclosure. It
-leaves the session ID explicitly unavailable when evidence is ambiguous.
+Live lane labels show the bound Pi session ID when conservative correlation succeeds. Current
+PiTeams Membership evidence can bind exactly only when active Membership identity, runtime
+generation, PID/process start, configured pane, and a unique catalog source all agree. Remaining
+processes may be correlated through a unique same-cwd tmux-window/session-name match, unique
+process/session start evidence, or deterministic same-second spawn batches. A resumed team lead may
+be inferred only when it is the sole unmatched Pi sharing a qualified tmux window and cwd with
+multiple PID-validated teammates, followed by one recent named unclaimed session. The API exposes
+separate process and session binding evidence; the inspector keeps full Session identity and
+owner-relevant state/usage/Summary structure in its default hierarchy, while PID, process instance,
+match method/confidence, evidence source, canonical JSONL source, and Summary lineage remain
+copyable in a closed diagnostic disclosure. It leaves the session ID explicitly unavailable when
+evidence is ambiguous.
 
 Lane identity typography uses only the typed live coordination role: explicit teammates are
 subordinate, while team leads, standalone Sessions, and unknown coordination remain primary. The
@@ -151,30 +147,17 @@ always retain precedence and never fall through to HTML. Static paths are decode
 symlinks are resolved before serving, and immutable caching is limited to fingerprinted
 asset-directory files.
 
-Load this package through Pi's `packages` setting to add exact live state, context-window usage, and
-process/session identity to every newly launched Pi process. The package manifest declares the
-bundled extension, so the host setting needs only the package directory:
-
-```json
-{ "packages": ["/absolute/path/to/HyperCarrier/apps/timeline"] }
-```
-
-For a one-off process, load the same extension directly:
-
-```bash
-pi -e "$PWD/extensions/timeline-lifecycle.mjs"
-```
-
-Use an absolute path when launching Pi outside this repository. Without accepted lifecycle evidence,
-an alive Pi process still appears as `Running`, but its work state is explicitly `unobserved`;
-process liveness never becomes guessed `working` or `idle` state.
+Timeline does not load a Pi extension or read/write Timeline lifecycle files. Every Pi process
+discovered in a current tmux pane remains visible with process liveness and location, but its work
+state is explicitly unavailable; Timeline does not infer thinking, tool use, idle, blocking,
+completion, context occupancy, or progress.
 
 ## Current limitations
 
 - Pi Messenger mesh history is not ingested. Pi Teams config/runtime/PID metadata is ingested only
   for currently PID-correlated members; historical team membership is not guessed.
-- `/api/health` describes the latest collection pass; use lease age and `/api/trace` when diagnosing
-  freshness.
+- `/api/health` describes the latest collection pass; use `/api/trace` when diagnosing correlation,
+  source counts, and freshness.
 - Monitoring is metadata-only. Terminal content, prompts, tool arguments, and tool output are
   intentionally unavailable to the dashboard. The bounded exception is a content-free, fresh,
   explicit Rarebit Summary attention Boolean; it remains separate from liveness, work state, and
@@ -188,8 +171,7 @@ process liveness never becomes guessed `working` or `idle` state.
   collections as zero evidence.
 - `GET /api/events` emits SSE invalidations; clients refetch the snapshot so there is only one state
   model.
-- `GET /api/trace` explains tmux queries, cache hits, source counts, and every rejected/stale
-  lifecycle record.
+- `GET /api/trace` explains tmux queries, cache hits, source counts, and correlation provenance.
 - `GET /api/health` reports collector health plus the configured traffic health location.
 - `GET /api/traffic/config` reports the traffic launch origin; `GET /api/traffic/health` performs a
   bounded loopback health diagnostic without making Timeline a traffic authority.
@@ -198,16 +180,10 @@ The JSONL parser only copies identity, timestamps, model/provider, stop reason, 
 cost. Prompt text, assistant text, reasoning, tool arguments, tool output, terminal content, and
 full process command lines never cross the API boundary.
 
-## Live identity and leases
+## Live process observation
 
 `TmuxLocation`, OS `ProcessInstance`, and Pi `ConversationSession` are separate identities. Pane IDs
-are qualified by tmux server socket; process IDs are qualified by observed start time; a Pi process
-can switch sessions. Live records must pass all of these checks:
-
-1. lifecycle heartbeat lease is fresh;
-2. PID currently exists in the process snapshot;
-3. tmux server and pane still exist;
-4. PID is the pane root or its descendant;
-5. process start time matches when the live projection provides it.
-
-Stale or malformed evidence is retained only as a reason in `/api/trace`.
+are qualified by tmux server socket; process IDs are qualified by observed start time. A current Pi
+process must be found through a non-dead tmux pane and process ancestry. It is then visible as
+`Running` with liveness/location, while its work state remains explicitly `unobserved` with reason
+`process_only_observation`. Timeline does not collect or infer lifecycle/activity state.

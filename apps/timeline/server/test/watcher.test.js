@@ -6,14 +6,12 @@ import { join } from "node:path";
 import test from "node:test";
 import { createSourceWatcher, timelineWatchRoots } from "../watcher.js";
 
-test("fixture roots replace only native Session and Team watch roots", () => {
+test("fixture roots contain only native Session, Rarebit, and Team sources", () => {
   const home = mkdtempSync(join(tmpdir(), "pi-watch-home-"));
   const sessionsRoot = join(home, "fixture-sessions");
   const teamsRoot = join(home, "fixture-teams");
   assert.deepEqual(timelineWatchRoots({ sessionsRoot, teamsRoot, home }), [
     sessionsRoot,
-    join(home, ".pi", "agent", "timeline", "events"),
-    join(home, ".pi", "agent", "timeline", "live"),
     join(home, ".pi", "agent", "rarebit"),
     teamsRoot,
   ]);

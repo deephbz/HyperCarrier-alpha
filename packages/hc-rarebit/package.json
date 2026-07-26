@@ -29,6 +29,9 @@
     "./core": "./src/rarebit-core.mjs",
     "./session": "./src/rarebit-session.mjs",
     "./service": "./src/rarebit-service.mjs",
+    "./status": "./src/rarebit-status.mjs",
+    "./artifact-state": "./src/rarebit-artifact-state.mjs",
+    "./visual-language": "./src/rarebit-visual-language.mjs",
     "./extension": "./src/extension.mjs",
     "./types": "./src/types.d.ts"
   },
@@ -37,6 +40,7 @@
     "src",
     "schemas",
     "README.md",
-    "RUNBOOK.md"
+    "RUNBOOK.md",
+    "VISUAL-LANGUAGE.md"
   ]
 }

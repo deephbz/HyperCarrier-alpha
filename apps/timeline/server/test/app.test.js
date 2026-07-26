@@ -186,6 +186,20 @@ test("serves built assets and SPA routes without shadowing APIs or allowing trav
   assert.match(asset.headers.get("cache-control"), /immutable/);
   const spa = await fetch(`${base}/sessions/one`, { headers: { accept: "text/html" } });
   assert.match(await spa.text(), /Pi Timeline/);
+  for (const [method, path] of [
+    ["GET", "/alpha"],
+    ["GET", "/alpha?demo=1"],
+    ["GET", "/alpha/anything"],
+    ["HEAD", "/alpha"],
+    ["HEAD", "/alpha/anything"],
+    ["GET", "/api/alpha/snapshot"],
+    ["GET", "/api/alpha/trace"],
+    ["GET", "/api/alpha/events"],
+  ]) {
+    const response = await fetch(`${base}${path}`, { method, headers: { accept: "text/html" } });
+    assert.equal(response.status, 404, `${method} ${path}`);
+    if (method === "GET") assert.deepEqual(await response.json(), { error: "not_found" });
+  }
   assert.equal(
     (await fetch(`${base}/api/not-real`, { headers: { accept: "text/html" } })).status,
     404,
@@ -238,7 +252,6 @@ test("lazy Session summary is resolved server-side and stays outside the metadat
     collect,
     reconciliationMs: 60_000,
     watchSources: () => ({ close() {} }),
-    watchAlphaSources: () => ({ close() {} }),
     readRarebitSummary: (session) => {
       requestedSession = session;
       return {
@@ -261,73 +274,4 @@ test("lazy Session summary is resolved server-side and stays outside the metadat
   assert.equal(detail.hidden, undefined);
   assert.equal(JSON.stringify(detail).includes(rawSentinel), false);
   assert.equal((await fetch(`${base}/api/sessions/%2Ftmp%2Fbad/rarebit-summary`)).status, 404);
-});
-
-test("Alpha API and SSE are additive and isolated from the legacy metadata snapshot", async (t) => {
-  let legacyNotify;
-  let alphaNotify;
-  let alphaCalls = 0;
-  const server = createTimelineServer({
-    reconciliationMs: 60_000,
-    collect: () => ({
-      generatedAt: "legacy-1",
-      sessions: [],
-      turns: [],
-      requests: [],
-      liveAgents: [],
-      secretSentinel: "legacy-only-secret",
-      trace: { rejected: [] },
-    }),
-    collectAlpha: ({ baseSnapshot }) => {
-      alphaCalls += 1;
-      return {
-        schemaVersion: 1,
-        generatedAt: `alpha-${alphaCalls}`,
-        projects: [
-          {
-            projectRef: { id: "p1", name: "Project", provenance: {} },
-            runtime: {},
-            rarebitSummary: { summary: "safe-derived-summary" },
-            intervention: {},
-            eventDelta: {},
-            evergreenDelta: {},
-            workLedger: {},
-            delivery: {},
-          },
-        ],
-        trace: { baseGeneratedAt: baseSnapshot.generatedAt },
-      };
-    },
-    watchSources: (callback) => {
-      legacyNotify = callback;
-      return { close() {} };
-    },
-    watchAlphaSources: (callback) => {
-      alphaNotify = callback;
-      return { close() {} };
-    },
-  });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => server.close());
-  const base = `http://127.0.0.1:${server.address().port}`;
-  const legacy = await (await fetch(`${base}/api/snapshot`)).json();
-  assert.equal("secretSentinel" in legacy, true);
-  const alpha = await (await fetch(`${base}/api/alpha/snapshot`)).json();
-  assert.equal(alpha.projects[0].rarebitSummary.summary, "safe-derived-summary");
-  assert.equal("secretSentinel" in alpha, false);
-  assert.deepEqual(await (await fetch(`${base}/api/alpha/trace`)).json(), {
-    baseGeneratedAt: "legacy-1",
-    refresh: { at: "alpha-1", reason: "request", paths: [], sources: [] },
-  });
-
-  const controller = new AbortController();
-  const response = await fetch(`${base}/api/alpha/events`, { signal: controller.signal });
-  const reader = response.body.getReader();
-  await reader.read();
-  alphaNotify({ reason: "alpha-filesystem", sourceKinds: ["summary"], paths: ["summary.jsonl"] });
-  const invalidation = new TextDecoder().decode((await reader.read()).value);
-  assert.match(invalidation, /"summary"/);
-  assert.match(invalidation, /alpha-2/);
-  controller.abort();
-  assert.equal(typeof legacyNotify, "function");
 });

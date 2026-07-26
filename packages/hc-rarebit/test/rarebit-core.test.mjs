@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import Ajv from "ajv";
 import {
   DEFAULT_RAREBIT_SUMMARY_POLICY,
+  RAREBIT_SUMMARY_PROMPT_VERSION,
   composeRarebitSummaryPrompt,
   composeRarebitTitlePrompt,
   evaluateRarebitSummaryEligibility,
@@ -105,6 +106,16 @@ test("prompts contain semantic prose only and title is a separate date-prefixed 
   const summaryPrompt = composeRarebitSummaryPrompt(selection);
   assert.match(summaryPrompt, /Investigate a strange latency regression/);
   assert.doesNotMatch(summaryPrompt, /sourceEntryId|contentHash|manifestHash/);
+  assert.match(
+    summaryPrompt,
+    /Tool-call inputs, tool results.*deliberately absent/i,
+  );
+  assert.match(
+    summaryPrompt,
+    /Absence of a tool transcript.*never.*work was not performed/i,
+  );
+  assert.match(summaryPrompt, /concise 'done'.*appear accomplished/i);
+  assert.match(summaryPrompt, /I will run tests next/i);
   const titlePrompt = composeRarebitTitlePrompt(selection);
   assert.match(titlePrompt, /Investigate a strange latency regression/);
   assert.doesNotMatch(titlePrompt, /Initial inspection complete/);
@@ -130,6 +141,14 @@ test("job identity varies with an operation's semantic inputs, not raw source pa
     model: { id: "cheap" },
   };
   assert.equal(rarebitJobIdentity(base), rarebitJobIdentity({ ...base }));
+  assert.notEqual(
+    rarebitJobIdentity({ ...base, promptVersion: "rarebit-summary-v3" }),
+    rarebitJobIdentity({
+      ...base,
+      promptVersion: RAREBIT_SUMMARY_PROMPT_VERSION,
+    }),
+    "a prompt-contract revision must materialize as a distinct job identity",
+  );
   assert.notEqual(
     rarebitJobIdentity(base),
     rarebitJobIdentity({ ...base, operation: "title", policy: null }),
@@ -165,7 +184,8 @@ test("shared imperative summary service persists a derived receipt without raw s
         text: JSON.stringify({
           summary:
             "Progress: inspected | Findings: context | Questions/Requests: None stated | Next step: review",
-          summaryNeedsHumanAttention: false,
+          sessionStatus: "finished",
+          statusReason: "all_requests_accomplished",
         }),
       }),
     },
@@ -254,7 +274,8 @@ test("writer-aligned JSON Schema accepts every persisted Rarebit terminal status
         text: JSON.stringify({
           summary:
             "Progress: p | Findings: f | Questions/Requests: None stated | Next step: n",
-          summaryNeedsHumanAttention: false,
+          sessionStatus: "finished",
+          statusReason: "all_requests_accomplished",
         }),
       }),
     },

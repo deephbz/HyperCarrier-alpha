@@ -25,11 +25,9 @@ export const RAREBIT_COMMAND_GRAMMAR = Object.freeze({
       forms: [[]],
     },
     {
-      name: "dump",
+      name: "recall",
       description: "Recall active-branch Rarebit messages with a prompt",
-      forms: [
-        [literal("messages", "Recall selected messages"), rest("<prompt...>")],
-      ],
+      forms: [[rest("<prompt...>")]],
     },
     {
       name: "config",

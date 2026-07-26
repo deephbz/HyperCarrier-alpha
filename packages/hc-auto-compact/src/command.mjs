@@ -1,10 +1,10 @@
 export const AUTO_COMPACT_USAGE =
-  "Usage: /auto-compact [status|on|off|threshold <percent>|run]";
+  "Usage: /auto-compact [status|on|off|threshold <percent>|run [prompt...]]";
 
 const SUBCOMMANDS = ["status", "on", "off", "threshold", "run"];
 
 export function autoCompactCommandDescription() {
-  return "/auto-compact [status|on|off|threshold <percent>|run]";
+  return "/auto-compact [status|on|off|threshold <percent>|run [prompt...]]";
 }
 
 export function getAutoCompactArgumentCompletions(prefix) {
@@ -16,7 +16,8 @@ export function getAutoCompactArgumentCompletions(prefix) {
 }
 
 export function parseAutoCompactCommand(input = "") {
-  const parts = String(input).trim().split(/\s+/).filter(Boolean);
+  const rawInput = String(input);
+  const parts = rawInput.trim().split(/\s+/).filter(Boolean);
   const subcommand = parts[0] ?? "status";
   const args = parts.slice(1);
   if (!SUBCOMMANDS.includes(subcommand))
@@ -25,6 +26,14 @@ export function parseAutoCompactCommand(input = "") {
       error: "unknown_subcommand",
       usage: AUTO_COMPACT_USAGE,
     };
+
+  if (subcommand === "run") {
+    const leading = rawInput.trimStart();
+    const remainder = leading.slice("run".length);
+    const prompt = /^\s/.test(remainder) ? remainder.slice(1) : "";
+    if (!prompt.trim()) return { ok: true, subcommand };
+    return { ok: true, subcommand, prompt };
+  }
 
   if (subcommand === "threshold") {
     if (args.length !== 1)

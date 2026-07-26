@@ -8,28 +8,25 @@ Pi Sessions + lifecycle leases + tmux + OS processes
                        |
                   read-only APIs
                        |
-               timeline / Alpha UI
+                  timeline UI
 
 selected user and assistant Rarebits
              |
              v
 packages/hc-rarebit          ----> append-only Rarebit materialization JSONL
-                                      |
-Beads + Git + Markdown ---------------+
-                                      v
-                         packages/hc-project-distill
-                                      |
-                         events + proposal bundles
+
+Beads + Git + Markdown ---------------> packages/hc-project-distill
+                                             |
+                                      events + proposal bundles
 ```
 
 ## Component responsibilities
 
 ### Timeline application
 
-Collects metadata from native Pi JSONL, lifecycle leases, tmux, process state,
-PiTeams runtime metadata, configured summary/event streams, proposal bundles,
-and read-only Beads export. It owns projections and diagnostics, not the facts
-it displays.
+Collects metadata from native Pi JSONL, tmux, process state, PiTeams runtime
+metadata, and Rarebit summary sidecars. It owns fleet projections and
+diagnostics, not the facts it displays.
 
 ### Recent-output extension
 

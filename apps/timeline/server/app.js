@@ -1,15 +1,14 @@
 import { createReadStream, existsSync, realpathSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, relative, resolve, sep } from "node:path";
-import { collectAlphaSnapshot, createAlphaSourceWatcher } from "./alpha.js";
 import { collectSnapshot, SessionCache, SessionCatalog } from "./collector.js";
 import {
   projectRarebitSummaryAttention,
   readSessionRarebitSummary,
   sanitizeRarebitSummaryDetail,
 } from "./rarebit-detail.js";
-import { createSourceWatcher } from "./watcher.js";
 import { resolveTrafficBaseUrl } from "./service-config.js";
+import { createSourceWatcher } from "./watcher.js";
 
 function json(res, status, body) {
   res.writeHead(status, {
@@ -19,17 +18,6 @@ function json(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
-const ALPHA_SOURCE_KINDS = new Set([
-  "alpha-source",
-  "beads",
-  "evergreen",
-  "project-events",
-  "project-manifest",
-  "project-registry",
-  "summary",
-  "timeline-runtime",
-]);
-const ALPHA_REASONS = new Set(["request", "filesystem", "alpha-filesystem", "reconciliation"]);
 const SNAPSHOT_WINDOWS = new Set(["15m", "1h", "6h", "24h", "all"]);
 
 function snapshotQuery(url) {
@@ -49,31 +37,6 @@ function snapshotQuery(url) {
   if (from === null || to === null || (from !== undefined && to !== undefined && from > to))
     return { error: "invalid_snapshot_bounds" };
   return { window, cursor: cursor ?? undefined, from, to };
-}
-
-export function sanitizeAlphaEvent(event = {}) {
-  const paths = Array.isArray(event.paths)
-    ? event.paths
-        .filter((path) => typeof path === "string")
-        .map((path) => path.slice(0, 500))
-        .slice(0, 20)
-    : [];
-  const sourceKinds = Array.isArray(event.sourceKinds)
-    ? [
-        ...new Set(
-          event.sourceKinds.filter(
-            (kind) => typeof kind === "string" && ALPHA_SOURCE_KINDS.has(kind),
-          ),
-        ),
-      ].slice(0, 20)
-    : [];
-  const reason =
-    event.reason === undefined
-      ? "request"
-      : typeof event.reason === "string" && ALPHA_REASONS.has(event.reason)
-        ? event.reason
-        : "alpha-filesystem";
-  return { reason, paths, sourceKinds };
 }
 
 const MIME = new Map([
@@ -141,11 +104,11 @@ function staticResponse(req, res, staticDir, rawPath, normalizedPath) {
   createReadStream(actualFile).pipe(res);
 }
 
-function serveSnapshot(res, url, snapshotFor) {
+async function serveSnapshot(res, url, snapshotFor) {
   const query = snapshotQuery(url);
   if (query.error) return json(res, 400, { error: query.error });
   try {
-    return json(res, 200, snapshotFor(query));
+    return json(res, 200, await snapshotFor(query));
   } catch (error) {
     if (error instanceof Error && error.message.startsWith("invalid_snapshot_"))
       return json(res, 400, { error: error.message });
@@ -163,10 +126,7 @@ export function attachRarebitSummaryAttention(snapshot, readRarebitSummary) {
       } catch {
         detail = { availability: "unavailable", reason: "sidecar_unreadable" };
       }
-      return {
-        ...session,
-        rarebitSummaryAttention: projectRarebitSummaryAttention(detail),
-      };
+      return { ...session, rarebitSummaryAttention: projectRarebitSummaryAttention(detail) };
     }),
   };
 }
@@ -176,8 +136,6 @@ export function createTimelineServer({
   reconciliationMs = 30_000,
   staticDir = resolve("dist/web"),
   watchSources = createSourceWatcher,
-  collectAlpha = collectAlphaSnapshot,
-  watchAlphaSources = createAlphaSourceWatcher,
   readRarebitSummary = readSessionRarebitSummary,
   collectionOptions = {},
   watchRoots,
@@ -191,11 +149,9 @@ export function createTimelineServer({
   const catalogCache = new SessionCatalog();
   const snapshots = new Map();
   let snapshot;
-  let alphaSnapshot;
   let lastRefresh;
   const clients = new Set();
-  const alphaClients = new Set();
-  const refresh = ({
+  const refresh = async ({
     reason = "request",
     paths = [],
     notify = true,
@@ -203,7 +159,7 @@ export function createTimelineServer({
   } = {}) => {
     const key = `${query.window}:${query.cursor ?? ""}:${query.from ?? ""}:${query.to ?? ""}`;
     const refreshed = attachRarebitSummaryAttention(
-      collect({
+      await collect({
         ...collectionOptions,
         cache,
         catalogCache,
@@ -226,38 +182,15 @@ export function createTimelineServer({
     }
     return refreshed;
   };
-  const snapshotFor = (query) => {
+  const snapshotFor = async (query) => {
     const key = `${query.window}:${query.cursor ?? ""}:${query.from ?? ""}:${query.to ?? ""}`;
-    return snapshots.get(key) ?? refresh({ query, notify: false });
+    return snapshots.get(key) ?? (await refresh({ query, notify: false }));
   };
-  const refreshAlpha = (event = {}) => {
-    const safeEvent = sanitizeAlphaEvent(event);
-    if (!snapshot) refresh({ reason: "request", notify: false });
-    alphaSnapshot = collectAlpha({
-      baseSnapshot: snapshot,
-      reason: safeEvent.reason,
-      paths: safeEvent.paths,
-    });
-    alphaSnapshot.trace ??= {};
-    alphaSnapshot.trace.refresh = {
-      at: alphaSnapshot.generatedAt,
-      reason: safeEvent.reason,
-      paths: safeEvent.paths,
-      sources: safeEvent.sourceKinds,
-    };
-    const payload = `event: invalidate\ndata: ${JSON.stringify({
-      generatedAt: alphaSnapshot.generatedAt,
-      sources: safeEvent.sourceKinds,
-      paths: safeEvent.paths,
-    })}\n\n`;
-    for (const client of alphaClients) client.write(payload);
-    return alphaSnapshot;
-  };
-  // The single HTTP router keeps API/static precedence auditable; route handlers remain side-effect free.
-  // eslint-disable-next-line complexity
   const server = createServer(async (req, res) => {
     const rawPath = String(req.url ?? "/").split("?", 1)[0];
     const url = new URL(req.url, "http://localhost");
+    if (url.pathname === "/alpha" || url.pathname.startsWith("/alpha/"))
+      return json(res, 404, { error: "not_found" });
     if (req.method === "GET" && url.pathname === "/api/health")
       return json(res, 200, {
         ok: true,
@@ -270,9 +203,9 @@ export function createTimelineServer({
     if (req.method === "GET" && url.pathname === "/api/traffic/health")
       return json(res, 200, await trafficHealth(trafficBaseUrl));
     if (req.method === "GET" && url.pathname === "/api/snapshot")
-      return serveSnapshot(res, url, snapshotFor);
+      return await serveSnapshot(res, url, snapshotFor);
     if (req.method === "GET" && url.pathname === "/api/trace")
-      return json(res, 200, (snapshot ?? refresh()).trace);
+      return json(res, 200, (snapshot ?? (await refresh())).trace);
     const rarebitDetail = url.pathname.match(/^\/api\/sessions\/([^/]+)\/rarebit-summary$/);
     if (req.method === "GET" && rarebitDetail) {
       let sessionId;
@@ -284,14 +217,10 @@ export function createTimelineServer({
       const known = [...snapshots.values()].flatMap((item) => item.sessions);
       const session =
         known.find((item) => item.id === sessionId) ??
-        (snapshot ?? refresh()).sessions.find((item) => item.id === sessionId);
+        (snapshot ?? (await refresh())).sessions.find((item) => item.id === sessionId);
       if (!session) return json(res, 404, { error: "session_not_found" });
       return json(res, 200, sanitizeRarebitSummaryDetail(readRarebitSummary(session)));
     }
-    if (req.method === "GET" && url.pathname === "/api/alpha/snapshot")
-      return json(res, 200, alphaSnapshot ?? refreshAlpha());
-    if (req.method === "GET" && url.pathname === "/api/alpha/trace")
-      return json(res, 200, (alphaSnapshot ?? refreshAlpha()).trace);
     if (req.method === "GET" && url.pathname === "/api/events") {
       res.writeHead(200, {
         "content-type": "text/event-stream",
@@ -303,17 +232,6 @@ export function createTimelineServer({
       req.on("close", () => clients.delete(res));
       return;
     }
-    if (req.method === "GET" && url.pathname === "/api/alpha/events") {
-      res.writeHead(200, {
-        "content-type": "text/event-stream",
-        "cache-control": "no-cache",
-        connection: "keep-alive",
-      });
-      res.write("event: ready\ndata: {}\n\n");
-      alphaClients.add(res);
-      req.on("close", () => alphaClients.delete(res));
-      return;
-    }
     if (url.pathname === "/api" || url.pathname.startsWith("/api/"))
       return json(res, 404, { error: "not_found" });
     if (req.method === "GET" || req.method === "HEAD")
@@ -322,31 +240,19 @@ export function createTimelineServer({
   });
   const sourceWatcher = watchSources(
     (event) => {
-      try {
-        snapshots.clear();
-        refresh(event);
-        refreshAlpha(event);
-      } catch {}
+      snapshots.clear();
+      refresh(event).catch(() => undefined);
     },
     watchRoots ? { roots: watchRoots } : undefined,
   );
-  const alphaSourceWatcher = watchAlphaSources((event) => {
-    try {
-      refreshAlpha(event);
-    } catch {}
-  });
   const timer = setInterval(() => {
-    try {
-      snapshots.clear();
-      refresh({ reason: "reconciliation" });
-      refreshAlpha({ reason: "reconciliation", sourceKinds: ["timeline-runtime"] });
-    } catch {}
+    snapshots.clear();
+    refresh({ reason: "reconciliation" }).catch(() => undefined);
   }, reconciliationMs);
   timer.unref();
   server.on("close", () => {
     clearInterval(timer);
     sourceWatcher?.close?.();
-    alphaSourceWatcher?.close?.();
   });
   return server;
 }
