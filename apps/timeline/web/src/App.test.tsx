@@ -2,9 +2,17 @@ import { readFileSync } from "node:fs";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { App, laneMarkerPaths, laneOutcomeSummary, snapshotSelection } from "./App";
+import {
+  App,
+  laneMarkerPaths,
+  laneOutcomeSummary,
+  ProcessInspector,
+  ProcessLaneRow,
+  snapshotSelection,
+} from "./App";
 import { trafficDeepLink } from "./TrafficLaunch";
 import { demoSnapshot } from "./demo";
+import { lanesFromSnapshot } from "./model";
 
 const timelineStyles = readFileSync("web/src/styles.css", "utf8");
 
@@ -14,6 +22,65 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   window.history.replaceState({}, "", "/?demo=1");
+});
+
+describe("Process lanes", () => {
+  it("renders only safe process evidence and never requests Session detail", async () => {
+    const user = userEvent.setup();
+    const snapshot = demoSnapshot();
+    snapshot.processes[0].link = undefined;
+    const lane = lanesFromSnapshot(snapshot).find((item) => item.kind === "process");
+    if (!lane || lane.kind !== "process") throw new Error("expected process lane");
+    const onSelect = vi.fn();
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    const { rerender } = render(
+      <ProcessLaneRow lane={lane} selected={false} onSelect={onSelect} />,
+    );
+    await user.click(screen.getByRole("button", { name: /Process/ }));
+    expect(onSelect).toHaveBeenCalledOnce();
+    expect(screen.getByText(/No verified link/)).toBeTruthy();
+
+    rerender(<ProcessInspector lane={lane} onClose={onSelect} />);
+    expect(screen.getByText("Process observation")).toBeTruthy();
+    expect(screen.getByText("No verified link")).toBeTruthy();
+    expect(screen.queryByText("Rarebit Summary")).toBeNull();
+    expect(screen.queryByText("Total tokens")).toBeNull();
+
+    const providerLinked = {
+      ...lane,
+      process: {
+        ...lane.process,
+        link: {
+          sessionId: "session-outside-page",
+          grade: "provider_verified" as const,
+          method: "herdr:native_session",
+          observedAt: "2026-07-25T12:00:00Z",
+          provenance: ["herdr"],
+        },
+      },
+    };
+    rerender(<ProcessInspector lane={providerLinked} onClose={onSelect} />);
+    expect(screen.getByText("Provider-verified link")).toBeTruthy();
+    expect(screen.getByText("session-outside-page")).toBeTruthy();
+    expect(screen.getByText("herdr:native_session")).toBeTruthy();
+    expect(screen.getByText("2026-07-25T12:00:00Z")).toBeTruthy();
+    expect(screen.getByText("herdr")).toBeTruthy();
+
+    const heuristic = {
+      ...providerLinked,
+      process: {
+        ...providerLinked.process,
+        link: { ...providerLinked.process.link, grade: "heuristic" as const },
+      },
+    };
+    rerender(<ProcessLaneRow lane={heuristic} selected={false} onSelect={onSelect} />);
+    expect(screen.getByText(/Heuristic link/)).toBeTruthy();
+    rerender(<ProcessInspector lane={heuristic} onClose={onSelect} />);
+    expect(fetch).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Close inspector" }));
+    expect(onSelect).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("dashboard controls", () => {
@@ -110,9 +177,9 @@ describe("dashboard controls", () => {
     await user.selectOptions(screen.getByRole("combobox", { name: "Filter sessions by" }), "state");
     await user.selectOptions(
       screen.getByRole("combobox", { name: "Filter value" }),
-      "Running · Thinking",
+      "Running · work state unavailable",
     );
-    expect(screen.getByText("2 visible")).toBeTruthy();
+    expect(screen.getByText("10 visible")).toBeTruthy();
   });
 
   it("opens coherent session details from an alias-first lane", async () => {
@@ -168,7 +235,7 @@ describe("dashboard controls", () => {
 
   it("keeps runtime state accessible while the compact secondary shows only Rarebits and usage", () => {
     const { container } = render(<App />);
-    const lanes = [...container.querySelectorAll(".lane")];
+    const lanes = [...container.querySelectorAll(".lane:not(.process-lane)")];
     expect(lanes.length).toBeGreaterThan(0);
     expect(container.textContent).not.toMatch(/\b\d+\s+outcomes\b/i);
 
@@ -184,7 +251,7 @@ describe("dashboard controls", () => {
       );
     }
     const leadButton = screen.getByRole("button", { name: /timeline-lead, session demo-0/ });
-    expect(leadButton.getAttribute("aria-label")).toContain("Running · Thinking");
+    expect(leadButton.getAttribute("aria-label")).toContain("Running · work state unavailable");
 
     expect(timelineStyles).toMatch(
       /\.lane-context\s*\{.*?display:\s*-webkit-box.*?white-space:\s*normal.*?-webkit-line-clamp:\s*2/s,

@@ -80,7 +80,8 @@ test("automatic ineligible does not suppress forced synthesis, whose duplicate r
           text: JSON.stringify({
             summary:
               "Progress: one | Findings: two | Questions/Requests: None stated | Next step: three",
-            summaryNeedsHumanAttention: false,
+            sessionStatus: "finished",
+            statusReason: "all_requests_accomplished",
           }),
         };
       },
@@ -133,7 +134,8 @@ test("overflow receipt does not suppress a retry with a larger complete-input li
           text: JSON.stringify({
             summary:
               "Progress: retried | Findings: complete | Questions/Requests: None stated | Next step: inspect",
-            summaryNeedsHumanAttention: false,
+            sessionStatus: "finished",
+            statusReason: "all_requests_accomplished",
           }),
         };
       },

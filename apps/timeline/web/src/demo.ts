@@ -1,17 +1,16 @@
 import type {
-  Snapshot,
-  Session,
-  Turn,
-  Request,
-  LiveAgent,
-  AgentState,
+  CoordinationEvidence,
+  ProcessObservation,
   RarebitMarker,
+  Request,
+  Session,
+  Snapshot,
+  Turn,
 } from "./types";
 const origin = Date.now() - 8 * 3_600_000;
 const projects = ["api-service", "data-pipeline", "model-evaluation", "research-notes"];
-const states: AgentState[] = ["thinking", "tool", "waiting_input", "blocked", "idle", "settled"];
 
-function demoCoordination(index: number): LiveAgent["coordination"] {
+function demoCoordination(index: number): CoordinationEvidence | undefined {
   if (index !== 1 && index !== 2) return undefined;
   return {
     kind: "pi-team",
@@ -27,7 +26,7 @@ export function demoSnapshot(): Snapshot {
     turns: Turn[] = [],
     requests: Request[] = [],
     rarebits: RarebitMarker[] = [],
-    liveAgents: LiveAgent[] = [];
+    processes: ProcessObservation[] = [];
   for (let i = 0; i < 60; i++) {
     const id = `demo-${i}`,
       started = origin + i * 19 * 60_000;
@@ -126,42 +125,41 @@ export function demoSnapshot(): Snapshot {
       },
     );
     if (i < 10)
-      liveAgents.push({
-        processInstanceId: `demo-p${i}`,
+      processes.push({
+        id: `demo-p${i}`,
         pid: 7000 + i,
-        sessionId: id,
+        observedAt: new Date().toISOString(),
         cwd: `/work/${project}`,
-        state: states[i % states.length],
-        processState: "running",
         process: { pid: 7000 + i, state: "running" },
-        workState: {
-          availability: "observed",
-          state: states[i % states.length],
-          evidenceSource: "demo",
-        },
-        activeTool: i % 6 === 1 ? "read" : undefined,
-        heartbeatAt: new Date(Date.now() - i * 3000).toISOString(),
-        model: "gpt-5.6-terra",
-        context: { tokens: 20_000 + i * 13_000, window: 200_000, percent: 10 + i * 6.5 },
-        confidence: "exact",
+        locations: [
+          {
+            provider: "tmux",
+            serverSocket: "demo",
+            sessionName: "agents",
+            windowIndex: 1 + (i % 3),
+            paneId: `%${i + 1}`,
+            cwd: `/work/${project}`,
+          },
+        ],
         coordination: demoCoordination(i),
-        pane: {
-          serverSocket: "demo",
-          sessionName: "agents",
-          windowIndex: 1 + (i % 3),
-          paneId: `%${i + 1}`,
-          cwd: `/work/${project}`,
+        link: {
+          sessionId: id,
+          grade: "provider_verified",
+          method: "demo",
+          observedAt: new Date().toISOString(),
+          provenance: ["demo"],
         },
+        issues: [],
       });
   }
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     generatedAt: new Date().toISOString(),
     sessions,
     turns,
     requests,
     rarebits,
-    liveAgents,
+    processes,
     trace: { durationMs: 4.2, sessionFiles: 60, rejected: [] },
   };
 }

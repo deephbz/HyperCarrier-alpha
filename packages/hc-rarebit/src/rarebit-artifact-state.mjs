@@ -1,0 +1,445 @@
+import {
+  RAREBIT_SESSION_STATUS_REASONS,
+  RAREBIT_SUMMARY_LIFECYCLE_BOUNDARIES,
+} from "./rarebit-core.mjs";
+
+const TERMINAL_STATUSES = new Set([
+  "ok",
+  "ineligible",
+  "inhibited",
+  "unavailable_overflow",
+  "failure",
+]);
+const AVAILABILITY = new Set(["available", "missing", "unreadable"]);
+const EXPECTATIONS = new Set(["owner_request", "agent_settled", "snapshot"]);
+
+function timestamp(value) {
+  const result = Date.parse(value);
+  return Number.isFinite(result) ? result : Number.NEGATIVE_INFINITY;
+}
+
+function nullableString(value) {
+  return typeof value === "string" ? value : null;
+}
+
+function modelRef(value) {
+  return value &&
+    typeof value.provider === "string" &&
+    typeof value.id === "string"
+    ? { provider: value.provider, id: value.id }
+    : null;
+}
+
+function ref(record) {
+  if (!record) return null;
+  return {
+    jobId: nullableString(record.jobId),
+    sessionId: nullableString(record.sessionId),
+    branchLeafId: nullableString(record.branch?.leafId),
+    selectionManifestHash: nullableString(record.selection?.manifestHash),
+    selectorVersion: nullableString(record.selection?.selectorVersion),
+    lifecycleBoundary: nullableString(record.lifecycleBoundary),
+    promptVersion: nullableString(record.promptVersion),
+    model: modelRef(record.model),
+    observedAt: nullableString(record.observedAt),
+    schemaVersion: Number.isInteger(record.schemaVersion)
+      ? record.schemaVersion
+      : null,
+    implementationVersion: nullableString(record.implementationVersion),
+  };
+}
+
+function projection(record) {
+  if (record.status === "ok")
+    return {
+      status: record.sessionStatus,
+      reason: record.statusReason,
+      assessmentRef: ref(record),
+    };
+  if (record.status === "ineligible")
+    return {
+      status: "ineligible",
+      reason: "intrinsic_policy",
+      assessmentRef: ref(record),
+    };
+  const reason = {
+    inhibited: "inhibited",
+    unavailable_overflow: "overflow",
+    failure: "synthesis_failure",
+  }[record.status];
+  return { status: "error", reason, assessmentRef: ref(record) };
+}
+
+function isOccurrence(value) {
+  return (
+    value &&
+    typeof value === "object" &&
+    typeof value.occurrenceId === "string" &&
+    value.occurrenceId &&
+    (typeof value.sourceEntryId === "string" || value.sourceEntryId === null) &&
+    Number.isInteger(value.order) &&
+    (value.role === "user" || value.role === "assistant") &&
+    ["user", "stop", "continuation"].includes(value.outcome) &&
+    typeof value.contentHash === "string" &&
+    value.contentHash
+  );
+}
+
+function validSelection(selection, { request = false } = {}) {
+  const occurrences = selection?.occurrences;
+  if (
+    !selection ||
+    typeof selection.manifestHash !== "string" ||
+    !selection.manifestHash ||
+    typeof selection.selectorVersion !== "string" ||
+    !selection.selectorVersion ||
+    !Array.isArray(occurrences) ||
+    !occurrences.every(isOccurrence)
+  )
+    return false;
+  const ids = new Set();
+  for (const occurrence of occurrences) {
+    if (!request && occurrence.sourceEntryId === null) continue;
+    if (
+      typeof occurrence.sourceEntryId !== "string" ||
+      !occurrence.sourceEntryId
+    )
+      return false;
+    if (ids.has(occurrence.sourceEntryId)) return false;
+    ids.add(occurrence.sourceEntryId);
+  }
+  if (!request) return true;
+  const last = occurrences.at(-1);
+  return last?.role === "user" && last.outcome === "user";
+}
+
+/** Returns a v3 receipt validity result without consulting Summary prose. */
+export function validateRarebitArtifactReceipt(record) {
+  if (
+    !record ||
+    typeof record !== "object" ||
+    record.type !== "rarebit_summary" ||
+    record.schemaVersion !== 3 ||
+    !TERMINAL_STATUSES.has(record.status) ||
+    typeof record.sessionId !== "string" ||
+    !record.sessionId ||
+    !RAREBIT_SUMMARY_LIFECYCLE_BOUNDARIES.includes(record.lifecycleBoundary) ||
+    typeof record.observedAt !== "string" ||
+    !Number.isFinite(Date.parse(record.observedAt)) ||
+    !validSelection(record.selection, {
+      request: record.lifecycleBoundary === "owner_request",
+    })
+  )
+    return { valid: false, reason: "malformed" };
+  if (record.status !== "ok") return { valid: true, record };
+  if (typeof record.summary !== "string")
+    return { valid: false, reason: "malformed" };
+  const legal = RAREBIT_SESSION_STATUS_REASONS[record.sessionStatus]?.includes(
+    record.statusReason,
+  );
+  const owner = record.lifecycleBoundary === "owner_request";
+  if (
+    !legal ||
+    (owner &&
+      (record.sessionStatus !== "user_requested" ||
+        record.statusReason !== "owner_request_recorded")) ||
+    (!owner && record.sessionStatus === "user_requested")
+  )
+    return { valid: false, reason: "malformed" };
+  return { valid: true, record };
+}
+
+function sameOccurrence(left, right) {
+  return (
+    left.occurrenceId === right.occurrenceId &&
+    left.sourceEntryId === right.sourceEntryId &&
+    left.order === right.order &&
+    left.role === right.role &&
+    left.outcome === right.outcome &&
+    left.contentHash === right.contentHash
+  );
+}
+
+function requestApplies(record, selection) {
+  if (record.selection.selectorVersion !== selection.selectorVersion)
+    return false;
+  const cut = record.selection.occurrences;
+  const current = selection.occurrences;
+  if (cut.length > current.length) return false;
+  if (
+    !cut.every((occurrence, index) =>
+      sameOccurrence(occurrence, current[index]),
+    )
+  )
+    return false;
+  const anchor = cut.at(-1);
+  const currentUsers = current.filter(
+    (occurrence) => occurrence.role === "user" && occurrence.outcome === "user",
+  );
+  return currentUsers.at(-1)?.sourceEntryId === anchor.sourceEntryId;
+}
+
+function newerThan(left, right) {
+  if (!right) return true;
+  const leftAt = timestamp(left.record.observedAt);
+  const rightAt = timestamp(right.record.observedAt);
+  return leftAt > rightAt || (leftAt === rightAt && left.index > right.index);
+}
+
+function newest(records) {
+  return records.reduce(
+    (best, candidate) =>
+      !best || newerThan(candidate, best) ? candidate : best,
+    null,
+  );
+}
+
+function retry(reason, deadlineExpired) {
+  return { recommended: !deadlineExpired, reason, deadlineExpired };
+}
+
+function result({
+  syncState,
+  projection: projected = null,
+  applicability = "none",
+  nativeRef = null,
+  receiptRef = null,
+  retry: retryValue = null,
+} = {}) {
+  return {
+    syncState,
+    projection: projected,
+    applicability,
+    nativeRef,
+    receiptRef,
+    retry: retryValue,
+  };
+}
+
+function terminalError(reason, input, receipt = null) {
+  return result({
+    syncState: "terminal_error",
+    projection: { status: "error", reason, assessmentRef: ref(receipt) },
+    nativeRef: nativeReference(input.native),
+    receiptRef: ref(receipt),
+    retry: retry(reason, true),
+  });
+}
+
+function nativeReference(native) {
+  return {
+    availability: native?.availability ?? "missing",
+    sessionId: native?.sessionId ?? null,
+    selectionManifestHash: native?.selection?.manifestHash ?? null,
+  };
+}
+
+/**
+ * Compose native active-branch evidence and append-only materialization history.
+ * The result is deliberately a producer projection: consumers do not walk
+ * selection ancestry, inspect receipt prose, or infer artifact identity.
+ */
+export function projectRarebitArtifactState({
+  native = { availability: "missing" },
+  materialization = { availability: "missing", records: [] },
+  expectation = "snapshot",
+  deadlineExpired = false,
+} = {}) {
+  if (
+    !AVAILABILITY.has(native.availability) ||
+    !AVAILABILITY.has(materialization.availability)
+  )
+    throw new TypeError(
+      "native and materialization availability must be available, missing, or unreadable",
+    );
+  if (!EXPECTATIONS.has(expectation))
+    throw new TypeError("Unsupported Rarebit artifact expectation");
+  const records = Array.isArray(materialization.records)
+    ? materialization.records
+    : [];
+  const parsed = records.map((record, index) => ({
+    record,
+    index,
+    ...validateRarebitArtifactReceipt(record),
+  }));
+  const valid = parsed.filter((candidate) => candidate.valid);
+  const invalidReason = parsed.some(
+    ({ record, valid: isValid }) =>
+      !isValid &&
+      record?.type === "rarebit_summary" &&
+      record.schemaVersion !== 3,
+  )
+    ? "unsupported"
+    : parsed.some(
+          ({ record, valid: isValid }) =>
+            !isValid && record?.type === "rarebit_summary",
+        )
+      ? "malformed"
+      : null;
+  const sidecarSessionIds = new Set(
+    records
+      .filter(
+        (record) =>
+          record?.type === "rarebit_summary" &&
+          typeof record.sessionId === "string" &&
+          record.sessionId,
+      )
+      .map((record) => record.sessionId),
+  );
+  if (sidecarSessionIds.size > 1)
+    return terminalError("session_conflict", { native });
+  const sidecarSessionId = [...sidecarSessionIds][0] ?? null;
+
+  const materializationUnreadable =
+    materialization.availability === "unreadable";
+
+  const nativeAvailable = native.availability === "available";
+  if (
+    nativeAvailable &&
+    (!native.sessionId || !validSelection(native.selection))
+  )
+    return terminalError("native_malformed", { native });
+  if (
+    nativeAvailable &&
+    sidecarSessionId &&
+    sidecarSessionId !== native.sessionId
+  )
+    return terminalError("session_conflict", { native });
+
+  if (!nativeAvailable) {
+    const candidates = valid.filter(({ record }) =>
+      expectation === "owner_request"
+        ? record.lifecycleBoundary === "owner_request"
+        : expectation === "agent_settled"
+          ? record.lifecycleBoundary === "agent_settled"
+          : true,
+    );
+    const chosen = newest(candidates);
+    const opposing = newest(
+      valid.filter(({ record }) =>
+        expectation === "owner_request"
+          ? record.lifecycleBoundary === "agent_settled"
+          : expectation === "agent_settled"
+            ? record.lifecycleBoundary === "owner_request"
+            : false,
+      ),
+    );
+    if (chosen && (expectation === "snapshot" || newerThan(chosen, opposing))) {
+      const state =
+        chosen.record.lifecycleBoundary === "owner_request"
+          ? "request_source_pending"
+          : "assessment_source_pending";
+      return result({
+        syncState: state,
+        projection: projection(chosen.record),
+        applicability:
+          chosen.record.lifecycleBoundary === "owner_request"
+            ? "request_cut"
+            : "materialization_only",
+        nativeRef: nativeReference(native),
+        receiptRef: ref(chosen.record),
+        retry: retry("native_source_pending", deadlineExpired),
+      });
+    }
+    if (!deadlineExpired)
+      return result({
+        syncState: "awaiting_artifacts",
+        nativeRef: nativeReference(native),
+        retry: retry(
+          materializationUnreadable
+            ? "materialization_unreadable"
+            : native.availability === "unreadable"
+              ? "native_unreadable"
+              : "native_missing",
+          false,
+        ),
+      });
+    return terminalError(
+      invalidReason ??
+        (materializationUnreadable
+          ? "materialization_unreadable"
+          : native.availability === "unreadable"
+            ? "native_unreadable"
+            : "native_missing"),
+      { native },
+    );
+  }
+
+  const current = valid.filter(
+    ({ record }) => record.sessionId === native.sessionId,
+  );
+  const exact = current.filter(
+    ({ record }) =>
+      record.selection.manifestHash === native.selection.manifestHash &&
+      record.selection.selectorVersion === native.selection.selectorVersion,
+  );
+  const requests = current.filter(
+    ({ record }) =>
+      record.lifecycleBoundary === "owner_request" &&
+      requestApplies(record, native.selection),
+  );
+  const activeRequest = newest(requests);
+  const settled = newest(
+    exact.filter(({ record }) => record.lifecycleBoundary === "agent_settled"),
+  );
+  if (settled && (!activeRequest || newerThan(settled, activeRequest)))
+    return result({
+      syncState: "assessment_current",
+      projection: projection(settled.record),
+      applicability: "exact_selection",
+      nativeRef: nativeReference(native),
+      receiptRef: ref(settled.record),
+      retry: null,
+    });
+  if (activeRequest) {
+    const cutLength = activeRequest.record.selection.occurrences.length;
+    const settlementPending = native.selection.occurrences
+      .slice(cutLength)
+      .some(
+        (occurrence) =>
+          occurrence.role === "assistant" && occurrence.outcome === "stop",
+      );
+    return result({
+      syncState: settlementPending ? "settlement_pending" : "request_current",
+      projection: projection(activeRequest.record),
+      applicability: "request_generation",
+      nativeRef: nativeReference(native),
+      receiptRef: ref(activeRequest.record),
+      retry: settlementPending
+        ? retry("settlement_pending", deadlineExpired)
+        : null,
+    });
+  }
+  const assessment = newest(
+    exact.filter(({ record }) => record.lifecycleBoundary !== "owner_request"),
+  );
+  if (assessment)
+    return result({
+      syncState: "assessment_current",
+      projection: projection(assessment.record),
+      applicability: "exact_selection",
+      nativeRef: nativeReference(native),
+      receiptRef: ref(assessment.record),
+      retry: null,
+    });
+  if (!deadlineExpired)
+    return result({
+      syncState: "awaiting_artifacts",
+      nativeRef: nativeReference(native),
+      retry: retry(
+        materializationUnreadable
+          ? "materialization_unreadable"
+          : "materialization_pending",
+        false,
+      ),
+    });
+  return terminalError(
+    invalidReason ??
+      (materializationUnreadable
+        ? "materialization_unreadable"
+        : materialization.availability === "missing"
+          ? "materialization_missing"
+          : "settlement_timeout"),
+    { native },
+  );
+}

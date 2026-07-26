@@ -1,0 +1,3 @@
+[submodule "packages/pi-team-bright"]
+	path = packages/pi-team-bright
+	url = https://github.com/deephbz/pi-team-bright.git

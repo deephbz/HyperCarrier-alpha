@@ -49,7 +49,7 @@ function stageLabel(name, status) {
       return `✓ ${name} (external)`;
     case "pending":
       return `○ ${name}`;
-    case "not_sent":
+    case "not_requested":
     default:
       return `— ${name}`;
   }
@@ -69,10 +69,24 @@ function renderHumanReceipt(receipt, { heading, includePrompt = false } = {}) {
     stageLabel("PICKUP", receipt.pickup),
   ].join(" → ");
   const prompt =
-    includePrompt && receipt.instructionSent
+    includePrompt && receipt.instructionRequested
       ? `\n\n${AGENT_INSTRUCTION_LABEL}\n${receipt.prompt}`
       : "";
   return `${title}\n${rail}\n${receipt.outcome}${prompt}`;
+}
+
+function renderLifecycleHud(receipt, { state, externalResolution = false }) {
+  const trigger = receipt.trigger === "manual" ? "MANUAL" : "AUTOMATIC";
+  const phase = externalResolution
+    ? "EXTERNAL COMPACTION — resolving interrupted handoff"
+    : state === "handoff_pending"
+      ? "HANDOFF — awaiting readiness"
+      : state === "ready"
+        ? "READY — awaiting turn end"
+        : state === "compacting"
+          ? "COMPACTING"
+          : "PICKUP — requesting continuation";
+  return `AUTO COMPACT · ${trigger} · ${phase}`;
 }
 
 function friendlyPercent(value) {
@@ -196,27 +210,27 @@ export function createAutoCompactController(pi, options = {}) {
     lastHumanReceipt = undefined;
   };
 
-  const setLifecycleWidget = (ctx, receipt) => {
+  const activeWidgetReceipt = () =>
+    currentHumanReceipt ??
+    (interruptedExternalCompaction?.runId === lastHumanReceipt?.runId
+      ? lastHumanReceipt
+      : undefined);
+
+  const setLifecycleWidget = (ctx) => {
     if (ctx?.mode !== "tui" || typeof ctx?.ui?.setWidget !== "function")
       return false;
     try {
-      if (!receipt) {
+      const activeReceipt = activeWidgetReceipt();
+      if (!activeReceipt) {
         ctx.ui.setWidget(AUTO_COMPACT_WIDGET_KEY, undefined);
         return true;
       }
-      const heading =
-        currentHumanReceipt?.runId === receipt.runId
-          ? "Current workflow"
-          : "Last workflow";
-      const instruction =
-        receipt.instructionSent && receipt.handoff === "active"
-          ? `\n\n${AGENT_INSTRUCTION_LABEL}\n${receipt.prompt}`
-          : "";
-      // Pi caps widget arrays at ten entries. Keep the exact, potentially
-      // multiline prompt in one Text component so the array cap cannot
-      // truncate the agent instruction.
       ctx.ui.setWidget(AUTO_COMPACT_WIDGET_KEY, [
-        `${renderHumanReceipt(receipt, { heading })}${instruction}`,
+        renderLifecycleHud(activeReceipt, {
+          state,
+          externalResolution:
+            interruptedExternalCompaction?.runId === activeReceipt.runId,
+        }),
       ]);
       return true;
     } catch {
@@ -226,7 +240,7 @@ export function createAutoCompactController(pi, options = {}) {
   };
 
   const clearLifecycleWidget = (ctx) => {
-    setLifecycleWidget(ctx, undefined);
+    setLifecycleWidget(ctx);
   };
 
   const notifyHumanReceipt = (
@@ -235,7 +249,7 @@ export function createAutoCompactController(pi, options = {}) {
     { level = "info", includePrompt = false, heading } = {},
   ) => {
     if (!receipt) return;
-    const cardRendered = setLifecycleWidget(ctx, receipt);
+    const cardRendered = setLifecycleWidget(ctx);
     notify(
       ctx,
       renderHumanReceipt(receipt, {
@@ -308,10 +322,14 @@ export function createAutoCompactController(pi, options = {}) {
     return settingsSnapshot;
   };
 
-  const startHandoff = async (ctx, trigger) => {
+  const startHandoff = async (ctx, trigger, pickupPrompt) => {
     if (state !== "idle" || startInFlight) {
       debug("handoff_ignored", { reason: "lifecycle_active", trigger });
       return { started: false, reason: "lifecycle_active" };
+    }
+    if (pickupPrompt && typeof pi.sendUserMessage !== "function") {
+      debug("handoff_ignored", { reason: "pickup_prompt_unavailable", trigger });
+      return { started: false, reason: "pickup_prompt_unavailable" };
     }
     startInFlight = true;
     const startingGeneration = sessionGeneration;
@@ -337,6 +355,7 @@ export function createAutoCompactController(pi, options = {}) {
       lifecycle = {
         id: ++lifecycleSequence,
         trigger,
+        pickupPrompt,
         startedAt: Date.now(),
       };
       transition("handoff_pending", { trigger });
@@ -351,20 +370,20 @@ export function createAutoCompactController(pi, options = {}) {
         compact: "pending",
         pickup: "pending",
         outcome: "Waiting for the agent to preserve work and report ready.",
-        instructionSent: false,
+        instructionRequested: false,
         terminal: false,
       };
       activateReadyTool();
       pi.sendMessage(
         {
-          customType: "auto_compact_handoff",
+          customType: "auto-compact.handoff",
           content: handoffPrompt,
-          display: false,
+          display: true,
           details: { projection: "handoff" },
         },
         { triggerTurn: true, deliverAs: "steer" },
       );
-      currentHumanReceipt.instructionSent = true;
+      currentHumanReceipt.instructionRequested = true;
 
       notifyHumanReceipt(ctx, currentHumanReceipt, { includePrompt: true });
       debug("handoff_started", {
@@ -378,9 +397,9 @@ export function createAutoCompactController(pi, options = {}) {
       const receipt = receiptForRun(runId);
       if (receipt) {
         receipt.handoff = "failed";
-        receipt.compact = "not_sent";
-        receipt.pickup = "not_sent";
-        receipt.outcome = "The handoff instruction could not be sent.";
+        receipt.compact = "not_requested";
+        receipt.pickup = "not_requested";
+        receipt.outcome = "The handoff instruction could not be requested.";
       }
       const archived = archiveCurrentReceipt(runId);
       resetLifecycle("handoff_injection_failed");
@@ -421,8 +440,8 @@ export function createAutoCompactController(pi, options = {}) {
       if (failed) {
         failed.handoff = "done";
         failed.compact = "failed";
-        failed.pickup = "not_sent";
-        failed.outcome = "Native compaction failed; pickup was not sent.";
+        failed.pickup = "not_requested";
+        failed.outcome = "Native compaction failed; pickup was not requested.";
       }
       const archived = archiveCurrentReceipt(runId);
       resetLifecycle("compaction_failed");
@@ -450,33 +469,37 @@ export function createAutoCompactController(pi, options = {}) {
             completing.compact = "done";
             completing.pickup = "active";
             completing.outcome =
-              "Native compaction finished; sending the pickup instruction.";
-            setLifecycleWidget(ctx, completing);
+              "Native compaction finished; requesting the pickup instruction.";
+            setLifecycleWidget(ctx);
           }
           try {
             pi.sendMessage(
               {
-                customType: "auto_compact_pickup",
+                customType: "auto-compact.pickup",
                 content: PICKUP_PROMPT,
-                display: false,
+                display: true,
                 details: { projection: "pickup" },
               },
-              { triggerTurn: true },
+              { triggerTurn: lifecycle.pickupPrompt ? false : true },
             );
+            if (lifecycle.pickupPrompt)
+              pi.sendUserMessage(lifecycle.pickupPrompt);
             if (completing) {
               completing.pickup = "done";
-              completing.outcome =
-                "Pickup instruction sent: resume unfinished work, or stop if complete.";
+              completing.outcome = lifecycle.pickupPrompt
+                ? "Pickup instruction and prompted continuation requested."
+                : "Pickup instruction requested: resume unfinished work, or stop if complete.";
             }
             const archived = archiveCurrentReceipt(runId);
             resetLifecycle("pickup_complete");
             notifyHumanReceipt(ctx, archived);
-            debug("pickup_injected");
+            debug("pickup_requested");
           } catch (error) {
             if (completing) {
               completing.pickup = "failed";
-              completing.outcome =
-                "Native compaction finished, but pickup could not be sent.";
+              completing.outcome = lifecycle?.pickupPrompt
+                ? "Native compaction finished, but the prompted continuation could not be requested."
+                : "Native compaction finished, but pickup could not be requested.";
             }
             const archived = archiveCurrentReceipt(runId);
             resetLifecycle("pickup_failed");
@@ -524,7 +547,7 @@ export function createAutoCompactController(pi, options = {}) {
       }
       transition("ready");
       deactivateReadyTool();
-      setLifecycleWidget(ctx, receipt);
+      setLifecycleWidget(ctx);
       debug("ready_accepted");
       return {
         content: [
@@ -616,19 +639,22 @@ export function createAutoCompactController(pi, options = {}) {
       event.reason === "manual" &&
       state === "compacting" &&
       lifecycle?.ownCompaction === true;
-    if (!ownManualCompaction) interruptedExternalCompaction = undefined;
+    if (!ownManualCompaction) {
+      interruptedExternalCompaction = undefined;
+      setLifecycleWidget(ctx);
+    }
     if (!ownManualCompaction && (state !== "idle" || startInFlight)) {
       const runId = lifecycle?.id;
       const interrupted = receiptForRun(runId);
       if (interrupted) {
         if (state === "handoff_pending") {
           interrupted.handoff = "interrupted";
-          interrupted.compact = "not_sent";
+          interrupted.compact = "not_requested";
         } else {
           interrupted.handoff = "done";
           interrupted.compact = "interrupted";
         }
-        interrupted.pickup = "not_sent";
+        interrupted.pickup = "not_requested";
         interrupted.outcome =
           "The cooperative workflow was interrupted by a separate native Pi compaction.";
       }
@@ -657,25 +683,25 @@ export function createAutoCompactController(pi, options = {}) {
       return;
     }
     const superseded = lastHumanReceipt;
-    interruptedExternalCompaction = undefined;
     superseded.compact = "external_done";
     superseded.pickup = "active";
     superseded.outcome =
-      "The cooperative workflow was interrupted; external compaction finished and is sending corrective pickup.";
-    setLifecycleWidget(ctx, superseded);
+      "The cooperative workflow was interrupted; external compaction finished and is requesting corrective pickup.";
+    setLifecycleWidget(ctx);
     try {
       pi.sendMessage(
         {
-          customType: "auto_compact_pickup",
+          customType: "auto-compact.pickup",
           content: SUPERSESSION_PICKUP_PROMPT,
-          display: false,
+          display: true,
           details: { projection: "pickup", supersedes: "handoff" },
         },
         { triggerTurn: false },
       );
       superseded.pickup = "done";
       superseded.outcome =
-        "The cooperative workflow was interrupted. External compaction finished; pickup instruction sent.";
+        "The cooperative workflow was interrupted. External compaction finished; pickup instruction requested.";
+      interruptedExternalCompaction = undefined;
       notifyHumanReceipt(ctx, superseded);
       debug("external_compaction_superseded_handoff", {
         reason: event.reason,
@@ -684,7 +710,8 @@ export function createAutoCompactController(pi, options = {}) {
     } catch (error) {
       superseded.pickup = "failed";
       superseded.outcome =
-        "External compaction finished, but corrective pickup could not be sent.";
+        "External compaction finished, but corrective pickup could not be requested.";
+      interruptedExternalCompaction = undefined;
       notifyHumanReceipt(ctx, superseded, { level: "error" });
       debug("external_compaction_supersession_failed", {
         error: String(error?.message ?? error),
@@ -709,12 +736,18 @@ export function createAutoCompactController(pi, options = {}) {
       }
 
       if (command.subcommand === "run") {
-        const result = await startHandoff(ctx, "manual");
+        const result = await startHandoff(ctx, "manual", command.prompt);
         if (!result.started && result.reason === "lifecycle_active")
           notify(
             ctx,
             `Auto Compact is already ${state.replaceAll("_", " ")}`,
             "warning",
+          );
+        else if (!result.started && result.reason === "pickup_prompt_unavailable")
+          notify(
+            ctx,
+            "Auto Compact cannot start the prompted run: this Pi runtime cannot deliver the continuation prompt",
+            "error",
           );
         return;
       }
@@ -767,12 +800,12 @@ export function createAutoCompactController(pi, options = {}) {
           if (interrupted) {
             if (state === "handoff_pending") {
               interrupted.handoff = "interrupted";
-              interrupted.compact = "not_sent";
+              interrupted.compact = "not_requested";
             } else {
               interrupted.handoff = "done";
               interrupted.compact = "interrupted";
             }
-            interrupted.pickup = "not_sent";
+            interrupted.pickup = "not_requested";
             interrupted.outcome =
               "The workflow was canceled before native compaction.";
           }
@@ -780,12 +813,18 @@ export function createAutoCompactController(pi, options = {}) {
           resetLifecycle("disabled");
         } else if (startInFlight) resetLifecycle("disabled");
       }
+      const offSessionGeneration =
+        command.subcommand === "off" ? sessionGeneration : undefined;
+      const offCommandIsCurrent = () =>
+        offSessionGeneration === undefined ||
+        sessionGeneration === offSessionGeneration;
       try {
         const persisted = await settingsWriter({
           cwd: ctx?.cwd,
           projectTrusted: ctx?.isProjectTrusted?.() === true,
           patch,
         });
+        if (!offCommandIsCurrent()) return;
         if (
           command.subcommand === "on" &&
           configurationIntent === configurationIntentSequence
@@ -794,6 +833,7 @@ export function createAutoCompactController(pi, options = {}) {
           configurationWarning = undefined;
         }
         await loadEffective(ctx);
+        if (!offCommandIsCurrent()) return;
         const settingText =
           command.subcommand === "threshold"
             ? `threshold set to ${friendlyPercent(command.threshold)}%`
@@ -807,6 +847,7 @@ export function createAutoCompactController(pi, options = {}) {
           notifyHumanReceipt(ctx, canceledReceipt);
         } else notify(ctx, notice, "info");
       } catch (error) {
+        if (!offCommandIsCurrent()) return;
         if (command.subcommand === "off") {
           configurationWarning =
             "automatic handoffs are disabled for this Session, but the setting was not persisted";

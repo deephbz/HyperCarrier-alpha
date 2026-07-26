@@ -7,6 +7,9 @@
   "engines": {
     "node": ">=22.19"
   },
+  "devDependencies": {
+    "ajv": "^6.15.0"
+  },
   "workspaces": [
     "apps/*",
     "packages/*"

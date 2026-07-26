@@ -16,7 +16,11 @@ function messageText(event) {
     .join("\n");
 }
 
-function snapshotMaterializationContext(ctx, mayNotify = () => true) {
+function snapshotMaterializationContext(
+  ctx,
+  mayNotify = () => true,
+  lifecycleBoundary = "session_start",
+) {
   const sessionManager = ctx?.sessionManager;
   const header = sessionManager?.getHeader?.();
   const branch = sessionManager?.getBranch?.();
@@ -38,6 +42,7 @@ function snapshotMaterializationContext(ctx, mayNotify = () => true) {
     ui,
     modelRegistry: ctx?.modelRegistry,
     sessionId: ctx?.sessionId,
+    lifecycleBoundary,
     isProjectTrusted: () => projectTrusted,
     sessionManager: {
       getHeader: () => header,
@@ -118,6 +123,7 @@ export function registerRarebitLifecycle(pi, schedule, options = {}) {
     followUp: [],
   };
   let persistedUserInputAwaitingProvider = false;
+  let pendingLifecycleBoundary = "owner_request";
   let normalStopAwaitingSettlement = false;
   let firstOwnerInputAwaitingProvider;
   let ownerMessageSeen = false;
@@ -181,6 +187,7 @@ export function registerRarebitLifecycle(pi, schedule, options = {}) {
       snapshotMaterializationContext(
         ctx,
         () => sessionLive && sessionGeneration === generation,
+        "session_start",
       ),
     );
   });
@@ -213,6 +220,7 @@ export function registerRarebitLifecycle(pi, schedule, options = {}) {
     const origin = consumeInputOrigin(messageText(event));
     if (isUserSubmissionOrigin(origin)) {
       persistedUserInputAwaitingProvider = true;
+      pendingLifecycleBoundary = "owner_request";
       if (!ownerMessageSeen && origin.bucket === "direct") {
         ownerMessageSeen = true;
         firstOwnerInputAwaitingProvider = {
@@ -239,7 +247,9 @@ export function registerRarebitLifecycle(pi, schedule, options = {}) {
     const snapshot = snapshotMaterializationContext(
       ctx,
       () => sessionLive && sessionGeneration === generation,
+      pendingLifecycleBoundary,
     );
+    pendingLifecycleBoundary = "owner_request";
     schedule(snapshot);
     if (firstOwnerInputAwaitingProvider) {
       const ownerMessage = firstOwnerInputAwaitingProvider;
@@ -276,6 +286,7 @@ export function registerRarebitLifecycle(pi, schedule, options = {}) {
       snapshotMaterializationContext(
         ctx,
         () => sessionLive && sessionGeneration === generation,
+        "agent_settled",
       ),
     );
   });
