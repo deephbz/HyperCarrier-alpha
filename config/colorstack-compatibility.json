@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "component": "colorstack",
+  "source": {
+    "repository": "https://github.com/deephbz/colorstack.git",
+    "commit": "c0a1a51bef009a2e549391e3c5835fd2e4960dcc",
+    "tree": "511c5bf15c65b05d445b8e2cc40a222becbc7dba"
+  },
+  "gitlink": {
+    "path": "config/colorstack",
+    "mode": "160000",
+    "commit": "c0a1a51bef009a2e549391e3c5835fd2e4960dcc"
+  },
+  "pythonProject": {
+    "name": "colorstack",
+    "version": "0.1.0",
+    "requiresPython": ">=3.11"
+  },
+  "generator": {
+    "path": "gen.py",
+    "manifest": ".colorstack-manifest.json",
+    "manifestSchemaVersion": 1
+  },
+  "coreOutputs": ["ghostty-theme", "herdr"],
+  "parentVerification": {
+    "state": "verified",
+    "verifier": "scripts/verify-colorstack-composition.mjs",
+    "requiredCheckout": "recursive"
+  }
+}

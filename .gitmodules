@@ -1,3 +1,9 @@
 [submodule "packages/pi-team-bright"]
 	path = packages/pi-team-bright
 	url = https://github.com/deephbz/pi-team-bright.git
+[submodule "packages/pi-openai-blackmagic-compact"]
+	path = packages/pi-openai-blackmagic-compact
+	url = https://github.com/deephbz/pi-openai-blackmagic-compact.git
+[submodule "config/colorstack"]
+	path = config/colorstack
+	url = https://github.com/deephbz/colorstack.git

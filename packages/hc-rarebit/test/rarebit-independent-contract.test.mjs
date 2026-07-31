@@ -107,7 +107,62 @@ test("automatic ineligible does not suppress forced synthesis, whose duplicate r
   assert.equal(calls, 1);
 });
 
-test("overflow receipt does not suppress a retry with a larger complete-input limit", async () => {
+test("oversized complete evidence auto-trims and still synthesizes with declared coverage", async () => {
+  const root = await mkdtemp(join(tmpdir(), "rarebit-auto-trim-"));
+  const sessionRoot = join(root, "sessions");
+  await mkdir(sessionRoot);
+  const sessionFile = join(sessionRoot, "session.jsonl");
+  await writeFile(sessionFile, "{}\n");
+  const branch = [
+    entry("old", { role: "user", content: `OLD-${"a".repeat(3_000)}` }),
+    entry(
+      "new",
+      { role: "assistant", stopReason: "stop", content: "NEWEST" },
+      "old",
+    ),
+  ];
+  const ctx = {
+    sessionManager: {
+      getHeader: () => ({ id: "auto-trim" }),
+      getSessionFile: () => sessionFile,
+      getBranch: () => branch,
+    },
+  };
+  let receivedPrompt;
+  let receivedCacheSessionId;
+  const result = await processRarebitSummary(ctx, {
+    sessionRoot,
+    rarebitRoot: join(root, "rarebit"),
+    forceSynthesis: true,
+    lifecycleBoundary: "agent_settled",
+    maxPromptChars: 3_200,
+    model: { provider: "test", id: "fake" },
+    modelClient: {
+      complete: async ({ prompt, cacheSessionId }) => {
+        receivedPrompt = prompt;
+        receivedCacheSessionId = cacheSessionId;
+        return {
+          text: JSON.stringify({
+            summary: "Earlier evidence was trimmed; the newest handoff is present.",
+            sessionStatus: "needs_attention",
+            statusReason: "uncertain",
+          }),
+        };
+      },
+    },
+  });
+  assert.equal(result.record.status, "ok");
+  assert.equal(receivedCacheSessionId, "auto-trim");
+  assert.equal(result.record.sessionStatus, "needs_attention");
+  assert.equal(result.record.statusReason, "uncertain");
+  assert.ok(result.record.inputCoverage.omittedMessageCount > 0);
+  assert.ok(receivedPrompt.length <= 3_200);
+  assert.match(receivedPrompt, /messages before are trimmed/);
+  assert.match(receivedPrompt, /NEWEST/);
+  assert.doesNotMatch(receivedPrompt, /OLD-/);
+});
+
+test("fixed prompt overflow does not suppress a retry with a larger input limit", async () => {
   const root = await mkdtemp(join(tmpdir(), "rarebit-overflow-"));
   const sessionRoot = join(root, "sessions");
   await mkdir(sessionRoot);

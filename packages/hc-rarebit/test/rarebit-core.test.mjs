@@ -8,15 +8,19 @@ import Ajv from "ajv";
 import {
   DEFAULT_RAREBIT_SUMMARY_POLICY,
   RAREBIT_SUMMARY_PROMPT_VERSION,
+  composeRarebitSummaryDerivationInput,
   composeRarebitSummaryPrompt,
   composeRarebitTitlePrompt,
   evaluateRarebitSummaryEligibility,
   measureRarebits,
+  normalizeRarebitSummarySynthesis,
   rarebitJobIdentity,
   selectRarebits,
   titleWithDatePrefix,
 } from "../src/rarebit-core.mjs";
+import { createPiRarebitModelClient } from "../src/rarebit-model.mjs";
 import {
+  DEFAULT_RAREBIT_MAX_PROMPT_CHARS,
   processRarebitSummary,
   processRarebitTitle,
 } from "../src/rarebit-service.mjs";
@@ -127,6 +131,95 @@ test("prompts contain semantic prose only and title is a separate date-prefixed 
   );
 });
 
+test("bounded Summary input retains newest evidence and declares every omission", () => {
+  const selection = selectRarebits([
+    entry("old", { role: "user", content: `OLDEST-${"a".repeat(1_200)}` }),
+    entry("middle", {
+      role: "assistant",
+      stopReason: "toolUse",
+      content: `MIDDLE-${"b".repeat(1_200)}`,
+    }),
+    entry("new", {
+      role: "assistant",
+      stopReason: "stop",
+      content: "NEWEST-EVIDENCE",
+    }),
+  ]);
+  const input = composeRarebitSummaryDerivationInput(selection, {
+    maxPromptChars: 3_200,
+    lifecycleBoundary: "agent_settled",
+  });
+  assert.ok(input.prompt.length <= 3_200);
+  assert.equal(input.coverage.totalMessageCount, 3);
+  assert.ok(input.coverage.omittedMessageCount > 0);
+  assert.equal(input.coverage.complete, false);
+  assert.match(input.prompt, /messages before are trimmed/);
+  assert.match(input.prompt, /NEWEST-EVIDENCE/);
+  assert.doesNotMatch(input.prompt, /OLDEST-/);
+  assert.match(input.prompt, /do not infer what was trimmed/i);
+  assert.equal(DEFAULT_RAREBIT_MAX_PROMPT_CHARS, 256_000);
+});
+
+test("one oversized newest message is tail-bounded with an explicit character omission", () => {
+  const selection = selectRarebits([
+    entry("huge", {
+      role: "user",
+      content: `DISCARDED-PREFIX-${"x".repeat(20_000)}-RETAINED-SUFFIX`,
+    }),
+  ]);
+  const input = composeRarebitSummaryDerivationInput(selection, {
+    maxPromptChars: 4_000,
+  });
+  assert.ok(input.prompt.length <= 4_000);
+  assert.equal(input.coverage.omittedMessageCount, 0);
+  assert.ok(input.coverage.omittedTextChars > 0);
+  assert.match(input.prompt, /leading characters.*trimmed/i);
+  assert.match(input.prompt, /RETAINED-SUFFIX/);
+  assert.doesNotMatch(input.prompt, /DISCARDED-PREFIX/);
+});
+
+test("Summary normalization accepts explicit uncertainty and conflicting evidence", () => {
+  for (const statusReason of ["uncertain", "conflicting_evidence"]) {
+    assert.deepEqual(
+      normalizeRarebitSummarySynthesis(
+        JSON.stringify({
+          summary: "The supplied evidence does not support a reliable account.",
+          sessionStatus: "needs_attention",
+          statusReason,
+        }),
+      ),
+      {
+        summary: "The supplied evidence does not support a reliable account.",
+        sessionStatus: "needs_attention",
+        statusReason,
+      },
+    );
+  }
+});
+
+test("Pi Summary model calls forward the stable Session cache identity", async () => {
+  let receivedOptions;
+  const client = await createPiRarebitModelClient(
+    {
+      modelRegistry: {
+        find: () => ({ provider: "test", id: "cache-model" }),
+        getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key" }),
+      },
+    },
+    {
+      model: { provider: "test", id: "cache-model" },
+      piAi: {
+        complete: async (_model, _context, options) => {
+          receivedOptions = options;
+          return { text: "ok" };
+        },
+      },
+    },
+  );
+  await client.complete({ prompt: "prompt", cacheSessionId: "session-cache-1" });
+  assert.equal(receivedOptions.sessionId, "session-cache-1");
+});
+
 test("job identity varies with an operation's semantic inputs, not raw source path", () => {
   const selection = selectRarebits([
     entry("u", { role: "user", content: "goal" }),
@@ -192,6 +285,19 @@ test("shared imperative summary service persists a derived receipt without raw s
   });
   assert.equal(result.record.status, "ok");
   assert.equal("eligibility" in result.record, false);
+  assert.equal(
+    result.record.inputCoveragePolicy.strategy,
+    "newest_suffix_with_explicit_omission",
+  );
+  assert.equal(result.record.inputCoveragePolicy.maxPromptChars, 256_000);
+  assert.deepEqual(result.record.inputCoverage, {
+    totalMessageCount: 1,
+    includedMessageCount: 1,
+    omittedMessageCount: 0,
+    omittedTextChars: 0,
+    promptChars: result.record.inputCoverage.promptChars,
+    complete: true,
+  });
   assert.equal(result.record.synthesis.usage.inputTokens, 3);
   assert.equal(result.record.synthesis.usage.outputTokens, 2);
   assert.equal(JSON.stringify(result.record).includes("owner context"), false);

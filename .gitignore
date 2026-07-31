@@ -21,3 +21,6 @@ config/*.private.json
 key-msg-summary.jsonl
 rarebit.jsonl
 proposals/
+
+# Terminal-theme candidates are generated outside this checkout by default.
+.colorstack-output/

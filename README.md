@@ -78,9 +78,87 @@ call is opt-in because selected user and assistant prose crosses the configured
 provider boundary. When Pi runs under Herdr, Rarebit can report two optional
 recency clocks: latest selected owner message, then latest selected agent stop.
 They aren't liveness, progress, or delivery state. The package README documents
-the token contract. [`config/herdr.example.toml`](config/herdr.example.toml) is
-a validated complete configuration; merge its fenced plugin blocks into existing
-preferences rather than overwriting them wholesale.
+the token contract.
+
+## Verified terminal theme candidate
+
+Requirements: Node.js 22.19 or newer; Python 3.11 or newer; and Herdr and
+Ghostty executables on `PATH` for validation. Colorstack is a Python project, not an npm workspace.
+The public selection uses `modus`.
+
+1. Clone and verify the two source children:
+
+```sh
+git clone --recurse-submodules https://github.com/deephbz/HyperCarrier-alpha.git
+cd HyperCarrier-alpha
+npm ci
+npm run verify:colorstack
+```
+
+The recursive checkout contains `packages/pi-team-bright` and `config/colorstack`.
+A non-recursive clone must run `git submodule update --init --recursive` before
+verification.
+
+2. Compose to a new path outside this source checkout:
+
+```sh
+candidate="$HOME/Downloads/hypercarrier-modus-candidate"
+npm run compose:terminal-theme -- --output-root "$candidate"
+```
+
+If verification, generation, or validation fails, the command produces no
+candidate. Your color-free configuration remains usable.
+
+3. Inspect the receipt and candidate files:
+
+```sh
+cat "$candidate/composition-receipt.json"
+find "$candidate" -type f | sort
+```
+
+4. Optional operator action: copy only the files you choose, then use the
+normal operator commands to install, select, and reload them. Perform visual
+acceptance in your own terminal. The compose command does not install, select,
+or reload a live configuration.
+
+## Optional terminal integration examples
+
+The `config/` directory contains a portable terminal behavior/keybinding bundle:
+
+- `herdr.example.toml` configures pane navigation, Cmd+F zoom, the Rarebit
+  Status and Agent View Presets controls, and file-viewer shortcuts;
+- `herdr.plugins.lock.toml` records complete plugin installation intent for the
+  two plugins shipped in this checkout and the pinned external file viewer;
+- `ghostty.example.config` combines non-color terminal settings with the macOS
+  keybindings that pass those controls through.
+
+These are examples, not a replacement for a live configuration. First install
+and enable the checkout-local plugins from this checkout, then selectively merge
+only the desired Herdr tables/key commands and Ghostty settings into your own
+files. For the external viewer, install the exact lock revision rather than an
+unpinned latest release:
+
+```sh
+herdr plugin link "$PWD/tools/agent-view-presets"
+herdr plugin enable agent-view-presets
+herdr plugin link "$PWD/tools/rarebit-status"
+herdr plugin enable rarebit-status
+herdr plugin install --ref 96fcc0a2bdd2727ec88c38f8c8806f97b7ca0ea0 -y smarzban/herdr-file-viewer
+```
+
+Validate copies without reading or replacing your default configuration:
+
+```sh
+config_dir="$(mktemp -d)"
+mkdir -p "$config_dir/herdr"
+cp config/herdr.example.toml "$config_dir/herdr/config.toml"
+HERDR_CONFIG_PATH="$config_dir/herdr/config.toml" herdr config check
+ghostty +validate-config --config-file="$PWD/config/ghostty.example.config"
+rm -rf "$config_dir"
+```
+
+The bundle deliberately excludes runtime plugin state, managed checkouts,
+personal paths, generated color output, and live terminal configuration.
 
 Auto Compact is a separate Pi extension under
 [`packages/hc-auto-compact`](packages/hc-auto-compact). After `npm ci`, load it
@@ -122,7 +200,7 @@ uv run --locked --project tools/herdr-pi-recovery herdr-pi-recovery plan
 `restore --execute` changes live Herdr panes, so inspect the default dry-run plan first. Each tool's README documents its boundary and recovery behavior.
 
 Pi Team Bright orchestration and its Beads-backed Task integration are maintained in
-[deephbz/pi-team-bright](https://github.com/deephbz/pi-team-bright). Clone this Alpha with `git clone --recurse-submodules`; a non-recursive clone intentionally lacks `packages/pi-team-bright` until `git submodule update --init --recursive` is run. The gitlink composes public source at its verified revision; `@hypercarrier/pi-team-bright` remains unpublished on npm.
+[deephbz/pi-team-bright](https://github.com/deephbz/pi-team-bright). Clone this Alpha with `git clone --recurse-submodules`; a non-recursive clone intentionally lacks `packages/pi-team-bright` until `git submodule update --init --recursive` is run. The gitlink composes the verified rc.2 source revision. The compatibility record separately verifies the immutable `@hypercarrier/pi-team-bright@0.16.0-rc.2` npm artifact and its public release receipts.
 
 ## Trust model
 

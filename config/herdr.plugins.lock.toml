@@ -1,0 +1,25 @@
+schema_version = 1
+
+# Declarative installation intent only. Runtime plugin state, managed checkouts,
+# and plugin-local configuration are intentionally not part of this file.
+[[plugins]]
+id = "agent-view-presets"
+source = "checkout"
+path = "tools/agent-view-presets"
+expected_version = "0.1.0"
+enabled = true
+
+[[plugins]]
+id = "rarebit-status"
+source = "checkout"
+path = "tools/rarebit-status"
+expected_version = "0.4.0"
+enabled = true
+
+[[plugins]]
+id = "herdr-file-viewer"
+source = "github"
+repository = "smarzban/herdr-file-viewer"
+revision = "96fcc0a2bdd2727ec88c38f8c8806f97b7ca0ea0"
+expected_version = "1.14.0"
+enabled = true

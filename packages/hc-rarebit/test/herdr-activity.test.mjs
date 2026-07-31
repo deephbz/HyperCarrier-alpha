@@ -31,6 +31,22 @@ test("Herdr activity tokens are wall-clock projections and reject unknown times"
   );
 });
 
+test("Herdr activity tokens show days and whole hours after 24 hours", () => {
+  assert.deepEqual(
+    herdrActivityTokens(
+      {
+        latestUser: { timestamp: "2026-07-25T12:00:00.000Z" },
+        latestAgentStop: { timestamp: "2026-07-23T04:01:00.000Z" },
+      },
+      Date.parse("2026-07-26T12:00:00.000Z"),
+    ),
+    {
+      rarebit_user_age: "1d 0h",
+      rarebit_stop_age: "3d 7h",
+    },
+  );
+});
+
 test("Herdr reporter refreshes with TTL, applies only to Pi, and clears on shutdown", async () => {
   const sent = [];
   let scheduled;
