@@ -3,6 +3,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { validateSchema } from "./lib/closed-json-schema.mjs";
+export { validateSchema, validateSchemaDefinition } from "./lib/closed-json-schema.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const RECORD_PATH = "config/pi-team-bright-compatibility.json";
@@ -16,64 +18,6 @@ function git(root, args) {
 function fail(code, message) { const error = new Error(message); error.code = code; throw error; }
 function object(value, label) { if (!value || typeof value !== "object" || Array.isArray(value)) fail("invalid-record", `${label} must be an object`); }
 
-const DRAFT_07 = "http://json-schema.org/draft-07/schema#";
-const SCHEMA_KEYWORDS = new Set(["$schema", "$id", "title", "type", "required", "properties", "additionalProperties", "const", "enum", "pattern", "minItems", "items"]);
-const SCHEMA_TYPES = new Set(["object", "string", "null", "array", "boolean", "number", "integer"]);
-function schemaObject(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
-function invalidSchema(location, message) { fail("invalid-schema", `${location}: ${message}`); }
-export function validateSchemaDefinition(schema, location = "$", root = true) {
-  if (!schemaObject(schema)) invalidSchema(location, "schema must be an object");
-  for (const key of Object.keys(schema)) if (!SCHEMA_KEYWORDS.has(key)) invalidSchema(location, `unsupported schema keyword ${key}`);
-  if (root && schema.$schema !== DRAFT_07) invalidSchema(location, `$schema must equal ${DRAFT_07}`);
-  if (schema.$schema !== undefined && schema.$schema !== DRAFT_07) invalidSchema(location, `$schema must equal ${DRAFT_07}`);
-  for (const key of ["$id", "title"]) if (schema[key] !== undefined && typeof schema[key] !== "string") invalidSchema(location, `${key} must be a string`);
-  if (schema.type !== undefined && (!SCHEMA_TYPES.has(schema.type))) invalidSchema(location, "type must be a supported type string");
-  if (schema.properties !== undefined) {
-    if (!schemaObject(schema.properties)) invalidSchema(location, "properties must be an object of schemas");
-    for (const [key, child] of Object.entries(schema.properties)) validateSchemaDefinition(child, `${location}.properties.${key}`, false);
-  }
-  if (schema.additionalProperties !== undefined) {
-    if (typeof schema.additionalProperties !== "boolean" && !schemaObject(schema.additionalProperties)) invalidSchema(location, "additionalProperties must be boolean or schema object");
-    if (schemaObject(schema.additionalProperties)) validateSchemaDefinition(schema.additionalProperties, `${location}.additionalProperties`, false);
-  }
-  if (schema.required !== undefined && (!Array.isArray(schema.required) || schema.required.some((key) => typeof key !== "string") || new Set(schema.required).size !== schema.required.length)) invalidSchema(location, "required must be a unique string array");
-  if (schema.enum !== undefined && (!Array.isArray(schema.enum) || schema.enum.length === 0)) invalidSchema(location, "enum must be a nonempty array");
-  if (schema.pattern !== undefined) { if (typeof schema.pattern !== "string") invalidSchema(location, "pattern must be a string"); try { new RegExp(schema.pattern); } catch { invalidSchema(location, "pattern must compile"); } }
-  if (schema.minItems !== undefined && (!Number.isInteger(schema.minItems) || schema.minItems < 0)) invalidSchema(location, "minItems must be a nonnegative integer");
-  if (schema.items !== undefined) { if (!schemaObject(schema.items)) invalidSchema(location, "items must be a schema object"); validateSchemaDefinition(schema.items, `${location}.items`, false); }
-  return schema;
-}
-function schemaType(value, type) {
-  if (type === "null") return value === null;
-  if (type === "array") return Array.isArray(value);
-  if (type === "object") return value !== null && typeof value === "object" && !Array.isArray(value);
-  if (type === "integer") return typeof value === "number" && Number.isFinite(value) && Number.isInteger(value);
-  return typeof value === type;
-}
-export function validateSchema(value, schema, location = "$") {
-  validateSchemaDefinition(schema, location, location === "$");
-  if (schema.type !== undefined && !schemaType(value, schema.type)) fail("schema-validation", `${location}: expected ${schema.type}`);
-  if (schema.const !== undefined && JSON.stringify(value) !== JSON.stringify(schema.const)) fail("schema-validation", `${location}: expected constant ${JSON.stringify(schema.const)}`);
-  if (schema.enum !== undefined && (!Array.isArray(schema.enum) || !schema.enum.some((candidate) => JSON.stringify(candidate) === JSON.stringify(value)))) fail("schema-validation", `${location}: value is not in enum`);
-  if (schema.pattern !== undefined && (typeof value !== "string" || !(new RegExp(schema.pattern).test(value)))) fail("schema-validation", `${location}: does not match ${schema.pattern}`);
-  if (schema.required !== undefined) {
-    if (!Array.isArray(schema.required) || !schemaType(value, "object")) fail("schema-validation", `${location}: required requires object`);
-    for (const key of schema.required) if (!(key in value)) fail("schema-validation", `${location}: missing required ${key}`);
-  }
-  if (schemaType(value, "object")) {
-    const properties = schema.properties ?? {};
-    for (const [key, item] of Object.entries(value)) {
-      if (key in properties) validateSchema(item, properties[key], `${location}.${key}`);
-      else if (schema.additionalProperties === false) fail("schema-validation", `${location}: additional property ${key}`);
-      else if (schema.additionalProperties && typeof schema.additionalProperties === "object") validateSchema(item, schema.additionalProperties, `${location}.${key}`);
-    }
-  }
-  if (schemaType(value, "array")) {
-    if (schema.minItems !== undefined && value.length < schema.minItems) fail("schema-validation", `${location}: expected at least ${schema.minItems} items`);
-    if (schema.items !== undefined) for (let index = 0; index < value.length; index += 1) validateSchema(value[index], schema.items, `${location}[${index}]`);
-  }
-  return value;
-}
 export function validateCompatibilityRecord(record) {
   object(record, "compatibility record");
   for (const key of REQUIRED) if (!(key in record)) fail("invalid-record", `compatibility record missing ${key}`);
@@ -81,7 +25,19 @@ export function validateCompatibilityRecord(record) {
   for (const [label, value] of [["source", record.source], ["package", record.package], ["publication", record.publication], ["gitlink", record.gitlink], ["parentVerification", record.parentVerification]]) object(value, label);
   if (record.source.repository !== "https://github.com/deephbz/pi-team-bright.git" || !/^[0-9a-f]{40}$/.test(record.source.commit) || !/^[0-9a-f]{40}$/.test(record.source.tree)) fail("invalid-record", "source repository, commit, or tree is invalid");
   if (record.package.name !== "@hypercarrier/pi-team-bright" || typeof record.package.version !== "string") fail("invalid-record", "package identity is invalid");
-  if (record.publication.state !== "unpublished" || record.publication.npmIntegrity !== null) fail("invalid-record", "unpublished package must have null npm integrity");
+  const publication = record.publication;
+  if (
+    publication.state !== "published" ||
+    publication.npmIntegrity !== "sha512-hEBpcAL7s9+oTzAJNb578l5my48tVY4TpjmtZNvG0xpVvVSb3807NjPVOw7VImgJdC2Ax2G8ntRpO0igoXSMyg==" ||
+    publication.npmShasum !== "cdaf5508bfbdc1cd5cb61517d47b3fce608749a6" ||
+    publication.tarball !== "https://registry.npmjs.org/@hypercarrier/pi-team-bright/-/pi-team-bright-0.16.0-rc.2.tgz" ||
+    publication.tarballSha256 !== "30d8dbde93d0a2f5b838bf88edefb2636f45e514232c54d0df4120caee0ae98e" ||
+    publication.tag !== "v0.16.0-rc.2" ||
+    publication.releaseUrl !== "https://github.com/deephbz/pi-team-bright/releases/tag/v0.16.0-rc.2" ||
+    publication.publishUrl !== "https://github.com/deephbz/pi-team-bright/actions/runs/30594201861" ||
+    publication.distTag !== "next" ||
+    publication.tarEntries !== 59
+  ) fail("invalid-record", "published npm tuple is invalid");
   if (record.gitlink.path !== SUBMODULE_PATH || record.gitlink.mode !== "160000" || record.gitlink.commit !== record.source.commit) fail("invalid-record", "gitlink does not match source commit");
   if (record.parentVerification.requiredCheckout !== "recursive") fail("invalid-record", "parent verification must require recursive checkout");
   const launcher = record.beads?.launcher, archive = record.beads?.archive;

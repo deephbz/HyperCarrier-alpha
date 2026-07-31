@@ -4,17 +4,250 @@
   "title": "Pi Team Bright composition compatibility record",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "component", "source", "package", "publication", "pi", "beads", "childVerification", "gitlink", "parentVerification"],
+  "required": [
+    "schemaVersion",
+    "component",
+    "source",
+    "package",
+    "publication",
+    "pi",
+    "beads",
+    "childVerification",
+    "gitlink",
+    "parentVerification"
+  ],
   "properties": {
-    "schemaVersion": {"const": 1},
-    "component": {"const": "pi-team-bright"},
-    "source": {"type": "object", "additionalProperties": false, "required": ["repository", "commit", "tree"], "properties": {"repository": {"const": "https://github.com/deephbz/pi-team-bright.git"}, "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"}, "tree": {"type": "string", "pattern": "^[0-9a-f]{40}$"}}},
-    "package": {"type": "object", "additionalProperties": false, "required": ["name", "version"], "properties": {"name": {"const": "@hypercarrier/pi-team-bright"}, "version": {"type": "string"}}},
-    "publication": {"type": "object", "additionalProperties": false, "required": ["state", "npmIntegrity"], "properties": {"state": {"const": "unpublished"}, "npmIntegrity": {"type": "null"}}},
-    "pi": {"type": "object", "additionalProperties": false, "required": ["peerRanges"], "properties": {"peerRanges": {"type": "object", "additionalProperties": {"type": "string"}}}},
-    "beads": {"type": "object", "additionalProperties": false, "required": ["launcher", "archive"], "properties": {"launcher": {"type": "object", "additionalProperties": false, "required": ["package", "version", "bin", "source"], "properties": {"package": {"const": "@beads/bd"}, "version": {"const": "1.1.0"}, "bin": {"const": "bin/bd.js"}, "source": {"const": "src/utils/beads.ts"}}}, "archive": {"type": "object", "additionalProperties": false, "required": ["materializer", "url", "sha256"], "properties": {"materializer": {"const": "scripts/materialize-beads-linux-amd64.cjs"}, "url": {"const": "https://github.com/gastownhall/beads/releases/download/v1.1.0/beads_1.1.0_linux_amd64.tar.gz"}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}}}},
-    "childVerification": {"type": "object", "additionalProperties": false, "required": ["ciWorkflow", "receipts"], "properties": {"ciWorkflow": {"type": "string"}, "receipts": {"type": "array", "minItems": 1, "items": {"type": "object", "required": ["name", "command", "result"]}}}},
-    "gitlink": {"type": "object", "additionalProperties": false, "required": ["path", "mode", "commit"], "properties": {"path": {"const": "packages/pi-team-bright"}, "mode": {"const": "160000"}, "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"}}},
-    "parentVerification": {"type": "object", "additionalProperties": false, "required": ["state", "verifier", "requiredCheckout"], "properties": {"state": {"enum": ["verified", "pending", "failed"]}, "verifier": {"type": "string"}, "requiredCheckout": {"const": "recursive"}}}
+    "schemaVersion": {
+      "const": 1
+    },
+    "component": {
+      "const": "pi-team-bright"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "commit",
+        "tree"
+      ],
+      "properties": {
+        "repository": {
+          "const": "https://github.com/deephbz/pi-team-bright.git"
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "tree": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      }
+    },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "const": "@hypercarrier/pi-team-bright"
+        },
+        "version": {
+          "type": "string"
+        }
+      }
+    },
+    "publication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "npmIntegrity",
+        "npmShasum",
+        "tarball",
+        "tarballSha256",
+        "tag",
+        "releaseUrl",
+        "publishUrl",
+        "distTag",
+        "tarEntries"
+      ],
+      "properties": {
+        "state": {
+          "const": "published"
+        },
+        "npmIntegrity": {
+          "const": "sha512-hEBpcAL7s9+oTzAJNb578l5my48tVY4TpjmtZNvG0xpVvVSb3807NjPVOw7VImgJdC2Ax2G8ntRpO0igoXSMyg=="
+        },
+        "npmShasum": {
+          "const": "cdaf5508bfbdc1cd5cb61517d47b3fce608749a6"
+        },
+        "tarball": {
+          "const": "https://registry.npmjs.org/@hypercarrier/pi-team-bright/-/pi-team-bright-0.16.0-rc.2.tgz"
+        },
+        "tarballSha256": {
+          "const": "30d8dbde93d0a2f5b838bf88edefb2636f45e514232c54d0df4120caee0ae98e"
+        },
+        "tag": {
+          "const": "v0.16.0-rc.2"
+        },
+        "releaseUrl": {
+          "const": "https://github.com/deephbz/pi-team-bright/releases/tag/v0.16.0-rc.2"
+        },
+        "publishUrl": {
+          "const": "https://github.com/deephbz/pi-team-bright/actions/runs/30594201861"
+        },
+        "distTag": {
+          "const": "next"
+        },
+        "tarEntries": {
+          "const": 59
+        }
+      }
+    },
+    "pi": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "peerRanges"
+      ],
+      "properties": {
+        "peerRanges": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "beads": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "launcher",
+        "archive"
+      ],
+      "properties": {
+        "launcher": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "package",
+            "version",
+            "bin",
+            "source"
+          ],
+          "properties": {
+            "package": {
+              "const": "@beads/bd"
+            },
+            "version": {
+              "const": "1.1.0"
+            },
+            "bin": {
+              "const": "bin/bd.js"
+            },
+            "source": {
+              "const": "src/utils/beads.ts"
+            }
+          }
+        },
+        "archive": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "materializer",
+            "url",
+            "sha256"
+          ],
+          "properties": {
+            "materializer": {
+              "const": "scripts/materialize-beads-linux-amd64.cjs"
+            },
+            "url": {
+              "const": "https://github.com/gastownhall/beads/releases/download/v1.1.0/beads_1.1.0_linux_amd64.tar.gz"
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        }
+      }
+    },
+    "childVerification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ciWorkflow",
+        "receipts"
+      ],
+      "properties": {
+        "ciWorkflow": {
+          "type": "string"
+        },
+        "receipts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "command",
+              "result"
+            ]
+          }
+        }
+      }
+    },
+    "gitlink": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "mode",
+        "commit"
+      ],
+      "properties": {
+        "path": {
+          "const": "packages/pi-team-bright"
+        },
+        "mode": {
+          "const": "160000"
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      }
+    },
+    "parentVerification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "verifier",
+        "requiredCheckout"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "verified",
+            "pending",
+            "failed"
+          ]
+        },
+        "verifier": {
+          "type": "string"
+        },
+        "requiredCheckout": {
+          "const": "recursive"
+        }
+      }
+    }
   }
 }

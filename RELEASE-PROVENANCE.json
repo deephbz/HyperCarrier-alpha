@@ -1,22 +1,47 @@
 {
   "schemaVersion": 1,
   "sourceRepository": "HyperCarrier",
-  "sourceCommit": "df0a79a4dcf418b12b7e3dbd4581c05675254404",
-  "sourceTree": "ecd3aff66b72ca8d91a24e5e127c1d4075fba0e5",
+  "sourceCommit": "b37b91ac8c79a76e10977352100e304e4dad3518",
+  "sourceTree": "b8e465135cf49a07cd29dec1e224dc83ab806094",
   "sourceWorktreeDirty": false,
-  "exportContentSha256": "06cb4c009e035cf980e4db3c27b86ab5ca6d822c23b03394cc243623297122ba",
-  "exportManifestSha256": "de840f9361cf966ab69d7b28ae22100dc7f48fc5feb27ad2d878f25c3f2cd99b",
+  "exportContentSha256": "22bd7e93e83d9ab3bc261defa80efb3bdbd23ffcb644ff1d322e07b2ec75e91d",
+  "exportManifestSha256": "483d0ae11fcfb52537402d928f78b2ec7f90216fb2c8889177ca5a2fe7e314c7",
   "dependencies": [],
   "submodules": [
     {
       "name": "packages/pi-team-bright",
       "path": "packages/pi-team-bright",
       "repository": "https://github.com/deephbz/pi-team-bright.git",
-      "commit": "2ea3f9764b09663b17d263cd6923204d8261accc",
-      "tree": "5faff3b51871b4ef65bd0f7a035770a4a79c6a82",
-      "package": {
+      "commit": "d858d9f81261f5c2bfbe9e1eaf342b523e0114eb",
+      "tree": "5023200b37e03d6bc7f26c3a7e7199e2bc2f7e12",
+      "identity": {
+        "kind": "npm-package",
         "name": "@hypercarrier/pi-team-bright",
-        "version": "0.16.0-rc.1"
+        "version": "0.16.0-rc.2"
+      }
+    },
+    {
+      "name": "packages/pi-openai-blackmagic-compact",
+      "path": "packages/pi-openai-blackmagic-compact",
+      "repository": "https://github.com/deephbz/pi-openai-blackmagic-compact.git",
+      "commit": "7ba0de2bdbad083ab646ff8ca67b8a262d78a246",
+      "tree": "ad17e51fd9367eda7962c093c4814579702c879e",
+      "identity": {
+        "kind": "npm-package",
+        "name": "@hypercarrier/pi-openai-blackmagic-compact",
+        "version": "0.1.0-rc.3"
+      }
+    },
+    {
+      "name": "config/colorstack",
+      "path": "config/colorstack",
+      "repository": "https://github.com/deephbz/colorstack.git",
+      "commit": "c0a1a51bef009a2e549391e3c5835fd2e4960dcc",
+      "tree": "511c5bf15c65b05d445b8e2cc40a222becbc7dba",
+      "identity": {
+        "kind": "python-project",
+        "name": "colorstack",
+        "version": "0.1.0"
       }
     }
   ],

@@ -1,0 +1,30 @@
+name: Colorstack composition
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: npm ci --ignore-scripts
+      - run: python3 -m pip install pytest==8.3.5
+      - run: python3 -m pytest config/colorstack
+      - run: npm run verify:colorstack -- --debug
+      - run: npm run test:composition

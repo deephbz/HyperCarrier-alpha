@@ -8,8 +8,9 @@ reasoning. Native Pi Session JSONL remains the raw evidence authority.
 Rarebit keeps three different things separate:
 
 - **Rarebit evidence** is the ordered selected raw prose and provenance.
-- **Rarebit Summary** is an optional lossy model derivation over that complete
-  evidence.
+- **Rarebit Summary** is an optional lossy model derivation linked to that
+  complete evidence; its model input may be an explicitly bounded newest
+  suffix.
 - **Rarebit Title** is a mutable human-facing Session-label proposal, not
   Session identity or evidence.
 
@@ -54,8 +55,12 @@ bookkeeping only: it never schedules a Summary, queries policy, resolves or
 calls a model, writes a receipt, or notifies. Each new receipt preserves its
 writable lifecycle boundary: an `owner_request` Summary is always
 `user_requested/owner_request_recorded`, while settled/manual summaries classify
-complete selected evidence as `finished/all_requests_accomplished` or
-`needs_attention` with a decision, input, approval, blocker, or unfinished reason. Settled classification sees
+the supplied selected evidence as `finished/all_requests_accomplished` or
+`needs_attention` with a decision, input, approval, blocker, unfinished,
+uncertain, or conflicting-evidence reason. `uncertain` is legal when important
+missing or ambiguous evidence blocks a reliable assessment;
+`conflicting_evidence` is legal for an unresolved material contradiction.
+Settled classification sees
 only selected user and assistant boundary prose: tool calls/results are
 intentionally absent, so their absence is not evidence that work failed. A
 final assistant handoff that says or conventionally signals completion, such as
@@ -65,6 +70,37 @@ reports failure, deferral, remaining work, a blocker, or a need for owner input.
 transcript. `finished` remains a Session-scoped appearance assessment, never
 Project or delivery truth. It does not block prompt entry or add model-visible
 messages.
+
+Summary prompts are bounded to 256,000 UTF-16 characters, Rarebit's explicit
+64k estimated-token ceiling under `ceil(chars/4)`. When the complete
+semantic message list does not fit, Rarebit retains the newest ordered suffix
+and inserts a model-visible `... (N messages before are trimmed)` record; if one
+newest message alone is oversized, its leading characters are omitted with a
+second explicit count. The compact receipt records total/included/omitted
+message counts, omitted leading characters, prompt size, and whether coverage
+was complete. Only a ceiling too small for the fixed contract itself remains an
+explicit overflow. Native Session JSONL and the complete Rarebit selection stay
+authoritative throughout.
+
+The Pi extension's Summary prompt is also a provider-cache contract. Fixed
+instructions come first, semantic messages are one compact JSON record per line
+in branch order, and lifecycle-specific instructions come after the message
+stream. Consequently an owner-request prompt is an exact prefix of the next
+linear settled prompt through every already-seen message. The model adapter
+passes the exact Pi Session ID as Pi AI's `sessionId`, which supplies a stable
+provider prompt-cache key across Summary calls in that Session. Forks or branch
+divergence may reuse only their exact common prefix; once trimming advances the
+newest-message window, only the fixed contract is guaranteed stable. Cache
+usage is provider/model behavior, not semantic correctness, and remains
+observable in each synthesis receipt's reported `cacheReadTokens`.
+
+Run `npm run test:e2e:summary-cache --workspace @hypercarrier/hc-rarebit` for
+the credentialed empirical canary. It defaults to the configured
+`rarebit.model` and creates two isolated Pi RPC calls with one stable cache
+Session ID; `PI_E2E_PROVIDER`, `PI_E2E_MODEL`, and `PI_E2E_THINKING` override
+the model. The canary requires an exact generated prompt prefix and at least
+1,024 reported cache-read tokens on the second call, and retains raw RPC JSONL
+plus a machine-readable result in a fresh temporary artifact directory.
 
 After intrinsic eligibility but before model resolution, the Pi shell emits the
 versioned `rarebit-automatic-summary-policy/1` query on Pi's shared extension

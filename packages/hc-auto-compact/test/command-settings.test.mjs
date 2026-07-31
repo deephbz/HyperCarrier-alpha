@@ -70,11 +70,11 @@ test("command grammar defaults to status and keeps a small explicit surface", ()
   assert.equal(getAutoCompactArgumentCompletions("threshold "), null);
 });
 
-test("threshold validation accepts only finite percentages strictly between 0 and 95", () => {
-  for (const value of [Number.NaN, -1, 0, 95, 100, Infinity, "90"]) {
+test("threshold validation accepts only finite percentages strictly between 1 and 110", () => {
+  for (const value of [Number.NaN, -1, 0, 1, 110, Infinity, "90"]) {
     assert.equal(isValidThreshold(value), false, String(value));
   }
-  for (const value of [Number.MIN_VALUE, 0.1, 90, 94.999]) {
+  for (const value of [1.001, 90, 100, 109.999]) {
     assert.equal(isValidThreshold(value), true, String(value));
   }
 
@@ -82,8 +82,9 @@ test("threshold validation accepts only finite percentages strictly between 0 an
     "threshold NaN",
     "threshold Infinity",
     "threshold 0",
+    "threshold 1",
     "threshold -1",
-    "threshold 95",
+    "threshold 110",
   ]) {
     assert.equal(parseAutoCompactCommand(input).ok, false, input);
   }
@@ -114,7 +115,7 @@ test("project settings merge fieldwise over global settings and invalid fields f
     {
       auto_compact: {
         enabled: "yes",
-        threshold: 95,
+        threshold: 110,
         pre_compact_prompt: " ",
       },
     },
