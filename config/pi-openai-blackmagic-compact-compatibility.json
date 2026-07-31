@@ -1,0 +1,80 @@
+{
+  "schemaVersion": 1,
+  "component": "pi-openai-blackmagic-compact",
+  "source": {
+    "repository": "https://github.com/deephbz/pi-openai-blackmagic-compact.git",
+    "commit": "7ba0de2bdbad083ab646ff8ca67b8a262d78a246",
+    "tree": "ad17e51fd9367eda7962c093c4814579702c879e"
+  },
+  "package": {
+    "name": "@hypercarrier/pi-openai-blackmagic-compact",
+    "version": "0.1.0-rc.3"
+  },
+  "pi": {
+    "peerRanges": {
+      "@earendil-works/pi-coding-agent": "0.83.0",
+      "@earendil-works/pi-ai": "0.83.0",
+      "@earendil-works/pi-tui": "0.83.0"
+    }
+  },
+  "childVerification": {
+    "ciWorkflow": ".github/workflows/ci.yml",
+    "receipts": [
+      {
+        "name": "unit-suite",
+        "command": "npm test",
+        "result": "21/21 tests passed from exact public child root 7ba0de2"
+      },
+      {
+        "name": "package-allowlist",
+        "command": "npm run verify:package",
+        "result": "exact 10-file package allowlist passed from child root 7ba0de2"
+      },
+      {
+        "name": "pack-dry-run",
+        "command": "npm run pack:check",
+        "result": "published tarball matches npm integrity sha512-L3pn91Hq13yEl5R4uJ7SM8PK4Ob4qNQsvDQR6h1ZD9AyADWlhSJHLvKPsS8BTACHTSUzPyhQg/0+3BXX6LFiIQ=="
+      },
+      {
+        "name": "child-ci",
+        "command": "GitHub Actions .github/workflows/ci.yml",
+        "result": "Node 22/24 passed at root 7ba0de2 in https://github.com/deephbz/pi-openai-blackmagic-compact/actions/runs/30559538818 and https://github.com/deephbz/pi-openai-blackmagic-compact/actions/runs/30559536401"
+      },
+      {
+        "name": "publish-dry-run",
+        "command": "GitHub Actions .github/workflows/publish.yml dry_run=true tag=next",
+        "result": "published rc.3 release workflow passed at root 7ba0de2 in https://github.com/deephbz/pi-openai-blackmagic-compact/actions/runs/30559607880"
+      },
+      {
+        "name": "authenticated-codex-canary",
+        "command": "two ordinary turns then Pi native /compact and restart/replay",
+        "result": "sanitized direct current-branch authenticated Codex apply, repeated apply, fresh-process replay, and recall passed at root 7ba0de2; see experiments/openai-server-compaction-live-canary/DIRECT-CURRENT-BRANCH-E2E.md"
+      }
+    ]
+  },
+  "publication": {
+    "state": "published",
+    "npmIntegrity": "sha512-L3pn91Hq13yEl5R4uJ7SM8PK4Ob4qNQsvDQR6h1ZD9AyADWlhSJHLvKPsS8BTACHTSUzPyhQg/0+3BXX6LFiIQ==",
+    "npmShasum": "a30fbe1c371f5ab9f990526973641febe10b7359",
+    "tarball": "https://registry.npmjs.org/@hypercarrier/pi-openai-blackmagic-compact/-/pi-openai-blackmagic-compact-0.1.0-rc.3.tgz",
+    "tarballSha256": "872e841403c6cbf73a338e60515833d44a56c13768e3aab1754acec9beefa735",
+    "tag": "v0.1.0-rc.3",
+    "releaseUrl": "https://github.com/deephbz/pi-openai-blackmagic-compact/releases/tag/v0.1.0-rc.3",
+    "ciUrls": [
+      "https://github.com/deephbz/pi-openai-blackmagic-compact/actions/runs/30559538818",
+      "https://github.com/deephbz/pi-openai-blackmagic-compact/actions/runs/30559536401"
+    ],
+    "publishUrl": "https://github.com/deephbz/pi-openai-blackmagic-compact/actions/runs/30559607880"
+  },
+  "gitlink": {
+    "path": "packages/pi-openai-blackmagic-compact",
+    "mode": "160000",
+    "commit": "7ba0de2bdbad083ab646ff8ca67b8a262d78a246"
+  },
+  "parentVerification": {
+    "state": "verified",
+    "verifier": "scripts/verify-pi-openai-blackmagic-compact-composition.mjs",
+    "requiredCheckout": "recursive",
+    "workspaceDisposition": "excluded: root Pi 0.80.10 conflicts with child Pi 0.83.0 peers"
+  }
+}

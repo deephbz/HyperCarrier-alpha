@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { Type } from "@earendil-works/pi-ai";
 import {
   autoCompactCommandDescription,
@@ -16,6 +18,7 @@ const AGENT_INSTRUCTION_LABEL =
   "Agent instruction (framework-generated hidden context; not user input):";
 export const AUTO_COMPACT_STATES = Object.freeze([
   "idle",
+  "queued",
   "handoff_pending",
   "ready",
   "compacting",
@@ -32,7 +35,7 @@ export function buildPreCompactPrompt(additionalGuidance) {
     typeof additionalGuidance === "string" && additionalGuidance.trim()
       ? `\n\nAdditional preservation guidance:\n${additionalGuidance.trim()}`
       : "";
-  return `Context is approaching the configured limit. Auto Compact will run Pi's native compaction after you report that this handoff is complete. This handoff notice applies only while auto_compact_ready is available; if that tool is unavailable, ignore this notice. Before signaling readiness, first preserve current progress in the project's durable Evergreen/work artifacts.${guidance}\n\nWhen preservation is complete, call auto_compact_ready with no arguments as your final and only action.`;
+  return `Context is approaching the configured limit. Auto Compact will run Pi's native compaction after you report that this handoff is complete. This handoff notice applies only while auto_compact_ready is available; if that tool is unavailable, ignore this notice. Do not gather more context during this handoff: do not read files, search, browse, inspect logs, or run verification. Using only information already present in this Session, immediately write or update the minimum durable Evergreen/work artifacts needed to preserve current progress, decisions, unresolved work, and continuation state. Use only already-known paths and safe write or edit operations. If no safe durable update is possible without inspection, do not inspect.${guidance}\n\nThe no-inspection rule takes precedence over any additional preservation guidance. When the minimal preservation write is complete, or no safe write is possible, call auto_compact_ready with no arguments as your final and only action.`;
 }
 
 function stageLabel(name, status) {
@@ -79,8 +82,10 @@ function renderLifecycleHud(receipt, { state, externalResolution = false }) {
   const trigger = receipt.trigger === "manual" ? "MANUAL" : "AUTOMATIC";
   const phase = externalResolution
     ? "EXTERNAL COMPACTION — resolving interrupted handoff"
-    : state === "handoff_pending"
-      ? "HANDOFF — awaiting readiness"
+    : state === "queued"
+      ? "QUEUED — waiting behind current agent work"
+      : state === "handoff_pending"
+        ? "HANDOFF — awaiting readiness"
       : state === "ready"
         ? "READY — awaiting turn end"
         : state === "compacting"
@@ -352,13 +357,19 @@ export function createAutoCompactController(pi, options = {}) {
       lastUsage = utilization;
       if (utilization.crossed) thresholdArmed = false;
 
+      const queueBehindCurrentWork =
+        trigger === "manual" &&
+        (ctx?.isIdle?.() === false || ctx?.hasPendingMessages?.() === true);
       lifecycle = {
         id: ++lifecycleSequence,
         trigger,
         pickupPrompt,
         startedAt: Date.now(),
+        ...(queueBehindCurrentWork ? { queueToken: randomUUID() } : {}),
       };
-      transition("handoff_pending", { trigger });
+      transition(queueBehindCurrentWork ? "queued" : "handoff_pending", {
+        trigger,
+      });
       const handoffPrompt = buildPreCompactPrompt(
         effective.settings.pre_compact_prompt,
       );
@@ -366,10 +377,12 @@ export function createAutoCompactController(pi, options = {}) {
         runId: lifecycle.id,
         trigger,
         prompt: handoffPrompt,
-        handoff: "active",
+        handoff: queueBehindCurrentWork ? "pending" : "active",
         compact: "pending",
         pickup: "pending",
-        outcome: "Waiting for the agent to preserve work and report ready.",
+        outcome: queueBehindCurrentWork
+          ? "Manual handoff queued behind current agent work."
+          : "Waiting for the agent to preserve work and report ready.",
         instructionRequested: false,
         terminal: false,
       };
@@ -379,14 +392,22 @@ export function createAutoCompactController(pi, options = {}) {
           customType: "auto-compact.handoff",
           content: handoffPrompt,
           display: true,
-          details: { projection: "handoff" },
+          details: queueBehindCurrentWork
+            ? {
+                projection: "handoff",
+                queuedRun: lifecycle.queueToken,
+              }
+            : { projection: "handoff" },
         },
-        { triggerTurn: true, deliverAs: "steer" },
+        {
+          triggerTurn: true,
+          deliverAs: queueBehindCurrentWork ? "followUp" : "steer",
+        },
       );
       currentHumanReceipt.instructionRequested = true;
 
       notifyHumanReceipt(ctx, currentHumanReceipt, { includePrompt: true });
-      debug("handoff_started", {
+      debug(queueBehindCurrentWork ? "handoff_queued" : "handoff_started", {
         trigger,
         utilization,
         threshold: effective.settings.threshold,
@@ -536,7 +557,7 @@ export function createAutoCompactController(pi, options = {}) {
             },
           ],
           details: { status: "ignored" },
-          terminate: true,
+          terminate: false,
         };
       }
       const receipt = receiptForRun(lifecycle.id);
@@ -626,8 +647,61 @@ export function createAutoCompactController(pi, options = {}) {
     }
   });
 
+  const activateDeliveredQueuedHandoff = (message, ctx) => {
+    if (
+      state !== "queued" ||
+      !lifecycle?.queueToken ||
+      message?.role !== "custom" ||
+      message.customType !== "auto-compact.handoff" ||
+      message.details?.queuedRun !== lifecycle.queueToken
+    )
+      return false;
+
+    const receipt = receiptForRun(lifecycle.id);
+    if (receipt) {
+      receipt.handoff = "active";
+      receipt.outcome =
+        "Queued handoff delivered; waiting for the agent to preserve work and report ready.";
+    }
+    delete lifecycle.queueToken;
+    transition("handoff_pending", { trigger: lifecycle.trigger });
+    activateReadyTool();
+    setLifecycleWidget(ctx);
+    debug("queued_handoff_delivered");
+    return true;
+  };
+
+  pi.on("message_start", (event, ctx) => {
+    activateDeliveredQueuedHandoff(event.message, ctx);
+  });
+
+  pi.on("context", (event, ctx) => {
+    if (state !== "queued") return;
+    for (const message of event.messages) {
+      if (activateDeliveredQueuedHandoff(message, ctx)) break;
+    }
+  });
+
   pi.on("agent_settled", (_event, ctx) => {
-    if (state === "ready") beginCompaction(ctx);
+    if (state === "ready") {
+      beginCompaction(ctx);
+      return;
+    }
+    if (state !== "queued" || !lifecycle) return;
+
+    const runId = lifecycle.id;
+    const undelivered = receiptForRun(runId);
+    if (undelivered) {
+      undelivered.handoff = "failed";
+      undelivered.compact = "not_requested";
+      undelivered.pickup = "not_requested";
+      undelivered.outcome =
+        "The queued handoff was removed before delivery; native compaction was not requested.";
+    }
+    const archived = archiveCurrentReceipt(runId);
+    resetLifecycle("queued_handoff_removed");
+    notifyHumanReceipt(ctx, archived, { level: "warning" });
+    debug("queued_handoff_removed");
   });
 
   pi.on("session_before_compact", (event, ctx) => {
@@ -647,7 +721,7 @@ export function createAutoCompactController(pi, options = {}) {
       const runId = lifecycle?.id;
       const interrupted = receiptForRun(runId);
       if (interrupted) {
-        if (state === "handoff_pending") {
+        if (state === "queued" || state === "handoff_pending") {
           interrupted.handoff = "interrupted";
           interrupted.compact = "not_requested";
         } else {
@@ -728,7 +802,7 @@ export function createAutoCompactController(pi, options = {}) {
         notify(
           ctx,
           command.error === "invalid_threshold"
-            ? "Invalid threshold: use a percent greater than 0 and less than 95"
+            ? "Invalid threshold: use a percent greater than 1 and less than 110"
             : command.usage,
           "warning",
         );
@@ -794,11 +868,15 @@ export function createAutoCompactController(pi, options = {}) {
         automaticEnabledOverride = false;
         configurationWarning = undefined;
         sessionGeneration += 1;
-        if (state === "handoff_pending" || state === "ready") {
+        if (
+          state === "queued" ||
+          state === "handoff_pending" ||
+          state === "ready"
+        ) {
           const runId = lifecycle?.id;
           const interrupted = receiptForRun(runId);
           if (interrupted) {
-            if (state === "handoff_pending") {
+            if (state === "queued" || state === "handoff_pending") {
               interrupted.handoff = "interrupted";
               interrupted.compact = "not_requested";
             } else {

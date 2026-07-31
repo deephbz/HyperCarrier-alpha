@@ -201,16 +201,44 @@ function validOverflow(value) {
     value.promptChars >= 0 &&
     Number.isInteger(value.maxPromptChars) &&
     value.maxPromptChars > 0 &&
-    value.strategy === "none"
+    ["none", "fixed_contract_exceeds_limit"].includes(value.strategy)
   );
 }
 
 function validInputCoveragePolicy(value) {
   return (
     exactKeys(value, ["strategy", "maxPromptChars"]) &&
-    value.strategy === "complete_or_explicit_overflow" &&
+    [
+      "complete_or_explicit_overflow",
+      "newest_suffix_with_explicit_omission",
+    ].includes(value.strategy) &&
     Number.isInteger(value.maxPromptChars) &&
     value.maxPromptChars > 0
+  );
+}
+
+function validInputCoverage(value) {
+  return (
+    exactKeys(value, [
+      "totalMessageCount",
+      "includedMessageCount",
+      "omittedMessageCount",
+      "omittedTextChars",
+      "promptChars",
+      "complete",
+    ]) &&
+    [
+      value.totalMessageCount,
+      value.includedMessageCount,
+      value.omittedMessageCount,
+      value.omittedTextChars,
+      value.promptChars,
+    ].every((item) => Number.isInteger(item) && item >= 0) &&
+    value.includedMessageCount + value.omittedMessageCount ===
+      value.totalMessageCount &&
+    typeof value.complete === "boolean" &&
+    value.complete ===
+      (value.omittedMessageCount === 0 && value.omittedTextChars === 0)
   );
 }
 
@@ -329,8 +357,15 @@ export function validateRarebitArtifactReceipt(record) {
     "model",
     "modelProvenance",
   ];
+  const hasInputCoverage = Object.hasOwn(record ?? {}, "inputCoverage");
   const variantKeys = {
-    ok: ["summary", "sessionStatus", "statusReason", "synthesis"],
+    ok: [
+      ...(hasInputCoverage ? ["inputCoverage"] : []),
+      "summary",
+      "sessionStatus",
+      "statusReason",
+      "synthesis",
+    ],
     ineligible: [],
     inhibited: ["automaticSummaryPolicy"],
     unavailable_overflow: ["overflow"],
@@ -344,7 +379,13 @@ export function validateRarebitArtifactReceipt(record) {
     record.schemaVersion !== 4 ||
     !sha256String(record.jobId) ||
     !nonEmptyString(record.sessionId) ||
-    record.implementationVersion !== "hc-rarebit-summary-v4" ||
+    ![
+      "hc-rarebit-summary-v4",
+      "hc-rarebit-summary-v5",
+      "hc-rarebit-summary-v6",
+    ].includes(
+      record.implementationVersion,
+    ) ||
     !nonEmptyString(record.promptVersion) ||
     !validBranch(record.branch) ||
     !validSelection(record.selection, {
@@ -360,6 +401,16 @@ export function validateRarebitArtifactReceipt(record) {
     !validInputCoveragePolicy(record.inputCoveragePolicy) ||
     !validModel(record.model) ||
     !validModelProvenance(record.modelProvenance)
+  )
+    return { valid: false, reason: "malformed" };
+
+  if (
+    (hasInputCoverage && !validInputCoverage(record.inputCoverage)) ||
+    (record.status === "ok" &&
+      ["hc-rarebit-summary-v5", "hc-rarebit-summary-v6"].includes(
+        record.implementationVersion,
+      ) &&
+      !hasInputCoverage)
   )
     return { valid: false, reason: "malformed" };
 

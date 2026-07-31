@@ -95,6 +95,7 @@ export async function createPiRarebitModelClient(ctx, config = {}) {
           headers: auth.headers,
           env: auth.env,
           reasoningEffort: "low",
+          sessionId: nonEmptyString(request.cacheSessionId),
         },
       );
     },

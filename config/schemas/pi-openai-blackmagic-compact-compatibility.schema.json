@@ -1,0 +1,225 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://hypercarrier.local/schemas/pi-openai-blackmagic-compact-compatibility.schema.json",
+  "title": "Pi OpenAI Blackmagic Compact composition compatibility record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "component",
+    "source",
+    "package",
+    "pi",
+    "childVerification",
+    "publication",
+    "gitlink",
+    "parentVerification"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "component": {
+      "const": "pi-openai-blackmagic-compact"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "commit",
+        "tree"
+      ],
+      "properties": {
+        "repository": {
+          "const": "https://github.com/deephbz/pi-openai-blackmagic-compact.git"
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "tree": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      }
+    },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "const": "@hypercarrier/pi-openai-blackmagic-compact"
+        },
+        "version": {
+          "const": "0.1.0-rc.3"
+        }
+      }
+    },
+    "pi": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "peerRanges"
+      ],
+      "properties": {
+        "peerRanges": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "@earendil-works/pi-coding-agent",
+            "@earendil-works/pi-ai",
+            "@earendil-works/pi-tui"
+          ],
+          "properties": {
+            "@earendil-works/pi-coding-agent": {
+              "const": "0.83.0"
+            },
+            "@earendil-works/pi-ai": {
+              "const": "0.83.0"
+            },
+            "@earendil-works/pi-tui": {
+              "const": "0.83.0"
+            }
+          }
+        }
+      }
+    },
+    "childVerification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ciWorkflow",
+        "receipts"
+      ],
+      "properties": {
+        "ciWorkflow": {
+          "const": ".github/workflows/ci.yml"
+        },
+        "receipts": {
+          "type": "array",
+          "minItems": 6,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "command",
+              "result"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "command": {
+                "type": "string"
+              },
+              "result": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "publication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "npmIntegrity",
+        "npmShasum",
+        "tarball",
+        "tarballSha256",
+        "tag",
+        "releaseUrl",
+        "ciUrls",
+        "publishUrl"
+      ],
+      "properties": {
+        "state": {
+          "const": "published"
+        },
+        "npmIntegrity": {
+          "const": "sha512-L3pn91Hq13yEl5R4uJ7SM8PK4Ob4qNQsvDQR6h1ZD9AyADWlhSJHLvKPsS8BTACHTSUzPyhQg/0+3BXX6LFiIQ=="
+        },
+        "npmShasum": {
+          "const": "a30fbe1c371f5ab9f990526973641febe10b7359"
+        },
+        "tarball": {
+          "const": "https://registry.npmjs.org/@hypercarrier/pi-openai-blackmagic-compact/-/pi-openai-blackmagic-compact-0.1.0-rc.3.tgz"
+        },
+        "tarballSha256": {
+          "const": "872e841403c6cbf73a338e60515833d44a56c13768e3aab1754acec9beefa735"
+        },
+        "tag": {
+          "const": "v0.1.0-rc.3"
+        },
+        "releaseUrl": {
+          "const": "https://github.com/deephbz/pi-openai-blackmagic-compact/releases/tag/v0.1.0-rc.3"
+        },
+        "ciUrls": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "string",
+            "pattern": "^https://github\\.com/deephbz/pi-openai-blackmagic-compact/actions/runs/[0-9]+$"
+          }
+        },
+        "publishUrl": {
+          "type": "string",
+          "pattern": "^https://github\\.com/deephbz/pi-openai-blackmagic-compact/actions/runs/[0-9]+$"
+        }
+      }
+    },
+    "gitlink": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "mode",
+        "commit"
+      ],
+      "properties": {
+        "path": {
+          "const": "packages/pi-openai-blackmagic-compact"
+        },
+        "mode": {
+          "const": "160000"
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        }
+      }
+    },
+    "parentVerification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "verifier",
+        "requiredCheckout",
+        "workspaceDisposition"
+      ],
+      "properties": {
+        "state": {
+          "const": "verified"
+        },
+        "verifier": {
+          "const": "scripts/verify-pi-openai-blackmagic-compact-composition.mjs"
+        },
+        "requiredCheckout": {
+          "const": "recursive"
+        },
+        "workspaceDisposition": {
+          "const": "excluded: root Pi 0.80.10 conflicts with child Pi 0.83.0 peers"
+        }
+      }
+    }
+  }
+}

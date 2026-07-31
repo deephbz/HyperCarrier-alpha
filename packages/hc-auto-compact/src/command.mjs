@@ -43,7 +43,7 @@ export function parseAutoCompactCommand(input = "") {
         usage: AUTO_COMPACT_USAGE,
       };
     const threshold = Number(args[0]);
-    if (!Number.isFinite(threshold) || threshold <= 0 || threshold >= 95)
+    if (!Number.isFinite(threshold) || threshold <= 1 || threshold >= 110)
       return {
         ok: false,
         error: "invalid_threshold",

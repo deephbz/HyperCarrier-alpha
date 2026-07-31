@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "component": "colorstack-rarebit-herdr-binding",
+  "summaryTones": {
+    "attention": "yellow",
+    "diagnostic": "red",
+    "muted": "subtext0",
+    "neutral": "text"
+  },
+  "tokens": {
+    "$rarebit_attention": "attention",
+    "$rarebit_error": "diagnostic",
+    "$rarebit_state_neutral": "neutral",
+    "$rarebit_state_attention": "attention",
+    "$rarebit_state_muted": "muted",
+    "$rarebit_state_diagnostic": "diagnostic",
+    "$rarebit_user_age": "muted",
+    "$rarebit_stop_age": "muted"
+  }
+}

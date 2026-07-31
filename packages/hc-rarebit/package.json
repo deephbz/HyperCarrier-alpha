@@ -9,7 +9,8 @@
   "type": "module",
   "types": "./src/types.d.ts",
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "test:e2e:summary-cache": "node scripts/e2e-summary-cache.mjs"
   },
   "bin": {
     "hc-rarebit": "./bin/hc-rarebit.mjs"

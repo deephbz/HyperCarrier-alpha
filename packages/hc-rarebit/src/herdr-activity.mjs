@@ -19,6 +19,10 @@ function durationLabel(timestamp, now) {
   if (totalMinutes < 1) return "now";
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
+  if (hours >= 24) {
+    const days = Math.floor(hours / 24);
+    return `${days}d ${hours % 24}h`;
+  }
   return hours > 0
     ? `${hours}h ${String(minutes).padStart(2, "0")}m`
     : `${minutes}m`;

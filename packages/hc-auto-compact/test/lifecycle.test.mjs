@@ -32,6 +32,8 @@ function makeHarness({
   sendUserMessageError,
   notifyError,
   setWidgetError,
+  idle = true,
+  pendingMessages = false,
 } = {}) {
   const handlers = new Map();
   const commands = new Map();
@@ -47,6 +49,8 @@ function makeHarness({
   const writes = [];
   let currentUsage = usage;
   let currentActiveTools = [...activeTools];
+  let currentlyIdle = idle;
+  let currentlyHasPendingMessages = pendingMessages;
   const configuredSettings = {
     enabled,
     threshold,
@@ -105,6 +109,12 @@ function makeHarness({
     getContextUsage() {
       return currentUsage;
     },
+    isIdle() {
+      return currentlyIdle;
+    },
+    hasPendingMessages() {
+      return currentlyHasPendingMessages;
+    },
     compact(options) {
       compactCalls.push(options);
     },
@@ -149,6 +159,12 @@ function makeHarness({
     },
     setConfiguredPrompt(next) {
       configuredSettings.pre_compact_prompt = next;
+    },
+    setIdle(next) {
+      currentlyIdle = next;
+    },
+    setHasPendingMessages(next) {
+      currentlyHasPendingMessages = next;
     },
   };
 }
@@ -297,6 +313,30 @@ test("automatic mode respects disabled settings and the inclusive configured bou
   assert.equal(below.controller.snapshot().state, "handoff_pending");
 });
 
+test("handoff prompt forbids context gathering and makes that invariant override guidance", () => {
+  const prompt = buildPreCompactPrompt(
+    "Read the project status first, then preserve the active receipt.",
+  );
+
+  assert.match(prompt, /do not gather more context/i);
+  assert.match(prompt, /do not read files, search, browse, inspect logs/i);
+  assert.match(prompt, /do not .*run verification/i);
+  assert.match(prompt, /using only information already present in this Session/i);
+  assert.match(prompt, /immediately write or update the minimum durable/i);
+  assert.match(prompt, /only already-known paths and safe write or edit operations/i);
+  assert.match(prompt, /if no safe durable update is possible.*do not inspect/i);
+  assert.match(prompt, /no-inspection rule takes precedence/i);
+  assert.ok(
+    prompt.lastIndexOf("no-inspection rule") >
+      prompt.indexOf("Read the project status first"),
+    "the framework-owned restriction must follow and override configurable guidance",
+  );
+  assert.match(
+    prompt,
+    /minimal preservation write is complete, or no safe write is possible, call auto_compact_ready/i,
+  );
+});
+
 test("automatic crossing starts one visible handoff with fixed preservation semantics", async () => {
   const harness = makeHarness({
     prompt: "Also record the active experiment receipt.",
@@ -312,6 +352,8 @@ test("automatic crossing starts one visible handoff with fixed preservation sema
   assert.match(message.content, /approaching the configured limit/i);
   assert.match(message.content, /native compaction/i);
   assert.match(message.content, /durable Evergreen\/work artifacts/i);
+  assert.match(message.content, /do not gather more context/i);
+  assert.match(message.content, /do not read files, search, browse/i);
   assert.match(message.content, /auto_compact_ready with no arguments/i);
   assert.match(
     message.content,
@@ -338,6 +380,107 @@ test("manual run uses the same handoff while automatic mode is disabled", async 
   assert.equal(harness.messages[0].message.customType, "auto-compact.handoff");
   assert.equal(harness.controller.snapshot().lifecycle.trigger, "manual");
   assert.match(harness.notices.at(-1).text, /AUTO COMPACT · MANUAL/);
+});
+
+test("busy manual run queues its typed handoff until the native follow-up reaches context", async () => {
+  const harness = makeHarness({ idle: false, pendingMessages: true });
+  const pickupPrompt = "Continue after compacting.";
+
+  await triggerManual(harness, pickupPrompt);
+
+  assert.equal(harness.controller.snapshot().state, "queued");
+  assert.deepEqual(harness.activeTools(), ["read", AUTO_COMPACT_TOOL_NAME]);
+  assert.equal(harness.messages.length, 1);
+  const queued = harness.messages[0];
+  assert.equal(queued.message.customType, "auto-compact.handoff");
+  assert.equal(queued.message.display, true);
+  assert.equal(queued.message.details.projection, "handoff");
+  assert.equal(typeof queued.message.details.queuedRun, "string");
+  assert.deepEqual(queued.options, {
+    triggerTurn: true,
+    deliverAs: "followUp",
+  });
+  assertCompactHud(
+    harness,
+    "AUTO COMPACT · MANUAL · QUEUED — waiting behind current agent work",
+  );
+
+  harness.handlers.get("message_start")(
+    {
+      message: {
+        role: "custom",
+        customType: "auto-compact.handoff",
+        details: { projection: "handoff", queuedRun: "another-run" },
+      },
+    },
+    harness.ctx,
+  );
+  assert.equal(harness.controller.snapshot().state, "queued");
+  assert.deepEqual(harness.activeTools(), ["read", AUTO_COMPACT_TOOL_NAME]);
+
+  const prematureReady = await ready(harness);
+  assert.equal(prematureReady.details.status, "ignored");
+  assert.equal(prematureReady.terminate, false);
+  assert.equal(harness.controller.snapshot().state, "queued");
+
+  harness.handlers.get("message_start")(
+    { message: { role: "custom", ...queued.message } },
+    harness.ctx,
+  );
+  assert.equal(harness.controller.snapshot().state, "handoff_pending");
+  assert.deepEqual(harness.activeTools(), ["read", AUTO_COMPACT_TOOL_NAME]);
+  assertCompactHud(
+    harness,
+    "AUTO COMPACT · MANUAL · HANDOFF — awaiting readiness",
+  );
+
+  await ready(harness);
+  harness.handlers.get("agent_settled")({}, harness.ctx);
+  harness.compactCalls[0].onComplete();
+  assert.deepEqual(harness.userMessages, [pickupPrompt]);
+});
+
+test("automatic handoffs remain steers even when the agent is busy", async () => {
+  const harness = makeHarness({ idle: false, pendingMessages: true });
+  await triggerAutomatic(harness);
+  assert.equal(harness.controller.snapshot().state, "handoff_pending");
+  assert.deepEqual(harness.messages[0].options, {
+    triggerTurn: true,
+    deliverAs: "steer",
+  });
+  assert.deepEqual(harness.activeTools(), ["read", AUTO_COMPACT_TOOL_NAME]);
+});
+
+test("a queued manual handoff removed before delivery terminates without compacting", async () => {
+  const harness = makeHarness({ idle: false });
+  await triggerManual(harness);
+  assert.equal(harness.controller.snapshot().state, "queued");
+
+  harness.handlers.get("agent_settled")({}, harness.ctx);
+
+  assert.equal(harness.controller.snapshot().state, "idle");
+  assert.deepEqual(harness.activeTools(), ["read"]);
+  assert.equal(harness.compactCalls.length, 0);
+  assertLifecycleWidgetCleared(harness);
+  assert.match(harness.notices.at(-1).text, /removed before delivery/i);
+});
+
+test("canceling a queued run fences its late typed handoff", async () => {
+  const harness = makeHarness({ idle: false });
+  await triggerManual(harness);
+  const queued = harness.messages[0].message;
+
+  await harness.commands.get("auto-compact").handler("off", harness.ctx);
+  assert.equal(harness.controller.snapshot().state, "idle");
+  assert.deepEqual(harness.activeTools(), ["read"]);
+
+  harness.handlers.get("context")(
+    { messages: [{ role: "custom", ...queued }] },
+    harness.ctx,
+  );
+  assert.equal(harness.controller.snapshot().state, "idle");
+  assert.deepEqual(harness.activeTools(), ["read"]);
+  assert.equal(harness.compactCalls.length, 0);
 });
 
 test("automatic and manual handoffs preserve the exact visible Session event and compact HUD", async () => {
@@ -430,10 +573,10 @@ test("human command reports status, persists valid changes, and rejects invalid 
   assert.match(harness.notices.at(-1).text, /turned on.*project/i);
 
   const writeCount = harness.writes.length;
-  await command.handler("threshold 95", harness.ctx);
+  await command.handler("threshold 110", harness.ctx);
   assert.equal(harness.writes.length, writeCount);
   assert.equal(harness.notices.at(-1).level, "warning");
-  assert.match(harness.notices.at(-1).text, /greater than 0 and less than 95/i);
+  assert.match(harness.notices.at(-1).text, /greater than 1 and less than 110/i);
 
   await command.handler("bogus", harness.ctx);
   assert.equal(harness.writes.length, writeCount);
@@ -459,7 +602,7 @@ test("ready is a temporary zero-parameter capability and defers native compact u
 
   const stale = await ready(harness);
   assert.equal(stale.details.status, "ignored");
-  assert.equal(stale.terminate, true);
+  assert.equal(stale.terminate, false);
 
   await triggerAutomatic(harness);
   const accepted = await ready(harness);

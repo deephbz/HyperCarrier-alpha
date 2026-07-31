@@ -78,19 +78,24 @@ test("provider prompt exposes semantic ordered messages, not machine lineage met
       promptVersion: "contract-test",
     },
   );
-  const payload = JSON.parse(prompt.slice(prompt.indexOf("\n\n") + 2));
+  const stream = prompt
+    .split("\n")
+    .slice(
+      prompt.split("\n").indexOf("BEGIN_RAREBIT_MESSAGES_JSONL") + 1,
+      prompt.split("\n").indexOf("END_RAREBIT_MESSAGES_JSONL"),
+    )
+    .map((line) => JSON.parse(line));
 
   assert.match(prompt, /Keep the semantic owner request/);
   assert.match(prompt, /Semantic continuation 0/);
-  assert.deepEqual(Object.keys(payload), ["messages"]);
   assert.deepEqual(
-    payload.messages.map((message) => Object.keys(message)),
+    stream.map((message) => Object.keys(message)),
     [
       ["role", "outcome", "text"],
       ["role", "outcome", "text"],
     ],
   );
-  assert.deepEqual(payload.messages, [
+  assert.deepEqual(stream, [
     { role: "user", outcome: "user", text: "Keep the semantic owner request." },
     {
       role: "assistant",
@@ -102,6 +107,24 @@ test("provider prompt exposes semantic ordered messages, not machine lineage met
     prompt,
     /\/private\/session-entry|machine-producer-identity/,
   );
+});
+
+test("linear owner and settled Summary prompts preserve an exact append-only evidence prefix", () => {
+  const ownerPrompt = composeRarebitSummaryPrompt(
+    selectRarebits(branchWithMachineMetadata(1)),
+    { lifecycleBoundary: "owner_request" },
+  );
+  const settledPrompt = composeRarebitSummaryPrompt(
+    selectRarebits(branchWithMachineMetadata(2)),
+    { lifecycleBoundary: "agent_settled" },
+  );
+  const ownerEvidencePrefix = ownerPrompt.slice(
+    0,
+    ownerPrompt.indexOf("\nEND_RAREBIT_MESSAGES_JSONL"),
+  );
+  assert.ok(settledPrompt.startsWith(`${ownerEvidencePrefix}\n`));
+  assert.match(ownerEvidencePrefix, /Semantic continuation 0/);
+  assert.doesNotMatch(ownerEvidencePrefix, /Lifecycle boundary:/);
 });
 
 test("eligible populated session_start only initializes bookkeeping and derives no Summary", async () => {

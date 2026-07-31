@@ -3,7 +3,7 @@ import {
   RAREBIT_SUMMARY_WRITABLE_LIFECYCLE_BOUNDARIES,
   RAREBIT_SUMMARY_PROMPT_VERSION,
   RAREBIT_TITLE_PROMPT_VERSION,
-  composeRarebitSummaryPrompt,
+  composeRarebitSummaryDerivationInput,
   composeRarebitTitlePrompt,
   evaluateRarebitSummaryEligibility,
   measureRarebits,
@@ -31,9 +31,9 @@ import {
 } from "./automatic-summary-policy.mjs";
 
 export const RAREBIT_TITLE_IMPLEMENTATION_VERSION = "hc-rarebit-title-v4";
-export const RAREBIT_SUMMARY_IMPLEMENTATION_VERSION = "hc-rarebit-summary-v4";
+export const RAREBIT_SUMMARY_IMPLEMENTATION_VERSION = "hc-rarebit-summary-v6";
 export const RAREBIT_SUMMARY_SCHEMA_VERSION = 4;
-export const DEFAULT_RAREBIT_MAX_PROMPT_CHARS = 200_000;
+export const DEFAULT_RAREBIT_MAX_PROMPT_CHARS = 256_000;
 
 function sessionFileFrom(ctx) {
   const sessionFile = ctx?.sessionManager?.getSessionFile?.();
@@ -170,7 +170,7 @@ export async function processRarebitSummary(ctx, config = {}) {
   if (!Number.isInteger(maxPromptChars) || maxPromptChars < 1)
     throw new RangeError("maxPromptChars must be a positive integer");
   const inputCoveragePolicy = {
-    strategy: "complete_or_explicit_overflow",
+    strategy: "newest_suffix_with_explicit_omission",
     maxPromptChars,
   };
   const synthesisJobId = rarebitJobIdentity({
@@ -250,6 +250,7 @@ export async function processRarebitSummary(ctx, config = {}) {
       record: reservation.record ?? base,
       reservation,
     };
+  let inputCoverage = null;
   try {
     if (!shouldSynthesize)
       return {
@@ -270,10 +271,13 @@ export async function processRarebitSummary(ctx, config = {}) {
         }),
       };
     }
-    const prompt = composeRarebitSummaryPrompt(selection, {
+    const derivationInput = composeRarebitSummaryDerivationInput(selection, {
       promptVersion,
       lifecycleBoundary,
+      maxPromptChars,
     });
+    const { prompt } = derivationInput;
+    inputCoverage = derivationInput.coverage;
     if (prompt.length > maxPromptChars) {
       return {
         duplicate: false,
@@ -283,7 +287,7 @@ export async function processRarebitSummary(ctx, config = {}) {
           overflow: {
             promptChars: prompt.length,
             maxPromptChars,
-            strategy: "none",
+            strategy: "fixed_contract_exceeds_limit",
           },
         }),
       };
@@ -308,6 +312,7 @@ export async function processRarebitSummary(ctx, config = {}) {
     const response = await client.complete({
       prompt,
       model: modelResolution.model,
+      cacheSessionId: sessionId,
     });
     const synthesisResult = normalizeRarebitSummarySynthesis(
       extractModelText(response),
@@ -324,6 +329,7 @@ export async function processRarebitSummary(ctx, config = {}) {
       record: await settleRarebitJob(reservation, {
         ...base,
         status: "ok",
+        inputCoverage,
         summary: synthesisResult.summary,
         sessionStatus:
           lifecycleBoundary === "owner_request"
