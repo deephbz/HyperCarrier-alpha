@@ -76,8 +76,33 @@
       "additionalProperties": false,
       "required": ["strategy", "maxPromptChars"],
       "properties": {
-        "strategy": { "const": "complete_or_explicit_overflow" },
+        "strategy": {
+          "enum": [
+            "complete_or_explicit_overflow",
+            "newest_suffix_with_explicit_omission"
+          ]
+        },
         "maxPromptChars": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "inputCoverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "totalMessageCount",
+        "includedMessageCount",
+        "omittedMessageCount",
+        "omittedTextChars",
+        "promptChars",
+        "complete"
+      ],
+      "properties": {
+        "totalMessageCount": { "type": "integer", "minimum": 0 },
+        "includedMessageCount": { "type": "integer", "minimum": 0 },
+        "omittedMessageCount": { "type": "integer", "minimum": 0 },
+        "omittedTextChars": { "type": "integer", "minimum": 0 },
+        "promptChars": { "type": "integer", "minimum": 0 },
+        "complete": { "type": "boolean" }
       }
     },
     "error": {
@@ -96,7 +121,9 @@
       "properties": {
         "promptChars": { "type": "integer", "minimum": 0 },
         "maxPromptChars": { "type": "integer", "minimum": 1 },
-        "strategy": { "const": "none" }
+        "strategy": {
+          "enum": ["none", "fixed_contract_exceeds_limit"]
+        }
       }
     },
     "synthesis": {
@@ -293,7 +320,13 @@
         "lifecycleBoundary": {
           "enum": ["owner_request", "agent_settled", "session_start", "manual"]
         },
-        "implementationVersion": { "const": "hc-rarebit-summary-v4" },
+        "implementationVersion": {
+          "enum": [
+            "hc-rarebit-summary-v4",
+            "hc-rarebit-summary-v5",
+            "hc-rarebit-summary-v6"
+          ]
+        },
         "synthesisMode": { "enum": ["forced", "automatic"] },
         "inputCoveragePolicy": { "$ref": "#/definitions/inputCoveragePolicy" },
         "promptVersion": { "type": "string", "minLength": 1 },
@@ -311,9 +344,12 @@
             "input",
             "approval",
             "blocker",
-            "unfinished"
+            "unfinished",
+            "uncertain",
+            "conflicting_evidence"
           ]
         },
+        "inputCoverage": { "$ref": "#/definitions/inputCoverage" },
         "synthesis": { "$ref": "#/definitions/synthesis" },
         "automaticSummaryPolicy": {
           "$ref": "#/definitions/automaticSummaryPolicy"

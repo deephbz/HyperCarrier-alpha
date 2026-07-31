@@ -19,8 +19,8 @@ export function isValidThreshold(value) {
   return (
     typeof value === "number" &&
     Number.isFinite(value) &&
-    value > 0 &&
-    value < 95
+    value > 1 &&
+    value < 110
   );
 }
 
@@ -59,7 +59,7 @@ export function resolveAutoCompactSettings(
       settings.threshold = configured.threshold;
     else
       errors.push(
-        "auto_compact.threshold must be greater than 0 and less than 95",
+        "auto_compact.threshold must be greater than 1 and less than 110",
       );
   }
 

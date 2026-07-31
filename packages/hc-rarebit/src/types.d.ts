@@ -48,7 +48,14 @@ export type RarebitSessionStatus =
   | { status: "finished"; reason: "all_requests_accomplished" }
   | {
       status: "needs_attention";
-      reason: "decision" | "input" | "approval" | "blocker" | "unfinished";
+      reason:
+        | "decision"
+        | "input"
+        | "approval"
+        | "blocker"
+        | "unfinished"
+        | "uncertain"
+        | "conflicting_evidence";
     }
   | { status: "ineligible"; reason: "intrinsic_policy" }
   | {
@@ -81,7 +88,9 @@ export type RarebitSummarySynthesis = {
     | "input"
     | "approval"
     | "blocker"
-    | "unfinished";
+    | "unfinished"
+    | "uncertain"
+    | "conflicting_evidence";
 };
 
 export type RarebitOccurrence = {
@@ -176,8 +185,29 @@ export function evaluateRarebitSummaryEligibility(
   policy: Required<RarebitSummaryPolicy>;
   measurement: RarebitMeasurement;
 };
+export type RarebitSummaryInputCoverage = {
+  totalMessageCount: number;
+  includedMessageCount: number;
+  omittedMessageCount: number;
+  omittedTextChars: number;
+  promptChars: number;
+  complete: boolean;
+};
+export function composeRarebitSummaryDerivationInput(
+  selection: ReturnType<typeof selectRarebits>,
+  options?: {
+    promptVersion?: string;
+    lifecycleBoundary?: "owner_request" | "agent_settled" | "manual";
+    maxPromptChars?: number;
+  },
+): { prompt: string; coverage: RarebitSummaryInputCoverage };
 export function composeRarebitSummaryPrompt(
   selection: ReturnType<typeof selectRarebits>,
+  options?: {
+    promptVersion?: string;
+    lifecycleBoundary?: "owner_request" | "agent_settled" | "manual";
+    maxPromptChars?: number;
+  },
 ): string;
 export function composeRarebitTitlePrompt(
   selection: ReturnType<typeof selectRarebits>,
@@ -210,7 +240,9 @@ export type RarebitModelProvenance = {
   settingsKey?: string;
 };
 export type RarebitInputCoveragePolicy = {
-  strategy: "complete_or_explicit_overflow";
+  strategy:
+    | "complete_or_explicit_overflow"
+    | "newest_suffix_with_explicit_omission";
   maxPromptChars: number;
 };
 export type RarebitSynthesisReceipt = {
@@ -264,7 +296,10 @@ type RarebitSummaryReceiptCommon = {
   selection: RarebitSelectionRef;
   lifecycleBoundary:
     "owner_request" | "agent_settled" | "session_start" | "manual";
-  implementationVersion: "hc-rarebit-summary-v4";
+  implementationVersion:
+    | "hc-rarebit-summary-v4"
+    | "hc-rarebit-summary-v5"
+    | "hc-rarebit-summary-v6";
   synthesisMode: "forced" | "automatic";
   inputCoveragePolicy: RarebitInputCoveragePolicy;
   promptVersion: string;
@@ -283,7 +318,10 @@ export type RarebitSummaryReceiptV4 =
         | "input"
         | "approval"
         | "blocker"
-        | "unfinished";
+        | "unfinished"
+        | "uncertain"
+        | "conflicting_evidence";
+      inputCoverage?: RarebitSummaryInputCoverage;
       synthesis: RarebitSynthesisReceipt;
     })
   | (RarebitSummaryReceiptCommon & { status: "ineligible" })
@@ -299,7 +337,7 @@ export type RarebitSummaryReceiptV4 =
       overflow: {
         promptChars: number;
         maxPromptChars: number;
-        strategy: "none";
+        strategy: "none" | "fixed_contract_exceeds_limit";
       };
     })
   | (RarebitSummaryReceiptCommon & {
@@ -326,7 +364,7 @@ export type RarebitNativeObservation =
   | { availability: "missing" | "unreadable" };
 
 export const RAREBIT_SUMMARY_SCHEMA_VERSION: 4;
-export const RAREBIT_SUMMARY_IMPLEMENTATION_VERSION: "hc-rarebit-summary-v4";
+export const RAREBIT_SUMMARY_IMPLEMENTATION_VERSION: "hc-rarebit-summary-v6";
 export function processRarebitSummary(
   ctx: unknown,
   config?: {

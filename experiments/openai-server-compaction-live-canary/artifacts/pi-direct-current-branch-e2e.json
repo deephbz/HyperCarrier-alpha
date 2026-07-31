@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-07-30",
+  "candidate": "@hypercarrier/pi-openai-blackmagic-compact@0.1.0-rc.3",
+  "sourceCommit": "7ba0de2bdbad083ab646ff8ca67b8a262d78a246",
+  "design": "direct_current_pi_branch",
+  "sourceFixture": {
+    "kind": "private_copy_of_owner_nominated_failing_session",
+    "endedAt": "auto_compact_handoff_tool_result",
+    "sourceSessionModified": false,
+    "rawEvidenceCommitted": false
+  },
+  "firstCompaction": {
+    "state": "remote_applied",
+    "protocol": "codex_compaction_trigger_v2",
+    "readablePiSummaryPresent": true,
+    "opaqueCheckpointPresent": true,
+    "checkpointPersistedExactlyOnce": true,
+    "predictiveCalibrationUsed": false
+  },
+  "firstRestart": {
+    "freshProcess": true,
+    "opaqueReplayObservedInProviderInput": true,
+    "preCompactionRecallCorrect": true
+  },
+  "secondCompaction": {
+    "state": "remote_applied",
+    "activeCheckpointAppliedBeforeCompaction": true
+  },
+  "secondRestart": {
+    "freshProcess": true,
+    "opaqueReplayObservedInProviderInput": true,
+    "preCompactionRecallCorrect": true
+  },
+  "privacy": {
+    "promptsIncluded": false,
+    "toolsIncluded": false,
+    "credentialsIncluded": false,
+    "endpointsIncluded": false,
+    "deploymentsIncluded": false,
+    "opaqueArtifactsIncluded": false,
+    "hashesIncluded": false,
+    "rawItemCountsIncluded": false
+  },
+  "remainingLiveCoverage": [
+    "official_openai_responses",
+    "azure_openai_responses"
+  ]
+}

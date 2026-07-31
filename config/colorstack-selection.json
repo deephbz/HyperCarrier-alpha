@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "scheme": "modus",
+  "inkContrast": 10.0,
+  "outputs": [
+    "ghostty-theme",
+    "tmux-include",
+    "bat-theme",
+    "shell-env",
+    "starship-select",
+    "starship-palette",
+    "herdr",
+    "pi-theme",
+    "jupyter-css",
+    "jupyter-cfg",
+    "jupyter-theme"
+  ]
+}
