@@ -241,7 +241,6 @@ test("lazy Session summary is resolved server-side and stays outside the metadat
         order: 1,
         role: "user",
         outcome: "user",
-        producer: null,
         timestamp: "2026-01-01T00:01:00Z",
       },
     ],

@@ -21,14 +21,16 @@
     "start:stack": "npm --workspace pi-session-timeline run start:stack",
     "start:better-url": "npm --workspace pi-session-timeline run start:better-url",
     "test": "npm run test:packages && npm run test:timeline && npm run test:traffic",
-    "test:packages": "node --test packages/hc-auto-compact/test/*.test.mjs packages/hc-project-distill/test/*.test.mjs packages/hc-rarebit/test/*.test.mjs",
+    "test:packages": "node --test packages/hc-auto-compact/test/*.test.mjs packages/hc-project-distill/test/*.test.mjs && npm --workspace @hypercarrier/rarebit test",
     "test:timeline": "npm --workspace pi-session-timeline test",
+    "test:release": "node --test scripts/test/export*.test.mjs scripts/test/public-workflow-closure.test.mjs scripts/test/pi-extension-release-receipt.test.mjs scripts/test/pi-extension-release-contract.test.mjs",
     "test:traffic": "npm --workspace @hypercarrier/traffic-analysis test",
-    "test:composition": "node --test --test-concurrency=1 scripts/test/verifier-schema.test.mjs scripts/test/verify-pi-team-bright-composition.test.mjs scripts/test/verify-pi-openai-blackmagic-compact-composition.test.mjs scripts/test/verify-colorstack-composition.test.mjs scripts/test/compose-terminal-theme-candidate.test.mjs",
+    "test:composition": "node --test --test-concurrency=1 scripts/test/verifier-schema.test.mjs scripts/test/verify-pi-team-bright-composition.test.mjs scripts/test/verify-pi-openai-blackmagic-compact-composition.test.mjs scripts/test/verify-colorstack-composition.test.mjs scripts/test/verify-rarebit-composition.test.mjs scripts/test/compose-terminal-theme-candidate.test.mjs",
     "verify:colorstack": "node scripts/verify-colorstack-composition.mjs",
     "compose:terminal-theme": "node scripts/compose-terminal-theme-candidate.mjs",
     "build:timeline": "npm --workspace pi-session-timeline run build:web",
     "build:traffic": "npm --workspace @hypercarrier/traffic-analysis run build",
-    "verify:pi-openai-blackmagic-compact": "node scripts/verify-pi-openai-blackmagic-compact-composition.mjs"
+    "verify:pi-openai-blackmagic-compact": "node scripts/verify-pi-openai-blackmagic-compact-composition.mjs",
+    "verify:rarebit": "node scripts/verify-rarebit-composition.mjs"
   }
 }

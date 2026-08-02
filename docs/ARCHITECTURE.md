@@ -14,6 +14,10 @@ selected user and assistant Rarebits
              |
              v
 packages/hc-rarebit          ----> append-only Rarebit materialization JSONL
+         ^
+         | exact verified gitlink; compatibility owned by HyperCarrier
+         |
+@hypercarrier/rarebit (CLI: rarebit), independent public authority
 
 Beads + Git + Markdown ---------------> packages/hc-project-distill
                                              |
@@ -21,6 +25,14 @@ Beads + Git + Markdown ---------------> packages/hc-project-distill
 ```
 
 ## Component responsibilities
+
+### Rarebit source and composition
+
+`@hypercarrier/rarebit` is the independent public source/npm authority and
+`rarebit` is its CLI. HyperCarrier consumes the exact verified same-path
+`packages/hc-rarebit` gitlink and owns compatibility/integration only. The
+Alpha projection is configured as a gitlink without copied child source; its
+parent merge and publication remain separate release gates.
 
 ### Timeline application
 

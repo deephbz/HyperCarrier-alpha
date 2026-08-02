@@ -7,3 +7,6 @@
 [submodule "config/colorstack"]
 	path = config/colorstack
 	url = https://github.com/deephbz/colorstack.git
+[submodule "packages/hc-rarebit"]
+	path = packages/hc-rarebit
+	url = https://github.com/deephbz/rarebit.git

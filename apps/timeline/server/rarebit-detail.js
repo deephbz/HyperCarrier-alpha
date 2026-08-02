@@ -1,5 +1,5 @@
-import { readRarebitSession } from "@hypercarrier/hc-rarebit/session";
-import { readRarebitCurrent, rarebitSummaryPresentation } from "@hypercarrier/hc-rarebit";
+import { readRarebitSession } from "@hypercarrier/rarebit/session";
+import { readRarebitCurrent, rarebitSummaryPresentation } from "@hypercarrier/rarebit";
 
 const DETAIL_AVAILABILITIES = new Set(["available", "missing", "unavailable"]);
 const STATUSES = new Set(["user_requested", "finished", "needs_attention", "ineligible", "error"]);

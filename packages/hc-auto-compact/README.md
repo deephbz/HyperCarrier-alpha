@@ -16,7 +16,23 @@ pi -e "$PWD/packages/hc-auto-compact/src/extension.mjs"
 Run `/auto-compact status` inside Pi to confirm that the extension is loaded
 and inspect its effective settings before relying on an automatic handoff.
 
+## Package map
+
+`package.json` owns the public export map:
+
+- [`.`](src/index.mjs) aggregates the existing public exports.
+- [`./extension`](src/extension.mjs) registers the Pi extension.
+- [`./controller`](src/controller.mjs) owns lifecycle state and Pi effects.
+- [`./command`](src/command.mjs) owns command parsing and completion.
+- [`./settings`](src/settings.mjs) owns settings resolution and persistence.
+
+[`src/presentation.mjs`](src/presentation.mjs) renders human projections, and
+[`src/threshold.mjs`](src/threshold.mjs) owns threshold validity. They are
+private implementation modules, not package export-map entries.
+
 ## Runtime contract
+
+### Lifecycle and handoff
 
 The runtime lifecycle is `idle → [queued →] handoff_pending → ready → compacting
 → pickup → idle`. At the configured context threshold, the extension requests a
@@ -26,13 +42,20 @@ agent-addressed historical record. Automatic and idle manual handoffs preserve
 `{ triggerTurn: true, deliverAs: "steer" }` delivery behavior; a busy manual run
 queues the same event with `deliverAs: "followUp"`. The agent preserves work in durable
 Project artifacts, calls that tool as its final action, and Pi's native compact
-flow starts after the agent run settles. Because the handoff starts near the
-context limit, its framework-owned instruction forbids further reads, searches,
-browsing, log inspection, and verification. The agent must use only context
-already present to make the minimum safe durable write; when no safe write is
-possible without inspection, it proceeds to readiness without inspecting.
-Configured preservation guidance can select what to preserve but cannot relax
-this no-inspection invariant. The handoff event uses custom type
+flow starts after the agent run settles.
+
+### No-inspection invariant
+
+Because the handoff starts near the context limit, its framework-owned
+instruction forbids further reads, searches, browsing, log inspection, and
+verification. The agent must use only context already present to make the
+minimum safe durable write; when no safe write is possible without inspection,
+it proceeds to readiness without inspecting. Configured preservation guidance
+can select what to preserve but cannot relax this no-inspection invariant.
+
+### Delivery, pickup, and human projections
+
+The handoff event uses custom type
 `auto-compact.handoff`; both the normal and external-corrective visible pickup
 events use `auto-compact.pickup`. Handoff steers and triggers a turn; an
 unprompted normal pickup triggers a turn, while a prompted manual pickup does
@@ -49,6 +72,8 @@ exact prompt snapshot and last terminal workflow remain inspectable on demand
 through `/auto-compact status` until a new run or Session/active-branch
 boundary. `PICKUP` means the continuation instruction was requested; it is not
 evidence that the request persisted or that the agent acted on it.
+
+### Configuration and commands
 
 Configuration is durable under `auto_compact` in Pi settings. A trusted
 Project command writes `.pi/settings.json`; otherwise it writes the global
@@ -95,6 +120,8 @@ then the unchanged prompt is requested as the sole continuation turn. Zero-argum
 manual runs, automatic runs, and external-corrective pickups retain their
 existing delivery behavior.
 
+### Session scope and evidence
+
 Pending handoffs, lifecycle identifiers, readiness, and threshold latches are
 Session-local in-memory state and are ephemeral. There is deliberately no
 forced-compaction timeout: if the agent never signals readiness, the pending
@@ -107,6 +134,8 @@ historical evidence; the extension's custom handoff/pickup messages are
 derived control projections. Native threshold compaction is suppressed while
 the extension is loaded, but manual and overflow compaction remain available
 and interrupt a pending handoff cleanly.
+
+### Diagnostics and verification
 
 For focused tests or private diagnostics, `createAutoCompactController` accepts
 an `onDebug(record)` callback and exposes `snapshot()`. Normal TUI output does

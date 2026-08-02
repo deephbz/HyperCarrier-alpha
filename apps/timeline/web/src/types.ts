@@ -1,7 +1,7 @@
 import type {
   RarebitSessionAssessmentRef,
   RarebitVisualPresentation,
-} from "@hypercarrier/hc-rarebit";
+} from "@hypercarrier/rarebit";
 
 export const TIMELINE_SNAPSHOT_SCHEMA_VERSION = 5 as const;
 /** Exact package `assessmentRef`; Timeline serializes it without re-derivation. */
@@ -125,7 +125,6 @@ export interface RarebitMarker {
   order: number;
   role: "user" | "assistant";
   outcome: "user" | "stop" | "continuation";
-  producer: string | null;
   timestamp: string | null;
 }
 export interface CoordinationEvidence {

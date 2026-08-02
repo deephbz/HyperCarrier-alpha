@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "id": "rarebit-alpha.1-bootstrap-exception",
+  "source": {
+    "repository": "https://github.com/deephbz/rarebit.git",
+    "commit": "03647151fbf844a33c48b37ca241422558009069",
+    "tree": "b54bdc83c2da65572c05c664315e0a888e43f5dd",
+    "tagObject": "a5d6271c5ee07d872e6f98bc645266f678d41d56",
+    "tag": "v0.1.0-alpha.1"
+  },
+  "artifact": {
+    "version": "0.1.0-alpha.1",
+    "tarball": "https://registry.npmjs.org/@hypercarrier/rarebit/-/rarebit-0.1.0-alpha.1.tgz",
+    "sri": "sha512-kNBG7hNDPteZVSkStU/c83G9NI80ed0Y6meQ2euK6cAzlkUyrGAPbSMakU24kcACI47vu52v67b4e6Vo/Sr77g==",
+    "sha1": "a234f273737533fc8e2980a00a0c200c519b30f7",
+    "unpackedSize": 394204,
+    "fileCount": 50,
+    "signatureKey": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+  },
+  "provenance": {
+    "available": false,
+    "reason": "first publish had no npm provenance attestation"
+  },
+  "routing": {
+    "firstPublishTags": {
+      "next": "0.1.0-alpha.1",
+      "latest": "0.1.0-alpha.1"
+    },
+    "current": {
+      "next": "0.1.0-alpha.4",
+      "latest": "0.1.0-alpha.1"
+    }
+  },
+  "incident": {
+    "code": "E400-no-change",
+    "correctiveRelease": "0.1.0-alpha.2",
+    "disposition": "retained as a sanitized bootstrap exception; alpha.2 supplies provenance"
+  }
+}
