@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   AUTO_COMPACT_USAGE,
+  autoCompactCommandDescription,
   getAutoCompactArgumentCompletions,
   parseAutoCompactCommand,
 } from "../src/command.mjs";
@@ -19,6 +20,10 @@ import {
 } from "../src/settings.mjs";
 
 test("command grammar defaults to status and keeps a small explicit surface", () => {
+  assert.equal(
+    `Usage: ${autoCompactCommandDescription()}`,
+    AUTO_COMPACT_USAGE,
+  );
   assert.deepEqual(parseAutoCompactCommand(), {
     ok: true,
     subcommand: "status",

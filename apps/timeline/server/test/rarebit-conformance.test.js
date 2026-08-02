@@ -21,18 +21,20 @@ const jsonl = (records) => `${records.map(JSON.stringify).join("\n")}\n`;
 test("Timeline matches strict Rarebit roles on a linear trace", () => {
   const fixture = caseById("linear-prose-and-outcomes");
   const projection = parseSessionJsonl(jsonl(fixture.records), fixture.id);
+  assert.equal(
+    projection.rarebits.every((occurrence) => !Object.hasOwn(occurrence, "producer")),
+    true,
+  );
   assert.deepEqual(
-    projection.rarebits.map(({ sourceEntryId, role, outcome, producer }) => ({
+    projection.rarebits.map(({ sourceEntryId, role, outcome }) => ({
       sourceEntryId,
       role,
       outcome,
-      producer,
     })),
-    fixture.expected.rarebits.map(({ sourceEntryId, role, outcome, producer }) => ({
+    fixture.expected.rarebits.map(({ sourceEntryId, role, outcome }) => ({
       sourceEntryId,
       role,
       outcome,
-      producer,
     })),
   );
 });

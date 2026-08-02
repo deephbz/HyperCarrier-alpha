@@ -41,6 +41,22 @@
         "tree": {
           "type": "string",
           "pattern": "^[0-9a-f]{40}$"
+        },
+        "tagObject": {
+          "const": "10881b9100dbe6900682065f4a13d8f84091971e"
+        },
+        "tag": {
+          "const": "v0.1.0-rc.5"
+        },
+        "tagTarget": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "sanitizedRootCommit": {
+          "const": "7eaba365fc4b0984f68941f2b6b2f6e9358e1d35"
+        },
+        "sanitizedRootTree": {
+          "const": "29f3bae40c3b4af1b1f7ac98e2b98799d1425248"
         }
       }
     },
@@ -56,7 +72,7 @@
           "const": "@hypercarrier/pi-openai-blackmagic-compact"
         },
         "version": {
-          "const": "0.1.0-rc.3"
+          "const": "0.1.0-rc.5"
         }
       }
     },
@@ -145,22 +161,22 @@
           "const": "published"
         },
         "npmIntegrity": {
-          "const": "sha512-L3pn91Hq13yEl5R4uJ7SM8PK4Ob4qNQsvDQR6h1ZD9AyADWlhSJHLvKPsS8BTACHTSUzPyhQg/0+3BXX6LFiIQ=="
+          "const": "sha512-pXn/IsTGBRJfc/q9JSUa6HHpzg8v0Kg5J23n0smLoKct3mjjvWiFFr4z7O23IlCiOpI7Y4mGp/y/uM4eFHwgqg=="
         },
         "npmShasum": {
-          "const": "a30fbe1c371f5ab9f990526973641febe10b7359"
+          "const": "e7900a2d2a8fa2af53ce2185d3a756eeccb46ec9"
         },
         "tarball": {
-          "const": "https://registry.npmjs.org/@hypercarrier/pi-openai-blackmagic-compact/-/pi-openai-blackmagic-compact-0.1.0-rc.3.tgz"
+          "const": "https://registry.npmjs.org/@hypercarrier/pi-openai-blackmagic-compact/-/pi-openai-blackmagic-compact-0.1.0-rc.5.tgz"
         },
         "tarballSha256": {
-          "const": "872e841403c6cbf73a338e60515833d44a56c13768e3aab1754acec9beefa735"
+          "const": "87583b792d57737c933f83ae34c36240d11ea296a31ffc29729827a550705569"
         },
         "tag": {
-          "const": "v0.1.0-rc.3"
+          "const": "v0.1.0-rc.5"
         },
         "releaseUrl": {
-          "const": "https://github.com/deephbz/pi-openai-blackmagic-compact/releases/tag/v0.1.0-rc.3"
+          "const": "https://github.com/deephbz/pi-openai-blackmagic-compact/releases/tag/v0.1.0-rc.5"
         },
         "ciUrls": {
           "type": "array",
@@ -173,6 +189,87 @@
         "publishUrl": {
           "type": "string",
           "pattern": "^https://github\\.com/deephbz/pi-openai-blackmagic-compact/actions/runs/[0-9]+$"
+        },
+        "releaseId": {
+          "const": 363795762
+        },
+        "dryRunUrl": {
+          "const": "https://github.com/deephbz/pi-openai-blackmagic-compact/actions/runs/30749534581"
+        },
+        "distTag": {
+          "const": "next"
+        },
+        "latest": {
+          "const": "0.1.0-rc.1"
+        },
+        "fileCount": {
+          "const": 9
+        },
+        "unpackedSize": {
+          "const": 40801
+        },
+        "signature": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "key",
+            "value"
+          ],
+          "properties": {
+            "key": {
+              "const": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+            },
+            "value": {
+              "const": "MEQCIDzXAMsC354H1i3wrqnu7d2V5/NH0NQ6W7Kad6PSxXA9AiBzuO6XOc4YyeyHeTmP7umVXuvDvbXrq3eyFfjt2ppLJA=="
+            }
+          }
+        },
+        "attestationEndpoint": {
+          "const": "https://registry.npmjs.org/-/npm/v1/attestations/@hypercarrier%2fpi-openai-blackmagic-compact@0.1.0-rc.5"
+        },
+        "provenance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "predicate",
+            "workflow",
+            "workflowRef",
+            "invocation",
+            "transparencyLogIndex"
+          ],
+          "properties": {
+            "predicate": {
+              "const": "https://slsa.dev/provenance/v1"
+            },
+            "workflow": {
+              "const": ".github/workflows/publish.yml"
+            },
+            "workflowRef": {
+              "const": "refs/tags/v0.1.0-rc.5"
+            },
+            "invocation": {
+              "const": "https://github.com/deephbz/pi-openai-blackmagic-compact/actions/runs/30749884378/attempts/1"
+            },
+            "transparencyLogIndex": {
+              "const": 2324422869
+            }
+          }
+        },
+        "releaseReceipt": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "asset",
+            "sha256"
+          ],
+          "properties": {
+            "asset": {
+              "const": "completion-receipt-v0.1.0-rc.5.json"
+            },
+            "sha256": {
+              "const": "83013ffeec35a0330271e66ecab060d3f6ac61601e5f2519cd491e450b9e4ab3"
+            }
+          }
         }
       }
     },
@@ -218,6 +315,98 @@
         },
         "workspaceDisposition": {
           "const": "excluded: root Pi 0.80.10 conflicts with child Pi 0.83.0 peers"
+        }
+      }
+    },
+    "lineage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceReceipt",
+        "scanner",
+        "sanitizer",
+        "legacyRc4",
+        "legacyRefsPrivacy"
+      ],
+      "properties": {
+        "sourceReceipt": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "blob",
+            "sha256"
+          ],
+          "properties": {
+            "path": {
+              "const": "release/privacy-lineage.v1.json"
+            },
+            "blob": {
+              "const": "f93d20088c3603daa6e2519db6db1ddea2e24d2b"
+            },
+            "sha256": {
+              "const": "860cd6b0c3b29f4d81ea17ab68409f342dc8be488c429a895e6a9d6738b1b71d"
+            }
+          }
+        },
+        "scanner": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "blob",
+            "sha256"
+          ],
+          "properties": {
+            "path": {
+              "const": "release/tools/git-privacy-scan.py"
+            },
+            "blob": {
+              "const": "887213d5d6aac3187a1631c6d985b1b0ea1385ec"
+            },
+            "sha256": {
+              "const": "7808ae1f0a5039bd939236d17db9574f2249043a8596ca85f8f6c1270d9a2381"
+            }
+          }
+        },
+        "sanitizer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "sha256"
+          ],
+          "properties": {
+            "path": {
+              "const": "scripts/sanitize-review-history.py"
+            },
+            "sha256": {
+              "const": "1ea80e209ac43506a5211e03fe64faa2fa53e71a49e6b7795fdc268a6944260d"
+            }
+          }
+        },
+        "legacyRc4": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tagObject",
+            "tagTarget",
+            "npmArtifact"
+          ],
+          "properties": {
+            "tagObject": {
+              "const": "b4ef75f9349f5aa6216df0914d2159697ac876eb"
+            },
+            "tagTarget": {
+              "const": "22d11a95c0f6f1d9c227eadcc502b6c83c755c88"
+            },
+            "npmArtifact": {
+              "const": false
+            }
+          }
+        },
+        "legacyRefsPrivacy": {
+          "const": "expected findings retained and disclosed"
         }
       }
     }
