@@ -73,12 +73,22 @@ the operating system, shows liveness/location with explicitly unavailable work
 state, and keeps Session correlation conservative; an ambiguous binding remains
 unavailable.
 
-Rarebit is a separate Pi package under `packages/hc-rarebit`. Its model-provider
-call is opt-in because selected user and assistant prose crosses the configured
-provider boundary. When Pi runs under Herdr, Rarebit can report two optional
-recency clocks: latest selected owner message, then latest selected agent stop.
-They aren't liveness, progress, or delivery state. The package README documents
-the token contract.
+Rarebit is the independent public `@hypercarrier/rarebit` package with the
+`rarebit` CLI. HyperCarrier composes it at the stable `packages/hc-rarebit`
+gitlink and owns compatibility only; its model-provider call is opt-in because
+selected user and assistant prose crosses the configured provider boundary.
+When Pi runs under Herdr, Rarebit can report two optional recency clocks: latest
+selected user message, then latest selected agent stop. They aren't liveness,
+progress, or delivery state. The package README documents the token contract.
+
+**Release tags:** use exact `@hypercarrier/rarebit@0.1.0-alpha.4` and
+`@hypercarrier/pi-openai-blackmagic-compact@0.1.0-rc.5` recovery pins. Rarebit's
+`next` tag points to alpha.4 while npm `latest` remains the retained
+`0.1.0-alpha.1` bootstrap exception. Blackmagic's `next` tag points to rc.5
+while npm `latest` remains the retained `0.1.0-rc.1`. The immutable Blackmagic
+rc.4 source tag is retained as historical source evidence; it has no npm
+artifact. No retained version was unpublished or retargeted, and Alpha has not
+been published from this candidate.
 
 ## Verified terminal theme candidate
 
@@ -175,7 +185,7 @@ settings, manual trigger, and failure behavior.
 
 ## Optional Herdr tools
 
-Three local tools are included for Herdr operators. They require [Herdr](https://github.com/deephbz/herdr) 0.7.5 or newer; the two plugins also use the Node.js runtime already required above. `agent-view-presets` reads local PiTeams membership files, and `rarebit-status` additionally requires a Pi checkout configured with this checkout's `packages/hc-rarebit` package. The recovery CLI requires Python 3.12 or newer and [uv](https://docs.astral.sh/uv/).
+Three local tools are included for Herdr operators. They require [Herdr](https://github.com/deephbz/herdr) 0.7.5 or newer; the two plugins also use the Node.js runtime already required above. `agent-view-presets` reads local PiTeams membership files, and `rarebit-status` additionally requires a Pi checkout configured with this checkout's `packages/hc-rarebit` gitlink path. The recovery CLI requires Python 3.12 or newer and [uv](https://docs.astral.sh/uv/).
 
 From the public checkout root, link and enable the plugins:
 

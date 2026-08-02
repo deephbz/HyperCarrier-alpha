@@ -1,2 +1,0 @@
-{"type":"message","id":"valid-1","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"valid"}]}}
-{"type":"message","id":"truncated","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"incomplete"

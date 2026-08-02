@@ -22,7 +22,7 @@ import {
   rarebitText,
   resolveActiveBranch,
   selectRarebits,
-} from "@hypercarrier/hc-rarebit";
+} from "@hypercarrier/rarebit";
 import { createSourceWatcher } from "./watcher.js";
 import { resolveBundledPiExporter, resolveExecutablePath } from "./pi-exporter-provider.js";
 import { renderRarebitMarkdown } from "./rarebit-markdown.js";
@@ -114,12 +114,10 @@ function compactSessionEntry(entry) {
   if (!metadata) return common;
   return {
     ...common,
-    producer: entry?.producer,
     message: {
       id: entry.message.id,
       role: entry.message.role,
       stopReason: entry.message.stopReason,
-      producer: entry.message.producer,
       timestamp: entry.message.timestamp,
       content: rarebitText(entry),
     },

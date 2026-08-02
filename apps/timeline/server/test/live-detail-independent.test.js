@@ -11,8 +11,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { parseNativeSession, resolveActiveBranch } from "@hypercarrier/hc-rarebit/session";
-import { selectRarebits } from "@hypercarrier/hc-rarebit/core";
+import { parseNativeSession, resolveActiveBranch } from "@hypercarrier/rarebit/session";
+import { selectRarebits } from "@hypercarrier/rarebit/core";
 import {
   analyzeSessionParentGraph,
   createIncrementalRarebitReader,

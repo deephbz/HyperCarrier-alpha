@@ -3,6 +3,9 @@ import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import lockfile from "proper-lockfile";
+import { isValidThreshold } from "./threshold.mjs";
+
+export { isValidThreshold };
 
 const { lock } = lockfile;
 
@@ -14,15 +17,6 @@ export const DEFAULT_AUTO_COMPACT_SETTINGS = Object.freeze({
   threshold: 90,
   pre_compact_prompt: DEFAULT_PRE_COMPACT_PROMPT,
 });
-
-export function isValidThreshold(value) {
-  return (
-    typeof value === "number" &&
-    Number.isFinite(value) &&
-    value > 1 &&
-    value < 110
-  );
-}
 
 function settingsObject(value) {
   return value && typeof value === "object" && !Array.isArray(value)

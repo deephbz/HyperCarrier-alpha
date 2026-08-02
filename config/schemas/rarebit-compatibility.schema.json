@@ -1,0 +1,429 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "component",
+    "source",
+    "package",
+    "publication",
+    "verification",
+    "gitlink",
+    "bootstrapException"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "component": {
+      "const": "rarebit"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "commit",
+        "tree",
+        "tagObject",
+        "tag",
+        "tagTarget"
+      ],
+      "properties": {
+        "repository": {
+          "const": "https://github.com/deephbz/rarebit.git"
+        },
+        "commit": {
+          "const": "336565fb132404c02f5adbbe1be4d86c2206e035"
+        },
+        "tree": {
+          "const": "ed87414cb9b5b1f8e77dab0d66dfa279d5f740a8"
+        },
+        "tagObject": {
+          "const": "2cf294c20a54ff36eb8ae2864216ea6983bc4dc8"
+        },
+        "tag": {
+          "const": "v0.1.0-alpha.4"
+        },
+        "tagTarget": {
+          "const": "336565fb132404c02f5adbbe1be4d86c2206e035"
+        }
+      }
+    },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "bin",
+        "node",
+        "piPeer"
+      ],
+      "properties": {
+        "name": {
+          "const": "@hypercarrier/rarebit"
+        },
+        "version": {
+          "const": "0.1.0-alpha.4"
+        },
+        "bin": {
+          "const": "rarebit"
+        },
+        "node": {
+          "const": ">=22"
+        },
+        "piPeer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "@earendil-works/pi-ai"
+          ],
+          "properties": {
+            "@earendil-works/pi-ai": {
+              "const": "*"
+            }
+          }
+        }
+      }
+    },
+    "publication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sri",
+        "sha1",
+        "sha256",
+        "tarball",
+        "size",
+        "unpackedSize",
+        "fileCount",
+        "githubRelease",
+        "signature",
+        "next",
+        "latest",
+        "bootstrapExceptionEvidence"
+      ],
+      "properties": {
+        "sri": {
+          "const": "sha512-x4CzTUQX9xwdsJzLJqIlghkfypOjwEHj0ScJXWhrdE/HyB9ISTG/vobaaWFX51tWSekSH3bczVOVSksNxH7Ixw=="
+        },
+        "sha1": {
+          "const": "d0453675d32f2dae05c675122a119547b2d1bea6"
+        },
+        "sha256": {
+          "const": "19449d2d1d3179ae13299d62951b685b4c3ae1dccf1fb996c624e9964d95d12e"
+        },
+        "tarball": {
+          "const": "https://registry.npmjs.org/@hypercarrier/rarebit/-/rarebit-0.1.0-alpha.4.tgz"
+        },
+        "size": {
+          "const": 92096
+        },
+        "unpackedSize": {
+          "const": 401693
+        },
+        "fileCount": {
+          "const": 50
+        },
+        "githubRelease": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "url",
+            "prerelease",
+            "latest"
+          ],
+          "properties": {
+            "id": {
+              "const": 363793012
+            },
+            "url": {
+              "const": "https://github.com/deephbz/rarebit/releases/tag/v0.1.0-alpha.4"
+            },
+            "prerelease": {
+              "const": true
+            },
+            "latest": {
+              "const": false
+            }
+          }
+        },
+        "signature": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "key",
+            "value"
+          ],
+          "properties": {
+            "key": {
+              "const": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
+            },
+            "value": {
+              "const": "MEUCIQCWX+aVCWOPantTtYewNNmc3Sw6soihJp5O6GjlzrSMtwIgIZ7eXfxUMiinVUzyE5ks2t6mP80E0DqahGLx7NOnPoI="
+            }
+          }
+        },
+        "next": {
+          "const": "0.1.0-alpha.4"
+        },
+        "latest": {
+          "const": "0.1.0-alpha.1"
+        },
+        "bootstrapExceptionEvidence": {
+          "const": "https://github.com/deephbz/rarebit/releases/tag/v0.1.0-alpha.2"
+        }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ci",
+        "dryRun",
+        "publish"
+      ],
+      "properties": {
+        "ci": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "run",
+            "url",
+            "head"
+          ],
+          "properties": {
+            "run": {
+              "const": 30749327677
+            },
+            "url": {
+              "const": "https://github.com/deephbz/rarebit/actions/runs/30749327677"
+            },
+            "head": {
+              "const": "336565fb132404c02f5adbbe1be4d86c2206e035"
+            }
+          }
+        },
+        "dryRun": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "run",
+            "url",
+            "nonce",
+            "head"
+          ],
+          "properties": {
+            "run": {
+              "const": 30749421136
+            },
+            "url": {
+              "const": "https://github.com/deephbz/rarebit/actions/runs/30749421136"
+            },
+            "nonce": {
+              "const": "b50a45f4-96ca-4d5a-8f51-5a95ea6d0ae8"
+            },
+            "head": {
+              "const": "336565fb132404c02f5adbbe1be4d86c2206e035"
+            }
+          }
+        },
+        "publish": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "run",
+            "url",
+            "nonce",
+            "ref",
+            "head",
+            "attestation",
+            "attestationEndpoint",
+            "slsaPredicateType",
+            "workflow",
+            "workflowRef",
+            "resolvedCommit",
+            "invocation"
+          ],
+          "properties": {
+            "run": {
+              "const": 30749454692
+            },
+            "url": {
+              "const": "https://github.com/deephbz/rarebit/actions/runs/30749454692"
+            },
+            "nonce": {
+              "const": "36d95631-a45b-4769-9e15-18129ce54e52"
+            },
+            "ref": {
+              "const": "v0.1.0-alpha.4"
+            },
+            "head": {
+              "const": "336565fb132404c02f5adbbe1be4d86c2206e035"
+            },
+            "attestation": {
+              "const": "https://github.com/deephbz/rarebit/actions/runs/30749454692"
+            },
+            "attestationEndpoint": {
+              "const": "https://registry.npmjs.org/-/npm/v1/attestations/@hypercarrier%2frarebit@0.1.0-alpha.4"
+            },
+            "slsaPredicateType": {
+              "const": "https://slsa.dev/provenance/v1"
+            },
+            "workflow": {
+              "const": ".github/workflows/publish.yml"
+            },
+            "workflowRef": {
+              "const": "refs/tags/v0.1.0-alpha.4"
+            },
+            "resolvedCommit": {
+              "const": "336565fb132404c02f5adbbe1be4d86c2206e035"
+            },
+            "invocation": {
+              "const": "https://github.com/deephbz/rarebit/actions/runs/30749454692/attempts/1"
+            }
+          }
+        }
+      }
+    },
+    "gitlink": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "mode",
+        "commit"
+      ],
+      "properties": {
+        "path": {
+          "const": "packages/hc-rarebit"
+        },
+        "mode": {
+          "const": "160000"
+        },
+        "commit": {
+          "const": "336565fb132404c02f5adbbe1be4d86c2206e035"
+        }
+      }
+    },
+    "bootstrapException": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "id": {
+          "const": "rarebit-alpha.1-bootstrap-exception"
+        },
+        "path": {
+          "const": "config/rarebit-alpha.1-bootstrap-exception.json"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "lineage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sanitizedRootCommit",
+        "sanitizedRootTree",
+        "sourceReceipt",
+        "scanner",
+        "releaseReceipt",
+        "legacyTagObjects"
+      ],
+      "properties": {
+        "sanitizedRootCommit": {
+          "const": "3620e9b0ddcdc4cb88771f8e16d5e88a3679480b"
+        },
+        "sanitizedRootTree": {
+          "const": "db7d388ec449af11c2054cf460931118f70c055b"
+        },
+        "sourceReceipt": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "blob",
+            "sha256"
+          ],
+          "properties": {
+            "path": {
+              "const": "release/privacy-lineage.v1.json"
+            },
+            "blob": {
+              "const": "11dae51b6fae6a5f421013b30833fcd0b908aa46"
+            },
+            "sha256": {
+              "const": "6051fc6db27ee05641b5e06a5a2dc606c67b440138e6c9c154ac647c48965ede"
+            }
+          }
+        },
+        "scanner": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "blob",
+            "sha256"
+          ],
+          "properties": {
+            "path": {
+              "const": "release/tools/git-privacy-scan.py"
+            },
+            "blob": {
+              "const": "887213d5d6aac3187a1631c6d985b1b0ea1385ec"
+            },
+            "sha256": {
+              "const": "7808ae1f0a5039bd939236d17db9574f2249043a8596ca85f8f6c1270d9a2381"
+            }
+          }
+        },
+        "releaseReceipt": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "asset",
+            "sha256"
+          ],
+          "properties": {
+            "asset": {
+              "const": "rarebit-0.1.0-alpha.4-publication-receipt.v1.json"
+            },
+            "sha256": {
+              "const": "5c4b877773a7f4f8d97b22c7eb0ad0b291ba9768e374b8a35bda911766a6d729"
+            }
+          }
+        },
+        "legacyTagObjects": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "v0.1.0-alpha.1",
+            "v0.1.0-alpha.2",
+            "v0.1.0-alpha.3"
+          ],
+          "properties": {
+            "v0.1.0-alpha.1": {
+              "const": "a5d6271c5ee07d872e6f98bc645266f678d41d56"
+            },
+            "v0.1.0-alpha.2": {
+              "const": "4b06aacbfddaa1c8209fcd63731c9962bbf2536f"
+            },
+            "v0.1.0-alpha.3": {
+              "const": "745570eb3b3de5d5295060dc4a851eff7f933e06"
+            }
+          }
+        }
+      }
+    }
+  }
+}

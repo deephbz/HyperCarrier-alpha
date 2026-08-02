@@ -1,10 +1,13 @@
-export const AUTO_COMPACT_USAGE =
-  "Usage: /auto-compact [status|on|off|threshold <percent>|run [prompt...]]";
+import { isValidThreshold } from "./threshold.mjs";
+
+const AUTO_COMPACT_SYNTAX =
+  "/auto-compact [status|on|off|threshold <percent>|run [prompt...]]";
+export const AUTO_COMPACT_USAGE = `Usage: ${AUTO_COMPACT_SYNTAX}`;
 
 const SUBCOMMANDS = ["status", "on", "off", "threshold", "run"];
 
 export function autoCompactCommandDescription() {
-  return "/auto-compact [status|on|off|threshold <percent>|run [prompt...]]";
+  return AUTO_COMPACT_SYNTAX;
 }
 
 export function getAutoCompactArgumentCompletions(prefix) {
@@ -43,7 +46,7 @@ export function parseAutoCompactCommand(input = "") {
         usage: AUTO_COMPACT_USAGE,
       };
     const threshold = Number(args[0]);
-    if (!Number.isFinite(threshold) || threshold <= 1 || threshold >= 110)
+    if (!isValidThreshold(threshold))
       return {
         ok: false,
         error: "invalid_threshold",
