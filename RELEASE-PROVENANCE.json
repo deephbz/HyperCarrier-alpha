@@ -1,23 +1,23 @@
 {
   "schemaVersion": 1,
   "sourceRepository": "HyperCarrier",
-  "sourceCommit": "0e60eb99c162a349fa7b4cd37f759da31b12bce6",
-  "sourceTree": "5518d17cfe605bbc0e0e4ec36f42cdba29283355",
+  "sourceCommit": "8445628f0dac0ca9958b233d30ef978ad07ce09c",
+  "sourceTree": "0820c6796116574540c03213181b5736b1deaaea",
   "sourceWorktreeDirty": false,
-  "exportContentSha256": "b770acca1f4e88b8bf7554db9238c682638a6736864dfdbb7e83af8fd23afb76",
-  "exportManifestSha256": "8d0ea8f94798b1288e2bad2e928255c5d05d666ef91879cfcfe7a9eca2827e48",
+  "exportContentSha256": "25dbbb12b19588e1e7db36acff2121c0e9b1a92251185dcdb5b4631778f71973",
+  "exportManifestSha256": "c96d96faded20819fd0464dc5525c6c8ecc8f12b9a51f8d1c892755f78b1fc21",
   "dependencies": [],
   "submodules": [
     {
       "name": "packages/pi-team-bright",
       "path": "packages/pi-team-bright",
       "repository": "https://github.com/deephbz/pi-team-bright.git",
-      "commit": "d858d9f81261f5c2bfbe9e1eaf342b523e0114eb",
-      "tree": "5023200b37e03d6bc7f26c3a7e7199e2bc2f7e12",
+      "commit": "51a3d6a7c843c2a9809e77952fda1b1d75ae0770",
+      "tree": "48a16dab8940f9722ad0bd6c5094280eba303300",
       "identity": {
         "kind": "npm-package",
         "name": "@hypercarrier/pi-team-bright",
-        "version": "0.16.0-rc.2"
+        "version": "0.17.0-rc.1"
       }
     },
     {
