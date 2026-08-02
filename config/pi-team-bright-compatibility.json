@@ -3,24 +3,24 @@
   "component": "pi-team-bright",
   "source": {
     "repository": "https://github.com/deephbz/pi-team-bright.git",
-    "commit": "d858d9f81261f5c2bfbe9e1eaf342b523e0114eb",
-    "tree": "5023200b37e03d6bc7f26c3a7e7199e2bc2f7e12"
+    "commit": "51a3d6a7c843c2a9809e77952fda1b1d75ae0770",
+    "tree": "48a16dab8940f9722ad0bd6c5094280eba303300"
   },
   "package": {
     "name": "@hypercarrier/pi-team-bright",
-    "version": "0.16.0-rc.2"
+    "version": "0.17.0-rc.1"
   },
   "publication": {
     "state": "published",
-    "npmIntegrity": "sha512-hEBpcAL7s9+oTzAJNb578l5my48tVY4TpjmtZNvG0xpVvVSb3807NjPVOw7VImgJdC2Ax2G8ntRpO0igoXSMyg==",
-    "npmShasum": "cdaf5508bfbdc1cd5cb61517d47b3fce608749a6",
-    "tarball": "https://registry.npmjs.org/@hypercarrier/pi-team-bright/-/pi-team-bright-0.16.0-rc.2.tgz",
-    "tarballSha256": "30d8dbde93d0a2f5b838bf88edefb2636f45e514232c54d0df4120caee0ae98e",
-    "tag": "v0.16.0-rc.2",
-    "releaseUrl": "https://github.com/deephbz/pi-team-bright/releases/tag/v0.16.0-rc.2",
-    "publishUrl": "https://github.com/deephbz/pi-team-bright/actions/runs/30594201861",
+    "npmIntegrity": "sha512-CshbaigGKTRVPgRz2+XjsfJfbpRFNeW4d+bmCGuoVBKIyCjr+ejADx184yxw9oOzpJ/0kUKYRvFdeJkxTxbRCQ==",
+    "npmShasum": "9bfca79dcbdd58e3eee781edf4ffd29bc0c25cc7",
+    "tarball": "https://registry.npmjs.org/@hypercarrier/pi-team-bright/-/pi-team-bright-0.17.0-rc.1.tgz",
+    "tarballSha256": "e2f458de07cfdb090469a6dbc7859c78664317bf24b81828e72eaf06e5bf84ba",
+    "tag": "v0.17.0-rc.1",
+    "releaseUrl": "https://github.com/deephbz/pi-team-bright/releases/tag/v0.17.0-rc.1",
+    "publishUrl": "https://github.com/deephbz/pi-team-bright/actions/runs/30763745797",
     "distTag": "next",
-    "tarEntries": 59
+    "tarEntries": 73
   },
   "pi": {
     "peerRanges": {
@@ -49,44 +49,49 @@
       {
         "name": "hosted-fast-lane",
         "command": "TERM_PROGRAM=iTerm.app npm test",
-        "result": "passed on Node 22 and 24 in main CI run 30561083557"
+        "result": "passed on Node 22 and 24 in main CI run 30763615943"
       },
       {
         "name": "hosted-exhaustive-complement",
         "command": "TERM_PROGRAM=iTerm.app npm run test:exhaustive-only",
-        "result": "passed on Node 22 and 24 in main CI run 30561083557"
+        "result": "passed on Node 22 and 24 in main CI run 30763615943"
       },
       {
         "name": "test-lane-closure",
         "command": "npm run test:lanes",
-        "result": "passed in PR CI run 30560874254 and main CI run 30561083557"
+        "result": "passed in main CI run 30763615943"
       },
       {
         "name": "generated-package-closure",
         "command": "npm run verify:package",
-        "result": "passed on Node 22 and 24 in main CI run 30561083557 with tracked dist clean"
+        "result": "passed on Node 22 and 24 in main CI run 30763615943 with tracked dist clean"
+      },
+      {
+        "name": "tracked-real-pi-ten-capability-workflow",
+        "command": "real Pi 0.80.10 / openai-codex GPT-5.6 Luna ten-capability workflow",
+        "result": "passed with distinct leader/Worker Sessions, connected Worker, replay-conflict refusal, fault probes, and stopped cleanup"
+      },
+      {
+        "name": "worker-replay-preservation-regression",
+        "command": "focused Worker replay-preservation regression plus npm run typecheck",
+        "result": "8 focused tests passed and typecheck passed"
       },
       {
         "name": "trusted-publisher",
         "command": "GitHub Actions publish workflow",
-        "result": "published rc.2 with npm provenance from exact child commit d858d9f in run 30594201861"
+        "result": "published rc.1 with npm provenance from exact child commit 51a3d6a in run 30763745797"
       },
       {
         "name": "registry-byte-verification",
         "command": "download registry tarball and recompute integrity, SHA-1, SHA-256, and entry count",
-        "result": "matched the immutable published tuple with 59 tar entries"
-      },
-      {
-        "name": "single-live-process-binding",
-        "command": "TERM_PROGRAM=iTerm.app npm run test:full",
-        "result": "471 tests passed locally; independent separate-process canary preserved incumbent binding and operability"
+        "result": "matched the immutable published tuple with 73 tar entries"
       }
     ]
   },
   "gitlink": {
     "path": "packages/pi-team-bright",
     "mode": "160000",
-    "commit": "d858d9f81261f5c2bfbe9e1eaf342b523e0114eb"
+    "commit": "51a3d6a7c843c2a9809e77952fda1b1d75ae0770"
   },
   "parentVerification": {
     "state": "verified",
