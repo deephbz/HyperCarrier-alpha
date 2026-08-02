@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "sourceRepository": "HyperCarrier",
-  "sourceCommit": "b37b91ac8c79a76e10977352100e304e4dad3518",
-  "sourceTree": "b8e465135cf49a07cd29dec1e224dc83ab806094",
+  "sourceCommit": "0e60eb99c162a349fa7b4cd37f759da31b12bce6",
+  "sourceTree": "5518d17cfe605bbc0e0e4ec36f42cdba29283355",
   "sourceWorktreeDirty": false,
-  "exportContentSha256": "22bd7e93e83d9ab3bc261defa80efb3bdbd23ffcb644ff1d322e07b2ec75e91d",
-  "exportManifestSha256": "483d0ae11fcfb52537402d928f78b2ec7f90216fb2c8889177ca5a2fe7e314c7",
+  "exportContentSha256": "b770acca1f4e88b8bf7554db9238c682638a6736864dfdbb7e83af8fd23afb76",
+  "exportManifestSha256": "8d0ea8f94798b1288e2bad2e928255c5d05d666ef91879cfcfe7a9eca2827e48",
   "dependencies": [],
   "submodules": [
     {
@@ -24,12 +24,12 @@
       "name": "packages/pi-openai-blackmagic-compact",
       "path": "packages/pi-openai-blackmagic-compact",
       "repository": "https://github.com/deephbz/pi-openai-blackmagic-compact.git",
-      "commit": "7ba0de2bdbad083ab646ff8ca67b8a262d78a246",
-      "tree": "ad17e51fd9367eda7962c093c4814579702c879e",
+      "commit": "a6247ac3a3f6ae4b80905f7cded9d2847815f15d",
+      "tree": "f63918a0035d31c787c5c3a70c7c66a5f354ff1a",
       "identity": {
         "kind": "npm-package",
         "name": "@hypercarrier/pi-openai-blackmagic-compact",
-        "version": "0.1.0-rc.3"
+        "version": "0.1.0-rc.5"
       }
     },
     {
@@ -42,6 +42,18 @@
         "kind": "python-project",
         "name": "colorstack",
         "version": "0.1.0"
+      }
+    },
+    {
+      "name": "packages/hc-rarebit",
+      "path": "packages/hc-rarebit",
+      "repository": "https://github.com/deephbz/rarebit.git",
+      "commit": "336565fb132404c02f5adbbe1be4d86c2206e035",
+      "tree": "ed87414cb9b5b1f8e77dab0d66dfa279d5f740a8",
+      "identity": {
+        "kind": "npm-package",
+        "name": "@hypercarrier/rarebit",
+        "version": "0.1.0-alpha.4"
       }
     }
   ],

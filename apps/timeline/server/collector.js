@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { rarebitMetadata } from "@hypercarrier/hc-rarebit/core";
+import { rarebitMetadata } from "@hypercarrier/rarebit/core";
 import { readPiTeams } from "./pi-teams.js";
 import {
   applyTmuxLocations,

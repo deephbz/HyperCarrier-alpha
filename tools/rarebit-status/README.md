@@ -22,7 +22,7 @@ truthful producer projection exists.
 
 The deck imports marks, labels, tones, and attention gating from the package's
 `rarebit-visual-language.mjs` contract. It owns only terminal-safe ANSI styling,
-layout, and interaction, so producer provenance cannot create an extra visual
+layout, and interaction, so every selected user message keeps the same visual
 role and ordinary `finished` remains neutral. Sidebar projection uses mutually
 exclusive neutral, attention, muted, and diagnostic state tokens because Herdr
 styles token names, not values. Separate attention and error mark tokens keep
@@ -56,12 +56,12 @@ cd "$main_root" && pi
 # In the fresh Pi: /rarebit status; record its exact Session JSONL path.
 session_file='/absolute/path/reported/by/pi.jsonl'
 sidecar="$(node --input-type=module - "$session_file" <<'NODE'
-import { rarebitMaterializationPath } from '@hypercarrier/hc-rarebit';
+import { rarebitMaterializationPath } from '@hypercarrier/rarebit';
 console.log(rarebitMaterializationPath(process.argv[2]));
 NODE
 )"
 node --input-type=module - "$session_file" <<'NODE'
-import { readRarebitCurrent } from '@hypercarrier/hc-rarebit';
+import { readRarebitCurrent } from '@hypercarrier/rarebit';
 const current = await readRarebitCurrent({ sessionFile: process.argv[2] });
 console.log(JSON.stringify({
   availability: current.availability,

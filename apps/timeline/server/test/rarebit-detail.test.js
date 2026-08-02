@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { processRarebitSummary } from "@hypercarrier/hc-rarebit";
+import { processRarebitSummary } from "@hypercarrier/rarebit";
 import {
   projectRarebitSummaryStatus,
   readSessionRarebitSummary,

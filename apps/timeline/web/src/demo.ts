@@ -121,7 +121,6 @@ export function demoSnapshot(): Snapshot {
         order: 1,
         role: "user",
         outcome: "user",
-        producer: null,
         timestamp: new Date(started + 60_000).toISOString(),
       },
       {
@@ -130,7 +129,6 @@ export function demoSnapshot(): Snapshot {
         order: n + 1,
         role: "assistant",
         outcome: "stop",
-        producer: null,
         timestamp: new Date(cursor).toISOString(),
       },
     );

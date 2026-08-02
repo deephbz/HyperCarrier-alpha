@@ -184,13 +184,6 @@ test("deck renders the package-owned marker and Summary grammar", () => {
     marker: "<green>□</>",
   });
   assert.equal(
-    terminalOccurrencePresentation(
-      { ...user, producer: "extension-rpc" },
-      palette,
-    ).label,
-    "user message",
-  );
-  assert.equal(
     terminalOccurrencePresentation(continuation, palette).marker,
     "<blue>•</>",
   );

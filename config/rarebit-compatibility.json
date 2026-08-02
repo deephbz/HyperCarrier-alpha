@@ -1,0 +1,103 @@
+{
+  "schemaVersion": 1,
+  "component": "rarebit",
+  "source": {
+    "repository": "https://github.com/deephbz/rarebit.git",
+    "commit": "336565fb132404c02f5adbbe1be4d86c2206e035",
+    "tree": "ed87414cb9b5b1f8e77dab0d66dfa279d5f740a8",
+    "tagObject": "2cf294c20a54ff36eb8ae2864216ea6983bc4dc8",
+    "tag": "v0.1.0-alpha.4",
+    "tagTarget": "336565fb132404c02f5adbbe1be4d86c2206e035"
+  },
+  "package": {
+    "name": "@hypercarrier/rarebit",
+    "version": "0.1.0-alpha.4",
+    "bin": "rarebit",
+    "node": ">=22",
+    "piPeer": {
+      "@earendil-works/pi-ai": "*"
+    }
+  },
+  "publication": {
+    "sri": "sha512-x4CzTUQX9xwdsJzLJqIlghkfypOjwEHj0ScJXWhrdE/HyB9ISTG/vobaaWFX51tWSekSH3bczVOVSksNxH7Ixw==",
+    "sha1": "d0453675d32f2dae05c675122a119547b2d1bea6",
+    "sha256": "19449d2d1d3179ae13299d62951b685b4c3ae1dccf1fb996c624e9964d95d12e",
+    "tarball": "https://registry.npmjs.org/@hypercarrier/rarebit/-/rarebit-0.1.0-alpha.4.tgz",
+    "size": 92096,
+    "unpackedSize": 401693,
+    "fileCount": 50,
+    "githubRelease": {
+      "id": 363793012,
+      "url": "https://github.com/deephbz/rarebit/releases/tag/v0.1.0-alpha.4",
+      "prerelease": true,
+      "latest": false
+    },
+    "signature": {
+      "key": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+      "value": "MEUCIQCWX+aVCWOPantTtYewNNmc3Sw6soihJp5O6GjlzrSMtwIgIZ7eXfxUMiinVUzyE5ks2t6mP80E0DqahGLx7NOnPoI="
+    },
+    "next": "0.1.0-alpha.4",
+    "latest": "0.1.0-alpha.1",
+    "bootstrapExceptionEvidence": "https://github.com/deephbz/rarebit/releases/tag/v0.1.0-alpha.2"
+  },
+  "verification": {
+    "ci": {
+      "run": 30749327677,
+      "url": "https://github.com/deephbz/rarebit/actions/runs/30749327677",
+      "head": "336565fb132404c02f5adbbe1be4d86c2206e035"
+    },
+    "dryRun": {
+      "run": 30749421136,
+      "url": "https://github.com/deephbz/rarebit/actions/runs/30749421136",
+      "nonce": "b50a45f4-96ca-4d5a-8f51-5a95ea6d0ae8",
+      "head": "336565fb132404c02f5adbbe1be4d86c2206e035"
+    },
+    "publish": {
+      "run": 30749454692,
+      "url": "https://github.com/deephbz/rarebit/actions/runs/30749454692",
+      "nonce": "36d95631-a45b-4769-9e15-18129ce54e52",
+      "ref": "v0.1.0-alpha.4",
+      "head": "336565fb132404c02f5adbbe1be4d86c2206e035",
+      "attestation": "https://github.com/deephbz/rarebit/actions/runs/30749454692",
+      "attestationEndpoint": "https://registry.npmjs.org/-/npm/v1/attestations/@hypercarrier%2frarebit@0.1.0-alpha.4",
+      "slsaPredicateType": "https://slsa.dev/provenance/v1",
+      "workflow": ".github/workflows/publish.yml",
+      "workflowRef": "refs/tags/v0.1.0-alpha.4",
+      "resolvedCommit": "336565fb132404c02f5adbbe1be4d86c2206e035",
+      "invocation": "https://github.com/deephbz/rarebit/actions/runs/30749454692/attempts/1"
+    }
+  },
+  "gitlink": {
+    "path": "packages/hc-rarebit",
+    "mode": "160000",
+    "commit": "336565fb132404c02f5adbbe1be4d86c2206e035"
+  },
+  "bootstrapException": {
+    "id": "rarebit-alpha.1-bootstrap-exception",
+    "path": "config/rarebit-alpha.1-bootstrap-exception.json",
+    "sha256": "29de8a7f11e9a66489f3729454875f54a562b5c4d0ea132a4bdfbd8bc925c92e"
+  },
+  "lineage": {
+    "sanitizedRootCommit": "3620e9b0ddcdc4cb88771f8e16d5e88a3679480b",
+    "sanitizedRootTree": "db7d388ec449af11c2054cf460931118f70c055b",
+    "sourceReceipt": {
+      "path": "release/privacy-lineage.v1.json",
+      "blob": "11dae51b6fae6a5f421013b30833fcd0b908aa46",
+      "sha256": "6051fc6db27ee05641b5e06a5a2dc606c67b440138e6c9c154ac647c48965ede"
+    },
+    "scanner": {
+      "path": "release/tools/git-privacy-scan.py",
+      "blob": "887213d5d6aac3187a1631c6d985b1b0ea1385ec",
+      "sha256": "7808ae1f0a5039bd939236d17db9574f2249043a8596ca85f8f6c1270d9a2381"
+    },
+    "releaseReceipt": {
+      "asset": "rarebit-0.1.0-alpha.4-publication-receipt.v1.json",
+      "sha256": "5c4b877773a7f4f8d97b22c7eb0ad0b291ba9768e374b8a35bda911766a6d729"
+    },
+    "legacyTagObjects": {
+      "v0.1.0-alpha.1": "a5d6271c5ee07d872e6f98bc645266f678d41d56",
+      "v0.1.0-alpha.2": "4b06aacbfddaa1c8209fcd63731c9962bbf2536f",
+      "v0.1.0-alpha.3": "745570eb3b3de5d5295060dc4a851eff7f933e06"
+    }
+  }
+}
