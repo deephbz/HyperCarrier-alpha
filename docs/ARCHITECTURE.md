@@ -19,9 +19,12 @@ packages/hc-rarebit          ----> append-only Rarebit materialization JSONL
          |
 @hypercarrier/rarebit (CLI: rarebit), independent public authority
 
-Beads + Git + Markdown ---------------> packages/hc-project-distill
-                                             |
-                                      events + proposal bundles
+effective Pi prompt + active tools
+             |
+             v
+packages/systemp-prompt-audit ----> immutable JSON snapshot
+             |
+             +--------------------> deterministic Markdown + HTML reviews
 ```
 
 ## Component responsibilities
@@ -47,12 +50,13 @@ model for one compact reported-output summary. It excludes user messages,
 reasoning, tool calls, tool arguments, and tool results. The output is lossy and
 does not determine liveness, priority, delivery, or intervention.
 
-### Project distiller
+### System Prompt Audit
 
-Reads an explicit Project registry and materializes deterministic, append-only
-Project events from Beads, Git, summaries, and Markdown sources. Optional model
-synthesis produces a separate proposal bundle. Canonical Markdown is never
-mutated automatically.
+Registers an operator command in Pi to capture the current effective system
+prompt and active tool definitions. The snapshot is immutable JSON evidence.
+The separate CLI verifies its payload hash and renders deterministic Markdown
+and script-free HTML without a model call. Snapshots and reviews remain
+sensitive local artifacts.
 
 ### PiTeams
 

@@ -1,0 +1,40 @@
+{
+  "name": "@hypercarrier/systemp-prompt-audit",
+  "version": "0.1.0",
+  "description": "Operator-only Pi system-prompt snapshots with deterministic Markdown and HTML review projections.",
+  "type": "module",
+  "license": "MIT",
+  "author": "deephbz",
+  "keywords": [
+    "pi-package",
+    "system-prompt",
+    "prompt-audit",
+    "observability"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test *.test.mjs",
+    "check": "npm test && node --check render-snapshot.mjs && node --check system-prompt-export.mjs && node --check system-prompt-review.mjs"
+  },
+  "bin": {
+    "systemp-prompt-audit": "./render-snapshot.mjs"
+  },
+  "files": [
+    "index.ts",
+    "render-snapshot.mjs",
+    "system-prompt-export.mjs",
+    "system-prompt-review.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "pi": {
+    "extensions": [
+      "index.ts"
+    ]
+  }
+}

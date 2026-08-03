@@ -18,4 +18,5 @@ sensitive evidence in a public issue.
   and assistant Rarebit prose under the configured summary policy. Review that
   provider's privacy terms before enabling synthesis for sensitive work.
 - Example configuration contains synthetic identities. Keep real Project
-  registries and generated events, summaries, and proposals out of Git.
+  records, generated summaries, and system-prompt snapshots and reviews out of
+  Git.

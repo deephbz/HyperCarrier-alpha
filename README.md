@@ -9,18 +9,18 @@ parts:
   delegating to Pi's native context compaction;
 - Rarebit, a sparse key-message projection with a Pi extension and CLI for
   derived summaries and Session-title proposals;
-- a Project distiller that joins explicit Project configuration, Beads Tasks,
-  Git evidence, and Rarebit summaries into append-only events and
-  reviewable Markdown proposals;
+- System Prompt Audit, an operator-only Pi package that captures immutable JSON
+  evidence and renders deterministic Markdown and HTML reviews;
 - an optional read-only traffic analysis module that resolves explicit Team or
   Agent scopes from local Pi Session evidence and explicit PiTeams attribution.
 
-The observatory and distiller paths are read-only by default. Auto Compact is a
-separately loaded control extension; it keeps its notices distinct from Session
-truth and delegates actuation to Pi's native compactor. The Alpha keeps runtime
-observations, reported agent output, Task records, Evergreen proposals,
-delivery evidence, and human attention assessment as separate axes instead of
-inventing one universal Project status.
+The observatory paths are read-only by default. System Prompt Audit writes only
+explicit operator-requested local artifacts. Auto Compact is a separately
+loaded control extension; it keeps its notices distinct from Session truth and
+delegates actuation to Pi's native compactor. The Alpha keeps runtime
+observations, reported agent output, Task records, delivery evidence, and human
+attention assessment as separate axes instead of inventing one universal
+Project status.
 
 ## Quick start
 
@@ -183,6 +183,13 @@ runtime state. Once loaded, it is enabled by default at a 90% effective-context
 threshold. Its package README documents the cooperative handoff, durable
 settings, manual trigger, and failure behavior.
 
+System Prompt Audit is under
+[`packages/systemp-prompt-audit`](packages/systemp-prompt-audit). Its Pi command
+captures the current effective prompt and active tool definitions as immutable
+JSON. Its CLI verifies the payload hash and renders deterministic Markdown and
+script-free HTML without a model call. Snapshots and reviews can contain local
+paths and private instructions, so keep them as sensitive local artifacts.
+
 ## Optional Herdr tools
 
 Three local tools are included for Herdr operators. They require [Herdr](https://github.com/deephbz/herdr) 0.7.5 or newer; the two plugins also use the Node.js runtime already required above. `agent-view-presets` reads local PiTeams membership files, and `rarebit-status` additionally requires a Pi checkout configured with this checkout's `packages/hc-rarebit` gitlink path. The recovery CLI requires Python 3.12 or newer and [uv](https://docs.astral.sh/uv/).
@@ -220,10 +227,8 @@ Pi Team Bright orchestration and its Beads-backed Task integration are maintaine
   evidence.
 - Project association comes only from explicit configuration. cwd, PID, file
   name, and timestamp proximity do not silently create identity.
-- The distiller writes append-only events and proposal bundles. It never
-  overwrites canonical Evergreen Markdown.
-- `citationStatus: exact` means referenced input event IDs are valid. It does
-  not prove that model-generated claims are true or accepted.
+- A system-prompt snapshot is point-in-time local evidence. Markdown and HTML
+  are deterministic review projections, not new authority.
 
 See [Concepts](docs/CONCEPTS.md), [Architecture](docs/ARCHITECTURE.md),
 [Traffic analysis](docs/TRAFFIC.md), and [Known limitations](docs/KNOWN-LIMITATIONS.md).
@@ -234,8 +239,8 @@ The services bind to `127.0.0.1` by default. Do not expose them to a LAN or the
 public internet: even metadata-only APIs can reveal local paths, Project names,
 Session identities, model/provider usage, cost, and tmux topology.
 
-No real Project registry, Session log, summary, event stream, or proposal is
-included in this repository. Checked-in fixtures are synthetic.
+No real Project registry, Session log, summary, system-prompt snapshot, or
+review is included in this repository. Checked-in fixtures are synthetic.
 
 See [SECURITY.md](SECURITY.md) for the data boundary and private vulnerability
 reporting guidance.

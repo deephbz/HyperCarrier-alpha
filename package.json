@@ -1,6 +1,6 @@
 {
   "name": "hypercarrier-alpha",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0-alpha.2",
   "description": "A local-first control plane for Pi, tmux, Project evidence, and agent-assisted work.",
   "private": true,
   "license": "MIT",
@@ -21,7 +21,7 @@
     "start:stack": "npm --workspace pi-session-timeline run start:stack",
     "start:better-url": "npm --workspace pi-session-timeline run start:better-url",
     "test": "npm run test:packages && npm run test:timeline && npm run test:traffic",
-    "test:packages": "node --test packages/hc-auto-compact/test/*.test.mjs packages/hc-project-distill/test/*.test.mjs && npm --workspace @hypercarrier/rarebit test",
+    "test:packages": "node --test packages/hc-auto-compact/test/*.test.mjs && npm --workspace @hypercarrier/rarebit test && npm --workspace @hypercarrier/systemp-prompt-audit test",
     "test:timeline": "npm --workspace pi-session-timeline test",
     "test:release": "node --test scripts/test/export*.test.mjs scripts/test/public-workflow-closure.test.mjs scripts/test/pi-extension-release-receipt.test.mjs scripts/test/pi-extension-release-contract.test.mjs",
     "test:traffic": "npm --workspace @hypercarrier/traffic-analysis test",
