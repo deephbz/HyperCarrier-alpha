@@ -18,20 +18,20 @@ timeline :4318 --links by session id--> live detail :4319 --Rarebit core--> spar
 - Timeline owns discovery, aggregation and navigation. Each `Session` carries `links.live` and
   `links.tps`; base URLs are configurable with `PI_LIVE_DETAIL_BASE_URL` and `PI_TPS_WEB_BASE_URL`.
 - Live detail owns exact-Session detail access. `GET /session/:id` is a stable, standalone Rarebit
-  view: it resolves the complete active branch with `@hypercarrier/rarebit` (CLI: `rarebit`) at
-  the stable `packages/hc-rarebit` gitlink, transports only
-  user, agent-continuation, and normal agent-stop Rarebit occurrences, and does not invoke or embed
-  Pi's exporter. The page reports how many other entry records remain unloaded. Its JSONL reader
-  retains a partial tail, reads only bytes after the committed offset on ordinary growth, and
-  rebuilds after truncate, replace, or semantic branch reset. SSE distinguishes occurrence append,
-  selection reset, and explicit unavailable state. Raw Rarebit text remains the evidence field;
-  presentation renders GitHub-flavored Markdown through pinned `marked` and `sanitize-html`
-  dependencies, escapes raw HTML, strips active content and unsafe URL schemes, and marks links
-  `noopener noreferrer`.
+  view: it resolves the complete active branch with `@hypercarrier/rarebit` (CLI: `rarebit`) at the
+  stable `packages/hc-rarebit` gitlink, transports only user, agent-continuation, and normal
+  agent-stop Rarebit occurrences, and does not invoke or embed Pi's exporter. The page reports how
+  many other entry records remain unloaded. Its JSONL reader retains a partial tail, reads only
+  bytes after the committed offset on ordinary growth, and rebuilds after truncate, replace, or
+  semantic branch reset. SSE distinguishes occurrence append, selection reset, and explicit
+  unavailable state. Raw Rarebit text remains the evidence field; presentation renders
+  GitHub-flavored Markdown through pinned `marked` and `sanitize-html` dependencies, escapes raw
+  HTML, strips active content and unsafe URL schemes, and marks links `noopener noreferrer`.
 
   Public release users should select exact alpha.4 or `@next`; an unpinned/latest install selects
   the `0.1.0-alpha.1` bootstrap exception. No retained version was changed, unpublished, or
   retargeted.
+
 - `GET /render/:id` is the explicit **Load full native trace** boundary. Only that request generates
   and serves Pi's current native HTML export, whose own filters remain unchanged. The private HTML
   cache is mode `0600` and keyed in-process by exact source stat identity plus the declared exporter

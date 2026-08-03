@@ -12,6 +12,7 @@ dist/
 .beads/
 .claude/
 .codex/
+.pi/
 
 config/project-registry.local.json
 config/*.private.json

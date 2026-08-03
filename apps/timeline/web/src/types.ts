@@ -1,7 +1,4 @@
-import type {
-  RarebitSessionAssessmentRef,
-  RarebitVisualPresentation,
-} from "@hypercarrier/rarebit";
+import type { RarebitSessionAssessmentRef, RarebitVisualPresentation } from "@hypercarrier/rarebit";
 
 export const TIMELINE_SNAPSHOT_SCHEMA_VERSION = 5 as const;
 /** Exact package `assessmentRef`; Timeline serializes it without re-derivation. */

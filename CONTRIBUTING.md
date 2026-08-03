@@ -18,9 +18,9 @@ npm --workspace pi-session-timeline run format:check
 npm --workspace pi-session-timeline run lint
 ```
 
-Use only synthetic fixtures. Do not commit real Pi Sessions, Project
-registries, local paths, credentials, generated summaries/events/proposals, or
-screenshots containing private metadata.
+Use only synthetic fixtures. Do not commit real Pi Sessions, Project records,
+local paths, credentials, generated summaries, system-prompt snapshots or
+reviews, or screenshots that contain private metadata.
 
 When reporting a bug, include the smallest sanitized reproduction and the
 relevant `/api/trace` diagnostics. Never attach raw private Session content.
