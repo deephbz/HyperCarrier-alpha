@@ -3,24 +3,24 @@
   "component": "pi-team-bright",
   "source": {
     "repository": "https://github.com/deephbz/pi-team-bright.git",
-    "commit": "51a3d6a7c843c2a9809e77952fda1b1d75ae0770",
-    "tree": "48a16dab8940f9722ad0bd6c5094280eba303300"
+    "commit": "7ccad1d1f7c1693822502e2aad7683b5fe981b52",
+    "tree": "7cc3d60ee5c89be1fd03264daea878409ce04eb8"
   },
   "package": {
     "name": "@hypercarrier/pi-team-bright",
-    "version": "0.17.0-rc.1"
+    "version": "0.17.0-rc.2"
   },
   "publication": {
     "state": "published",
-    "npmIntegrity": "sha512-CshbaigGKTRVPgRz2+XjsfJfbpRFNeW4d+bmCGuoVBKIyCjr+ejADx184yxw9oOzpJ/0kUKYRvFdeJkxTxbRCQ==",
-    "npmShasum": "9bfca79dcbdd58e3eee781edf4ffd29bc0c25cc7",
-    "tarball": "https://registry.npmjs.org/@hypercarrier/pi-team-bright/-/pi-team-bright-0.17.0-rc.1.tgz",
-    "tarballSha256": "e2f458de07cfdb090469a6dbc7859c78664317bf24b81828e72eaf06e5bf84ba",
-    "tag": "v0.17.0-rc.1",
-    "releaseUrl": "https://github.com/deephbz/pi-team-bright/releases/tag/v0.17.0-rc.1",
-    "publishUrl": "https://github.com/deephbz/pi-team-bright/actions/runs/30763745797",
+    "npmIntegrity": "sha512-Wt2cTkDe/iwID+/IaqTIZzlt2uVzsuOP+bHely+laJL+XsXr4dmnUNQyZMEOYzIjRCVg11Ej5i4iYwSws+YKIg==",
+    "npmShasum": "658b9c7a9eb1d577279b26ac7b40edc202776639",
+    "tarball": "https://registry.npmjs.org/@hypercarrier/pi-team-bright/-/pi-team-bright-0.17.0-rc.2.tgz",
+    "tarballSha256": "b45ea34cfcf049d8ec2773f2976c789ca919ad3656a35443da6e521a83655ca2",
+    "tag": "v0.17.0-rc.2",
+    "releaseUrl": "https://github.com/deephbz/pi-team-bright/releases/tag/v0.17.0-rc.2",
+    "publishUrl": "https://github.com/deephbz/pi-team-bright/actions/runs/30780818928",
     "distTag": "next",
-    "tarEntries": 73
+    "tarEntries": 74
   },
   "pi": {
     "peerRanges": {
@@ -44,54 +44,49 @@
     }
   },
   "childVerification": {
-    "ciWorkflow": ".github/workflows/ci.yml",
+    "ciWorkflow": ".github/workflows/publish.yml",
     "receipts": [
       {
-        "name": "hosted-fast-lane",
-        "command": "TERM_PROGRAM=iTerm.app npm test",
-        "result": "passed on Node 22 and 24 in main CI run 30763615943"
+        "name": "independent-full-release-lane",
+        "command": "TERM_PROGRAM=iTerm.app npm run test:full",
+        "result": "passed on exact child source: typecheck, 66 test files, and 504 tests"
       },
       {
-        "name": "hosted-exhaustive-complement",
-        "command": "TERM_PROGRAM=iTerm.app npm run test:exhaustive-only",
-        "result": "passed on Node 22 and 24 in main CI run 30763615943"
+        "name": "hosted-publication-gates",
+        "command": "npm run test:full && npm run test:lanes && npm run verify:package",
+        "result": "passed in trusted-publisher run 30780818928 at exact child commit 7ccad1d"
       },
       {
-        "name": "test-lane-closure",
-        "command": "npm run test:lanes",
-        "result": "passed in main CI run 30763615943"
+        "name": "tool-result-qa",
+        "command": "npm run qa:tool-results",
+        "result": "39 cases passed with three typed updates, one malformed-event contract gap, cancellation, and recovery evidence"
       },
       {
-        "name": "generated-package-closure",
-        "command": "npm run verify:package",
-        "result": "passed on Node 22 and 24 in main CI run 30763615943 with tracked dist clean"
+        "name": "real-pi-projection-workflows",
+        "command": "real Pi leader ten-tool and Worker publication smokes",
+        "result": "passed with distinct Sessions, exact extension composition, all leader tool families, and Worker-produced typed Task updates"
       },
       {
-        "name": "tracked-real-pi-ten-capability-workflow",
-        "command": "real Pi 0.80.10 / openai-codex GPT-5.6 Luna ten-capability workflow",
-        "result": "passed with distinct leader/Worker Sessions, connected Worker, replay-conflict refusal, fault probes, and stopped cleanup"
-      },
-      {
-        "name": "worker-replay-preservation-regression",
-        "command": "focused Worker replay-preservation regression plus npm run typecheck",
-        "result": "8 focused tests passed and typecheck passed"
+        "name": "privacy-range-gate",
+        "command": "git-privacy-scan range from v0.16.0-rc.2 public base",
+        "result": "passed for the single atomic release commit"
       },
       {
         "name": "trusted-publisher",
-        "command": "GitHub Actions publish workflow",
-        "result": "published rc.1 with npm provenance from exact child commit 51a3d6a in run 30763745797"
+        "command": "GitHub Actions npm publish --provenance --tag next",
+        "result": "published rc.2 with npm provenance from exact child commit 7ccad1d in run 30780818928"
       },
       {
         "name": "registry-byte-verification",
         "command": "download registry tarball and recompute integrity, SHA-1, SHA-256, and entry count",
-        "result": "matched the immutable published tuple with 73 tar entries"
+        "result": "matched the immutable published tuple with 74 tar entries and SLSA provenance"
       }
     ]
   },
   "gitlink": {
     "path": "packages/pi-team-bright",
     "mode": "160000",
-    "commit": "51a3d6a7c843c2a9809e77952fda1b1d75ae0770"
+    "commit": "7ccad1d1f7c1693822502e2aad7683b5fe981b52"
   },
   "parentVerification": {
     "state": "verified",

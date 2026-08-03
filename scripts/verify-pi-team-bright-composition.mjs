@@ -28,15 +28,15 @@ export function validateCompatibilityRecord(record) {
   const publication = record.publication;
   if (
     publication.state !== "published" ||
-    publication.npmIntegrity !== "sha512-CshbaigGKTRVPgRz2+XjsfJfbpRFNeW4d+bmCGuoVBKIyCjr+ejADx184yxw9oOzpJ/0kUKYRvFdeJkxTxbRCQ==" ||
-    publication.npmShasum !== "9bfca79dcbdd58e3eee781edf4ffd29bc0c25cc7" ||
-    publication.tarball !== "https://registry.npmjs.org/@hypercarrier/pi-team-bright/-/pi-team-bright-0.17.0-rc.1.tgz" ||
-    publication.tarballSha256 !== "e2f458de07cfdb090469a6dbc7859c78664317bf24b81828e72eaf06e5bf84ba" ||
-    publication.tag !== "v0.17.0-rc.1" ||
-    publication.releaseUrl !== "https://github.com/deephbz/pi-team-bright/releases/tag/v0.17.0-rc.1" ||
-    publication.publishUrl !== "https://github.com/deephbz/pi-team-bright/actions/runs/30763745797" ||
+    publication.npmIntegrity !== "sha512-Wt2cTkDe/iwID+/IaqTIZzlt2uVzsuOP+bHely+laJL+XsXr4dmnUNQyZMEOYzIjRCVg11Ej5i4iYwSws+YKIg==" ||
+    publication.npmShasum !== "658b9c7a9eb1d577279b26ac7b40edc202776639" ||
+    publication.tarball !== "https://registry.npmjs.org/@hypercarrier/pi-team-bright/-/pi-team-bright-0.17.0-rc.2.tgz" ||
+    publication.tarballSha256 !== "b45ea34cfcf049d8ec2773f2976c789ca919ad3656a35443da6e521a83655ca2" ||
+    publication.tag !== "v0.17.0-rc.2" ||
+    publication.releaseUrl !== "https://github.com/deephbz/pi-team-bright/releases/tag/v0.17.0-rc.2" ||
+    publication.publishUrl !== "https://github.com/deephbz/pi-team-bright/actions/runs/30780818928" ||
     publication.distTag !== "next" ||
-    publication.tarEntries !== 73
+    publication.tarEntries !== 74
   ) fail("invalid-record", "published npm tuple is invalid");
   if (record.gitlink.path !== SUBMODULE_PATH || record.gitlink.mode !== "160000" || record.gitlink.commit !== record.source.commit) fail("invalid-record", "gitlink does not match source commit");
   if (record.parentVerification.requiredCheckout !== "recursive") fail("invalid-record", "parent verification must require recursive checkout");
