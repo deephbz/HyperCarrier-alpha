@@ -3,30 +3,30 @@
   "component": "pi-team-bright",
   "source": {
     "repository": "https://github.com/deephbz/pi-team-bright.git",
-    "commit": "7ccad1d1f7c1693822502e2aad7683b5fe981b52",
-    "tree": "7cc3d60ee5c89be1fd03264daea878409ce04eb8"
+    "commit": "e55b4f2a9190d700a03d95cb9dee75e5c892ca0a",
+    "tree": "22787dd674559069550289350cdd214f641ac51d"
   },
   "package": {
     "name": "@hypercarrier/pi-team-bright",
-    "version": "0.17.0-rc.2"
+    "version": "0.17.0-rc.8"
   },
   "publication": {
     "state": "published",
-    "npmIntegrity": "sha512-Wt2cTkDe/iwID+/IaqTIZzlt2uVzsuOP+bHely+laJL+XsXr4dmnUNQyZMEOYzIjRCVg11Ej5i4iYwSws+YKIg==",
-    "npmShasum": "658b9c7a9eb1d577279b26ac7b40edc202776639",
-    "tarball": "https://registry.npmjs.org/@hypercarrier/pi-team-bright/-/pi-team-bright-0.17.0-rc.2.tgz",
-    "tarballSha256": "b45ea34cfcf049d8ec2773f2976c789ca919ad3656a35443da6e521a83655ca2",
-    "tag": "v0.17.0-rc.2",
-    "releaseUrl": "https://github.com/deephbz/pi-team-bright/releases/tag/v0.17.0-rc.2",
-    "publishUrl": "https://github.com/deephbz/pi-team-bright/actions/runs/30780818928",
+    "npmIntegrity": "sha512-Rbc1DUomZ9N11hyNv7womtlGN7sBEWQ86UQstCnl3b/KvV/xDbyMX5eZkc9QM21XPGNqKCjR4/gZ6fKziqkI2w==",
+    "npmShasum": "402bba56d307399a685495ca87d253b10e86ed2f",
+    "tarball": "https://registry.npmjs.org/@hypercarrier/pi-team-bright/-/pi-team-bright-0.17.0-rc.8.tgz",
+    "tarballSha256": "bf082d064a07fc2e7a890176c132c962bd153e793a368f9e410230387745f4d6",
+    "tag": "v0.17.0-rc.8",
+    "releaseUrl": "https://github.com/deephbz/pi-team-bright/releases/tag/v0.17.0-rc.8",
+    "publishUrl": "https://github.com/deephbz/pi-team-bright/actions/runs/30994064679",
     "distTag": "next",
-    "tarEntries": 74
+    "tarEntries": 84
   },
   "pi": {
     "peerRanges": {
-      "@earendil-works/pi-ai": "^0.80.10 || ^0.82.0",
-      "@earendil-works/pi-coding-agent": "^0.80.10 || ^0.82.0",
-      "@earendil-works/pi-tui": "^0.80.10 || ^0.82.0",
+      "@earendil-works/pi-ai": "^0.80.10 || ^0.82.0 || ^0.83.0",
+      "@earendil-works/pi-coding-agent": "^0.80.10 || ^0.82.0 || ^0.83.0",
+      "@earendil-works/pi-tui": "^0.80.10 || ^0.82.0 || ^0.83.0",
       "typebox": "^1.1.38"
     }
   },
@@ -47,46 +47,41 @@
     "ciWorkflow": ".github/workflows/publish.yml",
     "receipts": [
       {
-        "name": "independent-full-release-lane",
-        "command": "TERM_PROGRAM=iTerm.app npm run test:full",
-        "result": "passed on exact child source: typecheck, 66 test files, and 504 tests"
+        "name": "exact-release-source-ci",
+        "command": "npm test && npm run test:exhaustive-only && npm run test:lanes && npm run verify:package",
+        "result": "passed on Node 22 and 24 in run 30993756729 at release source 6540b82"
       },
       {
-        "name": "hosted-publication-gates",
-        "command": "npm run test:full && npm run test:lanes && npm run verify:package",
-        "result": "passed in trusted-publisher run 30780818928 at exact child commit 7ccad1d"
+        "name": "tagged-oidc-publication",
+        "command": "npm run test:full && npm run test:lanes && npm run verify:package && npm publish --provenance --tag next",
+        "result": "passed in run 30994064679 from v0.17.0-rc.8 at release source 6540b82"
       },
       {
-        "name": "tool-result-qa",
-        "command": "npm run qa:tool-results",
-        "result": "39 cases passed with three typed updates, one malformed-event contract gap, cancellation, and recovery evidence"
-      },
-      {
-        "name": "real-pi-projection-workflows",
-        "command": "real Pi leader ten-tool and Worker publication smokes",
-        "result": "passed with distinct Sessions, exact extension composition, all leader tool families, and Worker-produced typed Task updates"
-      },
-      {
-        "name": "privacy-range-gate",
-        "command": "git-privacy-scan range from v0.16.0-rc.2 public base",
-        "result": "passed for the single atomic release commit"
-      },
-      {
-        "name": "trusted-publisher",
-        "command": "GitHub Actions npm publish --provenance --tag next",
-        "result": "published rc.2 with npm provenance from exact child commit 7ccad1d in run 30780818928"
+        "name": "pane-layout-contract",
+        "command": "focused pane-layout and model-tool schema tests plus generated contract review",
+        "result": "14 focused tests, typecheck, and generated review passed for exclusive 0.1 < leader_share < 1.0"
       },
       {
         "name": "registry-byte-verification",
-        "command": "download registry tarball and recompute integrity, SHA-1, SHA-256, and entry count",
-        "result": "matched the immutable published tuple with 74 tar entries and SLSA provenance"
+        "command": "download the registry tarball and recompute integrity, SHA-1, SHA-256, SHA-512, size, and entry count",
+        "result": "matched the immutable 84-file registry tuple; publish and SLSA attestations use the exact package SHA-512"
+      },
+      {
+        "name": "final-source-selection",
+        "command": "verify release-source ancestry, final publication receipt, and public child main",
+        "result": "selected child main e55b4f2 contains the published receipt and descends from release source 6540b82"
+      },
+      {
+        "name": "privacy-gates",
+        "command": "git-privacy-scan staged, post-baseline range, and required full history",
+        "result": "staged and post-baseline ranges passed; full-history findings remain confined to grandfathered pre-baseline history"
       }
     ]
   },
   "gitlink": {
     "path": "packages/pi-team-bright",
     "mode": "160000",
-    "commit": "7ccad1d1f7c1693822502e2aad7683b5fe981b52"
+    "commit": "e55b4f2a9190d700a03d95cb9dee75e5c892ca0a"
   },
   "parentVerification": {
     "state": "verified",

@@ -217,7 +217,7 @@ uv run --locked --project tools/herdr-pi-recovery herdr-pi-recovery plan
 `restore --execute` changes live Herdr panes, so inspect the default dry-run plan first. Each tool's README documents its boundary and recovery behavior.
 
 Pi Team Bright orchestration and its Beads-backed Task integration are maintained in
-[deephbz/pi-team-bright](https://github.com/deephbz/pi-team-bright). Clone this Alpha with `git clone --recurse-submodules`; a non-recursive clone intentionally lacks `packages/pi-team-bright` until `git submodule update --init --recursive` is run. The gitlink composes the verified `0.17.0-rc.2` source revision. The compatibility record separately verifies the immutable `@hypercarrier/pi-team-bright@0.17.0-rc.2` npm artifact and its public release receipts.
+[deephbz/pi-team-bright](https://github.com/deephbz/pi-team-bright). Clone this Alpha with `git clone --recurse-submodules`; a non-recursive clone intentionally lacks `packages/pi-team-bright` until `git submodule update --init --recursive` is run. The gitlink composes the verified `0.17.0-rc.8` source revision. The compatibility record separately verifies the immutable `@hypercarrier/pi-team-bright@0.17.0-rc.8` npm artifact and its public release receipts.
 
 ## Trust model
 

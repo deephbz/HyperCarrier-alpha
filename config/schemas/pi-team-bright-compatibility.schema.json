@@ -81,31 +81,31 @@
           "const": "published"
         },
         "npmIntegrity": {
-          "const": "sha512-Wt2cTkDe/iwID+/IaqTIZzlt2uVzsuOP+bHely+laJL+XsXr4dmnUNQyZMEOYzIjRCVg11Ej5i4iYwSws+YKIg=="
+          "const": "sha512-Rbc1DUomZ9N11hyNv7womtlGN7sBEWQ86UQstCnl3b/KvV/xDbyMX5eZkc9QM21XPGNqKCjR4/gZ6fKziqkI2w=="
         },
         "npmShasum": {
-          "const": "658b9c7a9eb1d577279b26ac7b40edc202776639"
+          "const": "402bba56d307399a685495ca87d253b10e86ed2f"
         },
         "tarball": {
-          "const": "https://registry.npmjs.org/@hypercarrier/pi-team-bright/-/pi-team-bright-0.17.0-rc.2.tgz"
+          "const": "https://registry.npmjs.org/@hypercarrier/pi-team-bright/-/pi-team-bright-0.17.0-rc.8.tgz"
         },
         "tarballSha256": {
-          "const": "b45ea34cfcf049d8ec2773f2976c789ca919ad3656a35443da6e521a83655ca2"
+          "const": "bf082d064a07fc2e7a890176c132c962bd153e793a368f9e410230387745f4d6"
         },
         "tag": {
-          "const": "v0.17.0-rc.2"
+          "const": "v0.17.0-rc.8"
         },
         "releaseUrl": {
-          "const": "https://github.com/deephbz/pi-team-bright/releases/tag/v0.17.0-rc.2"
+          "const": "https://github.com/deephbz/pi-team-bright/releases/tag/v0.17.0-rc.8"
         },
         "publishUrl": {
-          "const": "https://github.com/deephbz/pi-team-bright/actions/runs/30780818928"
+          "const": "https://github.com/deephbz/pi-team-bright/actions/runs/30994064679"
         },
         "distTag": {
           "const": "next"
         },
         "tarEntries": {
-          "const": 74
+          "const": 84
         }
       }
     },
