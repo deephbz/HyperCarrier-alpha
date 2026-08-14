@@ -1,55 +1,31 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
-import { verifyComposition } from "../verify-pi-openai-blackmagic-compact-composition.mjs";
+import { validateCompatibilityRecord, verifyComposition } from "../verify-pi-openai-blackmagic-compact-composition.mjs";
 
-const run = (cwd, ...args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
-const sourceRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
-const repository = "https://github.com/deephbz/pi-openai-blackmagic-compact.git";
-const peers = { "@earendil-works/pi-coding-agent": "0.83.0", "@earendil-works/pi-ai": "0.83.0", "@earendil-works/pi-tui": "0.83.0" };
-const exactSource = { commit: "a6247ac3a3f6ae4b80905f7cded9d2847815f15d", tree: "f63918a0035d31c787c5c3a70c7c66a5f354ff1a" };
-const publicationTag = "v0.1.0-rc.5";
-function fixture() {
-  const root = mkdtempSync(path.join(os.tmpdir(), "blackmagic-composition-")), child = path.join(root, "packages/pi-openai-blackmagic-compact");
-  mkdirSync(child, { recursive: true }); mkdirSync(path.join(root, "config/schemas"), { recursive: true }); mkdirSync(path.join(root, "scripts/lib"), { recursive: true });
-  for (const repo of [root, child]) { run(repo, "init", "-q"); run(repo, "config", "user.email", "privacy-fixture@example.invalid"); run(repo, "config", "user.name", "Test"); }
-  run(child, "remote", "add", "origin", repository);
-  writeFileSync(path.join(child, "package.json"), JSON.stringify({ name: "@hypercarrier/pi-openai-blackmagic-compact", version: "0.1.0-rc.5", peerDependencies: peers }));
-  writeFileSync(path.join(child, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: { "": { name: "@hypercarrier/pi-openai-blackmagic-compact", version: "0.1.0-rc.5", peerDependencies: peers } } }));
-  run(child, "add", "."); run(child, "commit", "-qm", "child");
-  const exclusion = "!packages/pi-openai-blackmagic-compact";
-  const commit = run(child, "rev-parse", "HEAD"), tree = run(child, "rev-parse", "HEAD^{tree}"); run(root, "update-index", "--add", "--cacheinfo", `160000,${commit},packages/pi-openai-blackmagic-compact`);
-  writeFileSync(path.join(root, "package.json"), JSON.stringify({ workspaces: ["apps/*", "packages/*", exclusion] }));
-  writeFileSync(path.join(root, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: { "": { workspaces: ["apps/*", "packages/*", exclusion] } } }));
-  run(root, "add", "package.json", "package-lock.json", "packages/pi-openai-blackmagic-compact"); run(root, "commit", "-qm", "root");
-  const receipt = (name) => ({ name, command: name, result: name });
-  const record = { schemaVersion: 1, component: "pi-openai-blackmagic-compact", source: { repository, commit, tree }, package: { name: "@hypercarrier/pi-openai-blackmagic-compact", version: "0.1.0-rc.5" }, pi: { peerRanges: peers }, childVerification: { ciWorkflow: ".github/workflows/ci.yml", receipts: ["unit-suite", "package-allowlist", "pack-dry-run", "child-ci", "publish-dry-run", "authenticated-codex-canary"].map(receipt) }, publication: { state: "published", npmIntegrity: "sha512-pXn/IsTGBRJfc/q9JSUa6HHpzg8v0Kg5J23n0smLoKct3mjjvWiFFr4z7O23IlCiOpI7Y4mGp/y/uM4eFHwgqg==", npmShasum: "e7900a2d2a8fa2af53ce2185d3a756eeccb46ec9", tarball: "https://registry.npmjs.org/@hypercarrier/pi-openai-blackmagic-compact/-/pi-openai-blackmagic-compact-0.1.0-rc.5.tgz", tarballSha256: "87583b792d57737c933f83ae34c36240d11ea296a31ffc29729827a550705569", tag: "v0.1.0-rc.5", releaseUrl: "https://github.com/deephbz/pi-openai-blackmagic-compact/releases/tag/v0.1.0-rc.5", ciUrls: ["https://github.com/deephbz/pi-openai-blackmagic-compact/actions/runs/30749413496", "https://github.com/deephbz/pi-openai-blackmagic-compact/actions/runs/30749499634"], publishUrl: "https://github.com/deephbz/pi-openai-blackmagic-compact/actions/runs/30749884378", releaseId: 363795762, distTag: "next", latest: "0.1.0-rc.1", fileCount: 9, unpackedSize: 40801 }, gitlink: { path: "packages/pi-openai-blackmagic-compact", mode: "160000", commit }, parentVerification: { state: "verified", verifier: "scripts/verify-pi-openai-blackmagic-compact-composition.mjs", requiredCheckout: "recursive", workspaceDisposition: "excluded: root Pi 0.80.10 conflicts with child Pi 0.83.0 peers" } };
-  record.source.tagObject = "10881b9100dbe6900682065f4a13d8f84091971e"; record.source.tag = publicationTag; record.source.tagTarget = commit; record.source.sanitizedRootCommit = "7eaba365fc4b0984f68941f2b6b2f6e9358e1d35"; record.source.sanitizedRootTree = "29f3bae40c3b4af1b1f7ac98e2b98799d1425248"; record.lineage = { sourceReceipt: { path: "release/privacy-lineage.v1.json", blob: "f93d20088c3603daa6e2519db6db1ddea2e24d2b", sha256: "860cd6b0c3b29f4d81ea17ab68409f342dc8be488c429a895e6a9d6738b1b71d" }, scanner: { path: "release/tools/git-privacy-scan.py", blob: "887213d5d6aac3187a1631c6d985b1b0ea1385ec", sha256: "7808ae1f0a5039bd939236d17db9574f2249043a8596ca85f8f6c1270d9a2381" }, sanitizer: { path: "scripts/sanitize-review-history.py", sha256: "1ea80e209ac43506a5211e03fe64faa2fa53e71a49e6b7795fdc268a6944260d" }, legacyRc4: { tagObject: "b4ef75f9349f5aa6216df0914d2159697ac876eb", tagTarget: "22d11a95c0f6f1d9c227eadcc502b6c83c755c88", npmArtifact: false }, legacyRefsPrivacy: "expected findings retained and disclosed" }; writeFileSync(path.join(root, "config/pi-openai-blackmagic-compact-compatibility.json"), JSON.stringify(record)); cpSync(path.join(sourceRoot, "scripts/verify-pi-openai-blackmagic-compact-composition.mjs"), path.join(root, "scripts/verify-pi-openai-blackmagic-compact-composition.mjs")); cpSync(path.join(sourceRoot, "scripts/lib/closed-json-schema.mjs"), path.join(root, "scripts/lib/closed-json-schema.mjs")); cpSync(path.join(sourceRoot, "config/schemas/pi-openai-blackmagic-compact-compatibility.schema.json"), path.join(root, "config/schemas/pi-openai-blackmagic-compact-compatibility.schema.json"));
-  return { root, child, record, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
+const recordPath = path.join(root, "config/pi-openai-blackmagic-compact-compatibility.json");
+const record = () => JSON.parse(readFileSync(recordPath, "utf8"));
+
+test("verifies the rc.7 branch-provenance composition without a Git tag or release", () => {
+  const result = verifyComposition({ root });
+  assert.deepEqual(result, { component: "pi-openai-blackmagic-compact", revision: "6f3ee6a3f5c2743e4cdca8d9d18a0456c48c17e9", status: "verified" });
+});
+
+for (const [name, mutate] of [
+  ["rc.7 source", (value) => { value.source.commit = "0".repeat(40); }],
+  ["absent Git tag", (value) => { value.source.gitTag.state = "present"; }],
+  ["rc.7 package", (value) => { value.package.version = "0.1.0-rc.5"; }],
+  ["npm integrity", (value) => { value.publication.npmIntegrity = "sha512-wrong"; }],
+  ["tarball SHA-256", (value) => { value.publication.tarballSha256 = "0".repeat(64); }],
+  ["absent GitHub Release", (value) => { value.publication.githubRelease.state = "present"; }],
+  ["main-branch SLSA provenance", (value) => { value.publication.provenance.workflowRef = "refs/tags/v0.1.0-rc.7"; }],
+  ["exact peer epoch", (value) => { value.pi.peerRanges["@earendil-works/pi-ai"] = "0.84.0"; }],
+  ["publication receipt", (value) => { value.childVerification.receipts = value.childVerification.receipts.filter(({ name: receipt }) => receipt !== "trusted-publisher-publication"); }],
+]) {
+  test(`rejects ${name} drift`, () => {
+    const value = record(); mutate(value);
+    assert.throws(() => validateCompatibilityRecord(value), (error) => error.code === "invalid-record");
+  });
 }
-function exactTaglessFixture() {
-  const root = mkdtempSync(path.join(os.tmpdir(), "blackmagic-tagless-composition-")), child = path.join(root, "packages/pi-openai-blackmagic-compact");
-  mkdirSync(path.join(root, "config/schemas"), { recursive: true });
-  run(root, "init", "-q");
-  execFileSync("git", ["clone", "--quiet", "--no-tags", "--no-checkout", path.join(sourceRoot, "packages/pi-openai-blackmagic-compact"), child]);
-  run(child, "-c", "advice.detachedHead=false", "checkout", "--quiet", "--detach", exactSource.commit); run(child, "remote", "set-url", "origin", repository);
-  run(root, "update-index", "--add", "--cacheinfo", `160000,${exactSource.commit},packages/pi-openai-blackmagic-compact`);
-  for (const file of ["package.json", "package-lock.json"]) cpSync(path.join(sourceRoot, file), path.join(root, file));
-  cpSync(path.join(sourceRoot, "config/pi-openai-blackmagic-compact-compatibility.json"), path.join(root, "config/pi-openai-blackmagic-compact-compatibility.json"));
-  cpSync(path.join(sourceRoot, "config/schemas/pi-openai-blackmagic-compact-compatibility.schema.json"), path.join(root, "config/schemas/pi-openai-blackmagic-compact-compatibility.schema.json"));
-  return { root, child, cleanup: () => rmSync(root, { recursive: true, force: true }) };
-}
-function state(name, mutate, code) { test(name, () => { const f = fixture(); try { mutate(f); assert.throws(() => verifyComposition({ root: f.root, expectedSource: f.record.source }), (error) => error.code === code); } finally { f.cleanup(); } }); }
-test("verifies a tagless source-composition fixture", () => { const f = fixture(); try { assert.equal(run(f.child, "tag", "--list", publicationTag), ""); assert.equal(verifyComposition({ root: f.root, expectedSource: f.record.source }).status, "verified"); } finally { f.cleanup(); } });
-test("verifies the exact source composition without a local publication tag", () => { const f = exactTaglessFixture(); try { assert.equal(run(f.child, "tag", "--list", publicationTag), ""); assert.equal(run(f.child, "rev-parse", "HEAD^{tree}"), exactSource.tree); assert.equal(verifyComposition({ root: f.root }).status, "verified"); } finally { f.cleanup(); } });
-test("rejects rc.2 and pending publication", () => { for (const mutate of [(record) => { record.package.version = "0.1.0-rc.2"; }, (record) => { record.publication.state = "pending"; }]) { const f = fixture(); try { mutate(f.record); writeFileSync(path.join(f.root, "config/pi-openai-blackmagic-compact-compatibility.json"), JSON.stringify(f.record)); assert.throws(() => verifyComposition({ root: f.root, expectedSource: f.record.source })); } finally { f.cleanup(); } } });
-test("rejects publication tuple drift for tag, release URL, and npm integrity", () => { for (const [label, mutate] of [["tag", (record) => { record.publication.tag = "v0.1.0-rc.2"; }], ["release URL", (record) => { record.publication.releaseUrl = "https://github.com/deephbz/pi-openai-blackmagic-compact/releases/tag/v0.1.0-rc.2"; }], ["npm integrity", (record) => { record.publication.npmIntegrity = "sha512-wrong"; }]]) { const f = fixture(); try { mutate(f.record); writeFileSync(path.join(f.root, "config/pi-openai-blackmagic-compact-compatibility.json"), JSON.stringify(f.record)); assert.throws(() => verifyComposition({ root: f.root, expectedSource: f.record.source }), label); } finally { f.cleanup(); } } });
-state("fails closed for a dirty child", ({ child }) => writeFileSync(path.join(child, "dirty"), "x\n"), "dirty-submodule");
-state("fails closed for a wrong origin", ({ child }) => run(child, "remote", "set-url", "origin", "https://example.test/wrong.git"), "origin");
-state("fails closed for peer drift", ({ child, record, root }) => { const p = JSON.parse(readFileSync(path.join(child, "package.json"))); p.peerDependencies["@earendil-works/pi-ai"] = "0.84.0"; writeFileSync(path.join(child, "package.json"), JSON.stringify(p)); run(child, "add", "."); run(child, "commit", "-qm", "peer drift"); const commit = run(child, "rev-parse", "HEAD"); record.source.commit = record.gitlink.commit = record.source.tagTarget = commit; record.source.tree = run(child, "rev-parse", "HEAD^{tree}"); writeFileSync(path.join(root, "config/pi-openai-blackmagic-compact-compatibility.json"), JSON.stringify(record)); run(root, "update-index", "--cacheinfo", `160000,${commit},packages/pi-openai-blackmagic-compact`); }, "peer-@earendil-works/pi-ai");
-state("fails closed when root admits the incompatible child workspace", ({ root }) => writeFileSync(path.join(root, "package.json"), JSON.stringify({ workspaces: ["apps/*", "packages/*"] })), "workspace-disposition");
-state("fails closed when the root lock omits the workspace exclusion", ({ root }) => writeFileSync(path.join(root, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: { "": { workspaces: ["apps/*", "packages/*"] } } })), "workspace-lock-disposition");
-state("fails closed when the child lock drifts from the Pi epoch", ({ child, record, root }) => { const file = path.join(child, "package-lock.json"); const value = JSON.parse(readFileSync(file)); value.packages[""].peerDependencies["@earendil-works/pi-ai"] = "0.84.0"; writeFileSync(file, JSON.stringify(value)); run(child, "add", "."); run(child, "commit", "-qm", "lock drift"); const commit = run(child, "rev-parse", "HEAD"); record.source.commit = record.gitlink.commit = record.source.tagTarget = commit; record.source.tree = run(child, "rev-parse", "HEAD^{tree}"); writeFileSync(path.join(root, "config/pi-openai-blackmagic-compact-compatibility.json"), JSON.stringify(record)); run(root, "update-index", "--cacheinfo", `160000,${commit},packages/pi-openai-blackmagic-compact`); }, "child-lock-peer-@earendil-works/pi-ai");

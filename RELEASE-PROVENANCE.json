@@ -1,35 +1,35 @@
 {
   "schemaVersion": 1,
   "sourceRepository": "HyperCarrier",
-  "sourceCommit": "5f8e15fcca53d319bd342d38cbe1afc4efdfb977",
-  "sourceTree": "3ef30463e6083d3d35a8ce106127510abf150192",
+  "sourceCommit": "424e9c79c5d0dda107ea14384323f6edfb426611",
+  "sourceTree": "e77ce1fb4c158941085f9de683f7524e9ddf46c9",
   "sourceWorktreeDirty": false,
-  "exportContentSha256": "919058e72dcb068ab86a5b881452f52b9cdc2ff166c8940e91d194ffe8c0c9ba",
-  "exportManifestSha256": "9edede3a8f619a1c1e6c547754833736a64688730c76a45aaf6097ff401b07e4",
+  "exportContentSha256": "b6299e12a458251e761c27395c2eab235ea44a68ef7a283e61341e479feb6bc8",
+  "exportManifestSha256": "3472a1cc852b037851f34a488a0c97b52922d80e5a9d79506c7da8e4438feb74",
   "dependencies": [],
   "submodules": [
     {
       "name": "packages/pi-team-bright",
       "path": "packages/pi-team-bright",
       "repository": "https://github.com/deephbz/pi-team-bright.git",
-      "commit": "e55b4f2a9190d700a03d95cb9dee75e5c892ca0a",
-      "tree": "22787dd674559069550289350cdd214f641ac51d",
+      "commit": "82c31a91d0f1c2f6cb69ae86dc8df5272868cb58",
+      "tree": "44253927810f21c06deeecfaa9af5e7817510dbd",
       "identity": {
         "kind": "npm-package",
         "name": "@hypercarrier/pi-team-bright",
-        "version": "0.17.0-rc.8"
+        "version": "0.17.0"
       }
     },
     {
       "name": "packages/pi-openai-blackmagic-compact",
       "path": "packages/pi-openai-blackmagic-compact",
       "repository": "https://github.com/deephbz/pi-openai-blackmagic-compact.git",
-      "commit": "a6247ac3a3f6ae4b80905f7cded9d2847815f15d",
-      "tree": "f63918a0035d31c787c5c3a70c7c66a5f354ff1a",
+      "commit": "6f3ee6a3f5c2743e4cdca8d9d18a0456c48c17e9",
+      "tree": "506648583c4dbe205fe9a2641bcb1cc2b643bf52",
       "identity": {
         "kind": "npm-package",
         "name": "@hypercarrier/pi-openai-blackmagic-compact",
-        "version": "0.1.0-rc.5"
+        "version": "0.1.0-rc.7"
       }
     },
     {
