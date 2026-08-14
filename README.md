@@ -1,8 +1,8 @@
 # HyperCarrier Alpha
 
 HyperCarrier is an experimental, single-user, local-first control plane for
-agent-assisted work. This public Alpha combines five independently useful
-parts:
+agent-assisted work. This public Alpha is a source composition for technical
+testing. It contains these components:
 
 - a Pi/tmux timeline and live-session dashboard;
 - Auto Compact, an opt-in Pi extension that preserves durable work before
@@ -13,6 +13,11 @@ parts:
   evidence and renders deterministic Markdown and HTML reviews;
 - an optional read-only traffic analysis module that resolves explicit Team or
   Agent scopes from local Pi Session evidence and explicit PiTeams attribution.
+
+Pi Team Bright `0.17.0` is a stable npm release on `latest`. Pi OpenAI
+Blackmagic Compact `0.1.0-rc.7` is a published npm prerelease on `next`.
+These release facts describe the composed artifacts. They do not claim that each
+component is independently useful.
 
 The observatory paths are read-only by default. System Prompt Audit writes only
 explicit operator-requested local artifacts. Auto Compact is a separately
