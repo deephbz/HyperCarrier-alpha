@@ -1,8 +1,8 @@
 # HyperCarrier Alpha
 
 HyperCarrier is an experimental, single-user, local-first control plane for
-agent-assisted work. This public Alpha combines five independently useful
-parts:
+agent-assisted work. This public Alpha is a source composition for technical
+testing. It contains these components:
 
 - a Pi/tmux timeline and live-session dashboard;
 - Auto Compact, an opt-in Pi extension that preserves durable work before
@@ -13,6 +13,11 @@ parts:
   evidence and renders deterministic Markdown and HTML reviews;
 - an optional read-only traffic analysis module that resolves explicit Team or
   Agent scopes from local Pi Session evidence and explicit PiTeams attribution.
+
+Pi Team Bright `0.17.0` is a stable npm release on `latest`. Pi OpenAI
+Blackmagic Compact `0.1.0-rc.7` is a published npm prerelease on `next`.
+These release facts describe the composed artifacts. They do not claim that each
+component is independently useful.
 
 The observatory paths are read-only by default. System Prompt Audit writes only
 explicit operator-requested local artifacts. Auto Compact is a separately
@@ -82,13 +87,13 @@ selected user message, then latest selected agent stop. They aren't liveness,
 progress, or delivery state. The package README documents the token contract.
 
 **Release tags:** use exact `@hypercarrier/rarebit@0.1.0-alpha.4` and
-`@hypercarrier/pi-openai-blackmagic-compact@0.1.0-rc.5` recovery pins. Rarebit's
+`@hypercarrier/pi-openai-blackmagic-compact@0.1.0-rc.7` recovery pins. Rarebit's
 `next` tag points to alpha.4 while npm `latest` remains the retained
-`0.1.0-alpha.1` bootstrap exception. Blackmagic's `next` tag points to rc.5
-while npm `latest` remains the retained `0.1.0-rc.1`. The immutable Blackmagic
-rc.4 source tag is retained as historical source evidence; it has no npm
-artifact. No retained version was unpublished or retargeted, and Alpha has not
-been published from this candidate.
+`0.1.0-alpha.1` bootstrap exception. Blackmagic's `next` tag points to rc.7
+while npm `latest` remains rc.5. Blackmagic rc.7 is branch-provenance evidence:
+its npm artifact, SLSA provenance, and publish workflow are verified, but no
+matching Git tag or GitHub Release exists. No retained version was unpublished
+or retargeted, and Alpha has not been published from this candidate.
 
 ## Verified terminal theme candidate
 
@@ -216,8 +221,8 @@ uv run --locked --project tools/herdr-pi-recovery herdr-pi-recovery plan
 
 `restore --execute` changes live Herdr panes, so inspect the default dry-run plan first. Each tool's README documents its boundary and recovery behavior.
 
-Pi Team Bright orchestration and its Beads-backed Task integration are maintained in
-[deephbz/pi-team-bright](https://github.com/deephbz/pi-team-bright). Clone this Alpha with `git clone --recurse-submodules`; a non-recursive clone intentionally lacks `packages/pi-team-bright` until `git submodule update --init --recursive` is run. The gitlink composes the verified `0.17.0-rc.8` source revision. The compatibility record separately verifies the immutable `@hypercarrier/pi-team-bright@0.17.0-rc.8` npm artifact and its public release receipts.
+Pi Team Bright orchestration and its graph-native Task authority are maintained in
+[deephbz/pi-team-bright](https://github.com/deephbz/pi-team-bright). Clone this Alpha with `git clone --recurse-submodules`; a non-recursive clone intentionally lacks `packages/pi-team-bright` until `git submodule update --init --recursive` is run. The gitlink composes the verified `0.17.0` source revision. The compatibility record separately verifies the immutable `@hypercarrier/pi-team-bright@0.17.0` npm artifact and its public release receipts.
 
 ## Trust model
 
