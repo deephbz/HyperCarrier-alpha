@@ -59,17 +59,18 @@ the in-memory snapshot is a rebuildable projection. Timeline never opens PiTeams
 ~/.pi/agent/rarebit/materializations-v4+->|    snapshot/trace/SSE + React SPA
 pi-teams/observation ---------------+
 tmux sockets + list-panes ----------+     |
-macOS process table ----------------+     +--> live-detail Node HTTP service
-                                          |    Rarebit projection + JSONL SSE
-                                          |    explicit pi --export disclosure
+macOS process table ----------------+     +--> Trace Viewer Node HTTP service
+                                          |    pi-trace/1 projection + JSONL SSE invalidation
+                                          |    static React dense overview, virtual ledger, and inspector
                                           |
                                           +--> TPS adapter Node HTTP service
                                                JSONL stream + pi-tps-web
 
 Browser surfaces:
   main dashboard  = React + TypeScript + Vite build + CSS timeline lanes
-  live detail     = shared-core Rarebits + sanitized Markdown projection
-                    + lazy pinned stack-safe Pi native HTML
+  Trace Viewer    = full active-branch Pi trace + dense/virtual presentation
+                    + off-by-default Rarebit filter, raw exact-entry inspector,
+                    + and JSONL download
   TPS inspector   = React + TypeScript + DuckDB-WASM + Recharts
 ```
 
@@ -101,10 +102,11 @@ externally verified to listen only on `127.0.0.1`.
 The timeline emits absolute inspector links using
 `PI_LIVE_DETAIL_BASE_URL=http://live.pi.localhost:1355` and
 `PI_TPS_WEB_BASE_URL=http://tps.pi.localhost:1355`. LAN mode is intentionally not enabled because
-live detail and TPS surfaces contain session transcript data. SSE remains end-to-end HTTP
-`text/event-stream`; filesystem events invalidate the main snapshot and cause Live Detail to read
-only new bytes on ordinary growth. Semantic branch changes cause a typed projection reset. Pi's full
-native export is not generated or transported until the owner explicitly requests it.
+Trace Viewer and TPS surfaces contain Session transcript data. SSE remains end-to-end HTTP
+`text/event-stream`; filesystem events invalidate the main snapshot and the exact Trace Viewer
+projection. The viewer reads only new bytes on ordinary growth, then coalesces invalidations into a
+complete active-branch refetch because an appended fork can replace that branch. Its Canvas and
+virtual-ledger bounds limit browser controls, not the exact projection.
 
 ## Ontology
 
@@ -239,7 +241,7 @@ Missing, legacy, stale, selection-only, overflow, and failed derivations remain 
 joins, source paths, confidence/evidence, tmux coordinates, and Summary materialization/model/job/
 selection lineage remain copyable under a collapsed diagnostic/provenance disclosure; a changed
 Summary job between the fleet snapshot and selected detail is called out instead of silently joining
-them. Raw transcript and technical request/TPS detail stay in the separately linked Live Detail and
+them. Raw transcript and technical request/TPS detail stay in the separately linked Trace Viewer and
 TPS surfaces instead of enlarging the fleet snapshot. Messenger-mesh grouping and lane
 virtualization remain future work.
 

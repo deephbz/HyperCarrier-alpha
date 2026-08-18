@@ -14,10 +14,12 @@ testing. It contains these components:
 - an optional read-only traffic analysis module that resolves explicit Team or
   Agent scopes from local Pi Session evidence and explicit PiTeams attribution.
 
-Pi Team Bright `0.17.0` is a stable npm release on `latest`. Pi OpenAI
-Blackmagic Compact `0.1.0-rc.7` is a published npm prerelease on `next`.
-These release facts describe the composed artifacts. They do not claim that each
-component is independently useful.
+Rarebit `0.1.0-alpha.5` is a published npm prerelease on `next`, while
+`latest` remains `0.1.0-alpha.4`. Pi Team Bright `0.17.1` is a stable npm
+release on `latest`. Pi OpenAI Blackmagic Compact `0.1.0-rc.8` is a published
+npm prerelease on `next`, while `latest` remains `0.1.0-rc.5`. These release
+facts describe the composed artifacts. They do not claim that each component is
+independently useful.
 
 The observatory paths are read-only by default. System Prompt Audit writes only
 explicit operator-requested local artifacts. Auto Compact is a separately
@@ -50,17 +52,16 @@ Start the timeline:
 npm start
 ```
 
-`npm run start:stack` starts Timeline, live detail, and the TPS adapter on independent loopback
+`npm run start:stack` starts Timeline, Trace Viewer, and the TPS adapter on independent loopback
 ports. Friendly `.localhost` names are an optional proxy add-on. The TPS renderer is supported as
 an explicitly pinned external build; follow `apps/timeline/README.md` and its
 `integrations/pi-tps-web.json` contract rather than installing an unpinned latest version.
 
-Live Detail is Rarebit-first: its default exact-Session page transfers only the shared-core
-active-branch Rarebit messages and incrementally reads appended JSONL. **Full native** lazily uses
-the checked-in checksum-verified stack-safe Pi provider; users don't need to patch or configure a
-global Pi installation. The provider's release base, public patch revision, MIT notice, artifact
-integrity, and removal condition are under `vendor/pi-exporter` and reported by the live-detail
-health route.
+Trace Viewer is the exact-Session active-branch Pi trace surface. It serves static React over the
+schema-versioned `pi-trace/1` projection, with a DeepSeek Harness Trajectory-derived overview,
+ledger, exact-record inspector, raw JSONL download, and an off-by-default Rarebit filter. Pi JSONL
+remains evidence authority. The local copied source retains its pinned upstream revision and MIT
+notice under `apps/timeline/trace-viewer`.
 
 Then open:
 
@@ -86,14 +87,14 @@ When Pi runs under Herdr, Rarebit can report two optional recency clocks: latest
 selected user message, then latest selected agent stop. They aren't liveness,
 progress, or delivery state. The package README documents the token contract.
 
-**Release tags:** use exact `@hypercarrier/rarebit@0.1.0-alpha.4` and
-`@hypercarrier/pi-openai-blackmagic-compact@0.1.0-rc.7` recovery pins. Rarebit's
-`next` tag points to alpha.4 while npm `latest` remains the retained
-`0.1.0-alpha.1` bootstrap exception. Blackmagic's `next` tag points to rc.7
-while npm `latest` remains rc.5. Blackmagic rc.7 is branch-provenance evidence:
-its npm artifact, SLSA provenance, and publish workflow are verified, but no
-matching Git tag or GitHub Release exists. No retained version was unpublished
-or retargeted, and Alpha has not been published from this candidate.
+**Release tags:** use exact `@hypercarrier/rarebit@0.1.0-alpha.5` and
+`@hypercarrier/pi-openai-blackmagic-compact@0.1.0-rc.8` recovery pins. Rarebit's
+`next` tag points to alpha.5 while npm `latest` remains alpha.4. Blackmagic's
+`next` tag points to rc.8 while npm `latest` remains rc.5. Blackmagic rc.8 is
+branch-provenance evidence: its npm artifact, SLSA provenance, and publish
+workflow are verified, but no matching Git tag or GitHub Release exists. No
+retained version was unpublished or retargeted, and Alpha has not been published
+from this candidate.
 
 ## Verified terminal theme candidate
 
@@ -132,9 +133,9 @@ find "$candidate" -type f | sort
 ```
 
 4. Optional operator action: copy only the files you choose, then use the
-normal operator commands to install, select, and reload them. Perform visual
-acceptance in your own terminal. The compose command does not install, select,
-or reload a live configuration.
+   normal operator commands to install, select, and reload them. Perform visual
+   acceptance in your own terminal. The compose command does not install, select,
+   or reload a live configuration.
 
 ## Optional terminal integration examples
 
@@ -222,7 +223,7 @@ uv run --locked --project tools/herdr-pi-recovery herdr-pi-recovery plan
 `restore --execute` changes live Herdr panes, so inspect the default dry-run plan first. Each tool's README documents its boundary and recovery behavior.
 
 Pi Team Bright orchestration and its graph-native Task authority are maintained in
-[deephbz/pi-team-bright](https://github.com/deephbz/pi-team-bright). Clone this Alpha with `git clone --recurse-submodules`; a non-recursive clone intentionally lacks `packages/pi-team-bright` until `git submodule update --init --recursive` is run. The gitlink composes the verified `0.17.0` source revision. The compatibility record separately verifies the immutable `@hypercarrier/pi-team-bright@0.17.0` npm artifact and its public release receipts.
+[deephbz/pi-team-bright](https://github.com/deephbz/pi-team-bright). Clone this Alpha with `git clone --recurse-submodules`; a non-recursive clone intentionally lacks `packages/pi-team-bright` until `git submodule update --init --recursive` is run. The gitlink composes the verified `0.17.1` source revision. The compatibility record separately verifies the immutable `@hypercarrier/pi-team-bright@0.17.1` npm artifact and its public release receipts.
 
 ## Trust model
 

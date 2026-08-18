@@ -3,8 +3,8 @@
   "component": "pi-openai-blackmagic-compact",
   "source": {
     "repository": "https://github.com/deephbz/pi-openai-blackmagic-compact.git",
-    "commit": "6f3ee6a3f5c2743e4cdca8d9d18a0456c48c17e9",
-    "tree": "506648583c4dbe205fe9a2641bcb1cc2b643bf52",
+    "commit": "a8af309fcb9219185c12ce1e49393e0da8c72853",
+    "tree": "86fe8594fc1b0f8bfcfbe6ab8b00565dfc039fb2",
     "gitTag": {
       "state": "absent",
       "applicability": "not_applicable"
@@ -12,13 +12,13 @@
   },
   "package": {
     "name": "@hypercarrier/pi-openai-blackmagic-compact",
-    "version": "0.1.0-rc.7"
+    "version": "0.1.0-rc.8"
   },
   "pi": {
     "peerRanges": {
-      "@earendil-works/pi-coding-agent": "0.83.0",
-      "@earendil-works/pi-ai": "0.83.0",
-      "@earendil-works/pi-tui": "0.83.0"
+      "@earendil-works/pi-coding-agent": ">=0.83.0",
+      "@earendil-works/pi-ai": ">=0.83.0",
+      "@earendil-works/pi-tui": ">=0.83.0"
     }
   },
   "childVerification": {
@@ -27,42 +27,42 @@
       {
         "name": "unit-suite",
         "command": "npm test",
-        "result": "passed in publish run 31809511756 at exact source 6f3ee6a"
+        "result": "passed in publish run 31930165211 at exact source a8af309"
       },
       {
         "name": "package-allowlist",
         "command": "npm run verify:package",
-        "result": "passed in publish run 31809511756; the npm artifact has 9 files"
+        "result": "passed in publish run 31930165211; the npm artifact has 9 files"
       },
       {
         "name": "trusted-publisher-publication",
         "command": "npm publish --access public --provenance --tag next",
-        "result": "passed in workflow-dispatch publish run 31809511756 from exact source 6f3ee6a"
+        "result": "passed in workflow-dispatch publish run 31930165211 from exact source a8af309"
       },
       {
         "name": "registry-byte-verification",
         "command": "download the registry tarball and recompute integrity, SHA-1, SHA-256, SHA-512, size, and entry count",
-        "result": "matched the immutable 9-file registry tuple"
+        "result": "matched the immutable 9-file rc.8 registry tuple"
       },
       {
         "name": "slsa-provenance",
         "command": "inspect npm SLSA provenance",
-        "result": "identifies publish.yml at refs/heads/main and source 6f3ee6a"
+        "result": "identifies publish.yml at refs/heads/main and source a8af309"
       }
     ]
   },
   "publication": {
     "state": "published",
-    "npmIntegrity": "sha512-j3yTKo08m/Opts+updZluq0BwgvWOzPEpu5XxHm7ih/o7Uoma28shK4MUPHv+X6d+F1lmdPgEaJ/Lim69Lucng==",
-    "npmShasum": "493487b8aea719f2c14794aabc2ce8fa235b775d",
-    "tarball": "https://registry.npmjs.org/@hypercarrier/pi-openai-blackmagic-compact/-/pi-openai-blackmagic-compact-0.1.0-rc.7.tgz",
-    "tarballSha256": "3e458c1636ed45ead14cfe21d207a77f563610a15eda864c309128a6ca7c4b08",
+    "npmIntegrity": "sha512-MPxbcZf035CgQSb/XE/k4AuqyiZzX5qrM3o4pklHpXWtA2Grm21n370p5f4rLFAnCMTtNcRuy2hnEcBJj/hcYA==",
+    "npmShasum": "84eb981da0be117817cae4f0048addaeb4a86745",
+    "tarball": "https://registry.npmjs.org/@hypercarrier/pi-openai-blackmagic-compact/-/pi-openai-blackmagic-compact-0.1.0-rc.8.tgz",
+    "tarballSha256": "66af1d711c6f5a3a3578fcf05ab96431b923de6683e8b101787ab0f31fdcafcd",
     "distTag": "next",
     "latest": "0.1.0-rc.5",
     "fileCount": 9,
-    "unpackedSize": 43182,
-    "publishUrl": "https://github.com/deephbz/pi-openai-blackmagic-compact/actions/runs/31809511756",
-    "attestationEndpoint": "https://registry.npmjs.org/-/npm/v1/attestations/@hypercarrier%2fpi-openai-blackmagic-compact@0.1.0-rc.7",
+    "unpackedSize": 44187,
+    "publishUrl": "https://github.com/deephbz/pi-openai-blackmagic-compact/actions/runs/31930165211",
+    "attestationEndpoint": "https://registry.npmjs.org/-/npm/v1/attestations/@hypercarrier%2fpi-openai-blackmagic-compact@0.1.0-rc.8",
     "githubRelease": {
       "state": "absent",
       "applicability": "not_applicable"
@@ -71,13 +71,13 @@
       "predicate": "https://slsa.dev/provenance/v1",
       "workflow": ".github/workflows/publish.yml",
       "workflowRef": "refs/heads/main",
-      "invocation": "https://github.com/deephbz/pi-openai-blackmagic-compact/actions/runs/31809511756/attempts/1"
+      "invocation": "https://github.com/deephbz/pi-openai-blackmagic-compact/actions/runs/31930165211/attempts/1"
     }
   },
   "gitlink": {
     "path": "packages/pi-openai-blackmagic-compact",
     "mode": "160000",
-    "commit": "6f3ee6a3f5c2743e4cdca8d9d18a0456c48c17e9"
+    "commit": "a8af309fcb9219185c12ce1e49393e0da8c72853"
   },
   "parentVerification": {
     "state": "verified",

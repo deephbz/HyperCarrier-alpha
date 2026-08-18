@@ -50,19 +50,41 @@ function changedSessionId(path) {
 export class SessionRegistry {
   constructor({ sessionsRoot } = {}) {
     this.sessionsRoot = resolve(sessionsRoot ?? join(homedir(), ".pi", "agent", "sessions"));
+    this.sourcesById = new Map();
     this.byId = new Map();
+    this.ambiguousIds = new Map();
     this.lastRefresh = { mode: "full", paths: [] };
   }
+  rebuildIndexes() {
+    this.byId = new Map();
+    this.ambiguousIds = new Map();
+    for (const [id, sources] of this.sourcesById) {
+      if (sources.size === 1) this.byId.set(id, sources.values().next().value);
+      else if (sources.size > 1) this.ambiguousIds.set(id, new Set(sources));
+    }
+  }
+  removeSource(path) {
+    for (const [id, sources] of this.sourcesById) {
+      sources.delete(path);
+      if (sources.size === 0) this.sourcesById.delete(id);
+    }
+  }
+  addSource(id, path) {
+    const sources = this.sourcesById.get(id) ?? new Set();
+    sources.add(path);
+    this.sourcesById.set(id, sources);
+  }
   refresh() {
-    const next = new Map();
     const paths = findSessionFiles(this.sessionsRoot);
+    this.sourcesById = new Map();
     for (const path of paths) {
       try {
         const header = readSessionHeader(path);
-        if (header.type === "session" && typeof header.id === "string") next.set(header.id, path);
+        if (header?.type === "session" && typeof header.id === "string" && SAFE_ID.test(header.id))
+          this.addSource(header.id, path);
       } catch {}
     }
-    this.byId = next;
+    this.rebuildIndexes();
     this.lastRefresh = { mode: "full", paths };
     return this;
   }
@@ -71,30 +93,28 @@ export class SessionRegistry {
     if (!changed) return this.refresh();
 
     const updates = [];
-    const changedSet = new Set(changed);
-    const nextIds = new Set();
     for (const path of changed) {
       const id = changedSessionId(path);
       if (id === undefined) return this.refresh();
-      if (id) {
-        if (nextIds.has(id)) return this.refresh();
-        const existingPath = this.byId.get(id);
-        if (existingPath && existingPath !== path && !changedSet.has(existingPath))
-          return this.refresh();
-        nextIds.add(id);
-      }
       updates.push({ path, id });
     }
-
-    for (const { path } of updates)
-      for (const [id, currentPath] of this.byId) if (currentPath === path) this.byId.delete(id);
-    for (const { path, id } of updates) if (id) this.byId.set(id, path);
+    for (const { path } of updates) this.removeSource(path);
+    for (const { path, id } of updates) if (id) this.addSource(id, path);
+    this.rebuildIndexes();
     this.lastRefresh = { mode: "targeted", paths: changed };
     return this;
   }
+  resolve(id) {
+    if (!SAFE_ID.test(id)) return { kind: "missing" };
+    if (!this.byId.has(id) && !this.ambiguousIds.has(id)) this.refresh();
+    const source = this.byId.get(id);
+    if (source) return { kind: "resolved", source };
+    if (this.ambiguousIds.has(id)) return { kind: "ambiguous" };
+    return { kind: "missing" };
+  }
   get(id) {
-    if (!SAFE_ID.test(id)) return undefined;
-    return this.byId.get(id) ?? this.refresh().byId.get(id);
+    const resolution = this.resolve(id);
+    return resolution.kind === "resolved" ? resolution.source : undefined;
   }
   version(id) {
     const path = this.get(id);

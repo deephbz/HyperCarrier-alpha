@@ -12,8 +12,8 @@
       "type": "object", "additionalProperties": false, "required": ["repository", "commit", "tree", "gitTag"],
       "properties": {
         "repository": { "const": "https://github.com/deephbz/pi-openai-blackmagic-compact.git" },
-        "commit": { "const": "6f3ee6a3f5c2743e4cdca8d9d18a0456c48c17e9" },
-        "tree": { "const": "506648583c4dbe205fe9a2641bcb1cc2b643bf52" },
+        "commit": { "const": "a8af309fcb9219185c12ce1e49393e0da8c72853" },
+        "tree": { "const": "86fe8594fc1b0f8bfcfbe6ab8b00565dfc039fb2" },
         "gitTag": {
           "type": "object", "additionalProperties": false, "required": ["state", "applicability"],
           "properties": { "state": { "const": "absent" }, "applicability": { "const": "not_applicable" } }
@@ -22,7 +22,7 @@
     },
     "package": {
       "type": "object", "additionalProperties": false, "required": ["name", "version"],
-      "properties": { "name": { "const": "@hypercarrier/pi-openai-blackmagic-compact" }, "version": { "const": "0.1.0-rc.7" } }
+      "properties": { "name": { "const": "@hypercarrier/pi-openai-blackmagic-compact" }, "version": { "const": "0.1.0-rc.8" } }
     },
     "pi": {
       "type": "object", "additionalProperties": false, "required": ["peerRanges"],
@@ -31,9 +31,9 @@
           "type": "object", "additionalProperties": false,
           "required": ["@earendil-works/pi-coding-agent", "@earendil-works/pi-ai", "@earendil-works/pi-tui"],
           "properties": {
-            "@earendil-works/pi-coding-agent": { "const": "0.83.0" },
-            "@earendil-works/pi-ai": { "const": "0.83.0" },
-            "@earendil-works/pi-tui": { "const": "0.83.0" }
+            "@earendil-works/pi-coding-agent": { "const": ">=0.83.0" },
+            "@earendil-works/pi-ai": { "const": ">=0.83.0" },
+            "@earendil-works/pi-tui": { "const": ">=0.83.0" }
           }
         }
       }
@@ -56,16 +56,16 @@
       "required": ["state", "npmIntegrity", "npmShasum", "tarball", "tarballSha256", "distTag", "latest", "fileCount", "unpackedSize", "publishUrl", "attestationEndpoint", "githubRelease", "provenance"],
       "properties": {
         "state": { "const": "published" },
-        "npmIntegrity": { "const": "sha512-j3yTKo08m/Opts+updZluq0BwgvWOzPEpu5XxHm7ih/o7Uoma28shK4MUPHv+X6d+F1lmdPgEaJ/Lim69Lucng==" },
-        "npmShasum": { "const": "493487b8aea719f2c14794aabc2ce8fa235b775d" },
-        "tarball": { "const": "https://registry.npmjs.org/@hypercarrier/pi-openai-blackmagic-compact/-/pi-openai-blackmagic-compact-0.1.0-rc.7.tgz" },
-        "tarballSha256": { "const": "3e458c1636ed45ead14cfe21d207a77f563610a15eda864c309128a6ca7c4b08" },
+        "npmIntegrity": { "const": "sha512-MPxbcZf035CgQSb/XE/k4AuqyiZzX5qrM3o4pklHpXWtA2Grm21n370p5f4rLFAnCMTtNcRuy2hnEcBJj/hcYA==" },
+        "npmShasum": { "const": "84eb981da0be117817cae4f0048addaeb4a86745" },
+        "tarball": { "const": "https://registry.npmjs.org/@hypercarrier/pi-openai-blackmagic-compact/-/pi-openai-blackmagic-compact-0.1.0-rc.8.tgz" },
+        "tarballSha256": { "const": "66af1d711c6f5a3a3578fcf05ab96431b923de6683e8b101787ab0f31fdcafcd" },
         "distTag": { "const": "next" },
         "latest": { "const": "0.1.0-rc.5" },
         "fileCount": { "const": 9 },
-        "unpackedSize": { "const": 43182 },
-        "publishUrl": { "const": "https://github.com/deephbz/pi-openai-blackmagic-compact/actions/runs/31809511756" },
-        "attestationEndpoint": { "const": "https://registry.npmjs.org/-/npm/v1/attestations/@hypercarrier%2fpi-openai-blackmagic-compact@0.1.0-rc.7" },
+        "unpackedSize": { "const": 44187 },
+        "publishUrl": { "const": "https://github.com/deephbz/pi-openai-blackmagic-compact/actions/runs/31930165211" },
+        "attestationEndpoint": { "const": "https://registry.npmjs.org/-/npm/v1/attestations/@hypercarrier%2fpi-openai-blackmagic-compact@0.1.0-rc.8" },
         "githubRelease": {
           "type": "object", "additionalProperties": false, "required": ["state", "applicability"],
           "properties": { "state": { "const": "absent" }, "applicability": { "const": "not_applicable" } }
@@ -76,14 +76,14 @@
             "predicate": { "const": "https://slsa.dev/provenance/v1" },
             "workflow": { "const": ".github/workflows/publish.yml" },
             "workflowRef": { "const": "refs/heads/main" },
-            "invocation": { "const": "https://github.com/deephbz/pi-openai-blackmagic-compact/actions/runs/31809511756/attempts/1" }
+            "invocation": { "const": "https://github.com/deephbz/pi-openai-blackmagic-compact/actions/runs/31930165211/attempts/1" }
           }
         }
       }
     },
     "gitlink": {
       "type": "object", "additionalProperties": false, "required": ["path", "mode", "commit"],
-      "properties": { "path": { "const": "packages/pi-openai-blackmagic-compact" }, "mode": { "const": "160000" }, "commit": { "const": "6f3ee6a3f5c2743e4cdca8d9d18a0456c48c17e9" } }
+      "properties": { "path": { "const": "packages/pi-openai-blackmagic-compact" }, "mode": { "const": "160000" }, "commit": { "const": "a8af309fcb9219185c12ce1e49393e0da8c72853" } }
     },
     "parentVerification": {
       "type": "object", "additionalProperties": false, "required": ["state", "verifier", "requiredCheckout", "workspaceDisposition"],

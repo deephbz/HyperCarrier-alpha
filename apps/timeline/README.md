@@ -14,7 +14,7 @@ npm run build:web
 npm run quality             # format, lint, duplication, coverage, CRAP, tests, build
 npm start                 # dashboard + API at http://127.0.0.1:4318
 PORT=4390 npm start       # choose another local port
-npm run start:stack       # timeline + live detail + TPS adapter + traffic analysis
+npm run start:stack       # timeline + Trace Viewer + TPS adapter + traffic analysis
 npm run start:better-url  # http://{pi,live.pi,tps,traffic.pi}.localhost:1355
 ```
 
@@ -35,19 +35,23 @@ dataflow and routing diagram.
 
 Each session inspector links to two independent detail services:
 
-- **Live session** (`:4319/session/<id>`) defaults to the complete active-branch Rarebit projection:
-  persisted user messages, assistant continuations at `toolUse`, and normal assistant stops selected
-  by the shared Rarebit core. It reads only appended JSONL bytes on updates and does not invoke or
-  transport Pi's native export until **Full native** is selected. Full native uses the checked-in,
-  checksum-verified stack-safe Pi provider automatically; its exact package/base/patch identity is
-  reported by the live-detail health route. Pi's native filters remain available inside that lazy
-  disclosure.
+- **Trace Viewer** (`:4319/session/<id>`) is the authorized full active-branch Pi trace surface. It
+  serves a DeepSeek Harness Trajectory-inspired static React interaction, with a dense three-lane
+  active-branch-order Canvas overview, virtual ledger, resizable exact-record inspector, raw JSONL
+  download, and an off-by-default Rarebit filter. Search and range focus dim records; they do not
+  delete evidence. The browser coalesces SSE invalidations into complete refetches.
+  `GET /api/trace/<id>` is the schema-versioned `pi-trace/1` projection for one unambiguous Session
+  source of at most 16 MiB. A larger source returns a categorical error and keeps its
+  version-verified raw download available; duplicate Session IDs return unavailable rather than
+  selecting a path. On an ordinary append it verifies the committed prefix digest, then
+  incrementally parses new JSONL bytes. SSE invalidation always causes a complete refetch because a
+  fork can replace the active branch. Pi JSONL remains the raw authority.
 - **TPS inspector** (`:4320/?auto=1&session=<id>`) is optional and serves a separately built
   `pi-tps-web` application against that session's native JSONL.
 
-The timeline and live-detail surfaces do not require the TPS renderer. The TPS adapter and raw
-telemetry route remain healthy without it, while `/api/health` reports `renderer:false` and the
-renderer route returns an actionable 404. HyperCarrier pins the external renderer contract in
+Timeline and Trace Viewer do not require the TPS renderer. The TPS adapter and raw telemetry route
+remain healthy without it, while `/api/health` reports `renderer:false` and the renderer route
+returns an actionable 404. HyperCarrier pins the external renderer contract in
 `integrations/pi-tps-web.json`; build that exact artifact separately:
 
 ```bash

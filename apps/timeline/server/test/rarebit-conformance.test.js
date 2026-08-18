@@ -3,7 +3,8 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { parseSessionJsonl } from "../collector.js";
-import { isDefaultLiveEntry } from "../live-detail.js";
+import { projectPiTrace } from "../live-detail.js";
+import { parseNativeSession, resolveActiveBranch } from "@hypercarrier/rarebit/session";
 
 const corpus = JSON.parse(
   await readFile(
@@ -52,14 +53,26 @@ test("Timeline executable gap: physical-entry markers do not yet resolve the act
   );
 });
 
-test("Live Detail delegates its physical-entry predicate to strict Rarebit semantics", () => {
-  const fixture = caseById("linear-prose-and-outcomes");
-  const selected = fixture.records.filter(isDefaultLiveEntry).map((entry) => entry.id);
+test("Trace Viewer attaches strict Rarebit selection to full active-branch records", () => {
+  const fixture = caseById("fork-compaction-and-resume");
+  const parsed = parseNativeSession(jsonl(fixture.records), fixture.id);
+  const activeBranch = resolveActiveBranch(parsed, fixture.id);
+  const trace = projectPiTrace({
+    availability: "available",
+    sessionId: fixture.id,
+    version: "fixture",
+    activeLeafId: activeBranch.at(-1)?.id ?? null,
+    activeBranchIds: activeBranch.map((entry) => entry.id),
+    activeBranch,
+  });
   assert.deepEqual(
-    selected,
+    trace.records.filter((record) => record.rarebit).map((record) => record.sourceEntryId),
     fixture.expected.rarebits.map((item) => item.sourceEntryId),
   );
-  assert.equal(selected.includes("a-error"), false);
+  assert.equal(
+    trace.records.some((record) => !record.rarebit),
+    true,
+  );
 });
 
 test("Timeline malformed input stays observable instead of becoming silent empty success", () => {

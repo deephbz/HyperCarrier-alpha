@@ -35,19 +35,19 @@
           "const": "https://github.com/deephbz/rarebit.git"
         },
         "commit": {
-          "const": "336565fb132404c02f5adbbe1be4d86c2206e035"
+          "const": "62608c5140d49118449003b0213e56a481d11caf"
         },
         "tree": {
-          "const": "ed87414cb9b5b1f8e77dab0d66dfa279d5f740a8"
+          "const": "c2474e33c7529e4e6246175b6d0ee54c8221fb7b"
         },
         "tagObject": {
-          "const": "2cf294c20a54ff36eb8ae2864216ea6983bc4dc8"
+          "const": "1f13f4f2d0c658492e418e53c8361d2baf3dfcb0"
         },
         "tag": {
-          "const": "v0.1.0-alpha.4"
+          "const": "v0.1.0-alpha.5"
         },
         "tagTarget": {
-          "const": "336565fb132404c02f5adbbe1be4d86c2206e035"
+          "const": "62608c5140d49118449003b0213e56a481d11caf"
         }
       }
     },
@@ -66,7 +66,7 @@
           "const": "@hypercarrier/rarebit"
         },
         "version": {
-          "const": "0.1.0-alpha.4"
+          "const": "0.1.0-alpha.5"
         },
         "bin": {
           "const": "rarebit"
@@ -82,7 +82,7 @@
           ],
           "properties": {
             "@earendil-works/pi-ai": {
-              "const": "*"
+              "const": ">=0.83.0"
             }
           }
         }
@@ -107,25 +107,25 @@
       ],
       "properties": {
         "sri": {
-          "const": "sha512-x4CzTUQX9xwdsJzLJqIlghkfypOjwEHj0ScJXWhrdE/HyB9ISTG/vobaaWFX51tWSekSH3bczVOVSksNxH7Ixw=="
+          "const": "sha512-h+NBXHEL22i1jKb4j1c4NLC6FcyamXSzUbkbJDCxhM3qtu24tKNbKfHK5ggV0pTs6E+w324H/vCNFBn4m7Ymfg=="
         },
         "sha1": {
-          "const": "d0453675d32f2dae05c675122a119547b2d1bea6"
+          "const": "4eea88372a9f30c99491bdc4d89eddcaf01a7ef3"
         },
         "sha256": {
-          "const": "19449d2d1d3179ae13299d62951b685b4c3ae1dccf1fb996c624e9964d95d12e"
+          "const": "68340be270582e2834b03da228c6066b1e9c971c40be46b9612defef76caf0fe"
         },
         "tarball": {
-          "const": "https://registry.npmjs.org/@hypercarrier/rarebit/-/rarebit-0.1.0-alpha.4.tgz"
+          "const": "https://registry.npmjs.org/@hypercarrier/rarebit/-/rarebit-0.1.0-alpha.5.tgz"
         },
         "size": {
-          "const": 92096
+          "const": 93242
         },
         "unpackedSize": {
-          "const": 401693
+          "const": 405878
         },
         "fileCount": {
-          "const": 50
+          "const": 51
         },
         "githubRelease": {
           "type": "object",
@@ -138,10 +138,10 @@
           ],
           "properties": {
             "id": {
-              "const": 363793012
+              "const": 371245947
             },
             "url": {
-              "const": "https://github.com/deephbz/rarebit/releases/tag/v0.1.0-alpha.4"
+              "const": "https://github.com/deephbz/rarebit/releases/tag/v0.1.0-alpha.5"
             },
             "prerelease": {
               "const": true
@@ -163,15 +163,15 @@
               "const": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
             },
             "value": {
-              "const": "MEUCIQCWX+aVCWOPantTtYewNNmc3Sw6soihJp5O6GjlzrSMtwIgIZ7eXfxUMiinVUzyE5ks2t6mP80E0DqahGLx7NOnPoI="
+              "const": "MEUCID/EkuqbT3hzQvu1m0/23o7qN8ALu9c1d7fabppOvY1NAiEApRe2PecZqbbDjqvFPWY+HGdllrTrqtps3mZI9bVXbSQ="
             }
           }
         },
         "next": {
-          "const": "0.1.0-alpha.4"
+          "const": "0.1.0-alpha.5"
         },
         "latest": {
-          "const": "0.1.0-alpha.1"
+          "const": "0.1.0-alpha.4"
         },
         "bootstrapExceptionEvidence": {
           "const": "https://github.com/deephbz/rarebit/releases/tag/v0.1.0-alpha.2"
@@ -197,13 +197,13 @@
           ],
           "properties": {
             "run": {
-              "const": 30749327677
+              "const": 31929298263
             },
             "url": {
-              "const": "https://github.com/deephbz/rarebit/actions/runs/30749327677"
+              "const": "https://github.com/deephbz/rarebit/actions/runs/31929298263"
             },
             "head": {
-              "const": "336565fb132404c02f5adbbe1be4d86c2206e035"
+              "const": "62608c5140d49118449003b0213e56a481d11caf"
             }
           }
         },
@@ -218,16 +218,16 @@
           ],
           "properties": {
             "run": {
-              "const": 30749421136
+              "const": 31929511826
             },
             "url": {
-              "const": "https://github.com/deephbz/rarebit/actions/runs/30749421136"
+              "const": "https://github.com/deephbz/rarebit/actions/runs/31929511826"
             },
             "nonce": {
-              "const": "b50a45f4-96ca-4d5a-8f51-5a95ea6d0ae8"
+              "const": "212baec3-faba-451c-a713-cddd1ecc6f7a"
             },
             "head": {
-              "const": "336565fb132404c02f5adbbe1be4d86c2206e035"
+              "const": "62608c5140d49118449003b0213e56a481d11caf"
             }
           }
         },
@@ -250,25 +250,25 @@
           ],
           "properties": {
             "run": {
-              "const": 30749454692
+              "const": 31930126874
             },
             "url": {
-              "const": "https://github.com/deephbz/rarebit/actions/runs/30749454692"
+              "const": "https://github.com/deephbz/rarebit/actions/runs/31930126874"
             },
             "nonce": {
-              "const": "36d95631-a45b-4769-9e15-18129ce54e52"
+              "const": "7d4dd74c-d6b8-45bc-b04c-b58e33af374c"
             },
             "ref": {
-              "const": "v0.1.0-alpha.4"
+              "const": "v0.1.0-alpha.5"
             },
             "head": {
-              "const": "336565fb132404c02f5adbbe1be4d86c2206e035"
+              "const": "62608c5140d49118449003b0213e56a481d11caf"
             },
             "attestation": {
-              "const": "https://github.com/deephbz/rarebit/actions/runs/30749454692"
+              "const": "https://github.com/deephbz/rarebit/actions/runs/31930126874"
             },
             "attestationEndpoint": {
-              "const": "https://registry.npmjs.org/-/npm/v1/attestations/@hypercarrier%2frarebit@0.1.0-alpha.4"
+              "const": "https://registry.npmjs.org/-/npm/v1/attestations/@hypercarrier%2frarebit@0.1.0-alpha.5"
             },
             "slsaPredicateType": {
               "const": "https://slsa.dev/provenance/v1"
@@ -277,13 +277,13 @@
               "const": ".github/workflows/publish.yml"
             },
             "workflowRef": {
-              "const": "refs/tags/v0.1.0-alpha.4"
+              "const": "refs/tags/v0.1.0-alpha.5"
             },
             "resolvedCommit": {
-              "const": "336565fb132404c02f5adbbe1be4d86c2206e035"
+              "const": "62608c5140d49118449003b0213e56a481d11caf"
             },
             "invocation": {
-              "const": "https://github.com/deephbz/rarebit/actions/runs/30749454692/attempts/1"
+              "const": "https://github.com/deephbz/rarebit/actions/runs/31930126874/attempts/1"
             }
           }
         }
@@ -305,7 +305,7 @@
           "const": "160000"
         },
         "commit": {
-          "const": "336565fb132404c02f5adbbe1be4d86c2206e035"
+          "const": "62608c5140d49118449003b0213e56a481d11caf"
         }
       }
     },
@@ -360,10 +360,10 @@
               "const": "release/privacy-lineage.v1.json"
             },
             "blob": {
-              "const": "11dae51b6fae6a5f421013b30833fcd0b908aa46"
+              "const": "bae1ebcb283f0c29abb7f7c42ba69c3d65d8292e"
             },
             "sha256": {
-              "const": "6051fc6db27ee05641b5e06a5a2dc606c67b440138e6c9c154ac647c48965ede"
+              "const": "684a8c47fd4f325d215d9976c5526e41c980b40d2a4029f4715e7cfea018de4f"
             }
           }
         },
@@ -396,10 +396,10 @@
           ],
           "properties": {
             "asset": {
-              "const": "rarebit-0.1.0-alpha.4-publication-receipt.v1.json"
+              "const": "release/v0.1.0-alpha.5-release-receipt.md"
             },
             "sha256": {
-              "const": "5c4b877773a7f4f8d97b22c7eb0ad0b291ba9768e374b8a35bda911766a6d729"
+              "const": "610bd3b76fb80700b025ada98a4c64d82cb953470d3623324bc993f0149abc5a"
             }
           }
         },

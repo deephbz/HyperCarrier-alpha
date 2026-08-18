@@ -15,6 +15,8 @@ function fixture() {
  const child = path.join(dir, "packages/hc-rarebit"); rmSync(child, { recursive:true, force:true });
  git(root, "clone", "--no-hardlinks", "packages/hc-rarebit", child);
  git(child, "remote", "set-url", "origin", "https://github.com/deephbz/rarebit.git");
+ for (const file of ["config/rarebit-compatibility.json", "config/schemas/rarebit-compatibility.schema.json", "package-lock.json", "apps/timeline/package.json"]) cpSync(path.join(root, file), path.join(dir, file));
+ git(dir, "update-index", "--cacheinfo", `160000,${git(child, "rev-parse", "HEAD")},packages/hc-rarebit`);
  return { root:dir, child, cleanup:()=>rmSync(dir,{recursive:true,force:true}) };
 }
 function state(name, code, mutate) { test(name, () => { const f=fixture(); try { mutate(f); assert.throws(()=>verifyRarebitComposition({root:f.root}), e=>e.code===code || code==="invalid-record"); } finally { f.cleanup(); } }); }
@@ -40,17 +42,18 @@ state("child manifest peer drift","peer-pi",hiddenChild("package.json",d=>d.peer
 state("child lock drift","child-lock-version",hiddenChild("package-lock.json",d=>d.version="0"));
 state("root lock alias","root-lock-alias",({root})=>{const p=path.join(root,"package-lock.json");{const d=json(p);d.legacy="@hypercarrier/hc-rarebit";writeFileSync(p,JSON.stringify(d))}});
 state("root lock link","root-lock-link",({root})=>{const p=path.join(root,"package-lock.json"),d=json(p);d.packages["node_modules/@hypercarrier/rarebit"].resolved="bad";writeFileSync(p,JSON.stringify(d))});
+state("Rarebit dev Pi lock","rarebit-dev-pi-version",({root})=>{const p=path.join(root,"package-lock.json"),d=json(p);d.packages["packages/hc-rarebit/node_modules/@earendil-works/pi-coding-agent"].version="0";writeFileSync(p,JSON.stringify(d))});
 state("timeline manifest dependency","timeline-dependency",({root})=>{const p=path.join(root,"apps/timeline/package.json"),d=json(p);d.dependencies["@hypercarrier/rarebit"]="0";writeFileSync(p,JSON.stringify(d))});
 state("exception missing","missing-exception",({root})=>rmSync(path.join(root,"config/rarebit-alpha.1-bootstrap-exception.json")));
 state("exception digest","exception-digest",({root})=>writeFileSync(path.join(root,"config/rarebit-alpha.1-bootstrap-exception.json"),"{}"));
-test("the exact alpha.4 dry-run and publish nonces are the only declared public nonces",()=>{const record=json(path.join(root,"config/rarebit-compatibility.json"));assert.deepEqual(new Set([record.verification.dryRun.nonce,record.verification.publish.nonce]),new Set(["b50a45f4-96ca-4d5a-8f51-5a95ea6d0ae8","36d95631-a45b-4769-9e15-18129ce54e52"]))});
+test("the exact alpha.5 dry-run and publish nonces are the only declared public nonces",()=>{const record=json(path.join(root,"config/rarebit-compatibility.json"));assert.deepEqual(new Set([record.verification.dryRun.nonce,record.verification.publish.nonce]),new Set(["212baec3-faba-451c-a713-cddd1ecc6f7a","7d4dd74c-d6b8-45bc-b04c-b58e33af374c"]))});
 for (const [name,keys,value] of [
- ["source commit",["source","commit"],"734aeb57d71c268fdabd723feefdd717785e9f9d"],
- ["source tree",["source","tree"],"1511e9f09ea7d1b68fb61613fc8620a94b3401c6"],
- ["tag object",["source","tagObject"],"4b06aacbfddaa1c8209fcd63731c9962bbf2536f"],
- ["package version",["package","version"],"0.1.0-alpha.2"],
- ["artifact SRI",["publication","sri"],"sha512-jZEIYB7xtY9YxaSI55bsLlMu1QiYDpknYKhBClYWJ6TQCIz0rLuB01qM/k3BpQAjOgdAtOQdjv/TEQeph+SXqA=="],
- ["dry-run nonce",["verification","dryRun","nonce"],["69b0e035","186a","4470","9324","a22f003f7710"].join("-")],
- ["publish nonce",["verification","publish","nonce"],["757148b5","fb6b","4e95","8313","62f98eb3ae42"].join("-")]
-]) state(`real alpha.2 drift ${name}`,"invalid-record",({root})=>{const p=path.join(root,"config/rarebit-compatibility.json"),d=json(p);let o=d;for(const k of keys.slice(0,-1))o=o[k];o[keys.at(-1)]=value;writeFileSync(p,JSON.stringify(d))});
-for (const keys of [["source","tree"],["source","tagObject"],["package","version"],["publication","sri"],["publication","signature","value"],["verification","ci","run"],["verification","dryRun","nonce"],["verification","publish","run"],["verification","publish","url"],["verification","publish","nonce"],["verification","publish","ref"],["verification","publish","head"],["verification","publish","attestation"],["verification","publish","attestationEndpoint"],["verification","publish","slsaPredicateType"],["verification","publish","workflow"],["verification","publish","workflowRef"],["verification","publish","resolvedCommit"],["verification","publish","invocation"]]) state(`immutable drift ${keys.join(".")}`,"invalid-record",({root})=>{const p=path.join(root,"config/rarebit-compatibility.json"),d=json(p);let o=d;for(const k of keys.slice(0,-1))o=o[k];o[keys.at(-1)]="wrong";writeFileSync(p,JSON.stringify(d))});
+ ["source commit",["source","commit"],"336565fb132404c02f5adbbe1be4d86c2206e035"],
+ ["source tree",["source","tree"],"ed87414cb9b5b1f8e77dab0d66dfa279d5f740a8"],
+ ["tag object",["source","tagObject"],"2cf294c20a54ff36eb8ae2864216ea6983bc4dc8"],
+ ["package version",["package","version"],"0.1.0-alpha.4"],
+ ["artifact SRI",["publication","sri"],"sha512-x4CzTUQX9xwdsJzLJqIlghkfypOjwEHj0ScJXWhrdE/HyB9ISTG/vobaaWFX51tWSekSH3bczVOVSksNxH7Ixw=="],
+ ["dry-run nonce",["verification","dryRun","nonce"],["b50a45f4","96ca","4d5a","8f51","5a95ea6d0ae8"].join("-")],
+ ["publish nonce",["verification","publish","nonce"],["36d95631","a45b","4769","9e15","18129ce54e52"].join("-")]
+]) state(`real alpha.4 drift ${name}`,"invalid-record",({root})=>{const p=path.join(root,"config/rarebit-compatibility.json"),d=json(p);let o=d;for(const k of keys.slice(0,-1))o=o[k];o[keys.at(-1)]=value;writeFileSync(p,JSON.stringify(d))});
+for (const keys of [["source","tree"],["source","tagObject"],["package","version"],["publication","sri"],["publication","signature","value"],["verification","ci","run"],["lineage","sourceReceipt","blob"],["lineage","sourceReceipt","sha256"],["lineage","releaseReceipt","asset"],["lineage","releaseReceipt","sha256"],["verification","dryRun","nonce"],["verification","publish","run"],["verification","publish","url"],["verification","publish","nonce"],["verification","publish","ref"],["verification","publish","head"],["verification","publish","attestation"],["verification","publish","attestationEndpoint"],["verification","publish","slsaPredicateType"],["verification","publish","workflow"],["verification","publish","workflowRef"],["verification","publish","resolvedCommit"],["verification","publish","invocation"]]) state(`immutable drift ${keys.join(".")}`,"invalid-record",({root})=>{const p=path.join(root,"config/rarebit-compatibility.json"),d=json(p);let o=d;for(const k of keys.slice(0,-1))o=o[k];o[keys.at(-1)]="wrong";writeFileSync(p,JSON.stringify(d))});
