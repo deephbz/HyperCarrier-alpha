@@ -10,10 +10,10 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const RECORD_PATH = "config/pi-team-bright-compatibility.json";
 const SCHEMA_PATH = "config/schemas/pi-team-bright-compatibility.schema.json";
 const SUBMODULE_PATH = "packages/pi-team-bright";
-const SOURCE = Object.freeze({ repository: "https://github.com/deephbz/pi-team-bright.git", commit: "fada68bf65e85bfb105ac03ec1a8d97bec03cff1", tree: "cbe7a112485ec01385eb75d548f5c3b73999cd06" });
-const PACKAGE = Object.freeze({ name: "@hypercarrier/pi-team-bright", version: "0.17.3" });
+const SOURCE = Object.freeze({ repository: "https://github.com/deephbz/pi-team-bright.git", commit: "06ee423380e4fb0ce79f15887bd637cd2a56e024", tree: "caa844f69a0f2af52200385a2447b37170d0b077" });
+const PACKAGE = Object.freeze({ name: "@hypercarrier/pi-team-bright", version: "0.17.4" });
 const PEERS = Object.freeze({ "@earendil-works/pi-ai": ">=0.83.0", "@earendil-works/pi-coding-agent": ">=0.83.0", "@earendil-works/pi-tui": ">=0.83.0", typebox: "^1.1.38" });
-const PUBLICATION = Object.freeze({ state: "published", npmIntegrity: "sha512-+vGDjwx8msn3/JHwM8OkrPnnP2mDhW2vhw9OuEpeaBNArHICgsPYfRYgxPKI43+pcN3eOifSuGKk6ZMiyZQWlQ==", npmShasum: "1cdbbf14559beb0d54f0bfe3c7c46c9336bc6c09", tarball: "https://registry.npmjs.org/@hypercarrier/pi-team-bright/-/pi-team-bright-0.17.3.tgz", tarballSha256: "04c93d534f6fcc781f3e61398caf9fb6912fa60ddd396dbc23961b28e4c0a8e8", tag: "v0.17.3", releaseUrl: "https://github.com/deephbz/pi-team-bright/releases/tag/v0.17.3", publishUrl: "https://github.com/deephbz/pi-team-bright/actions/runs/32241628625", distTag: "latest", tarEntries: 197 });
+const PUBLICATION = Object.freeze({ state: "published", npmIntegrity: "sha512-qgH/CjywDL9i3BtIYUnOWmBdgoEjOZ2VtEB3c5+6lZXEFqgI9gKw9+3VuFabJ3pM0Sby3S6CWTAuJFDrhJ2Apw==", npmShasum: "49a6ca620fc18302c39d068aace7d11b567ac0bf", tarball: "https://registry.npmjs.org/@hypercarrier/pi-team-bright/-/pi-team-bright-0.17.4.tgz", tarballSha256: "cc20e4459bef5d9debf0f4e3109c25505dbf6291030c7fac40c76db9de7f06eb", tag: "v0.17.4", releaseUrl: "https://github.com/deephbz/pi-team-bright/releases/tag/v0.17.4", publishUrl: "https://github.com/deephbz/pi-team-bright/actions/runs/32259352783", distTag: "latest", tarEntries: 198 });
 const REQUIRED_RECEIPTS = ["stable-release-dry-run", "stable-oidc-publication", "registry-byte-verification", "release-lane-closure"];
 
 function git(root, args) { return execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim(); }

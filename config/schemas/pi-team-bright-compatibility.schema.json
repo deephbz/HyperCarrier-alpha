@@ -12,28 +12,28 @@
       "type": "object", "additionalProperties": false, "required": ["repository", "commit", "tree"],
       "properties": {
         "repository": { "const": "https://github.com/deephbz/pi-team-bright.git" },
-        "commit": { "const": "fada68bf65e85bfb105ac03ec1a8d97bec03cff1" },
-        "tree": { "const": "cbe7a112485ec01385eb75d548f5c3b73999cd06" }
+        "commit": { "const": "06ee423380e4fb0ce79f15887bd637cd2a56e024" },
+        "tree": { "const": "caa844f69a0f2af52200385a2447b37170d0b077" }
       }
     },
     "package": {
       "type": "object", "additionalProperties": false, "required": ["name", "version"],
-      "properties": { "name": { "const": "@hypercarrier/pi-team-bright" }, "version": { "const": "0.17.3" } }
+      "properties": { "name": { "const": "@hypercarrier/pi-team-bright" }, "version": { "const": "0.17.4" } }
     },
     "publication": {
       "type": "object", "additionalProperties": false,
       "required": ["state", "npmIntegrity", "npmShasum", "tarball", "tarballSha256", "tag", "releaseUrl", "publishUrl", "distTag", "tarEntries"],
       "properties": {
         "state": { "const": "published" },
-        "npmIntegrity": { "const": "sha512-+vGDjwx8msn3/JHwM8OkrPnnP2mDhW2vhw9OuEpeaBNArHICgsPYfRYgxPKI43+pcN3eOifSuGKk6ZMiyZQWlQ==" },
-        "npmShasum": { "const": "1cdbbf14559beb0d54f0bfe3c7c46c9336bc6c09" },
-        "tarball": { "const": "https://registry.npmjs.org/@hypercarrier/pi-team-bright/-/pi-team-bright-0.17.3.tgz" },
-        "tarballSha256": { "const": "04c93d534f6fcc781f3e61398caf9fb6912fa60ddd396dbc23961b28e4c0a8e8" },
-        "tag": { "const": "v0.17.3" },
-        "releaseUrl": { "const": "https://github.com/deephbz/pi-team-bright/releases/tag/v0.17.3" },
-        "publishUrl": { "const": "https://github.com/deephbz/pi-team-bright/actions/runs/32241628625" },
+        "npmIntegrity": { "const": "sha512-qgH/CjywDL9i3BtIYUnOWmBdgoEjOZ2VtEB3c5+6lZXEFqgI9gKw9+3VuFabJ3pM0Sby3S6CWTAuJFDrhJ2Apw==" },
+        "npmShasum": { "const": "49a6ca620fc18302c39d068aace7d11b567ac0bf" },
+        "tarball": { "const": "https://registry.npmjs.org/@hypercarrier/pi-team-bright/-/pi-team-bright-0.17.4.tgz" },
+        "tarballSha256": { "const": "cc20e4459bef5d9debf0f4e3109c25505dbf6291030c7fac40c76db9de7f06eb" },
+        "tag": { "const": "v0.17.4" },
+        "releaseUrl": { "const": "https://github.com/deephbz/pi-team-bright/releases/tag/v0.17.4" },
+        "publishUrl": { "const": "https://github.com/deephbz/pi-team-bright/actions/runs/32259352783" },
         "distTag": { "const": "latest" },
-        "tarEntries": { "const": 197 }
+        "tarEntries": { "const": 198 }
       }
     },
     "pi": {
@@ -85,7 +85,7 @@
     },
     "gitlink": {
       "type": "object", "additionalProperties": false, "required": ["path", "mode", "commit"],
-      "properties": { "path": { "const": "packages/pi-team-bright" }, "mode": { "const": "160000" }, "commit": { "const": "fada68bf65e85bfb105ac03ec1a8d97bec03cff1" } }
+      "properties": { "path": { "const": "packages/pi-team-bright" }, "mode": { "const": "160000" }, "commit": { "const": "06ee423380e4fb0ce79f15887bd637cd2a56e024" } }
     },
     "parentVerification": {
       "type": "object", "additionalProperties": false, "required": ["state", "verifier", "requiredCheckout"],

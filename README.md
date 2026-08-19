@@ -15,7 +15,7 @@ testing. It contains these components:
   Agent scopes from local Pi Session evidence and explicit PiTeams attribution.
 
 Rarebit `0.1.0-alpha.5` is a published npm prerelease on `next`, while
-`latest` remains `0.1.0-alpha.4`. Pi Team Bright `0.17.3` is a stable npm
+`latest` remains `0.1.0-alpha.4`. Pi Team Bright `0.17.4` is a stable npm
 release on `latest`. Pi OpenAI Blackmagic Compact `0.1.0-rc.8` is a published
 npm prerelease on `next`, while `latest` remains `0.1.0-rc.5`. These release
 facts describe the composed artifacts. They do not claim that each component is
@@ -243,7 +243,7 @@ uv run --locked --project tools/herdr-pi-recovery herdr-pi-recovery plan
 plan first. Each tool README gives exact use, verification, and removal steps.
 
 Pi Team Bright orchestration and its graph-native Task authority are maintained in
-[deephbz/pi-team-bright](https://github.com/deephbz/pi-team-bright). Clone this Alpha with `git clone --recurse-submodules`; a non-recursive clone intentionally lacks `packages/pi-team-bright` until `git submodule update --init --recursive` is run. The gitlink composes the verified `0.17.3` source revision. The compatibility record separately verifies the immutable `@hypercarrier/pi-team-bright@0.17.3` npm artifact and its public release receipts.
+[deephbz/pi-team-bright](https://github.com/deephbz/pi-team-bright). Clone this Alpha with `git clone --recurse-submodules`; a non-recursive clone intentionally lacks `packages/pi-team-bright` until `git submodule update --init --recursive` is run. The gitlink composes the verified `0.17.4` source revision. The compatibility record separately verifies the immutable `@hypercarrier/pi-team-bright@0.17.4` npm artifact and its public release receipts.
 
 ## Trust model
 
