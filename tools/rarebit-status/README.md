@@ -5,6 +5,34 @@ It projects producer-owned Rarebit artifact state into a two-tab popup: Summary
 and Rarebit-message timeline. It is an external consumer, not a public release
 gate or a Rarebit, Session, runtime, Task, or delivery authority.
 
+It requires Herdr 0.7.5 or newer, Node.js 22.19 or newer, and this checkout's
+verified `packages/hc-rarebit` submodule.
+
+## Install and open
+
+Run these commands from the HyperCarrier checkout root:
+
+```bash
+plugin_root="$PWD/tools/rarebit-status"
+herdr plugin link "$plugin_root"
+herdr plugin enable rarebit-status
+herdr plugin list --plugin rarebit-status --json
+herdr config check
+herdr server reload-config
+herdr plugin action invoke rarebit-status.refresh-all
+herdr plugin action invoke rarebit-status.open
+```
+
+The JSON record must show plugin id `rarebit-status`, the exact `plugin_root`,
+the `open` action, and the `rarebit-deck` pane. The open action uses the current
+exactly bound Pi pane. The example sidebar rows and shortcut are in
+`config/herdr.example.toml` in a public Alpha checkout. Merge only the blocks
+you need into the live Herdr configuration, then check and reload it again.
+
+Rarebit Status, Pi Teams Hierarchy, and Agent View Presets can run together.
+They use separate metadata tokens, and only Agent View Presets owns the Agent
+filter.
+
 ## Behavior
 
 The plugin binds only to Herdr's exact `agent_session { agent=pi, kind=path }`

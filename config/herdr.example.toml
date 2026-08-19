@@ -16,11 +16,13 @@ zoom = "cmd+f"
 agent_panel_sort = "spaces"
 show_agent_labels_on_pane_borders = true
 
-# Exact-Session Rarebit state plus the Summary/timeline deck shortcut.
+# Pi Team Membership role and exact-Session Rarebit state. The tab supplies
+# Team context, so the role row does not repeat the Team name.
 [ui.sidebar.agents]
 row_gap = 0
 rows = [
   ["state_icon", { token = "tab", bold = true, dim = false }, { token = "workspace", bold = false, dim = true }, { token = "$rarebit_attention", bold = true }, { token = "$rarebit_error", bold = true }],
+  [{ token = "$pi_team_lead", bold = false, dim = false }, { token = "$pi_team_worker", bold = false, dim = true }],
   [{ token = "$rarebit_state_neutral" }, { token = "$rarebit_state_attention", bold = true }, { token = "$rarebit_state_muted", dim = true }, { token = "$rarebit_state_diagnostic", bold = true }, { token = "$rarebit_state" }],
   [{ token = "$rarebit_user_age", dim = true }, { token = "$rarebit_stop_age", dim = true }],
 ]

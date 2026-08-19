@@ -15,7 +15,7 @@ testing. It contains these components:
   Agent scopes from local Pi Session evidence and explicit PiTeams attribution.
 
 Rarebit `0.1.0-alpha.5` is a published npm prerelease on `next`, while
-`latest` remains `0.1.0-alpha.4`. Pi Team Bright `0.17.1` is a stable npm
+`latest` remains `0.1.0-alpha.4`. Pi Team Bright `0.17.3` is a stable npm
 release on `latest`. Pi OpenAI Blackmagic Compact `0.1.0-rc.8` is a published
 npm prerelease on `next`, while `latest` remains `0.1.0-rc.5`. These release
 facts describe the composed artifacts. They do not claim that each component is
@@ -141,10 +141,11 @@ find "$candidate" -type f | sort
 
 The `config/` directory contains a portable terminal behavior/keybinding bundle:
 
-- `herdr.example.toml` configures pane navigation, Cmd+F zoom, the Rarebit
-  Status and Agent View Presets controls, and file-viewer shortcuts;
+- `herdr.example.toml` configures pane navigation, Cmd+F zoom, the role-only
+  Pi Teams hierarchy row, Rarebit Status and Agent View Presets controls, and
+  file-viewer shortcuts;
 - `herdr.plugins.lock.toml` records complete plugin installation intent for the
-  two plugins shipped in this checkout and the pinned external file viewer;
+  three plugins shipped in this checkout and the pinned external file viewer;
 - `ghostty.example.config` combines non-color terminal settings with the macOS
   keybindings that pass those controls through.
 
@@ -159,6 +160,8 @@ herdr plugin link "$PWD/tools/agent-view-presets"
 herdr plugin enable agent-view-presets
 herdr plugin link "$PWD/tools/rarebit-status"
 herdr plugin enable rarebit-status
+herdr plugin link "$PWD/tools/pi-teams-hierarchy"
+herdr plugin enable pi-teams-hierarchy
 herdr plugin install --ref 96fcc0a2bdd2727ec88c38f8c8806f97b7ca0ea0 -y smarzban/herdr-file-viewer
 ```
 
@@ -198,19 +201,35 @@ paths and private instructions, so keep them as sensitive local artifacts.
 
 ## Optional Herdr tools
 
-Three local tools are included for Herdr operators. They require [Herdr](https://github.com/deephbz/herdr) 0.7.5 or newer; the two plugins also use the Node.js runtime already required above. `agent-view-presets` reads local PiTeams membership files, and `rarebit-status` additionally requires a Pi checkout configured with this checkout's `packages/hc-rarebit` gitlink path. The recovery CLI requires Python 3.12 or newer and [uv](https://docs.astral.sh/uv/).
+This checkout includes three Herdr plugins and one separate recovery CLI. They
+require [Herdr](https://github.com/deephbz/herdr) 0.7.5 or newer. The plugins
+use Node.js. `rarebit-status` also requires the verified Rarebit submodule, and
+`pi-teams-hierarchy` requires the verified Pi Team Bright submodule. The
+recovery CLI requires Python 3.12 or newer and
+[uv](https://docs.astral.sh/uv/); it is not a Herdr plugin.
 
-From the public checkout root, link and enable the plugins:
+From the public checkout root, link and enable each plugin. Then verify the
+records, check the merged configuration, reload Herdr, and invoke the actions:
 
 ```sh
-herdr plugin link "$PWD/tools/agent-view-presets"
-herdr plugin enable agent-view-presets
-herdr plugin action invoke agent-view-presets.no-teammates
+for plugin in agent-view-presets rarebit-status pi-teams-hierarchy; do
+  herdr plugin link "$PWD/tools/$plugin"
+  herdr plugin enable "$plugin"
+  herdr plugin list --plugin "$plugin" --json
+done
+herdr config check
+herdr server reload-config
 
-herdr plugin link "$PWD/tools/rarebit-status"
-herdr plugin enable rarebit-status
+herdr plugin action invoke agent-view-presets.no-teammates
 herdr plugin action invoke rarebit-status.open
+herdr plugin action invoke pi-teams-hierarchy.refresh-all
 ```
+
+The example Agent-sidebar row shows only the stable Team Membership role. The
+containing tab supplies Team context, and Workers use a muted `↳` child row.
+Rarebit Status and Pi Teams Hierarchy own separate metadata tokens. Agent View
+Presets alone owns the optional Agent filter, so the three plugins can run
+together.
 
 Run the recovery CLI without a private-machine path:
 
@@ -220,10 +239,11 @@ uv run --locked --project tools/herdr-pi-recovery herdr-pi-recovery dump
 uv run --locked --project tools/herdr-pi-recovery herdr-pi-recovery plan
 ```
 
-`restore --execute` changes live Herdr panes, so inspect the default dry-run plan first. Each tool's README documents its boundary and recovery behavior.
+`restore --execute` changes live Herdr panes, so inspect the default dry-run
+plan first. Each tool README gives exact use, verification, and removal steps.
 
 Pi Team Bright orchestration and its graph-native Task authority are maintained in
-[deephbz/pi-team-bright](https://github.com/deephbz/pi-team-bright). Clone this Alpha with `git clone --recurse-submodules`; a non-recursive clone intentionally lacks `packages/pi-team-bright` until `git submodule update --init --recursive` is run. The gitlink composes the verified `0.17.1` source revision. The compatibility record separately verifies the immutable `@hypercarrier/pi-team-bright@0.17.1` npm artifact and its public release receipts.
+[deephbz/pi-team-bright](https://github.com/deephbz/pi-team-bright). Clone this Alpha with `git clone --recurse-submodules`; a non-recursive clone intentionally lacks `packages/pi-team-bright` until `git submodule update --init --recursive` is run. The gitlink composes the verified `0.17.3` source revision. The compatibility record separately verifies the immutable `@hypercarrier/pi-team-bright@0.17.3` npm artifact and its public release receipts.
 
 ## Trust model
 

@@ -3,22 +3,22 @@
   "component": "pi-team-bright",
   "source": {
     "repository": "https://github.com/deephbz/pi-team-bright.git",
-    "commit": "83c01ebdadfc85cd2dc856bb8f01579c285b1c5d",
-    "tree": "7acadbc61bada62f17210b2aa3ea8130c1b1cf14"
+    "commit": "fada68bf65e85bfb105ac03ec1a8d97bec03cff1",
+    "tree": "cbe7a112485ec01385eb75d548f5c3b73999cd06"
   },
   "package": {
     "name": "@hypercarrier/pi-team-bright",
-    "version": "0.17.1"
+    "version": "0.17.3"
   },
   "publication": {
     "state": "published",
-    "npmIntegrity": "sha512-8gW4W3usqH34fcY5m+mn6itWp+qQl0WVQ0W1CX2fve7/KzT5ez/6uCsg9F/YdWaEY3Im2Kj2YGTlrmqrlx5tvA==",
-    "npmShasum": "db0446a58dfd696a39ad81e75ded4b7265e7c9a3",
-    "tarball": "https://registry.npmjs.org/@hypercarrier/pi-team-bright/-/pi-team-bright-0.17.1.tgz",
-    "tarballSha256": "30487e6bc1137bb73974bb85a1ba6c422557001c5ec4ebdb8bb5c91ffac18199",
-    "tag": "v0.17.1",
-    "releaseUrl": "https://github.com/deephbz/pi-team-bright/releases/tag/v0.17.1",
-    "publishUrl": "https://github.com/deephbz/pi-team-bright/actions/runs/31930158085",
+    "npmIntegrity": "sha512-+vGDjwx8msn3/JHwM8OkrPnnP2mDhW2vhw9OuEpeaBNArHICgsPYfRYgxPKI43+pcN3eOifSuGKk6ZMiyZQWlQ==",
+    "npmShasum": "1cdbbf14559beb0d54f0bfe3c7c46c9336bc6c09",
+    "tarball": "https://registry.npmjs.org/@hypercarrier/pi-team-bright/-/pi-team-bright-0.17.3.tgz",
+    "tarballSha256": "04c93d534f6fcc781f3e61398caf9fb6912fa60ddd396dbc23961b28e4c0a8e8",
+    "tag": "v0.17.3",
+    "releaseUrl": "https://github.com/deephbz/pi-team-bright/releases/tag/v0.17.3",
+    "publishUrl": "https://github.com/deephbz/pi-team-bright/actions/runs/32241628625",
     "distTag": "latest",
     "tarEntries": 197
   },
@@ -49,29 +49,29 @@
       {
         "name": "stable-release-dry-run",
         "command": "npm run test:full && npm run test:lanes && npm run verify:package",
-        "result": "passed from exact stable source in dry-run 31929515781"
+        "result": "passed from exact stable source in dry-run 32241058837"
       },
       {
         "name": "stable-oidc-publication",
         "command": "npm run test:full && npm run test:lanes && npm run verify:package && npm publish --provenance --tag latest",
-        "result": "passed and published from exact stable source in run 31930158085"
+        "result": "passed and published from exact stable source in run 32241628625"
       },
       {
         "name": "registry-byte-verification",
         "command": "download the registry tarball and recompute integrity, SHA-1, SHA-256, SHA-512, size, and entry count",
-        "result": "matched the immutable 197-file v0.17.1 registry tuple"
+        "result": "matched the immutable 197-file v0.17.3 registry tuple"
       },
       {
         "name": "release-lane-closure",
         "command": "clean exact-source test:full and test:lanes",
-        "result": "passed the final aggregate plus 120 fast and 23 exhaustive lanes at source 83c01eb"
+        "result": "passed the final aggregate plus 120 fast and 23 exhaustive lanes at source fada68b"
       }
     ]
   },
   "gitlink": {
     "path": "packages/pi-team-bright",
     "mode": "160000",
-    "commit": "83c01ebdadfc85cd2dc856bb8f01579c285b1c5d"
+    "commit": "fada68bf65e85bfb105ac03ec1a8d97bec03cff1"
   },
   "parentVerification": {
     "state": "verified",

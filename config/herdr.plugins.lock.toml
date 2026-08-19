@@ -17,6 +17,13 @@ expected_version = "0.4.0"
 enabled = true
 
 [[plugins]]
+id = "pi-teams-hierarchy"
+source = "checkout"
+path = "tools/pi-teams-hierarchy"
+expected_version = "0.1.0"
+enabled = true
+
+[[plugins]]
 id = "herdr-file-viewer"
 source = "github"
 repository = "smarzban/herdr-file-viewer"
