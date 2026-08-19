@@ -11,8 +11,10 @@ import {
 import {
   clampTraceRange,
   normalizeTraceQuery,
+  ordinalCellGeometry,
   reconcileTraceRange,
   recordMatchesNormalizedTraceQuery,
+  recordSemanticTag,
   recordWithinTraceRange,
   traceBounds,
   traceTransition,
@@ -26,8 +28,8 @@ const MINIMUM_VIEWPORT_RECORDS = 4;
 const INSPECTOR_MIN_WIDTH = 320;
 const INSPECTOR_MAX_WIDTH = 720;
 const OVERVIEW_HEIGHT = 126;
-const LEDGER_ROW_HEIGHT = 62;
-const FOLD_SUMMARY_HEIGHT = 32;
+const LEDGER_ROW_HEIGHT = 36;
+const FOLD_SUMMARY_HEIGHT = 28;
 const VIRTUAL_OVERSCAN = 8;
 
 const traceLanes = ["input", "model", "tools"] as const;
@@ -68,11 +70,6 @@ function timestampLabel(value: TraceRecord["timestamp"]) {
   if (value === null) return "Time unavailable";
   const date = new Date(value);
   return Number.isNaN(date.valueOf()) ? "Time unavailable" : date.toLocaleString();
-}
-
-function recordSummary(record: TraceRecord) {
-  const text = record.text.replaceAll(/\s+/g, " ").trim();
-  return text || record.label;
 }
 
 function traceUrl(sessionId: string) {
@@ -188,6 +185,152 @@ function ledgerClass(
     .join(" ");
 }
 
+function lanePaintStyle(lane: TraceLane): CSSProperties {
+  return { "--lane-paint": lanePresentation[lane].paint } as CSSProperties;
+}
+
+function SemanticTag({ record }: { record: TraceRecord }) {
+  const tag = recordSemanticTag(record);
+  if (tag === null) return null;
+  return (
+    <span aria-hidden="true" className="semantic-tag" style={lanePaintStyle(tag.lane)}>
+      {tag.label}
+    </span>
+  );
+}
+
+interface OverviewDensityBucket {
+  errors: number;
+  focused: number;
+  matches: number;
+  rarebits: number;
+  total: number;
+}
+
+function overviewRecordOpacity(
+  record: TraceRecord,
+  matchedRecords: ReadonlySet<string> | null,
+  range: TraceRange | null,
+) {
+  return (
+    (matchedRecords === null || matchedRecords.has(record.recordId) ? 1 : 0.18) *
+    (recordWithinTraceRange(record, range) ? 1 : 0.45)
+  );
+}
+
+function drawSparseOrdinalCells(
+  context: CanvasRenderingContext2D,
+  records: readonly TraceRecord[],
+  domain: TraceRange,
+  columns: number,
+  matchedRecords: ReadonlySet<string> | null,
+  range: TraceRange | null,
+) {
+  for (const record of records) {
+    const cell = ordinalCellGeometry(record.order, domain, columns);
+    if (cell === null || cell.end <= cell.start) continue;
+    const lane = lanePresentation[record.lane];
+    const width = cell.end - cell.start;
+    context.globalAlpha = overviewRecordOpacity(record, matchedRecords, range);
+    context.fillStyle = lane.paint;
+    context.fillRect(cell.start, lane.top, width, 25);
+    if (record.details.isError) {
+      context.fillStyle = "#d06470";
+      context.fillRect(cell.start, lane.top, width, 2);
+      context.fillRect(cell.start, lane.top + 23, width, 2);
+    }
+    if (record.rarebit) {
+      context.globalAlpha = 1;
+      context.fillStyle = "#f4d078";
+      context.fillRect(cell.start, lane.top, width, 2);
+    }
+  }
+}
+
+function drawDenseOrdinalCells(
+  context: CanvasRenderingContext2D,
+  records: readonly TraceRecord[],
+  domain: TraceRange,
+  columns: number,
+  matchedRecords: ReadonlySet<string> | null,
+  range: TraceRange | null,
+) {
+  const buckets: OverviewDensityBucket[][] = traceLanes.map(() =>
+    Array.from({ length: columns }, () => ({
+      errors: 0,
+      focused: 0,
+      matches: 0,
+      rarebits: 0,
+      total: 0,
+    })),
+  );
+  for (const record of records) {
+    const cell = ordinalCellGeometry(record.order, domain, columns);
+    if (cell === null) continue;
+    const lane = traceLanes.indexOf(record.lane);
+    const bucket = buckets[lane][Math.min(columns - 1, cell.start)];
+    bucket.total += 1;
+    if (matchedRecords === null || matchedRecords.has(record.recordId)) bucket.matches += 1;
+    if (recordWithinTraceRange(record, range)) bucket.focused += 1;
+    if (record.rarebit) bucket.rarebits += 1;
+    if (record.details.isError) bucket.errors += 1;
+  }
+  for (const [laneIndex, lane] of traceLanes.entries())
+    for (const [column, bucket] of buckets[laneIndex].entries()) {
+      if (bucket.total === 0) continue;
+      const density = Math.min(0.95, 0.3 + Math.log2(bucket.total + 1) * 0.16);
+      const matchRatio = bucket.matches / bucket.total;
+      const focusRatio = bucket.focused / bucket.total;
+      context.globalAlpha =
+        density * (matchRatio > 0 ? matchRatio : 0.18) * (0.45 + focusRatio * 0.55);
+      context.fillStyle = lanePresentation[lane].paint;
+      context.fillRect(column, lanePresentation[lane].top, 1, 25);
+      if (bucket.errors > 0) {
+        context.fillStyle = "#d06470";
+        context.fillRect(column, lanePresentation[lane].top, 1, 2);
+        context.fillRect(column, lanePresentation[lane].top + 23, 1, 2);
+      }
+      if (bucket.rarebits > 0) {
+        context.globalAlpha = 1;
+        context.fillStyle = "#f4d078";
+        context.fillRect(column, lanePresentation[lane].top, 1, 2);
+      }
+    }
+}
+
+function drawOverviewRecords(
+  context: CanvasRenderingContext2D,
+  records: readonly TraceRecord[],
+  domain: TraceRange,
+  columns: number,
+  matchedRecords: ReadonlySet<string> | null,
+  range: TraceRange | null,
+) {
+  if (domain.end - domain.start <= columns) {
+    drawSparseOrdinalCells(context, records, domain, columns, matchedRecords, range);
+    return;
+  }
+  drawDenseOrdinalCells(context, records, domain, columns, matchedRecords, range);
+}
+
+function drawOverviewSelection(
+  context: CanvasRenderingContext2D,
+  records: readonly TraceRecord[],
+  selectedId: string | null,
+  domain: TraceRange,
+  columns: number,
+) {
+  const selected = records.find((record) => record.recordId === selectedId);
+  const cell = selected ? ordinalCellGeometry(selected.order, domain, columns) : null;
+  if (selected === undefined || cell === null) return;
+  const start = Math.min(columns - 1, cell.start);
+  context.globalAlpha = 1;
+  context.strokeStyle = "#eef8ff";
+  context.lineWidth = 2;
+  // A collapsed dense cell gets one locator pixel, not a duration-bearing interval.
+  context.strokeRect(start, lanePresentation[selected.lane].top, Math.max(1, cell.end - start), 25);
+}
+
 function Overview({
   records,
   fullBounds,
@@ -272,57 +415,8 @@ function Overview({
     context.setTransform(scale, 0, 0, scale, 0, 0);
     context.clearRect(0, 0, canvasWidth, OVERVIEW_HEIGHT);
     const columns = Math.max(1, Math.ceil(canvasWidth));
-    const lanes = traceLanes;
-    const buckets = lanes.map(() =>
-      Array.from({ length: columns }, () => ({
-        errors: 0,
-        focused: 0,
-        matches: 0,
-        rarebits: 0,
-        total: 0,
-      })),
-    );
-    for (const record of records) {
-      if (record.order < domain.start || record.order >= domain.end) continue;
-      const lane = lanes.indexOf(record.lane);
-      const column = Math.min(
-        columns - 1,
-        Math.max(
-          0,
-          Math.floor(((record.order - domain.start) / (domain.end - domain.start)) * columns),
-        ),
-      );
-      const bucket = buckets[lane][column];
-      bucket.total += 1;
-      if (matchedRecords === null || matchedRecords.has(record.recordId)) bucket.matches += 1;
-      if (recordWithinTraceRange(record, range)) bucket.focused += 1;
-      if (record.rarebit) bucket.rarebits += 1;
-      if (record.details.isError) bucket.errors += 1;
-    }
-    for (const [lane, laneBuckets] of lanes.map((name, index) => [name, buckets[index]] as const))
-      for (const [column, bucket] of laneBuckets.entries()) {
-        if (bucket.total === 0) continue;
-        const density = Math.min(0.95, 0.3 + Math.log2(bucket.total + 1) * 0.16);
-        const matchRatio = bucket.matches / bucket.total;
-        const focusRatio = bucket.focused / bucket.total;
-        context.globalAlpha =
-          density * (matchRatio > 0 ? matchRatio : 0.18) * (0.45 + focusRatio * 0.55);
-        context.fillStyle = bucket.errors > 0 ? "#d06470" : lanePresentation[lane].paint;
-        context.fillRect(column, lanePresentation[lane].top, 1, 25);
-        if (bucket.rarebits > 0) {
-          context.globalAlpha = 1;
-          context.fillStyle = "#f4d078";
-          context.fillRect(column, lanePresentation[lane].top, 1, 2);
-        }
-      }
-    const selected = records.find((record) => record.recordId === selectedId);
-    if (selected && selected.order >= domain.start && selected.order < domain.end) {
-      const column = ((selected.order - domain.start) / (domain.end - domain.start)) * columns;
-      context.globalAlpha = 1;
-      context.strokeStyle = "#eef8ff";
-      context.lineWidth = 2;
-      context.strokeRect(column, lanePresentation[selected.lane].top, 2, 25);
-    }
+    drawOverviewRecords(context, records, domain, columns, matchedRecords, range);
+    drawOverviewSelection(context, records, selectedId, domain, columns);
     context.globalAlpha = 1;
   }, [canvasWidth, domain, matchedRecords, range, records, selectedId]);
 
@@ -357,9 +451,16 @@ function Overview({
 
   return (
     <section className="overview" ref={rootRef} aria-label="Trajectory overview">
-      <div className="overview-labels" aria-hidden="true">
+      <div aria-label="Overview lane keys" className="overview-labels">
         {traceLanes.map((lane) => (
-          <span key={lane}>{lanePresentation[lane].label}</span>
+          <span className="overview-lane-key" key={lane}>
+            <span
+              aria-hidden="true"
+              className="overview-lane-swatch"
+              style={lanePaintStyle(lane)}
+            />
+            {lanePresentation[lane].label}
+          </span>
         ))}
       </div>
       <div className="overview-main">
@@ -527,6 +628,9 @@ function RecordLedger({
 
   return (
     <section className="ledger" aria-label="Trace ledger">
+      <a className="ledger-skip" href="#trace-inspector">
+        Skip to inspector
+      </a>
       <div className="ledger-heading">
         <span>Order</span>
         <span>Event</span>
@@ -567,13 +671,11 @@ function RecordLedger({
                 type="button"
               >
                 <span className="record-number">#{item.record.order + 1}</span>
-                <span className="record-main">
-                  <span className="record-kind">
-                    {item.record.label}
-                    {item.record.turn !== null &&
-                      ` · T${item.record.turn}${item.record.step === null ? "" : ` S${item.record.step}`}`}
-                  </span>
-                  <span className="record-text">{recordSummary(item.record)}</span>
+                <span className="record-kind">
+                  <SemanticTag record={item.record} />
+                  {item.record.label}
+                  {item.record.turn !== null &&
+                    ` · T${item.record.turn}${item.record.step === null ? "" : ` S${item.record.step}`}`}
                 </span>
                 <time>{timestampLabel(item.record.timestamp)}</time>
               </button>
@@ -601,14 +703,19 @@ function Inspector({
   const [tab, setTab] = useState<"summary" | "content" | "raw" | "unavailable">("summary");
   if (record === null)
     return (
-      <aside className="inspector empty">
+      <aside className="inspector empty" id="trace-inspector" tabIndex={-1}>
         <h2>Inspector</h2>
         <p>Select a trace record.</p>
       </aside>
     );
   const tabs = ["summary", "content", "raw", "unavailable"] as const;
   return (
-    <aside className="inspector" aria-label="Exact record inspector">
+    <aside
+      aria-label="Exact record inspector"
+      className="inspector"
+      id="trace-inspector"
+      tabIndex={-1}
+    >
       <div
         aria-label="Resize inspector"
         aria-orientation="vertical"
@@ -737,7 +844,7 @@ export function TraceViewer() {
   const [query, setQuery] = useState("");
   const [rarebitOnly, setRarebitOnly] = useState(false);
   const [range, setRange] = useState<TraceRange | null>(null);
-  const [inspectorWidth, setInspectorWidth] = useState(500);
+  const [inspectorWidth, setInspectorWidth] = useState(460);
   const [collapsedTurns, setCollapsedTurns] = useState<ReadonlySet<number>>(new Set());
   const [collapsedCalls, setCollapsedCalls] = useState<ReadonlySet<string>>(new Set());
   const [transition, setTransition] = useState<TraceTransition>("initial");
@@ -886,6 +993,8 @@ export function TraceViewer() {
   );
   const resizeInspector = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
       const startX = event.clientX;
       const startWidth = inspectorWidth;
       const move = (next: PointerEvent) => {
@@ -998,50 +1107,52 @@ export function TraceViewer() {
         <p className="loading">Loading exact active-branch trace…</p>
       ) : (
         <>
-          <Overview
-            key={overviewEpoch}
-            fullBounds={activeBounds}
-            matchedRecords={matchedRecords}
-            onRangeChange={changeRange}
-            onSelect={selectRecord}
-            range={range}
-            records={scopedRecords}
-            selectedId={selectedId}
-          />
-          <p className="trace-scope-note">
-            {query.trim() === ""
-              ? "The dense overview and virtual ledger keep all active-branch evidence in scope."
-              : "Search dims non-matches; focus keeps all evidence visible."}
-          </p>
-          <div className="trace-workspace" style={traceWorkspaceStyle(inspectorWidth)}>
-            <RecordLedger
-              collapsedCalls={collapsedCalls}
-              collapsedTurns={collapsedTurns}
+          <div className="trace-workspace-frame" style={traceWorkspaceStyle(inspectorWidth)}>
+            <Overview
+              key={overviewEpoch}
+              fullBounds={activeBounds}
               matchedRecords={matchedRecords}
+              onRangeChange={changeRange}
               onSelect={selectRecord}
               range={range}
               records={scopedRecords}
-              revision={trace.sourceVersion}
               selectedId={selectedId}
-              transition={transition}
             />
-            <Inspector
-              key={selected?.recordId ?? "none"}
-              inspectorWidth={inspectorWidth}
-              onResizeBy={(pixels) =>
-                setInspectorWidth((current) =>
-                  Math.min(INSPECTOR_MAX_WIDTH, Math.max(INSPECTOR_MIN_WIDTH, current + pixels)),
-                )
-              }
-              onResizeStart={resizeInspector}
-              onSelectLinkedRecord={(id) => {
-                const target = trace.records.find((record) => record.recordId === id);
-                if (!target) return;
-                if (rarebitOnly && !target.rarebit) setRarebitOnly(false);
-                selectRecord(target);
-              }}
-              record={selected}
-            />
+            <p className="trace-scope-note">
+              {query.trim() === ""
+                ? "The dense overview and virtual ledger keep all active-branch evidence in scope."
+                : "Search dims non-matches; focus keeps all evidence visible."}
+            </p>
+            <div className="trace-workspace">
+              <RecordLedger
+                collapsedCalls={collapsedCalls}
+                collapsedTurns={collapsedTurns}
+                matchedRecords={matchedRecords}
+                onSelect={selectRecord}
+                range={range}
+                records={scopedRecords}
+                revision={trace.sourceVersion}
+                selectedId={selectedId}
+                transition={transition}
+              />
+              <Inspector
+                key={selected?.recordId ?? "none"}
+                inspectorWidth={inspectorWidth}
+                onResizeBy={(pixels) =>
+                  setInspectorWidth((current) =>
+                    Math.min(INSPECTOR_MAX_WIDTH, Math.max(INSPECTOR_MIN_WIDTH, current + pixels)),
+                  )
+                }
+                onResizeStart={resizeInspector}
+                onSelectLinkedRecord={(id) => {
+                  const target = trace.records.find((record) => record.recordId === id);
+                  if (!target) return;
+                  if (rarebitOnly && !target.rarebit) setRarebitOnly(false);
+                  selectRecord(target);
+                }}
+                record={selected}
+              />
+            </div>
           </div>
           <footer className="trace-footer">
             {trace.records.length} active-branch records · {scopedRecords.length} in scope ·{" "}

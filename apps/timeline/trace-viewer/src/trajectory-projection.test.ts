@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   clampTraceRange,
   normalizeTraceQuery,
+  ordinalCellGeometry,
   reconcileTraceRange,
   recordMatchesNormalizedTraceQuery,
+  recordSemanticTag,
   recordWithinTraceRange,
   traceBounds,
   traceTransition,
@@ -44,6 +46,39 @@ describe("Pi trace trajectory projection", () => {
       start: 8,
       end: 9,
     });
+  });
+
+  it("tiles visible ordinal cells at shared rounded boundaries", () => {
+    const domain = { start: 0, end: 3 };
+
+    expect(ordinalCellGeometry(0, domain, 10)).toEqual({ start: 0, end: 3 });
+    expect(ordinalCellGeometry(1, domain, 10)).toEqual({ start: 3, end: 7 });
+    expect(ordinalCellGeometry(2, domain, 10)).toEqual({ start: 7, end: 10 });
+  });
+
+  it("clips or aggregates ordinal cells without widening a false interval", () => {
+    expect(ordinalCellGeometry(1, { start: 2, end: 5 }, 12)).toBeNull();
+    expect(ordinalCellGeometry(2, { start: 2, end: 5 }, 12)).toEqual({ start: 0, end: 4 });
+    expect(ordinalCellGeometry(4, { start: 2, end: 5 }, 12)).toEqual({ start: 8, end: 12 });
+    expect(ordinalCellGeometry(2, { start: 0, end: 5 }, 2)).toEqual({ start: 1, end: 1 });
+  });
+
+  it("projects role tags only from exact message kinds at their matching lane", () => {
+    expect(recordSemanticTag({ ...record(0), kind: "input", lane: "input" })).toEqual({
+      label: "USER",
+      lane: "input",
+    });
+    expect(recordSemanticTag({ ...record(1), kind: "assistant", lane: "model" })).toEqual({
+      label: "ASSISTANT",
+      lane: "model",
+    });
+    expect(recordSemanticTag({ ...record(2), kind: "tool_result", lane: "tools" })).toEqual({
+      label: "TOOL",
+      lane: "tools",
+    });
+    expect(recordSemanticTag({ ...record(3), kind: "compaction", lane: "model" })).toBeNull();
+    expect(recordSemanticTag({ ...record(4), kind: "custom", lane: "input" })).toBeNull();
+    expect(recordSemanticTag({ ...record(5), kind: "input", lane: "model" })).toBeNull();
   });
 
   it("uses search and focus as emphasis predicates", () => {

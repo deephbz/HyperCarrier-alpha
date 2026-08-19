@@ -5,7 +5,15 @@
  * projection while using HyperCarrier's Pi trace record contract.
  */
 
-import type { TraceRecord } from "./types";
+import type { TraceLane, TraceRecord } from "./types";
+
+const semanticTagByKind: Readonly<
+  Record<string, { readonly label: string; readonly lane: TraceLane }>
+> = {
+  input: { label: "USER", lane: "input" },
+  assistant: { label: "ASSISTANT", lane: "model" },
+  tool_result: { label: "TOOL", lane: "tools" },
+};
 
 /** A half-open, active-branch ordinal range. It is presentation state, not Pi evidence. */
 export interface TraceRange {
@@ -55,9 +63,45 @@ export function clampTraceRange(range: TraceRange, bounds: TraceRange): TraceRan
   return { start: Math.max(bounds.start, bounds.end - 1), end: bounds.end };
 }
 
+/** Rounded shared pixel edges preserve exact ordinal-cell boundaries without implying duration. */
+export interface OrdinalCellGeometry {
+  readonly end: number;
+  readonly start: number;
+}
+
+/**
+ * Projects one half-open ordinal cell `[order, order + 1)` into the current
+ * view. A missing result lies outside the view; a zero-width result is dense
+ * and needs aggregation rather than a widened false interval.
+ */
+export function ordinalCellGeometry(
+  order: number,
+  domain: TraceRange,
+  width: number,
+): OrdinalCellGeometry | null {
+  if (!Number.isFinite(order) || !Number.isFinite(width) || width <= 0) return null;
+  const span = domain.end - domain.start;
+  if (!Number.isFinite(span) || span <= 0) return null;
+  const startOrder = Math.max(domain.start, order);
+  const endOrder = Math.min(domain.end, order + 1);
+  if (startOrder >= endOrder) return null;
+  const edge = (ordinal: number) =>
+    Math.max(0, Math.min(width, Math.round(((ordinal - domain.start) / span) * width)));
+  return { start: edge(startOrder), end: edge(endOrder) };
+}
+
 /** Normalize once per query, not once per active-branch record. */
 export function normalizeTraceQuery(query: string): string {
   return query.trim().toLowerCase();
+}
+
+/**
+ * A row tag repeats only an exact source-message role. Lanes remain display
+ * coordinates, so non-message records never acquire an actor tag.
+ */
+export function recordSemanticTag(record: Pick<TraceRecord, "kind" | "lane">) {
+  const tag = semanticTagByKind[record.kind];
+  return tag?.lane === record.lane ? tag : null;
 }
 
 /** A search highlight keeps all trace evidence in the ledger and overview. */
