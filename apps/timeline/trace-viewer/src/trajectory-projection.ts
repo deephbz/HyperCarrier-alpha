@@ -69,11 +69,73 @@ export interface OrdinalCellGeometry {
   readonly start: number;
 }
 
+/** Dense overview opacity follows matching Rarebits, not unrelated records in one pixel. */
+export function overviewMatchRatio(total: number, matches: number, rarebits: number): number {
+  if (
+    !Number.isFinite(total) ||
+    total <= 0 ||
+    !Number.isFinite(matches) ||
+    !Number.isFinite(rarebits)
+  )
+    return 0;
+  const denominator = rarebits > 0 ? rarebits : total;
+  return Math.min(1, Math.max(0, matches / denominator));
+}
+
+/** One drawn pixel column; the dense path uses ceil(width) one-pixel buckets. */
+export function overviewColumnAtClientX(
+  clientX: number,
+  left: number,
+  width: number,
+): number | null {
+  if (!Number.isFinite(clientX) || !Number.isFinite(left) || !Number.isFinite(width)) return null;
+  const columns = Math.max(1, Math.ceil(width));
+  if (columns <= 0) return null;
+  const fraction = Math.min(1, Math.max(0, (clientX - left) / Math.max(1, width)));
+  return Math.min(columns - 1, Math.floor(fraction * columns));
+}
+
 /**
- * Projects one half-open ordinal cell `[order, order + 1)` into the current
- * view. A missing result lies outside the view; a zero-width result is dense
- * and needs aggregation rather than a widened false interval.
+ * A hit follows the drawn cell, so a dense Rarebit-containing pixel stays
+ * selectable even when floor(inverse ordinal) lands on its non-Rarebit neighbor.
  */
+export function selectableRecordAtColumn<T extends { readonly order: number }>(
+  selectable: readonly T[],
+  column: number,
+  domain: TraceRange,
+  columns: number,
+): T | null {
+  if (!Number.isFinite(column) || !Number.isFinite(columns) || columns <= 0) return null;
+  for (const record of selectable) {
+    const cell = ordinalCellGeometry(record.order, domain, columns);
+    if (cell === null) continue;
+    if (column >= cell.start && column < Math.max(cell.start + 1, cell.end)) return record;
+  }
+  return null;
+}
+
+/**
+ * Arrow keys move from the selected record's branch ordinal and skip marks that
+ * are not selectable in the current mode, so bounds stay stable.
+ */
+export function adjacentSelectableRecord<
+  T extends { readonly recordId: string; readonly order: number },
+>(
+  records: readonly T[],
+  selectable: readonly T[],
+  selectedId: string | null,
+  direction: -1 | 1,
+): T | null {
+  if (records.length === 0) return null;
+  const selectableIds = new Set(selectable.map((record) => record.recordId));
+  const start = selectedId === null ? -1 : records.findIndex((r) => r.recordId === selectedId);
+  for (let index = start + direction; index >= 0 && index < records.length; index += direction) {
+    const candidate = records[index];
+    if (selectableIds.has(candidate.recordId)) return candidate;
+  }
+  return null;
+}
+
 export function ordinalCellGeometry(
   order: number,
   domain: TraceRange,

@@ -69,7 +69,7 @@ macOS process table ----------------+     +--> Trace Viewer Node HTTP service
 Browser surfaces:
   main dashboard  = React + TypeScript + Vite build + CSS timeline lanes
   Trace Viewer    = full active-branch Pi trace + dense/virtual presentation
-                    + off-by-default Rarebit filter, raw exact-entry inspector,
+                    + on-by-default Rarebit emphasis, rendered/raw Content and exact-entry inspector,
                     + and JSONL download
   TPS inspector   = React + TypeScript + DuckDB-WASM + Recharts
 ```

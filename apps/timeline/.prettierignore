@@ -9,3 +9,4 @@ crap-report
 AGENTS.md
 CLAUDE.md
 package-lock.json
+.playwright-cli

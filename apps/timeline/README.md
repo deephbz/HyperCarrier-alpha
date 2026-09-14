@@ -18,6 +18,20 @@ npm run start:stack       # timeline + Trace Viewer + TPS adapter + traffic anal
 npm run start:better-url  # http://{pi,live.pi,tps,traffic.pi}.localhost:1355
 ```
 
+Install the app-owned `/view-trace` command in the Pi host settings. Add the absolute path to this
+repository's extension:
+
+```json
+{
+  "extensions": ["/path/to/HyperCarrier/apps/timeline/pi/view-trace.mjs"]
+}
+```
+
+Restart Pi after saving the settings, or run `/reload` to pick up the new extension, then run
+`/view-trace`. The command reads the invoking Session ID from Pi and opens the existing Trace Viewer
+at `http://127.0.0.1:4319/session/<id>`. Set `PI_LIVE_DETAIL_BASE_URL` only when the existing viewer
+uses another allowlisted loopback origin.
+
 `PI_TIMELINE_PORT`, `PI_LIVE_DETAIL_PORT`, `PI_TPS_ADAPTER_PORT`, and `PI_TRAFFIC_PORT` configure
 stack ports independently; traffic defaults to `4321`, and an ambient parent `PORT` cannot collapse
 `start:stack` onto one port. `PI_TRAFFIC_BASE_URL` configures Timeline's traffic launch origin and
@@ -38,14 +52,16 @@ Each session inspector links to two independent detail services:
 - **Trace Viewer** (`:4319/session/<id>`) is the authorized full active-branch Pi trace surface. It
   serves a DeepSeek Harness Trajectory-inspired static React interaction, with a dense three-lane
   active-branch-order Canvas overview, virtual ledger, resizable exact-record inspector, raw JSONL
-  download, and an off-by-default Rarebit filter. Search and range focus dim records; they do not
-  delete evidence. The browser coalesces SSE invalidations into complete refetches.
-  `GET /api/trace/<id>` is the schema-versioned `pi-trace/1` projection for one unambiguous Session
-  source of at most 16 MiB. A larger source returns a categorical error and keeps its
-  version-verified raw download available; duplicate Session IDs return unavailable rather than
-  selecting a path. On an ordinary append it verifies the committed prefix digest, then
-  incrementally parses new JSONL bytes. SSE invalidation always causes a complete refetch because a
-  fork can replace the active branch. Pi JSONL remains the raw authority.
+  download, and a Rarebit-only presentation mode enabled on first open. The mode keeps every lane
+  mark and ledger row visible, fades non-Rarebits, and allows row inspection without selecting faded
+  overview marks. Search and range focus dim records; they do not delete evidence. The browser
+  coalesces SSE invalidations into complete refetches. `GET /api/trace/<id>` is the schema-versioned
+  `pi-trace/1` projection for one unambiguous Session source of at most 16 MiB. A larger source
+  returns a categorical error and keeps its version-verified raw download available; duplicate
+  Session IDs return unavailable rather than selecting a path. On an ordinary append it verifies the
+  committed prefix digest, then incrementally parses new JSONL bytes. SSE invalidation always causes
+  a complete refetch because a fork can replace the active branch. Pi JSONL remains the raw
+  authority.
 - **TPS inspector** (`:4320/?auto=1&session=<id>`) is optional and serves a separately built
   `pi-tps-web` application against that session's native JSONL.
 

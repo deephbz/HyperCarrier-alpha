@@ -245,7 +245,9 @@ p {
 }
 .trace-workspace {
   display: grid;
-  grid-template-columns: minmax(280px, 1fr) var(--trace-inspector-width, 460px);
+  grid-template-columns:
+    minmax(280px, calc(100% - var(--trace-inspector-width, 70%)))
+    minmax(320px, var(--trace-inspector-width, 70%));
   min-height: 520px;
   gap: 0;
 }
@@ -446,6 +448,14 @@ p {
   outline: 2px solid #90caff;
   outline-offset: -2px;
 }
+.inspector-empty-content {
+  padding: 16px;
+}
+.inspector-empty-content p {
+  margin-top: 6px;
+  color: #8295aa;
+  font-size: 12px;
+}
 .inspector > header {
   display: flex;
   justify-content: space-between;
@@ -517,9 +527,35 @@ p {
   text-decoration: underline;
   cursor: pointer;
 }
+.record-content-panel {
+  padding: 0 16px 12px;
+}
+.content-mode-controls {
+  display: flex;
+  gap: 4px;
+  padding: 8px 0;
+  border-bottom: 1px solid #203246;
+}
+.content-mode-controls button {
+  padding: 4px 7px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #98afc5;
+  font-size: 11px;
+  cursor: pointer;
+}
+.content-mode-controls button.active {
+  border-color: #42678c;
+  background: #19324a;
+  color: #e3f2ff;
+}
+.record-content-panel .content-renderer {
+  padding: 12px 0;
+}
 .record-content {
   margin: 0;
-  padding: 12px 16px;
+  padding: 12px 0;
   white-space: pre-wrap;
   word-break: break-word;
   color: #d5e0eb;
@@ -577,18 +613,6 @@ p {
   .search input {
     width: 100%;
   }
-  .trace-workspace {
-    grid-template-columns: 1fr;
-  }
-  .inspector {
-    position: static;
-    max-height: none;
-    border-top: 1px solid #273c54;
-    border-inline-start: 0;
-  }
-  .inspector-resize {
-    display: none;
-  }
   .ledger-scroll {
     max-height: 55vh;
     min-height: min(420px, 55vh);
@@ -602,6 +626,20 @@ p {
   }
   .ledger-heading span:last-child,
   .ledger-row time {
+    display: none;
+  }
+}
+@media (max-width: 640px) {
+  .trace-workspace {
+    grid-template-columns: 1fr;
+  }
+  .inspector {
+    position: static;
+    max-height: none;
+    border-top: 1px solid #273c54;
+    border-inline-start: 0;
+  }
+  .inspector-resize {
     display: none;
   }
 }

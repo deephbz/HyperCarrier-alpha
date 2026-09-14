@@ -9,24 +9,34 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
+  adjacentSelectableRecord,
   clampTraceRange,
   normalizeTraceQuery,
   ordinalCellGeometry,
+  overviewColumnAtClientX,
+  overviewMatchRatio,
   reconcileTraceRange,
   recordMatchesNormalizedTraceQuery,
   recordSemanticTag,
   recordWithinTraceRange,
+  selectableRecordAtColumn,
   traceBounds,
   traceTransition,
   type TraceRange,
   type TraceTransition,
 } from "./trajectory-projection";
+import { ContentRenderer } from "./ContentRenderer";
+import {
+  INSPECTOR_MIN_WIDTH,
+  clampInspectorWidth,
+  constrainedInspectorWidth,
+  inspectorMaximumWidth,
+  inspectorWidthFromDrag,
+} from "./split-layout";
 import type { PiTrace, TraceLane, TraceRecord, TraceUnavailable } from "./types";
 
 const MINIMUM_DRAG_PX = 3;
 const MINIMUM_VIEWPORT_RECORDS = 4;
-const INSPECTOR_MIN_WIDTH = 320;
-const INSPECTOR_MAX_WIDTH = 720;
 const OVERVIEW_HEIGHT = 126;
 const LEDGER_ROW_HEIGHT = 36;
 const FOLD_SUMMARY_HEIGHT = 28;
@@ -84,14 +94,6 @@ function rangeLabel(range: TraceRange | null, end: number) {
 function rangeAtClientX(clientX: number, rect: DOMRect, domain: TraceRange): number {
   const fraction = Math.min(1, Math.max(0, (clientX - rect.left) / Math.max(1, rect.width)));
   return domain.start + fraction * (domain.end - domain.start);
-}
-
-function nearestRecord(records: readonly TraceRecord[], order: number) {
-  return records.reduce<TraceRecord | null>((nearest, record) => {
-    if (nearest === null || Math.abs(record.order - order) < Math.abs(nearest.order - order))
-      return record;
-    return nearest;
-  }, null);
 }
 
 function turnRecordCounts(records: readonly TraceRecord[]) {
@@ -171,13 +173,14 @@ function ledgerClass(
   selectedId: string | null,
   matches: boolean,
   range: TraceRange | null,
+  rarebitOnly: boolean,
 ) {
   return [
     "ledger-row",
     record.lane,
     record.recordId === selectedId ? "selected" : "",
     record.rarebit ? "rarebit" : "",
-    !matches ? "dimmed" : "",
+    !matches || (rarebitOnly && !record.rarebit) ? "dimmed" : "",
     !recordWithinTraceRange(record, range) ? "outside-focus" : "",
     record.turn !== null && record.step === null ? "turn-start" : "",
   ]
@@ -279,7 +282,7 @@ function drawDenseOrdinalCells(
     for (const [column, bucket] of buckets[laneIndex].entries()) {
       if (bucket.total === 0) continue;
       const density = Math.min(0.95, 0.3 + Math.log2(bucket.total + 1) * 0.16);
-      const matchRatio = bucket.matches / bucket.total;
+      const matchRatio = overviewMatchRatio(bucket.total, bucket.matches, bucket.rarebits);
       const focusRatio = bucket.focused / bucket.total;
       context.globalAlpha =
         density * (matchRatio > 0 ? matchRatio : 0.18) * (0.45 + focusRatio * 0.55);
@@ -333,6 +336,7 @@ function drawOverviewSelection(
 
 function Overview({
   records,
+  selectableRecords,
   fullBounds,
   selectedId,
   matchedRecords,
@@ -341,6 +345,7 @@ function Overview({
   onSelect,
 }: {
   records: readonly TraceRecord[];
+  selectableRecords: readonly TraceRecord[];
   fullBounds: TraceRange | null;
   selectedId: string | null;
   matchedRecords: ReadonlySet<string> | null;
@@ -424,8 +429,11 @@ function Overview({
     return <section className="overview empty">No records in this scope.</section>;
 
   const selection = activeRange === null ? null : clampTraceRange(activeRange, bounds);
-  const selectNearest = (order: number) => {
-    const record = nearestRecord(records, order);
+  const selectHit = (clientX: number, rect: DOMRect) => {
+    const columns = Math.max(1, Math.ceil(rect.width));
+    const column = overviewColumnAtClientX(clientX, rect.left, rect.width);
+    if (column === null) return;
+    const record = selectableRecordAtColumn(selectableRecords, column, domain, columns);
     if (record) onSelect(record);
   };
 
@@ -440,7 +448,7 @@ function Overview({
     dragRef.current = null;
     setDraftRange(null);
     const point = rangeAtClientX(clientX, rect, domain);
-    if (Math.abs(clientX - drag.clientX) < MINIMUM_DRAG_PX) return selectNearest(point);
+    if (Math.abs(clientX - drag.clientX) < MINIMUM_DRAG_PX) return selectHit(clientX, rect);
     onRangeChange(
       clampTraceRange(
         { start: Math.min(drag.anchor, point), end: Math.max(drag.anchor, point) },
@@ -485,8 +493,12 @@ function Overview({
             const direction = event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : 0;
             if (direction === 0) return;
             event.preventDefault();
-            const current = records.findIndex((record) => record.recordId === selectedId);
-            const next = records[Math.max(0, Math.min(records.length - 1, current + direction))];
+            const next = adjacentSelectableRecord(
+              records,
+              selectableRecords,
+              selectedId,
+              direction,
+            );
             if (next) onSelect(next);
           }}
           onPointerCancel={() => {
@@ -560,6 +572,7 @@ function RecordLedger({
   collapsedCalls,
   selectedId,
   matchedRecords,
+  rarebitOnly,
   range,
   revision,
   transition,
@@ -570,6 +583,7 @@ function RecordLedger({
   collapsedCalls: ReadonlySet<string>;
   selectedId: string | null;
   matchedRecords: ReadonlySet<string> | null;
+  rarebitOnly: boolean;
   range: TraceRange | null;
   revision: string;
   transition: TraceTransition;
@@ -663,6 +677,7 @@ function RecordLedger({
                   selectedId,
                   matchedRecords === null || matchedRecords.has(item.record.recordId),
                   range,
+                  rarebitOnly,
                 )} ledger-virtual-item`}
                 data-record-id={item.record.recordId}
                 key={item.record.recordId}
@@ -687,28 +702,77 @@ function RecordLedger({
   );
 }
 
+function InspectorResize({
+  inspectorMaximum,
+  inspectorValue,
+  onResizeBy,
+  onResizeStart,
+}: {
+  inspectorMaximum: number;
+  inspectorValue: number | null;
+  onResizeBy: (pixels: number, currentWidth: number, workspaceWidth: number) => void;
+  onResizeStart: (event: ReactPointerEvent<HTMLDivElement>) => void;
+}) {
+  return (
+    <div
+      aria-label="Resize inspector"
+      aria-orientation="vertical"
+      aria-valuemax={inspectorMaximum}
+      aria-valuemin={INSPECTOR_MIN_WIDTH}
+      aria-valuenow={inspectorValue ?? undefined}
+      className="inspector-resize"
+      onKeyDown={(event) => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        event.preventDefault();
+        const inspector = event.currentTarget.parentElement;
+        const workspace = inspector?.parentElement;
+        if (!inspector || !workspace) return;
+        onResizeBy(
+          event.key === "ArrowLeft" ? 16 : -16,
+          inspector.getBoundingClientRect().width,
+          workspace.getBoundingClientRect().width,
+        );
+      }}
+      onPointerDown={onResizeStart}
+      role="separator"
+      tabIndex={0}
+    />
+  );
+}
+
 function Inspector({
   record,
-  inspectorWidth,
+  inspectorMaximum,
+  inspectorValue,
   onResizeBy,
   onResizeStart,
   onSelectLinkedRecord,
 }: {
   record: TraceRecord | null;
-  inspectorWidth: number;
-  onResizeBy: (pixels: number) => void;
+  inspectorMaximum: number;
+  inspectorValue: number | null;
+  onResizeBy: (pixels: number, currentWidth: number, workspaceWidth: number) => void;
   onResizeStart: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onSelectLinkedRecord: (id: string) => void;
 }) {
-  const [tab, setTab] = useState<"summary" | "content" | "raw" | "unavailable">("summary");
+  const [tab, setTab] = useState<"summary" | "content" | "raw" | "unavailable">("content");
+  const [contentMode, setContentMode] = useState<"rendered" | "raw">("rendered");
+  const tabs = ["summary", "content", "raw", "unavailable"] as const;
   if (record === null)
     return (
       <aside className="inspector empty" id="trace-inspector" tabIndex={-1}>
-        <h2>Inspector</h2>
-        <p>Select a trace record.</p>
+        <InspectorResize
+          inspectorMaximum={inspectorMaximum}
+          inspectorValue={inspectorValue}
+          onResizeBy={onResizeBy}
+          onResizeStart={onResizeStart}
+        />
+        <div className="inspector-empty-content">
+          <h2>Inspector</h2>
+          <p>Select a trace record.</p>
+        </div>
       </aside>
     );
-  const tabs = ["summary", "content", "raw", "unavailable"] as const;
   return (
     <aside
       aria-label="Exact record inspector"
@@ -716,20 +780,11 @@ function Inspector({
       id="trace-inspector"
       tabIndex={-1}
     >
-      <div
-        aria-label="Resize inspector"
-        aria-orientation="vertical"
-        aria-valuemax={INSPECTOR_MAX_WIDTH}
-        aria-valuemin={INSPECTOR_MIN_WIDTH}
-        aria-valuenow={inspectorWidth}
-        className="inspector-resize"
-        onKeyDown={(event) => {
-          if (event.key === "ArrowLeft") onResizeBy(16);
-          if (event.key === "ArrowRight") onResizeBy(-16);
-        }}
-        onPointerDown={onResizeStart}
-        role="separator"
-        tabIndex={0}
+      <InspectorResize
+        inspectorMaximum={inspectorMaximum}
+        inspectorValue={inspectorValue}
+        onResizeBy={onResizeBy}
+        onResizeStart={onResizeStart}
       />
       <header>
         <div>
@@ -815,7 +870,31 @@ function Inspector({
         </dl>
       )}
       {tab === "content" && (
-        <pre className="record-content">{record.text || "No readable text content."}</pre>
+        <section aria-label="Record content" className="record-content-panel">
+          <div className="content-mode-controls" role="group" aria-label="Content view">
+            <button
+              aria-pressed={contentMode === "rendered"}
+              className={contentMode === "rendered" ? "active" : ""}
+              onClick={() => setContentMode("rendered")}
+              type="button"
+            >
+              Rendered
+            </button>
+            <button
+              aria-pressed={contentMode === "raw"}
+              className={contentMode === "raw" ? "active" : ""}
+              onClick={() => setContentMode("raw")}
+              type="button"
+            >
+              Raw text
+            </button>
+          </div>
+          {contentMode === "rendered" ? (
+            <ContentRenderer text={record.text || "No readable text content."} />
+          ) : (
+            <pre className="record-content">{record.text || "No readable text content."}</pre>
+          )}
+        </section>
       )}
       {tab === "raw" && <pre className="record-content">{JSON.stringify(record.raw, null, 2)}</pre>}
       {tab === "unavailable" && (
@@ -832,8 +911,10 @@ function Inspector({
   );
 }
 
-function traceWorkspaceStyle(inspectorWidth: number): CSSProperties {
-  return { "--trace-inspector-width": `${inspectorWidth}px` } as CSSProperties;
+function traceWorkspaceStyle(inspectorWidth: number | null): CSSProperties {
+  return {
+    "--trace-inspector-width": inspectorWidth === null ? "70%" : `${inspectorWidth}px`,
+  } as CSSProperties;
 }
 
 export function TraceViewer() {
@@ -842,9 +923,11 @@ export function TraceViewer() {
   const [problem, setProblem] = useState<TraceUnavailable | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [rarebitOnly, setRarebitOnly] = useState(false);
+  const [rarebitOnly, setRarebitOnly] = useState(true);
   const [range, setRange] = useState<TraceRange | null>(null);
-  const [inspectorWidth, setInspectorWidth] = useState(460);
+  const [inspectorWidth, setInspectorWidth] = useState<number | null>(null);
+  const [workspaceWidth, setWorkspaceWidth] = useState(0);
+  const [workspaceElement, setWorkspaceElement] = useState<HTMLDivElement | null>(null);
   const [collapsedTurns, setCollapsedTurns] = useState<ReadonlySet<number>>(new Set());
   const [collapsedCalls, setCollapsedCalls] = useState<ReadonlySet<string>>(new Set());
   const [transition, setTransition] = useState<TraceTransition>("initial");
@@ -941,25 +1024,21 @@ export function TraceViewer() {
   }, [refresh, sessionId]);
 
   const activeBounds = useMemo(() => traceBounds(trace?.records ?? []), [trace?.records]);
-  const scopedRecords = useMemo(
-    () =>
-      rarebitOnly
-        ? (trace?.records ?? []).filter((record) => record.rarebit)
-        : (trace?.records ?? []),
-    [rarebitOnly, trace?.records],
+  const scopedRecords = useMemo(() => trace?.records ?? [], [trace?.records]);
+  const selectableRecords = useMemo(
+    () => (rarebitOnly ? scopedRecords.filter((record) => record.rarebit) : scopedRecords),
+    [rarebitOnly, scopedRecords],
   );
   const normalizedQuery = useMemo(() => normalizeTraceQuery(query), [query]);
-  const matchedRecords = useMemo(
-    () =>
-      normalizedQuery === ""
-        ? null
-        : new Set(
-            scopedRecords
-              .filter((record) => recordMatchesNormalizedTraceQuery(record, normalizedQuery))
-              .map((record) => record.recordId),
-          ),
-    [normalizedQuery, scopedRecords],
-  );
+  const matchedRecords = useMemo(() => {
+    const matches = scopedRecords.filter(
+      (record) =>
+        (!rarebitOnly || record.rarebit) &&
+        recordMatchesNormalizedTraceQuery(record, normalizedQuery),
+    );
+    if (normalizedQuery === "" && !rarebitOnly) return null;
+    return new Set(matches.map((record) => record.recordId));
+  }, [normalizedQuery, rarebitOnly, scopedRecords]);
   const selected = scopedRecords.find((record) => record.recordId === selectedId) ?? null;
   const collapsibleTurns = useMemo(
     () =>
@@ -991,29 +1070,38 @@ export function TraceViewer() {
     (record: TraceRecord) => changeSelection(record.recordId),
     [changeSelection],
   );
-  const resizeInspector = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      event.preventDefault();
-      event.currentTarget.setPointerCapture(event.pointerId);
-      const startX = event.clientX;
-      const startWidth = inspectorWidth;
-      const move = (next: PointerEvent) => {
-        setInspectorWidth(
-          Math.min(
-            INSPECTOR_MAX_WIDTH,
-            Math.max(INSPECTOR_MIN_WIDTH, startWidth + startX - next.clientX),
-          ),
-        );
-      };
-      const stop = () => {
-        window.removeEventListener("pointermove", move);
-        window.removeEventListener("pointerup", stop);
-      };
-      window.addEventListener("pointermove", move);
-      window.addEventListener("pointerup", stop, { once: true });
-    },
-    [inspectorWidth],
-  );
+  useLayoutEffect(() => {
+    const workspace = workspaceElement;
+    if (workspace === null) return;
+    const measure = () => setWorkspaceWidth(workspace.clientWidth);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(workspace);
+    return () => observer.disconnect();
+  }, [workspaceElement]);
+  const inspectorMaximum = inspectorMaximumWidth(workspaceWidth);
+  const inspectorValue =
+    workspaceWidth > 0 ? constrainedInspectorWidth(inspectorWidth, workspaceWidth) : null;
+  const resizeInspector = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const inspector = event.currentTarget.parentElement;
+    const workspace = inspector?.parentElement;
+    if (!inspector || !workspace) return;
+    const startX = event.clientX;
+    const startWidth = inspector.getBoundingClientRect().width;
+    const workspaceWidth = workspace.getBoundingClientRect().width;
+    const move = (next: PointerEvent) => {
+      setInspectorWidth(inspectorWidthFromDrag(startWidth, startX, next.clientX, workspaceWidth));
+    };
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop, { once: true });
+  }, []);
 
   if (!sessionId)
     return <main className="trace-error">This route requires an exact Session ID.</main>;
@@ -1052,13 +1140,6 @@ export function TraceViewer() {
               onChange={(event) => {
                 const next = event.currentTarget.checked;
                 setRarebitOnly(next);
-                if (
-                  next &&
-                  selectedIdRef.current &&
-                  !trace?.records.find((record) => record.recordId === selectedIdRef.current)
-                    ?.rarebit
-                )
-                  changeSelection(null);
               }}
               type="checkbox"
             />{" "}
@@ -1107,7 +1188,7 @@ export function TraceViewer() {
         <p className="loading">Loading exact active-branch trace…</p>
       ) : (
         <>
-          <div className="trace-workspace-frame" style={traceWorkspaceStyle(inspectorWidth)}>
+          <div className="trace-workspace-frame" style={traceWorkspaceStyle(inspectorValue)}>
             <Overview
               key={overviewEpoch}
               fullBounds={activeBounds}
@@ -1116,6 +1197,7 @@ export function TraceViewer() {
               onSelect={selectRecord}
               range={range}
               records={scopedRecords}
+              selectableRecords={selectableRecords}
               selectedId={selectedId}
             />
             <p className="trace-scope-note">
@@ -1123,7 +1205,7 @@ export function TraceViewer() {
                 ? "The dense overview and virtual ledger keep all active-branch evidence in scope."
                 : "Search dims non-matches; focus keeps all evidence visible."}
             </p>
-            <div className="trace-workspace">
+            <div className="trace-workspace" ref={setWorkspaceElement}>
               <RecordLedger
                 collapsedCalls={collapsedCalls}
                 collapsedTurns={collapsedTurns}
@@ -1131,18 +1213,18 @@ export function TraceViewer() {
                 onSelect={selectRecord}
                 range={range}
                 records={scopedRecords}
+                rarebitOnly={rarebitOnly}
                 revision={trace.sourceVersion}
                 selectedId={selectedId}
                 transition={transition}
               />
               <Inspector
+                inspectorMaximum={inspectorMaximum}
+                inspectorValue={inspectorValue}
                 key={selected?.recordId ?? "none"}
-                inspectorWidth={inspectorWidth}
-                onResizeBy={(pixels) =>
-                  setInspectorWidth((current) =>
-                    Math.min(INSPECTOR_MAX_WIDTH, Math.max(INSPECTOR_MIN_WIDTH, current + pixels)),
-                  )
-                }
+                onResizeBy={(pixels, currentWidth, workspaceWidth) => {
+                  setInspectorWidth(clampInspectorWidth(currentWidth + pixels, workspaceWidth));
+                }}
                 onResizeStart={resizeInspector}
                 onSelectLinkedRecord={(id) => {
                   const target = trace.records.find((record) => record.recordId === id);

@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  adjacentSelectableRecord,
   clampTraceRange,
   normalizeTraceQuery,
   ordinalCellGeometry,
+  overviewColumnAtClientX,
+  overviewMatchRatio,
   reconcileTraceRange,
   recordMatchesNormalizedTraceQuery,
   recordSemanticTag,
   recordWithinTraceRange,
+  selectableRecordAtColumn,
   traceBounds,
   traceTransition,
 } from "./trajectory-projection";
@@ -46,6 +50,55 @@ describe("Pi trace trajectory projection", () => {
       start: 8,
       end: 9,
     });
+  });
+
+  it("maps the pointer to the drawn overview pixel column", () => {
+    expect(overviewColumnAtClientX(0, 0, 100)).toBe(0);
+    expect(overviewColumnAtClientX(99, 0, 100)).toBe(99);
+    expect(overviewColumnAtClientX(100, 0, 100)).toBe(99);
+    expect(overviewColumnAtClientX(-5, 0, 100)).toBe(0);
+  });
+
+  it("selects the drawn cell, keeping a dense Rarebit reachable", () => {
+    // At dense zoom the span (1000) exceeds the columns (100), so a cell
+    // collapses to one pixel. A Rarebit sharing that pixel stays selectable.
+    const dense = { start: 0, end: 1000 };
+    const rarebit = { order: 500 };
+    expect(ordinalCellGeometry(rarebit.order, dense, 100)).toEqual({ start: 50, end: 50 });
+    expect(selectableRecordAtColumn([rarebit], 50, dense, 100)).toEqual(rarebit);
+    expect(selectableRecordAtColumn([rarebit], 51, dense, 100)).toBeNull();
+
+    // A sparse cell spans its rounded edges and the right boundary is included.
+    const sparse = { start: 0, end: 3 };
+    expect(ordinalCellGeometry(1, sparse, 10)).toEqual({ start: 3, end: 7 });
+    expect(selectableRecordAtColumn([{ order: 1 }], 4, sparse, 10)).toEqual({ order: 1 });
+    expect(selectableRecordAtColumn([{ order: 1 }], 7, sparse, 10)).toBeNull();
+  });
+
+  it("moves chronologically from the selected ordinal and skips ineligible marks", () => {
+    const records = [record(0), record(1), record(2), record(3)].map((item) => ({
+      order: item.order,
+      recordId: item.recordId,
+    }));
+    const rarebits = [records[1], records[3]];
+
+    expect(adjacentSelectableRecord(records, rarebits, records[0].recordId, 1)).toEqual(
+      rarebits[0],
+    );
+    expect(adjacentSelectableRecord(records, rarebits, records[1].recordId, 1)).toEqual(
+      rarebits[1],
+    );
+    expect(adjacentSelectableRecord(records, rarebits, records[3].recordId, 1)).toBeNull();
+    expect(adjacentSelectableRecord(records, rarebits, null, 1)).toEqual(rarebits[0]);
+    expect(adjacentSelectableRecord(records, rarebits, rarebits[1].recordId, -1)).toEqual(
+      rarebits[0],
+    );
+  });
+
+  it("weights dense pixels by matching Rarebits instead of unrelated records", () => {
+    expect(overviewMatchRatio(101, 1, 1)).toBe(1);
+    expect(overviewMatchRatio(100, 0, 0)).toBe(0);
+    expect(overviewMatchRatio(100, 18, 0)).toBeCloseTo(0.18);
   });
 
   it("tiles visible ordinal cells at shared rounded boundaries", () => {
