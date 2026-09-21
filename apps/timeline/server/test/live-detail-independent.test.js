@@ -110,13 +110,47 @@ async function startServer(t, records) {
   return { base: `http://127.0.0.1:${server.address().port}`, root, path, notify };
 }
 
+test("Pi trace keeps imported prose inspectable without assigning it current turn steps", () => {
+  const records = [
+    header(),
+    {
+      ...user("seed", null, "bounded Rarebit distillation"),
+      rarebitFork: { version: "rarebit-fork-entry/1", kind: "seed" },
+    },
+    {
+      ...assistant("imported", "seed", "stop", [{ type: "text", text: "Imported evidence" }]),
+      rarebitFork: {
+        version: "rarebit-fork-entry/1",
+        kind: "import",
+        sourceSessionId: "source-session",
+        sourceEntryId: "source-entry",
+        occurrenceId: "source-occurrence",
+        role: "assistant",
+        outcome: "stop",
+        originalTimestamp: "2026-08-16T00:00:00.000Z",
+        ancestry: [],
+      },
+    },
+    user("fresh", "imported", "Fresh request"),
+    assistant("fresh-stop", "fresh", "stop", [{ type: "text", text: "Fresh response" }]),
+  ];
+  const { path } = createSessionFile(records);
+  const trace = projectPiTrace(createIncrementalTraceReader(path).refresh().projection);
+  const imported = trace.records.find((record) => record.sourceEntryId === "imported");
+  assert.equal(imported?.imported, true);
+  assert.equal(imported?.content[0]?.text, "Imported evidence");
+  assert.equal(imported?.turn, null);
+  assert.equal(trace.records.find((record) => record.sourceEntryId === "fresh")?.turn, 1);
+  assert.equal(trace.records.find((record) => record.sourceEntryId === "fresh-stop")?.step, 1);
+});
+
 test("Pi trace projection retains full active-branch evidence and attaches Rarebits by source entry", () => {
   const { path } = createSessionFile(traceFixture());
   const reader = createIncrementalTraceReader(path);
   const update = reader.refresh();
   const trace = projectPiTrace(update.projection);
   assert.equal(update.kind, "snapshot");
-  assert.equal(trace.schemaVersion, "pi-trace/1");
+  assert.equal(trace.schemaVersion, "pi-trace/2");
   assert.deepEqual(
     trace.records.map((record) => record.sourceEntryId),
     [

@@ -60,7 +60,7 @@ the in-memory snapshot is a rebuildable projection. Timeline never opens PiTeams
 pi-teams/observation ---------------+
 tmux sockets + list-panes ----------+     |
 macOS process table ----------------+     +--> Trace Viewer Node HTTP service
-                                          |    pi-trace/1 projection + JSONL SSE invalidation
+                                          |    pi-trace/2 typed-content projection + JSONL SSE invalidation
                                           |    static React dense overview, virtual ledger, and inspector
                                           |
                                           +--> TPS adapter Node HTTP service

@@ -14,7 +14,18 @@ testing. It contains these components:
 - an optional read-only traffic analysis module that resolves explicit Team or
   Agent scopes from local Pi Session evidence and explicit PiTeams attribution.
 
-Rarebit `0.1.0-alpha.5` is a published npm prerelease on `next`, while
+## Release notes — Alpha 0.1.0-alpha.3 candidate
+
+This candidate is not published. It adds typed Trace Viewer content boundaries and
+full-page record inspection, import-aware Rarebit filtering in Timeline, Traffic,
+and TPS projections, and the PiQ CLI composition. Rarebit alpha.6 is published
+with repaired Git metadata and immutable npm provenance; the parent records both
+sources explicitly and preserves the existing `latest` tag. See the
+[alpha.6 release](https://github.com/deephbz/rarebit/releases/tag/v0.1.0-alpha.6)
+and [repair receipt](https://github.com/deephbz/rarebit/releases/download/v0.1.0-alpha.6/rarebit-alpha6-final-receipt.json)
+for the repair evidence.
+
+Rarebit `0.1.0-alpha.6` is a published npm prerelease on `next`, while
 `latest` remains `0.1.0-alpha.4`. Pi Team Bright `0.17.4` is a stable npm
 release on `latest`. Pi OpenAI Blackmagic Compact `0.1.0-rc.8` is a published
 npm prerelease on `next`, while `latest` remains `0.1.0-rc.5`. These release
@@ -37,9 +48,10 @@ Requirements:
 - macOS or a compatible Unix environment for live process/tmux discovery;
 - optional: `pi`, `tmux`, and `bd` for real local evidence.
 
-Install and verify:
+Install and verify from a recursive checkout:
 
 ```sh
+git submodule update --init --recursive
 npm ci
 npm test
 npm run build:timeline
@@ -81,20 +93,29 @@ unavailable.
 
 Rarebit is the independent public `@hypercarrier/rarebit` package with the
 `rarebit` CLI. HyperCarrier composes it at the stable `packages/hc-rarebit`
-gitlink and owns compatibility only; its model-provider call is opt-in because
+gitlink and owns compatibility only. Run local commands through the pinned
+workspace executables:
+
+```sh
+npm exec -- piq entries --session /absolute/source.jsonl
+npm exec -- rarebit fork /absolute/source.jsonl
+```
+
+Its model-provider call is opt-in because
 selected user and assistant prose crosses the configured provider boundary.
 When Pi runs under Herdr, Rarebit can report two optional recency clocks: latest
 selected user message, then latest selected agent stop. They aren't liveness,
 progress, or delivery state. The package README documents the token contract.
 
-**Release tags:** use exact `@hypercarrier/rarebit@0.1.0-alpha.5` and
+**Release tags:** use exact `@hypercarrier/rarebit@0.1.0-alpha.6` and
 `@hypercarrier/pi-openai-blackmagic-compact@0.1.0-rc.8` recovery pins. Rarebit's
-`next` tag points to alpha.5 while npm `latest` remains alpha.4. Blackmagic's
+`next` tag points to alpha.6 while npm `latest` remains alpha.4. Blackmagic's
 `next` tag points to rc.8 while npm `latest` remains rc.5. Blackmagic rc.8 is
 branch-provenance evidence: its npm artifact, SLSA provenance, and publish
 workflow are verified, but no matching Git tag or GitHub Release exists. No
-retained version was unpublished or retargeted, and Alpha has not been published
-from this candidate.
+npm artifact was unpublished or retargeted. The alpha.6 Git tag and gitlink
+metadata received an authorized privacy repair while the npm artifact and its
+attestation stayed immutable. Alpha has not been published from this candidate.
 
 ## Verified terminal theme candidate
 

@@ -56,12 +56,12 @@ Each session inspector links to two independent detail services:
   mark and ledger row visible, fades non-Rarebits, and allows row inspection without selecting faded
   overview marks. Search and range focus dim records; they do not delete evidence. The browser
   coalesces SSE invalidations into complete refetches. `GET /api/trace/<id>` is the schema-versioned
-  `pi-trace/1` projection for one unambiguous Session source of at most 16 MiB. A larger source
-  returns a categorical error and keeps its version-verified raw download available; duplicate
-  Session IDs return unavailable rather than selecting a path. On an ordinary append it verifies the
-  committed prefix digest, then incrementally parses new JSONL bytes. SSE invalidation always causes
-  a complete refetch because a fork can replace the active branch. Pi JSONL remains the raw
-  authority.
+  `pi-trace/2` projection with ordered typed content for one unambiguous Session source of at most
+  16 MiB. A larger source returns a categorical error and keeps its version-verified raw download
+  available; duplicate Session IDs return unavailable rather than selecting a path. On an ordinary
+  append it verifies the committed prefix digest, then incrementally parses new JSONL bytes. SSE
+  invalidation always causes a complete refetch because a fork can replace the active branch. Pi
+  JSONL remains the raw authority.
 - **TPS inspector** (`:4320/?auto=1&session=<id>`) is optional and serves a separately built
   `pi-tps-web` application against that session's native JSONL.
 

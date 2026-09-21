@@ -28,6 +28,17 @@ import {
 } from "../collector.js";
 
 const paneLine = "$1\twork\t@2\t0\tagents\t%3\t1\t100\t/dev/ttys001\t/repo\tzsh\t0";
+const importedRarebitMarker = {
+  version: "rarebit-fork-entry/1",
+  kind: "import",
+  sourceSessionId: "source-session",
+  sourceEntryId: "source-entry",
+  occurrenceId: "source-occurrence",
+  role: "assistant",
+  outcome: "stop",
+  originalTimestamp: "2026-01-01T00:00:00Z",
+  ancestry: [],
+};
 
 test("tmux socket discovery handles unsupported and absent roots", () => {
   assert.deepEqual(discoverTmuxSockets({ uid: undefined, roots: [] }), []);
@@ -569,6 +580,71 @@ test("Session usage preserves observed zero, partial subtotals, and independent 
     tokens: { availability: "unavailable" },
     cost: { availability: "unavailable" },
   });
+});
+
+test("imported Rarebit seed records do not become Timeline turns, requests, markers, or recency", () => {
+  const input = [
+    { type: "session", id: "imported-timeline", timestamp: "2026-01-01T00:00:00Z", cwd: "/repo" },
+    {
+      type: "message",
+      id: "seed",
+      timestamp: "2026-01-01T00:01:00Z",
+      rarebitFork: { version: "rarebit-fork-entry/1", kind: "seed" },
+      message: { role: "user", content: "bounded Rarebit distillation" },
+    },
+    {
+      type: "message",
+      id: "imported-assistant",
+      timestamp: "2026-01-01T00:02:00Z",
+      rarebitFork: importedRarebitMarker,
+      message: {
+        role: "assistant",
+        timestamp: "2026-01-01T00:01:30Z",
+        stopReason: "stop",
+        usage: { input: 900, output: 500, totalTokens: 1_400, cost: { total: 99 } },
+        content: [{ type: "text", text: "Imported evidence" }],
+      },
+    },
+    {
+      type: "message",
+      id: "fresh-user",
+      timestamp: "2026-01-01T00:03:00Z",
+      message: { role: "user", content: "Fresh request" },
+    },
+    {
+      type: "message",
+      id: "fresh-assistant",
+      timestamp: "2026-01-01T00:03:02Z",
+      message: {
+        role: "assistant",
+        stopReason: "stop",
+        usage: { input: 10, output: 5, totalTokens: 15, cost: { total: 0.25 } },
+        content: [{ type: "text", text: "Fresh response" }],
+      },
+    },
+  ];
+  const parsed = parseSessionJsonl(input.map(JSON.stringify).join("\n"), "fixture");
+  assert.deepEqual(
+    parsed.turns.map((turn) => turn.id),
+    ["fresh-user"],
+  );
+  assert.deepEqual(
+    parsed.requests.map((request) => request.id),
+    ["fresh-assistant"],
+  );
+  assert.deepEqual(
+    parsed.rarebits.map((marker) => marker.sourceEntryId),
+    ["fresh-user", "fresh-assistant"],
+  );
+  assert.equal(parsed.session.lastMessageAt, "2026-01-01T00:03:02Z");
+  assert.deepEqual(parsed.session.usage, {
+    tokens: { availability: "complete", value: 15 },
+    cost: { availability: "complete", value: 0.25 },
+  });
+  const root = mkdtempSync(join(tmpdir(), "pi-imported-catalog-"));
+  const path = join(root, "session.jsonl");
+  writeFileSync(path, `${input.map(JSON.stringify).join("\n")}\n`);
+  assert.equal(readSessionCatalogMetadata(path).session.lastMessageAt, "2026-01-01T00:03:02Z");
 });
 
 test("Rarebit markers share the summary predicate without serializing session prose", () => {

@@ -6,6 +6,8 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
@@ -341,9 +343,11 @@ function Overview({
   selectedId,
   matchedRecords,
   range,
+  inert = false,
   onRangeChange,
   onSelect,
 }: {
+  inert?: boolean;
   records: readonly TraceRecord[];
   selectableRecords: readonly TraceRecord[];
   fullBounds: TraceRange | null;
@@ -458,7 +462,12 @@ function Overview({
   };
 
   return (
-    <section className="overview" ref={rootRef} aria-label="Trajectory overview">
+    <section
+      aria-label="Trajectory overview"
+      className="overview"
+      inert={inert || undefined}
+      ref={rootRef}
+    >
       <div aria-label="Overview lane keys" className="overview-labels">
         {traceLanes.map((lane) => (
           <span className="overview-lane-key" key={lane}>
@@ -567,6 +576,7 @@ function Overview({
 }
 
 function RecordLedger({
+  inert = false,
   records,
   collapsedTurns,
   collapsedCalls,
@@ -587,6 +597,7 @@ function RecordLedger({
   range: TraceRange | null;
   revision: string;
   transition: TraceTransition;
+  inert?: boolean;
   onSelect: (record: TraceRecord) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -641,7 +652,7 @@ function RecordLedger({
   }, [scrollToRecord, selectedId]);
 
   return (
-    <section className="ledger" aria-label="Trace ledger">
+    <section aria-label="Trace ledger" className="ledger" inert={inert || undefined}>
       <a className="ledger-skip" href="#trace-inspector">
         Skip to inspector
       </a>
@@ -703,11 +714,13 @@ function RecordLedger({
 }
 
 function InspectorResize({
+  disabled = false,
   inspectorMaximum,
   inspectorValue,
   onResizeBy,
   onResizeStart,
 }: {
+  disabled?: boolean;
   inspectorMaximum: number;
   inspectorValue: number | null;
   onResizeBy: (pixels: number, currentWidth: number, workspaceWidth: number) => void;
@@ -715,6 +728,7 @@ function InspectorResize({
 }) {
   return (
     <div
+      aria-disabled={disabled || undefined}
       aria-label="Resize inspector"
       aria-orientation="vertical"
       aria-valuemax={inspectorMaximum}
@@ -722,7 +736,7 @@ function InspectorResize({
       aria-valuenow={inspectorValue ?? undefined}
       className="inspector-resize"
       onKeyDown={(event) => {
-        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        if (disabled || (event.key !== "ArrowLeft" && event.key !== "ArrowRight")) return;
         event.preventDefault();
         const inspector = event.currentTarget.parentElement;
         const workspace = inspector?.parentElement;
@@ -733,10 +747,181 @@ function InspectorResize({
           workspace.getBoundingClientRect().width,
         );
       }}
-      onPointerDown={onResizeStart}
+      onPointerDown={disabled ? undefined : onResizeStart}
       role="separator"
-      tabIndex={0}
+      tabIndex={disabled ? -1 : 0}
     />
+  );
+}
+
+function formatJson(value: unknown): string {
+  return JSON.stringify(value, null, 2) ?? "null";
+}
+
+function TypedDisclosure({
+  className,
+  mountWhenClosed = false,
+  summary,
+  children,
+}: {
+  className: string;
+  mountWhenClosed?: boolean;
+  summary: string;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <details
+      className={className}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+      open={open}
+    >
+      <summary>{summary}</summary>
+      {open || mountWhenClosed ? children : null}
+    </details>
+  );
+}
+
+function TypedContent({
+  record,
+  onSelectLinkedRecord,
+  rawMode,
+}: {
+  record: TraceRecord;
+  onSelectLinkedRecord: (id: string) => void;
+  rawMode: boolean;
+}) {
+  if (record.content.length === 0)
+    return <p className="muted">No readable typed content blocks.</p>;
+  return (
+    <div className="typed-content">
+      {record.content.map((block) => {
+        const source = `source block ${block.sourceBlockIndex + 1}`;
+        if (block.kind === "prose")
+          return (
+            <section className="typed-content-block prose" key={block.sourceBlockIndex}>
+              <span className="content-label">Prose · {source}</span>
+              {rawMode ? (
+                <pre className="record-content">{block.text || "(empty prose)"}</pre>
+              ) : (
+                <ContentRenderer text={block.text || "(empty prose)"} />
+              )}
+            </section>
+          );
+        if (block.kind === "reasoning")
+          return (
+            <TypedDisclosure
+              className="typed-content-block collapsed reasoning"
+              key={block.sourceBlockIndex}
+              mountWhenClosed={rawMode}
+              summary={`Reasoning · ${source}`}
+            >
+              <pre className="record-content">{block.text || "(empty reasoning)"}</pre>
+            </TypedDisclosure>
+          );
+        if (block.kind === "tool_call")
+          return (
+            <TypedDisclosure
+              className="typed-content-block collapsed tool-call"
+              key={block.sourceBlockIndex}
+              mountWhenClosed={rawMode}
+              summary={`Tool call · ${block.name} · ${source}`}
+            >
+              <dl className="record-summary">
+                <div>
+                  <dt>Call ID</dt>
+                  <dd>{block.id ?? "Unavailable"}</dd>
+                </div>
+                <div>
+                  <dt>Arguments</dt>
+                  <dd>
+                    <pre className="record-content">
+                      {rawMode
+                        ? `Tool call · ${block.name}\n${formatJson(block.arguments)}`
+                        : formatJson(block.arguments)}
+                    </pre>
+                  </dd>
+                </div>
+              </dl>
+              {block.toolResultRecordId && (
+                <button
+                  className="linked-record"
+                  onClick={() => onSelectLinkedRecord(block.toolResultRecordId!)}
+                  type="button"
+                >
+                  Open tool result
+                </button>
+              )}
+            </TypedDisclosure>
+          );
+        if (block.kind === "tool_result")
+          return (
+            <TypedDisclosure
+              className="typed-content-block collapsed tool-result"
+              key={block.sourceBlockIndex}
+              mountWhenClosed={rawMode}
+              summary={`Tool result${block.toolName ? ` · ${block.toolName}` : ""} · ${source}`}
+            >
+              {rawMode ? (
+                <pre className="record-content">{block.text || "(empty tool result)"}</pre>
+              ) : block.text ? (
+                <ContentRenderer text={block.text} />
+              ) : (
+                <p>(empty tool result)</p>
+              )}
+              {record.toolCallRecordId && (
+                <button
+                  className="linked-record"
+                  onClick={() => onSelectLinkedRecord(record.toolCallRecordId!)}
+                  type="button"
+                >
+                  Open tool call
+                </button>
+              )}
+            </TypedDisclosure>
+          );
+        return (
+          <TypedDisclosure
+            className="typed-content-block collapsed unsupported"
+            key={block.sourceBlockIndex}
+            mountWhenClosed={rawMode}
+            summary={`Unsupported content${block.nativeType ? ` · ${block.nativeType}` : ""} · ${source}`}
+          >
+            <p>{block.reason}</p>
+            <pre className="record-content">
+              {rawMode
+                ? `Unsupported content${block.nativeType ? ` · ${block.nativeType}` : ""}\n${formatJson(block.raw)}`
+                : formatJson(block.raw)}
+            </pre>
+          </TypedDisclosure>
+        );
+      })}
+    </div>
+  );
+}
+
+function InspectorToggle({
+  disabled,
+  maximized,
+  onToggle,
+}: {
+  disabled: boolean;
+  maximized: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      aria-pressed={maximized}
+      className="inspector-toggle"
+      disabled={disabled}
+      onClick={(event) => {
+        onToggle();
+        event.currentTarget.focus();
+      }}
+      type="button"
+    >
+      {maximized ? "Restore split view" : "Expand inspector"}
+    </button>
   );
 }
 
@@ -747,6 +932,8 @@ function Inspector({
   onResizeBy,
   onResizeStart,
   onSelectLinkedRecord,
+  onToggleMaximize,
+  maximized,
 }: {
   record: TraceRecord | null;
   inspectorMaximum: number;
@@ -754,6 +941,8 @@ function Inspector({
   onResizeBy: (pixels: number, currentWidth: number, workspaceWidth: number) => void;
   onResizeStart: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onSelectLinkedRecord: (id: string) => void;
+  onToggleMaximize: () => void;
+  maximized: boolean;
 }) {
   const [tab, setTab] = useState<"summary" | "content" | "raw" | "unavailable">("content");
   const [contentMode, setContentMode] = useState<"rendered" | "raw">("rendered");
@@ -762,10 +951,16 @@ function Inspector({
     return (
       <aside className="inspector empty" id="trace-inspector" tabIndex={-1}>
         <InspectorResize
+          disabled={maximized}
           inspectorMaximum={inspectorMaximum}
           inspectorValue={inspectorValue}
           onResizeBy={onResizeBy}
           onResizeStart={onResizeStart}
+        />
+        <InspectorToggle
+          disabled={!maximized && record === null}
+          maximized={maximized}
+          onToggle={onToggleMaximize}
         />
         <div className="inspector-empty-content">
           <h2>Inspector</h2>
@@ -781,6 +976,7 @@ function Inspector({
       tabIndex={-1}
     >
       <InspectorResize
+        disabled={maximized}
         inspectorMaximum={inspectorMaximum}
         inspectorValue={inspectorValue}
         onResizeBy={onResizeBy}
@@ -792,6 +988,7 @@ function Inspector({
           <h2>{record.label}</h2>
           <p className="muted">{record.sourceEntryId ?? "Source entry unavailable"}</p>
         </div>
+        <InspectorToggle disabled={false} maximized={maximized} onToggle={onToggleMaximize} />
       </header>
       <div className="inspector-tabs" role="tablist" aria-label="Record inspector tabs">
         {tabs.map((item) => (
@@ -826,6 +1023,10 @@ function Inspector({
           <div>
             <dt>Rarebit</dt>
             <dd>{record.rarebit ? "Selected by the Rarebit semantic backend" : "Not selected"}</dd>
+          </div>
+          <div>
+            <dt>Typed blocks</dt>
+            <dd>{record.content.length}</dd>
           </div>
           <div>
             <dt>Time</dt>
@@ -889,11 +1090,11 @@ function Inspector({
               Raw text
             </button>
           </div>
-          {contentMode === "rendered" ? (
-            <ContentRenderer text={record.text || "No readable text content."} />
-          ) : (
-            <pre className="record-content">{record.text || "No readable text content."}</pre>
-          )}
+          <TypedContent
+            onSelectLinkedRecord={onSelectLinkedRecord}
+            rawMode={contentMode === "raw"}
+            record={record}
+          />
         </section>
       )}
       {tab === "raw" && <pre className="record-content">{JSON.stringify(record.raw, null, 2)}</pre>}
@@ -926,6 +1127,7 @@ export function TraceViewer() {
   const [rarebitOnly, setRarebitOnly] = useState(true);
   const [range, setRange] = useState<TraceRange | null>(null);
   const [inspectorWidth, setInspectorWidth] = useState<number | null>(null);
+  const [inspectorMaximized, setInspectorMaximized] = useState(false);
   const [workspaceWidth, setWorkspaceWidth] = useState(0);
   const [workspaceElement, setWorkspaceElement] = useState<HTMLDivElement | null>(null);
   const [collapsedTurns, setCollapsedTurns] = useState<ReadonlySet<number>>(new Set());
@@ -963,6 +1165,17 @@ export function TraceViewer() {
         const body = (await response.json()) as PiTrace | TraceUnavailable;
         if (!response.ok || body.availability !== "available") {
           setProblem(body as TraceUnavailable);
+          setTrace(null);
+          traceRef.current = null;
+          continue;
+        }
+        if (body.schemaVersion !== "pi-trace/2") {
+          setProblem({
+            availability: "unavailable",
+            reason: "trace_schema_unsupported",
+            message:
+              "This Trace Viewer requires pi-trace/2. Reload the Trace Viewer to use the current server projection.",
+          });
           setTrace(null);
           traceRef.current = null;
           continue;
@@ -1022,6 +1235,14 @@ export function TraceViewer() {
     });
     return () => events.close();
   }, [refresh, sessionId]);
+  useEffect(() => {
+    if (!inspectorMaximized || trace === null) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [inspectorMaximized, trace]);
 
   const activeBounds = useMemo(() => traceBounds(trace?.records ?? []), [trace?.records]);
   const scopedRecords = useMemo(() => trace?.records ?? [], [trace?.records]);
@@ -1102,6 +1323,17 @@ export function TraceViewer() {
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", stop, { once: true });
   }, []);
+  const handleMaximizedKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLElement>) => {
+      if (!inspectorMaximized || event.key !== "Escape") return;
+      const target = event.target;
+      if (target instanceof HTMLInputElement && target.type === "search") return;
+      event.preventDefault();
+      event.stopPropagation();
+      setInspectorMaximized(false);
+    },
+    [inspectorMaximized],
+  );
 
   if (!sessionId)
     return <main className="trace-error">This route requires an exact Session ID.</main>;
@@ -1118,8 +1350,11 @@ export function TraceViewer() {
     );
 
   return (
-    <main className="trace-viewer">
-      <header className="trace-toolbar">
+    <main
+      className={`trace-viewer${inspectorMaximized ? " inspector-maximized" : ""}`}
+      onKeyDownCapture={handleMaximizedKeyDown}
+    >
+      <header className="trace-toolbar" inert={inspectorMaximized || undefined}>
         <div>
           <p className="eyebrow">Pi active branch</p>
           <h1>Trace viewer</h1>
@@ -1192,6 +1427,7 @@ export function TraceViewer() {
             <Overview
               key={overviewEpoch}
               fullBounds={activeBounds}
+              inert={inspectorMaximized}
               matchedRecords={matchedRecords}
               onRangeChange={changeRange}
               onSelect={selectRecord}
@@ -1208,6 +1444,7 @@ export function TraceViewer() {
             <div className="trace-workspace" ref={setWorkspaceElement}>
               <RecordLedger
                 collapsedCalls={collapsedCalls}
+                inert={inspectorMaximized}
                 collapsedTurns={collapsedTurns}
                 matchedRecords={matchedRecords}
                 onSelect={selectRecord}
@@ -1221,6 +1458,7 @@ export function TraceViewer() {
               <Inspector
                 inspectorMaximum={inspectorMaximum}
                 inspectorValue={inspectorValue}
+                maximized={inspectorMaximized}
                 key={selected?.recordId ?? "none"}
                 onResizeBy={(pixels, currentWidth, workspaceWidth) => {
                   setInspectorWidth(clampInspectorWidth(currentWidth + pixels, workspaceWidth));
@@ -1232,11 +1470,12 @@ export function TraceViewer() {
                   if (rarebitOnly && !target.rarebit) setRarebitOnly(false);
                   selectRecord(target);
                 }}
+                onToggleMaximize={() => setInspectorMaximized((current) => !current)}
                 record={selected}
               />
             </div>
           </div>
-          <footer className="trace-footer">
+          <footer className="trace-footer" inert={inspectorMaximized || undefined}>
             {trace.records.length} active-branch records · {scopedRecords.length} in scope ·{" "}
             {trace.selection.rarebitSourceEntryIds.length} Rarebits · source {trace.sourceVersion}
           </footer>

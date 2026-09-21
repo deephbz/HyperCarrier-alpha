@@ -11,6 +11,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { rarebitMetadata } from "@hypercarrier/rarebit/core";
+import { getImportedRarebitEntryIds } from "@hypercarrier/rarebit/fork-lineage";
 import { readPiTeams } from "./pi-teams.js";
 import {
   applyTmuxLocations,
@@ -576,8 +577,10 @@ function parseSessionLine(state, line) {
   }
   if (!entry || typeof entry !== "object") return true;
   state.entryOrder += 1;
+  const imported =
+    typeof entry.id === "string" && getImportedRarebitEntryIds([entry]).has(entry.id);
   const rarebit = rarebitMetadata(entry, state.entryOrder);
-  if (rarebit) state.rarebits.push(rarebit);
+  if (rarebit && !imported) state.rarebits.push(rarebit);
   if (entry.type === "session") {
     state.session = {
       id: entry.id,
@@ -587,7 +590,7 @@ function parseSessionLine(state, line) {
     };
   } else if (entry.type === "session_info" || entry.type === "session_name") {
     if (state.session && typeof entry.name === "string") state.session.name = entry.name;
-  } else if (entry.type === "message" && entry.message?.role === "user") {
+  } else if (entry.type === "message" && entry.message?.role === "user" && !imported) {
     recordLastMessageAt(state, entry.timestamp);
     state.currentTurnIndex = state.turns.length;
     state.turns.push({
@@ -599,7 +602,7 @@ function parseSessionLine(state, line) {
       cost: 0,
       totalTokens: 0,
     });
-  } else if (entry.type === "message" && entry.message?.role === "assistant") {
+  } else if (entry.type === "message" && entry.message?.role === "assistant" && !imported) {
     recordLastMessageAt(state, entry.timestamp);
     const currentTurn = state.turns[state.currentTurnIndex];
     const usage = sumUsage(entry.message.usage);
@@ -705,8 +708,8 @@ function readAppendedBytes(path, start, end) {
   }
 }
 
-const SESSION_CACHE_VERSION = 4;
-const SESSION_CATALOG_VERSION = 1;
+const SESSION_CACHE_VERSION = 5;
+const SESSION_CATALOG_VERSION = 2;
 
 function cacheStamp(stat) {
   return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${SESSION_CACHE_VERSION}`;
@@ -761,6 +764,7 @@ function messageTimestampFromLine(line) {
   if (!line.length) return undefined;
   try {
     const entry = JSON.parse(line.toString("utf8"));
+    if (getImportedRarebitEntryIds([entry]).has(entry?.id)) return undefined;
     if (
       entry?.type === "message" &&
       (entry.message?.role === "user" || entry.message?.role === "assistant") &&

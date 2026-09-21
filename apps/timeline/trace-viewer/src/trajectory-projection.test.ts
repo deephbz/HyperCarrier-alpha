@@ -28,7 +28,7 @@ function record(order: number, text = "trace evidence"): TraceRecord {
     turn: 1,
     step: null,
     timestamp: null,
-    text,
+    content: [{ kind: "prose", sourceBlockIndex: 0, text }],
     rarebit: false,
     details: {},
     unavailable: {},

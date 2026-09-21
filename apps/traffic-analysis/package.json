@@ -25,6 +25,7 @@
     "start": "npm run build && node dist/server/index.js"
   },
   "dependencies": {
+    "@hypercarrier/rarebit": "0.1.0-alpha.6",
     "@tanstack/react-virtual": "^3.14.6",
     "echarts": "^6.1.0",
     "plotly.js-dist-min": "^3.4.0",
