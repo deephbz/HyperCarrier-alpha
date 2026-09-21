@@ -5,7 +5,7 @@
  * projection while using HyperCarrier's Pi trace record contract.
  */
 
-import type { TraceLane, TraceRecord } from "./types";
+import type { TraceContentBlock, TraceLane, TraceRecord } from "./types";
 
 const semanticTagByKind: Readonly<
   Record<string, { readonly label: string; readonly lane: TraceLane }>
@@ -167,13 +167,30 @@ export function recordSemanticTag(record: Pick<TraceRecord, "kind" | "lane">) {
 }
 
 /** A search highlight keeps all trace evidence in the ledger and overview. */
+export function contentSearchText(block: TraceContentBlock): string {
+  switch (block.kind) {
+    case "prose":
+    case "reasoning":
+    case "tool_result":
+      return block.text;
+    case "tool_call": {
+      const argumentsText = JSON.stringify(block.arguments ?? "") ?? "";
+      return `${block.name}\n${argumentsText}`;
+    }
+    case "unsupported":
+      return `${block.nativeType ?? "unknown"}\n${block.reason}`;
+  }
+}
+
 export function recordMatchesNormalizedTraceQuery(
   record: TraceRecord,
   normalizedQuery: string,
 ): boolean {
   return (
     normalizedQuery === "" ||
-    `${record.label}\n${record.text}`.toLowerCase().includes(normalizedQuery)
+    `${record.label}\n${record.content.map(contentSearchText).join("\n")}`
+      .toLowerCase()
+      .includes(normalizedQuery)
   );
 }
 

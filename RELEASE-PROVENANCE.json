@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "sourceRepository": "HyperCarrier",
-  "sourceCommit": "98e7ff9d6286f3aaf0eea3a459814ef26c99a035",
-  "sourceTree": "6d493055426a3cc9395a6a1323c00dd1cca1a939",
+  "sourceCommit": "8d952aa003a24eb3ae7e3becc65429d5bce4a3f5",
+  "sourceTree": "4d15137e3b7b171e0292a24c4c62dffe510ef023",
   "sourceWorktreeDirty": false,
-  "exportContentSha256": "058ee732b7ccb31657100f1f7116bf3f968bbc2ff35ac52b9c85bdbe8230f19e",
-  "exportManifestSha256": "6f13c368c3790cac96a0b837052db4c9c92f5643189ba8582083b90b89079c77",
+  "exportContentSha256": "a97e9f4c21580790c7c696c823b4bad1a70dec72e68c9effe493fa5c8d4c60ba",
+  "exportManifestSha256": "073258161223817b2cee9ea122419904d7d4b46f51848bb39e61b3c8ea6a7f9e",
   "dependencies": [],
   "submodules": [
     {
@@ -48,12 +48,12 @@
       "name": "packages/hc-rarebit",
       "path": "packages/hc-rarebit",
       "repository": "https://github.com/deephbz/rarebit.git",
-      "commit": "62608c5140d49118449003b0213e56a481d11caf",
-      "tree": "c2474e33c7529e4e6246175b6d0ee54c8221fb7b",
+      "commit": "7f70563c11c0b28463ef08e290baba59d781a677",
+      "tree": "0a0d9c1da6126b5cc3716fe9bc46a9759e5e64ed",
       "identity": {
         "kind": "npm-package",
         "name": "@hypercarrier/rarebit",
-        "version": "0.1.0-alpha.5"
+        "version": "0.1.0-alpha.6"
       }
     }
   ],

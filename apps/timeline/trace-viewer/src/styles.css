@@ -16,6 +16,32 @@ body {
   min-height: 100vh;
   background: linear-gradient(150deg, #0a111b, #111a29 44%, #0d1320);
 }
+.trace-viewer.inspector-maximized {
+  overflow: hidden;
+}
+.trace-viewer.inspector-maximized .trace-toolbar,
+.trace-viewer.inspector-maximized .overview,
+.trace-viewer.inspector-maximized .trace-scope-note,
+.trace-viewer.inspector-maximized .trace-footer,
+.trace-viewer.inspector-maximized .ledger {
+  visibility: hidden;
+  pointer-events: none;
+}
+.trace-viewer.inspector-maximized .inspector {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  width: auto;
+  height: 100dvh;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  background: #0f1927;
+}
+.trace-viewer.inspector-maximized .inspector-resize {
+  visibility: hidden;
+  pointer-events: none;
+}
 button,
 input {
   font: inherit;
@@ -462,6 +488,22 @@ p {
   padding: 12px 16px;
   border-bottom: 1px solid #273c54;
 }
+.inspector-toggle {
+  align-self: start;
+  min-height: 32px;
+  padding: 6px 9px;
+  border: 1px solid #416182;
+  border-radius: 5px;
+  background: #17304a;
+  color: #cce6ff;
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.inspector-toggle:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
 .inspector h2 {
   margin-top: 2px;
   font-size: 16px;
@@ -552,6 +594,34 @@ p {
 }
 .record-content-panel .content-renderer {
   padding: 12px 0;
+}
+.typed-content {
+  display: grid;
+  gap: 8px;
+  padding-top: 12px;
+}
+.typed-content-block {
+  min-width: 0;
+  border-bottom: 1px solid #203246;
+}
+.typed-content-block .content-label,
+.typed-content-block summary {
+  color: #9cb2c7;
+  font-size: 11px;
+  letter-spacing: 0.03em;
+}
+.typed-content-block summary {
+  padding: 8px 0;
+  cursor: pointer;
+}
+.typed-content-block.collapsed[open] summary {
+  color: #d4e1ec;
+}
+.typed-content-block .content-renderer {
+  overflow-wrap: anywhere;
+}
+.typed-content-block.unsupported summary {
+  color: #e3b77d;
 }
 .record-content {
   margin: 0;

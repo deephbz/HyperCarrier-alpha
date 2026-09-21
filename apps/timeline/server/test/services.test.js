@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer, request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,6 +25,17 @@ import { createTpsAdapterServer } from "../tps-adapter.js";
 
 const sessionId = "019f-test-session";
 const header = { type: "session", id: sessionId, timestamp: "2026-01-01T00:00:00Z", cwd: "/repo" };
+const importedRarebitMarker = {
+  version: "rarebit-fork-entry/1",
+  kind: "import",
+  sourceSessionId: "source-session",
+  sourceEntryId: "source-entry",
+  occurrenceId: "source-occurrence",
+  role: "assistant",
+  outcome: "stop",
+  originalTimestamp: "2026-01-01T00:00:00Z",
+  ancestry: [],
+};
 
 function requestLoopback(port, host) {
   return new Promise((resolve, reject) => {
@@ -173,6 +191,62 @@ test("TPS adapter serves the pinned renderer and exact raw Session telemetry", a
     new RegExp(sessionId),
   );
   assert.equal((await fetch(`${base}/api/telemetry?session=missing`)).status, 404);
+});
+
+test("TPS telemetry excludes imported Rarebit records while retaining fresh records", async (t) => {
+  const { root, path } = fixture();
+  appendFileSync(
+    path,
+    `${JSON.stringify({
+      type: "message",
+      id: "imported-tps",
+      timestamp: "2026-01-01T00:01:00Z",
+      rarebitFork: importedRarebitMarker,
+      message: {
+        role: "assistant",
+        stopReason: "stop",
+        usage: { input: 900, output: 500, totalTokens: 1_400, cost: { total: 99 } },
+        content: [{ type: "text", text: "Imported telemetry" }],
+      },
+    })}\n`,
+  );
+  const server = createTpsAdapterServer({
+    sessionsRoot: root,
+    staticDir: undefined,
+    watchSources: () => ({ close() {} }),
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const response = await fetch(
+    `http://127.0.0.1:${server.address().port}/api/telemetry?session=${sessionId}`,
+  );
+  const body = await response.text();
+  assert.equal(response.headers.get("x-hypercarrier-imported-history"), "excluded-from-telemetry");
+  assert.match(body, /"id":"a1"/);
+  assert.doesNotMatch(body, /imported-tps|Imported telemetry/);
+});
+
+test("TPS telemetry terminates when the pinned source disappears", async (t) => {
+  const { root, path } = fixture();
+  const server = createTpsAdapterServer({
+    sessionsRoot: root,
+    staticDir: undefined,
+    watchSources: () => ({ close() {} }),
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  unlinkSync(path);
+  const outcome = await Promise.race([
+    fetch(`http://127.0.0.1:${server.address().port}/api/telemetry?session=${sessionId}`).then(
+      async (response) => {
+        await response.text();
+        return "resolved";
+      },
+      () => "rejected",
+    ),
+    new Promise((resolve) => setTimeout(() => resolve("timeout"), 1_000)),
+  ]);
+  assert.equal(outcome, "rejected");
 });
 
 test("TPS adapter reports a degraded renderer without a pinned dist", async (t) => {

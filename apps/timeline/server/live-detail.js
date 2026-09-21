@@ -18,6 +18,7 @@ import {
   resolveActiveBranch,
   selectRarebits,
 } from "@hypercarrier/rarebit";
+import { getImportedRarebitEntryIds } from "@hypercarrier/rarebit/fork-lineage";
 import { createSourceWatcher } from "./watcher.js";
 import { SessionRegistry } from "./session-registry.js";
 import { resolveCoreHost, resolveServicePort } from "./service-config.js";
@@ -25,7 +26,7 @@ import { resolveCoreHost, resolveServicePort } from "./service-config.js";
 const READ_CHUNK_BYTES = 1024 * 1024;
 const SOURCE_HEADER_BYTES = 64 * 1024;
 export const MAX_TRACE_SOURCE_BYTES = 16 * 1024 * 1024;
-const TRACE_SCHEMA_VERSION = "pi-trace/1";
+const TRACE_SCHEMA_VERSION = "pi-trace/2";
 const TRACE_STATIC_DIR = fileURLToPath(new URL("../dist/trace-viewer/", import.meta.url));
 const MIME = new Map([
   [".css", "text/css; charset=utf-8"],
@@ -90,26 +91,74 @@ function isPrefix(previous, next, same = (left, right) => left === right) {
   return previous.length <= next.length && previous.every((item, index) => same(item, next[index]));
 }
 
-function textContent(content) {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .flatMap((block) => {
-      if (typeof block === "string") return [block];
-      if (!block || typeof block !== "object") return [];
-      if (typeof block.text === "string") return [block.text];
-      if (typeof block.thinking === "string") return [block.thinking];
-      if (block.type === "toolCall") {
-        const name = typeof block.name === "string" ? block.name : "tool call";
-        const argumentsText =
-          typeof block.arguments === "string"
-            ? block.arguments
-            : JSON.stringify(block.arguments ?? {});
-        return [`${name} ${argumentsText}`.trim()];
-      }
-      return [];
-    })
-    .join("\n");
+function toolResultFields(message) {
+  return {
+    toolCallId: typeof message.toolCallId === "string" ? message.toolCallId : null,
+    toolName: typeof message.toolName === "string" ? message.toolName : null,
+    isError: message.isError === true,
+  };
+}
+
+function unsupportedContentBlock(block, sourceBlockIndex, reason) {
+  return {
+    kind: "unsupported",
+    sourceBlockIndex,
+    nativeType:
+      block && typeof block === "object" && typeof block.type === "string" ? block.type : null,
+    reason,
+    raw: block,
+  };
+}
+
+function typedContentBlock(block, sourceBlockIndex, toolResult, message) {
+  if (typeof block === "string")
+    return {
+      kind: toolResult ? "tool_result" : "prose",
+      sourceBlockIndex,
+      text: block,
+      ...(toolResult ? toolResultFields(message) : {}),
+    };
+  if (!block || typeof block !== "object")
+    return unsupportedContentBlock(
+      block,
+      sourceBlockIndex,
+      "Pi content block is not an object or string.",
+    );
+  if (block.type === "text" && typeof block.text === "string")
+    return {
+      kind: toolResult ? "tool_result" : "prose",
+      sourceBlockIndex,
+      text: block.text,
+      ...(toolResult ? toolResultFields(message) : {}),
+    };
+  if (block.type === "thinking" && typeof block.thinking === "string")
+    return { kind: "reasoning", sourceBlockIndex, text: block.thinking };
+  if (block.type === "toolCall")
+    return {
+      kind: "tool_call",
+      sourceBlockIndex,
+      id: typeof block.id === "string" ? block.id : null,
+      name: typeof block.name === "string" ? block.name : "tool call",
+      arguments: block.arguments ?? null,
+    };
+  return unsupportedContentBlock(
+    block,
+    sourceBlockIndex,
+    "Pi content block type is not supported by the typed trace contract.",
+  );
+}
+
+function contentBlocks(entry) {
+  const message = plainObject(entry?.message);
+  const content =
+    typeof message.content === "string"
+      ? [message.content]
+      : Array.isArray(message.content)
+        ? message.content
+        : [];
+  return content.map((block, sourceBlockIndex) =>
+    typedContentBlock(block, sourceBlockIndex, message.role === "toolResult", message),
+  );
 }
 
 function timestampOf(entry) {
@@ -154,19 +203,6 @@ function entryPresentation(entry) {
 
 function entryDetails(entry) {
   const message = plainObject(entry?.message);
-  const toolCalls = Array.isArray(message.content)
-    ? message.content.flatMap((block) =>
-        block?.type === "toolCall" && typeof block.id === "string"
-          ? [
-              {
-                id: block.id,
-                name: typeof block.name === "string" ? block.name : "tool call",
-                arguments: block.arguments ?? null,
-              },
-            ]
-          : [],
-      )
-    : [];
   const usage = plainObject(message.usage);
   return {
     ...(typeof message.stopReason === "string" ? { stopReason: message.stopReason } : {}),
@@ -177,23 +213,23 @@ function entryDetails(entry) {
     ...(typeof message.toolCallId === "string" ? { toolCallId: message.toolCallId } : {}),
     ...(typeof message.toolName === "string" ? { toolName: message.toolName } : {}),
     ...(message.isError === true ? { isError: true } : {}),
-    ...(toolCalls.length ? { toolCalls } : {}),
     ...(Object.keys(usage).length ? { usage } : {}),
   };
 }
 
-function traceRecords(branch, selectedSourceEntryIds) {
+function traceRecords(branch, selectedSourceEntryIds, importedEntryIds) {
   let turn = 0;
   let step = 0;
   const records = branch.map((entry, index) => {
     const presentation = entryPresentation(entry);
     const message = plainObject(entry?.message);
-    if (entry?.type === "message" && message.role === "user") {
+    const sourceEntryId = typeof entry?.id === "string" ? entry.id : null;
+    const imported = sourceEntryId !== null && importedEntryIds.has(sourceEntryId);
+    if (entry?.type === "message" && message.role === "user" && !imported) {
       turn += 1;
       step = 0;
     }
-    if (entry?.type === "message" && message.role === "assistant") step += 1;
-    const sourceEntryId = typeof entry?.id === "string" ? entry.id : null;
+    if (entry?.type === "message" && message.role === "assistant" && !imported) step += 1;
     return {
       recordId: sourceEntryId ? `entry:${sourceEntryId}` : `position:${index}`,
       sourceEntryId,
@@ -204,7 +240,7 @@ function traceRecords(branch, selectedSourceEntryIds) {
       turn: turn || null,
       step: step || null,
       timestamp: timestampOf(entry),
-      text: textContent(message.content),
+      content: contentBlocks(entry),
       rarebit: sourceEntryId !== null && selectedSourceEntryIds.has(sourceEntryId),
       details: entryDetails(entry),
       unavailable: {
@@ -215,28 +251,52 @@ function traceRecords(branch, selectedSourceEntryIds) {
         systemPrompt: "Pi Session JSONL does not record the complete system prompt.",
       },
       raw: entry,
+      ...(imported ? { imported: true } : {}),
     };
   });
-  const toolCallSources = new Map();
-  for (const record of records)
-    for (const call of record.details.toolCalls ?? []) {
-      const existing = toolCallSources.get(call.id);
-      toolCallSources.set(
-        call.id,
+  const toolCalls = new Map();
+  const toolResults = new Map();
+  for (const record of records) {
+    for (const block of record.content) {
+      if (block.kind !== "tool_call" || typeof block.id !== "string") continue;
+      const existing = toolCalls.get(block.id);
+      toolCalls.set(
+        block.id,
         existing
           ? { count: existing.count + 1, recordId: null }
           : { count: 1, recordId: record.recordId },
       );
     }
-  return records.map((record) => {
     const toolCallId = record.details.toolCallId;
-    const candidate = typeof toolCallId === "string" ? toolCallSources.get(toolCallId) : null;
-    return typeof toolCallId === "string"
-      ? {
-          ...record,
-          toolCallRecordId: candidate?.count === 1 ? candidate.recordId : null,
-        }
-      : record;
+    if (record.kind === "tool_result" && typeof toolCallId === "string") {
+      const existing = toolResults.get(toolCallId);
+      toolResults.set(
+        toolCallId,
+        existing
+          ? { count: existing.count + 1, recordId: null }
+          : { count: 1, recordId: record.recordId },
+      );
+    }
+  }
+  return records.map((record) => {
+    const content = record.content.map((block) => {
+      if (block.kind !== "tool_call" || typeof block.id !== "string") return block;
+      const call = toolCalls.get(block.id);
+      const result = toolResults.get(block.id);
+      return {
+        ...block,
+        toolResultRecordId: call?.count === 1 && result?.count === 1 ? result.recordId : null,
+      };
+    });
+    const toolCallId = record.details.toolCallId;
+    const candidate = typeof toolCallId === "string" ? toolCalls.get(toolCallId) : null;
+    return {
+      ...record,
+      content,
+      ...(typeof toolCallId === "string"
+        ? { toolCallRecordId: candidate?.count === 1 ? candidate.recordId : null }
+        : {}),
+    };
   });
 }
 
@@ -247,6 +307,7 @@ function traceRecords(branch, selectedSourceEntryIds) {
 export function projectPiTrace(projection) {
   if (projection?.availability !== "available") return projection;
   const selected = selectRarebits(projection.activeBranch);
+  const importedEntryIds = getImportedRarebitEntryIds(projection.activeBranch);
   const selectedSourceEntryIds = new Set(
     selected.occurrences
       .map((occurrence) => occurrence.sourceEntryId)
@@ -260,7 +321,7 @@ export function projectPiTrace(projection) {
     selectorVersion: RAREBIT_SELECTOR_VERSION,
     activeLeafId: projection.activeLeafId,
     activeBranchIds: projection.activeBranchIds,
-    records: traceRecords(projection.activeBranch, selectedSourceEntryIds),
+    records: traceRecords(projection.activeBranch, selectedSourceEntryIds, importedEntryIds),
     selection: {
       selectorVersion: RAREBIT_SELECTOR_VERSION,
       manifestHash: selected.manifestHash,

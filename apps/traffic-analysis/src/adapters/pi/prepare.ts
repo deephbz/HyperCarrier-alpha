@@ -13,6 +13,7 @@ import type {
   Usage,
 } from "../../domain/contracts.js";
 import { SCHEMA_VERSION } from "../../domain/contracts.js";
+import { getImportedRarebitEntryIds } from "@hypercarrier/rarebit/fork-lineage";
 const observed = (basis: string): Evidence => ({
   class: "observed",
   basis,
@@ -144,6 +145,7 @@ export function preparePiJsonl(
       });
     }
   });
+  const importedEntryIds = getImportedRarebitEntryIds(entries);
   const header = entries.find((x) => x.type === "session") ?? {};
   const latestSessionInfo = entries
     .filter((x) => x.type === "session_info" || x.type === "session_name")
@@ -186,9 +188,11 @@ export function preparePiJsonl(
   for (const e of entries) {
     const message = e.message ?? e;
     const role = message?.role;
+    const imported = typeof e.id === "string" && importedEntryIds.has(e.id);
     const time = ms(e.timestamp) ?? ms(message?.timestamp);
-    if (time !== null) allTimes.push(time);
+    if (time !== null && !imported) allTimes.push(time);
     if (role === "user") {
+      if (imported) continue;
       const text =
         typeof message.content === "string"
           ? message.content
@@ -230,6 +234,7 @@ export function preparePiJsonl(
       continue;
     }
     if (role === "assistant") {
+      if (imported) continue;
       const u = usage(message.usage);
       const response = ms(e.timestamp);
       const start = ms(message.timestamp);
@@ -330,6 +335,7 @@ export function preparePiJsonl(
       continue;
     }
     if (role === "toolResult" || message?.type === "toolResult") {
+      if (imported) continue;
       const callId = message.toolCallId ?? message.callId ?? null;
       const ev: ToolEvent = {
         tool_event_id: id(source_id, "tool-result", events.length),
@@ -442,7 +448,7 @@ export function preparePiJsonl(
     schema_version: SCHEMA_VERSION,
     prepared_derivation_id: createHash("sha256")
       .update(
-        `${digest}|pi-0.80.6-byte-adapter-v1|approved-first-last-200-only|pi.teams.inbox-message-v1:1|tool-owner-manifest-v2`,
+        `${digest}|pi-0.80.6-byte-adapter-v1|approved-first-last-200-only|imported-rarebit-exclusion-v1|pi.teams.inbox-message-v1:1|tool-owner-manifest-v2`,
       )
       .digest("hex"),
     provenance: {
@@ -459,7 +465,8 @@ export function preparePiJsonl(
         },
       ],
       parser_version: "pi-0.80.6-byte-adapter-v1",
-      content_policy: "approved-first-last-200-only",
+      content_policy:
+        "approved-first-last-200-only; imported-rarebit-excluded-v1",
       classifier: { id: "pi.teams.inbox-message-v1", version: "1" },
       tool_manifest_version: "tool-owner-manifest-v2",
     },

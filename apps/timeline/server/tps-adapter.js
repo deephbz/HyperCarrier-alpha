@@ -3,6 +3,9 @@ import { createServer } from "node:http";
 import { extname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
+import { StringDecoder } from "node:string_decoder";
+import { pipeline, Transform } from "node:stream";
+import { getImportedRarebitEntryIds } from "@hypercarrier/rarebit/fork-lineage";
 import { createSourceWatcher } from "./watcher.js";
 import { SessionRegistry } from "./session-registry.js";
 import { resolveCoreHost, resolveServicePort } from "./service-config.js";
@@ -24,6 +27,58 @@ function sessionFromRequest(req, url) {
   } catch {
     return "";
   }
+}
+
+function telemetryWithoutImportedRarebitHistory() {
+  const decoder = new StringDecoder("utf8");
+  let pending = "";
+  const keepLine = (line) => {
+    if (!line.trim()) return true;
+    try {
+      const entry = JSON.parse(line);
+      return !getImportedRarebitEntryIds([entry]).has(entry?.id);
+    } catch {
+      return true;
+    }
+  };
+  return new Transform({
+    transform(chunk, _encoding, callback) {
+      pending += decoder.write(chunk);
+      const lines = pending.split("\n");
+      pending = lines.pop() ?? "";
+      callback(
+        null,
+        lines
+          .filter(keepLine)
+          .map((line) => `${line}\n`)
+          .join(""),
+      );
+    },
+    flush(callback) {
+      pending += decoder.end();
+      callback(null, pending && keepLine(pending) ? pending : "");
+    },
+  });
+}
+
+function streamTelemetry(req, res, path) {
+  const source = createReadStream(path);
+  const filter = telemetryWithoutImportedRarebitHistory();
+  const abort = () => {
+    if (!res.writableEnded && !res.destroyed) {
+      source.destroy();
+      filter.destroy();
+      res.destroy();
+    }
+  };
+  const finish = (error) => {
+    req.off("aborted", abort);
+    res.off("close", abort);
+    if (error && !res.destroyed) res.destroy(error);
+  };
+  req.once("aborted", abort);
+  res.once("close", abort);
+  pipeline(source, filter, res, finish);
 }
 
 export function createTpsAdapterServer({
@@ -56,8 +111,9 @@ export function createTpsAdapterServer({
       res.writeHead(200, {
         "content-type": "text/plain; charset=utf-8",
         "cache-control": "no-store",
+        "x-hypercarrier-imported-history": "excluded-from-telemetry",
       });
-      return createReadStream(path).pipe(res);
+      return streamTelemetry(req, res, path);
     }
     if (req.method === "GET" && url.pathname === "/api/version") {
       res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });

@@ -10,6 +10,7 @@
     "publication",
     "verification",
     "gitlink",
+    "metadataRepair",
     "bootstrapException"
   ],
   "properties": {
@@ -35,19 +36,19 @@
           "const": "https://github.com/deephbz/rarebit.git"
         },
         "commit": {
-          "const": "62608c5140d49118449003b0213e56a481d11caf"
+          "const": "7f70563c11c0b28463ef08e290baba59d781a677"
         },
         "tree": {
-          "const": "c2474e33c7529e4e6246175b6d0ee54c8221fb7b"
+          "const": "0a0d9c1da6126b5cc3716fe9bc46a9759e5e64ed"
         },
         "tagObject": {
-          "const": "1f13f4f2d0c658492e418e53c8361d2baf3dfcb0"
+          "const": "177c15e000d601e18770593b8269896a79de9e67"
         },
         "tag": {
-          "const": "v0.1.0-alpha.5"
+          "const": "v0.1.0-alpha.6"
         },
         "tagTarget": {
-          "const": "62608c5140d49118449003b0213e56a481d11caf"
+          "const": "7f70563c11c0b28463ef08e290baba59d781a677"
         }
       }
     },
@@ -66,10 +67,27 @@
           "const": "@hypercarrier/rarebit"
         },
         "version": {
-          "const": "0.1.0-alpha.5"
+          "const": "0.1.0-alpha.6"
         },
         "bin": {
           "const": "rarebit"
+        },
+        "additionalBins": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "const": "piq"
+          }
+        },
+        "piPeerOptional": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "enum": [
+              "@earendil-works/pi-ai",
+              "@earendil-works/pi-coding-agent"
+            ]
+          }
         },
         "node": {
           "const": ">=22"
@@ -107,25 +125,25 @@
       ],
       "properties": {
         "sri": {
-          "const": "sha512-h+NBXHEL22i1jKb4j1c4NLC6FcyamXSzUbkbJDCxhM3qtu24tKNbKfHK5ggV0pTs6E+w324H/vCNFBn4m7Ymfg=="
+          "const": "sha512-qCbbJAOgx0i5M28n4eeOCMkpPCrMwtU4kR/9Uf3w1TQTonA1S+YG8pYwM7PzsYTkuDp55J+xQtSZ52WtWhfxZg=="
         },
         "sha1": {
-          "const": "4eea88372a9f30c99491bdc4d89eddcaf01a7ef3"
+          "const": "72003a4e2f3a5bc0f3674bd9d3d905a6f42aee1b"
         },
         "sha256": {
-          "const": "68340be270582e2834b03da228c6066b1e9c971c40be46b9612defef76caf0fe"
+          "const": "96ac86dc4f35e03406e8a42abb266b88592417ea23d6f522d1bd6c4e473baaeb"
         },
         "tarball": {
-          "const": "https://registry.npmjs.org/@hypercarrier/rarebit/-/rarebit-0.1.0-alpha.5.tgz"
+          "const": "https://registry.npmjs.org/@hypercarrier/rarebit/-/rarebit-0.1.0-alpha.6.tgz"
         },
         "size": {
-          "const": 93242
+          "const": 117185
         },
         "unpackedSize": {
-          "const": 405878
+          "const": 503615
         },
         "fileCount": {
-          "const": 51
+          "const": 60
         },
         "githubRelease": {
           "type": "object",
@@ -138,10 +156,10 @@
           ],
           "properties": {
             "id": {
-              "const": 371245947
+              "const": 392815542
             },
             "url": {
-              "const": "https://github.com/deephbz/rarebit/releases/tag/v0.1.0-alpha.5"
+              "const": "https://github.com/deephbz/rarebit/releases/tag/v0.1.0-alpha.6"
             },
             "prerelease": {
               "const": true
@@ -163,12 +181,12 @@
               "const": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U"
             },
             "value": {
-              "const": "MEUCID/EkuqbT3hzQvu1m0/23o7qN8ALu9c1d7fabppOvY1NAiEApRe2PecZqbbDjqvFPWY+HGdllrTrqtps3mZI9bVXbSQ="
+              "const": "MEUCIGVcpcGSPpPljaFuhZ4QSGvetB6KpgNtvwAk2wgFIqHRAiEA3wfIxTaFm/Uz2RWbFwiQBq5TzAWsaLzTerEMceTyx6g="
             }
           }
         },
         "next": {
-          "const": "0.1.0-alpha.5"
+          "const": "0.1.0-alpha.6"
         },
         "latest": {
           "const": "0.1.0-alpha.4"
@@ -197,13 +215,13 @@
           ],
           "properties": {
             "run": {
-              "const": 31929298263
+              "const": 35579125370
             },
             "url": {
-              "const": "https://github.com/deephbz/rarebit/actions/runs/31929298263"
+              "const": "https://github.com/deephbz/rarebit/actions/runs/35579125370"
             },
             "head": {
-              "const": "62608c5140d49118449003b0213e56a481d11caf"
+              "const": "7de6326a5c1d1f9a4c01cbcc28e16bcef7cc2566"
             }
           }
         },
@@ -218,16 +236,16 @@
           ],
           "properties": {
             "run": {
-              "const": 31929511826
+              "const": 35579443036
             },
             "url": {
-              "const": "https://github.com/deephbz/rarebit/actions/runs/31929511826"
+              "const": "https://github.com/deephbz/rarebit/actions/runs/35579443036"
             },
             "nonce": {
-              "const": "212baec3-faba-451c-a713-cddd1ecc6f7a"
+              "const": "0a1ef824-6f68-4fdd-80d7-862651df5ed7"
             },
             "head": {
-              "const": "62608c5140d49118449003b0213e56a481d11caf"
+              "const": "7de6326a5c1d1f9a4c01cbcc28e16bcef7cc2566"
             }
           }
         },
@@ -250,25 +268,25 @@
           ],
           "properties": {
             "run": {
-              "const": 31930126874
+              "const": 35579627947
             },
             "url": {
-              "const": "https://github.com/deephbz/rarebit/actions/runs/31930126874"
+              "const": "https://github.com/deephbz/rarebit/actions/runs/35579627947"
             },
             "nonce": {
-              "const": "7d4dd74c-d6b8-45bc-b04c-b58e33af374c"
+              "const": "475f6ef8-e963-483a-8f72-8eb5f3c8dbc7"
             },
             "ref": {
-              "const": "v0.1.0-alpha.5"
+              "const": "v0.1.0-alpha.6"
             },
             "head": {
-              "const": "62608c5140d49118449003b0213e56a481d11caf"
+              "const": "7de6326a5c1d1f9a4c01cbcc28e16bcef7cc2566"
             },
             "attestation": {
-              "const": "https://github.com/deephbz/rarebit/actions/runs/31930126874"
+              "const": "https://github.com/deephbz/rarebit/actions/runs/35579627947"
             },
             "attestationEndpoint": {
-              "const": "https://registry.npmjs.org/-/npm/v1/attestations/@hypercarrier%2frarebit@0.1.0-alpha.5"
+              "const": "https://registry.npmjs.org/-/npm/v1/attestations/@hypercarrier%2frarebit@0.1.0-alpha.6"
             },
             "slsaPredicateType": {
               "const": "https://slsa.dev/provenance/v1"
@@ -277,13 +295,13 @@
               "const": ".github/workflows/publish.yml"
             },
             "workflowRef": {
-              "const": "refs/tags/v0.1.0-alpha.5"
+              "const": "refs/tags/v0.1.0-alpha.6"
             },
             "resolvedCommit": {
-              "const": "62608c5140d49118449003b0213e56a481d11caf"
+              "const": "7de6326a5c1d1f9a4c01cbcc28e16bcef7cc2566"
             },
             "invocation": {
-              "const": "https://github.com/deephbz/rarebit/actions/runs/31930126874/attempts/1"
+              "const": "https://github.com/deephbz/rarebit/actions/runs/35579627947/attempts/1"
             }
           }
         }
@@ -305,7 +323,47 @@
           "const": "160000"
         },
         "commit": {
-          "const": "62608c5140d49118449003b0213e56a481d11caf"
+          "const": "7f70563c11c0b28463ef08e290baba59d781a677"
+        }
+      }
+    },
+    "metadataRepair": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "originalCommit",
+        "repairedCommit",
+        "originalTagObject",
+        "repairedTagObject",
+        "commonTree",
+        "reason",
+        "receiptUrl",
+        "receiptSha256"
+      ],
+      "properties": {
+        "originalCommit": {
+          "const": "7de6326a5c1d1f9a4c01cbcc28e16bcef7cc2566"
+        },
+        "repairedCommit": {
+          "const": "7f70563c11c0b28463ef08e290baba59d781a677"
+        },
+        "originalTagObject": {
+          "const": "6aa4dd7b000a7e5a7e7e65ece76b36306c5d4aed"
+        },
+        "repairedTagObject": {
+          "const": "177c15e000d601e18770593b8269896a79de9e67"
+        },
+        "commonTree": {
+          "const": "0a0d9c1da6126b5cc3716fe9bc46a9759e5e64ed"
+        },
+        "reason": {
+          "const": "privacy-history-repair"
+        },
+        "receiptUrl": {
+          "const": "https://github.com/deephbz/rarebit/releases/download/v0.1.0-alpha.6/rarebit-alpha6-final-receipt.json"
+        },
+        "receiptSha256": {
+          "const": "ae6abc116be3a9cf8f362ad14d88572141c4e97adccfb0b097ddfb73104cddaf"
         }
       }
     },

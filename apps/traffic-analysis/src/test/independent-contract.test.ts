@@ -9,6 +9,96 @@ import { InMemorySourceStore } from "../application/store.js";
 import { readAllowlistedAttribution } from "../adapters/pi-teams/attribution.js";
 
 const line = (value: unknown) => `${JSON.stringify(value)}\n`;
+const importedMarker = {
+  version: "rarebit-fork-entry/1",
+  kind: "import",
+  sourceSessionId: "source-session",
+  sourceEntryId: "source-entry",
+  occurrenceId: "source-occurrence",
+  role: "assistant",
+  outcome: "stop",
+  originalTimestamp: "2026-07-13T23:59:00.000Z",
+  ancestry: [],
+};
+
+test("imported Rarebit seed records do not become Traffic turns, requests, timing, or usage", () => {
+  const prepared = preparePiJsonl(
+    line({ type: "session", id: "imported-history" }) +
+      line({
+        id: "seed",
+        timestamp: "2026-07-14T00:00:00.000Z",
+        rarebitFork: { version: "rarebit-fork-entry/1", kind: "seed" },
+        message: { role: "user", content: "bounded Rarebit distillation" },
+      }) +
+      line({
+        id: "imported-assistant",
+        timestamp: "2026-07-14T00:00:01.000Z",
+        rarebitFork: importedMarker,
+        message: {
+          role: "assistant",
+          timestamp: "2026-07-14T00:00:00.500Z",
+          stopReason: "stop",
+          usage: {
+            input: 900,
+            output: 500,
+            cacheRead: 200,
+            cacheWrite: 100,
+            totalTokens: 1_700,
+            cost: { total: 99 },
+          },
+          content: [{ type: "text", text: "Imported evidence" }],
+        },
+      }) +
+      line({
+        id: "fresh-user",
+        timestamp: "2026-07-14T00:01:00.000Z",
+        message: { role: "user", content: "Fresh request" },
+      }) +
+      line({
+        id: "fresh-assistant",
+        timestamp: "2026-07-14T00:01:02.000Z",
+        message: {
+          role: "assistant",
+          timestamp: "2026-07-14T00:01:01.000Z",
+          stopReason: "stop",
+          usage: {
+            input: 10,
+            output: 5,
+            totalTokens: 15,
+            cost: {
+              input: 0.1,
+              cacheRead: 0.05,
+              cacheWrite: 0.02,
+              output: 0.08,
+              total: 0.25,
+            },
+          },
+          content: [],
+        },
+      }),
+    "imported-history",
+  );
+  assert.deepEqual(
+    prepared.turns.map((turn) => turn.preceding_user_boundary.raw_id),
+    ["fresh-user"],
+  );
+  assert.deepEqual(
+    prepared.requests.map((request) => request.request_id),
+    ["source:imported-history:request:0"],
+  );
+  assert.deepEqual(prepared.coverage, {
+    start_ms: Date.parse("2026-07-14T00:01:00.000Z"),
+    end_ms: Date.parse("2026-07-14T00:01:02.000Z"),
+  });
+  const usage = analyze(prepared).aggregates.find(
+    (aggregate) =>
+      aggregate.kind === "usage_aggregate" &&
+      aggregate.dimensions.agent_id === null,
+  );
+  assert.equal(usage?.measures.request_count, 1);
+  assert.equal(usage?.measures.total_tokens, 15);
+  assert.equal(usage?.measures.static_total_cost_usd, 0.25);
+});
 
 test("independent: native Pi-style usage fields preserve cache and reasoning-subset reconciliation", () => {
   const prepared = preparePiJsonl(

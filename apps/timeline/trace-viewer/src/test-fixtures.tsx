@@ -15,7 +15,7 @@ export function traceRecord(order: number, rarebit: boolean, text: string): Trac
     turn: 1,
     step: order,
     timestamp: null,
-    text,
+    content: [{ kind: "prose", sourceBlockIndex: 0, text }],
     rarebit,
     details: {},
     unavailable: {},
@@ -25,7 +25,7 @@ export function traceRecord(order: number, rarebit: boolean, text: string): Trac
 
 export const traceFixture: PiTrace = {
   availability: "available",
-  schemaVersion: "pi-trace/1",
+  schemaVersion: "pi-trace/2",
   sessionId: "session-test",
   sourceVersion: "source-1",
   selectorVersion: "selector-1",
