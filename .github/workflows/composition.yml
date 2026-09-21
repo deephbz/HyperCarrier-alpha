@@ -1,4 +1,4 @@
-name: Pi Team Bright public composition
+name: Native composition consistency
 
 on:
   pull_request:
@@ -21,7 +21,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --ignore-scripts
-      - run: node scripts/verify-pi-team-bright-composition.mjs --debug
-      - run: npm test
-      - run: npm run build:timeline
-      - run: npm run build:traffic
+      - run: npm run verify:composition -- --debug
+      - run: npm run verify:colorstack -- --debug
+      - run: npm run test:composition
+      - run: npm --workspace pi-session-timeline test

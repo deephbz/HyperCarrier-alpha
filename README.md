@@ -14,31 +14,25 @@ testing. It contains these components:
 - an optional read-only traffic analysis module that resolves explicit Team or
   Agent scopes from local Pi Session evidence and explicit PiTeams attribution.
 
-## Release notes — Alpha 0.1.0-alpha.3 candidate
+## Source projection
 
-This candidate is not published. It adds typed Trace Viewer content boundaries and
-full-page record inspection, import-aware Rarebit filtering in Timeline, Traffic,
-and TPS projections, and the PiQ CLI composition. Rarebit alpha.6 is published
-with repaired Git metadata and immutable npm provenance; the parent records both
-sources explicitly and preserves the existing `latest` tag. See the
-[alpha.6 release](https://github.com/deephbz/rarebit/releases/tag/v0.1.0-alpha.6)
-and [repair receipt](https://github.com/deephbz/rarebit/releases/download/v0.1.0-alpha.6/rarebit-alpha6-final-receipt.json)
-for the repair evidence.
+This checkout is generated from a selected committed private source. The
+exporter preserves the public allowlist, child gitlinks, package workspace
+closure, and generated provenance. Read package manifests, Git metadata, npm
+registry data, and the linked GitHub release for current versions and artifact
+identity. This README does not duplicate volatile release tables.
 
-Rarebit `0.1.0-alpha.6` is a published npm prerelease on `next`, while
-`latest` remains `0.1.0-alpha.4`. Pi Team Bright `0.17.4` is a stable npm
-release on `latest`. Pi OpenAI Blackmagic Compact `0.1.0-rc.8` is a published
-npm prerelease on `next`, while `latest` remains `0.1.0-rc.5`. These release
-facts describe the composed artifacts. They do not claim that each component is
-independently useful.
+The source includes typed Trace Viewer content boundaries and full-page record
+inspection, import-aware Rarebit filtering in Timeline, Traffic, and TPS
+projections, and the PiQ CLI composition. The observatory paths are read-only
+by default. System Prompt Audit writes only explicit operator-requested local
+artifacts. Auto Compact is a separately loaded control extension; it keeps its
+notices distinct from Session truth and delegates actuation to Pi's native
+compactor.
 
-The observatory paths are read-only by default. System Prompt Audit writes only
-explicit operator-requested local artifacts. Auto Compact is a separately
-loaded control extension; it keeps its notices distinct from Session truth and
-delegates actuation to Pi's native compactor. The Alpha keeps runtime
-observations, reported agent output, Task records, delivery evidence, and human
-attention assessment as separate axes instead of inventing one universal
-Project status.
+The Alpha keeps runtime observations, reported agent output, Task records,
+delivery evidence, and human attention assessment as separate axes instead of
+inventing one universal Project status.
 
 ## Quick start
 
@@ -107,15 +101,11 @@ When Pi runs under Herdr, Rarebit can report two optional recency clocks: latest
 selected user message, then latest selected agent stop. They aren't liveness,
 progress, or delivery state. The package README documents the token contract.
 
-**Release tags:** use exact `@hypercarrier/rarebit@0.1.0-alpha.6` and
-`@hypercarrier/pi-openai-blackmagic-compact@0.1.0-rc.8` recovery pins. Rarebit's
-`next` tag points to alpha.6 while npm `latest` remains alpha.4. Blackmagic's
-`next` tag points to rc.8 while npm `latest` remains rc.5. Blackmagic rc.8 is
-branch-provenance evidence: its npm artifact, SLSA provenance, and publish
-workflow are verified, but no matching Git tag or GitHub Release exists. No
-npm artifact was unpublished or retargeted. The alpha.6 Git tag and gitlink
-metadata received an authorized privacy repair while the npm artifact and its
-attestation stayed immutable. Alpha has not been published from this candidate.
+**Artifact identity:** use the exact package version, dist-tag, Git tag, and
+GitHub release shown by the package and repository metadata. Do not infer an
+artifact version from this generated checkout or replace npm provenance with a
+repaired Git identity. Immutable tags and published package bytes remain
+separate authorities.
 
 ## Verified terminal theme candidate
 
@@ -264,7 +254,7 @@ uv run --locked --project tools/herdr-pi-recovery herdr-pi-recovery plan
 plan first. Each tool README gives exact use, verification, and removal steps.
 
 Pi Team Bright orchestration and its graph-native Task authority are maintained in
-[deephbz/pi-team-bright](https://github.com/deephbz/pi-team-bright). Clone this Alpha with `git clone --recurse-submodules`; a non-recursive clone intentionally lacks `packages/pi-team-bright` until `git submodule update --init --recursive` is run. The gitlink composes the verified `0.17.4` source revision. The compatibility record separately verifies the immutable `@hypercarrier/pi-team-bright@0.17.4` npm artifact and its public release receipts.
+[deephbz/pi-team-bright](https://github.com/deephbz/pi-team-bright). Clone this Alpha with `git clone --recurse-submodules`; a non-recursive clone intentionally lacks `packages/pi-team-bright` until `git submodule update --init --recursive` is run. The committed gitlink and child package metadata identify the selected source and artifact independently.
 
 ## Trust model
 
