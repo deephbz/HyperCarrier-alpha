@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
   "sourceRepository": "HyperCarrier",
-  "sourceCommit": "fb40f2d5f08d1398aa0295e31359e842cfdc283f",
-  "sourceTree": "d81049f2d3906ab886124ab1a4f7dd43e28eae74",
+  "sourceCommit": "f87295284bf1005eb65f77f01fcf6f621f56e5ce",
+  "sourceTree": "d1d04d14f3cc12534e6c73d966e12dd2d8a14fc7",
   "sourceWorktreeDirty": false,
-  "exportContentSha256": "3f3d19e079d572d8964796c2e4cc1dcd0ccfa800d6344e69246811bc05b638a2",
+  "exportContentSha256": "312c4d9a56610ea66d5a2107d1d5084d1ef595a4ec7f9593b44b914ec44c86eb",
   "exportManifestSha256": "b3c8d6e4177a3714904d3642181d09b9778ff18106733a0ae0bc117b9ddb3622",
   "dependencies": [],
   "submodules": [
@@ -12,12 +12,12 @@
       "name": "packages/pi-team-bright",
       "path": "packages/pi-team-bright",
       "repository": "https://github.com/deephbz/pi-team-bright.git",
-      "commit": "06ee423380e4fb0ce79f15887bd637cd2a56e024",
-      "tree": "caa844f69a0f2af52200385a2447b37170d0b077",
+      "commit": "7504afa1619934033f3a397717c77acbcd42aff2",
+      "tree": "94becfe59db04a883a2d5c0a221b94e9f546dfa3",
       "identity": {
         "kind": "npm-package",
         "name": "@hypercarrier/pi-team-bright",
-        "version": "0.17.4"
+        "version": "0.20.0"
       }
     },
     {
@@ -48,12 +48,12 @@
       "name": "packages/hc-rarebit",
       "path": "packages/hc-rarebit",
       "repository": "https://github.com/deephbz/rarebit.git",
-      "commit": "721ddc584bb177d46f1363b7455cd6a4a667b13e",
-      "tree": "bb4d333c236a62d88a78f44d70387aa268b43b3d",
+      "commit": "a64dc5bc052569fdfd6b344cacfd986d68bbf248",
+      "tree": "6106495006a040751c411ce067256184bfb3f567",
       "identity": {
         "kind": "npm-package",
         "name": "@hypercarrier/rarebit",
-        "version": "0.1.0-alpha.6"
+        "version": "0.2.0"
       }
     }
   ],

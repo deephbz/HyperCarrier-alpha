@@ -107,6 +107,18 @@ artifact version from this generated checkout or replace npm provenance with a
 repaired Git identity. Immutable tags and published package bytes remain
 separate authorities.
 
+## Upgrade composed Pi extensions
+
+After updating this checkout, run `git submodule update --init --recursive`
+and `npm ci`. Restart Pi to load the updated extension code. Existing external
+npm installations remain separate from this checkout.
+
+Read the pinned [Pi Team Bright upgrade guide](packages/pi-team-bright/README.md#upgrade-from-model-profiles)
+before changing Worker model settings. Finish or stop live Teams on their
+original version, preserve their stores and Session logs, then migrate settings
+and start new Team epochs. The pinned [Rarebit guide](packages/hc-rarebit/README.md)
+owns its command, settings, and Recap behavior.
+
 ## Verified terminal theme candidate
 
 Requirements: Node.js 22.19 or newer; Python 3.11 or newer; and Herdr and
