@@ -13,8 +13,10 @@
     "test:e2e": "node scripts/e2e-rpc.mjs"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "0.80.10",
     "proper-lockfile": "4.1.2"
+  },
+  "peerDependencies": {
+    "typebox": "*"
   },
   "pi": {
     "extensions": [

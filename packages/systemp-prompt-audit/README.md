@@ -7,6 +7,10 @@ definitions for operator review. It registers no model-facing tools.
 - `systemp-prompt-audit SNAPSHOT.json [REVIEW.md]` renders deterministic
   Markdown and self-contained HTML without a model call.
 
+For an evidence-based audit, annotated proposal review, or approved source
+application, follow the [prompt review playbook](docs/prompt-review-playbook.md).
+It covers the full workflow; this README owns the package commands.
+
 ## Install
 
 Install the checkout as a Pi package, then reload Pi:
@@ -23,7 +27,20 @@ The package requires Node.js 22 or newer.
 
 ## Capture
 
-Run the operator command in Pi:
+Use this command to measure the user's actual Pi profile. A normal `pi` launch
+in a temporary directory is sufficient for a representative profile audit;
+you do not need to locate a specific existing process. Keep normal extensions,
+built-in tools, skills, context files, settings, and model enabled. Record the
+working directory because project-local context and settings can change totals.
+Use the original process only when its exact Session-specific state matters.
+
+Do not substitute a minimal test process or an SDK/RPC process with
+normal profile discovery disabled for the user's setup. Such a capture measures only that
+test configuration. Label it explicitly and never report its total as the
+user's normal prompt size. An extension being loaded does not prove that its
+model-facing tools are active; check the exported active-tool names.
+
+Run the operator command in the normally configured Pi process:
 
 ```text
 /export-system-prompt
@@ -45,6 +62,20 @@ effective prompt and active-tool set. The command records:
 
 The snapshot does not include provider scaffolding or later
 `before_provider_request` rewrites.
+
+### Measure length and extension overhead
+
+Report system-prompt text, each active tool definition, and their combined
+length separately. State the counting method. Character-based token estimates
+are not provider tokenization. Exclude export metadata such as `sourceInfo`
+from model-context counts, and state the JSON serialization used for schemas.
+
+For an extension comparison, start with the actual-profile export. Distinguish
+an observed active tool cost from a projected cost for an uninstalled candidate.
+A measured before/after comparison must preserve all unrelated profile inputs,
+including the Session working directory. Do not claim that a candidate is
+installed merely because its definitions were added to an offline calculation.
+Keep raw exports private and preserve their hashes with the derived breakdown.
 
 ## Render
 
