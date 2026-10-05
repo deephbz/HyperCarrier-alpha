@@ -878,6 +878,37 @@ test("only native threshold compaction is suppressed and external compaction int
   assert.equal((await ready(harness)).details.status, "ignored");
 });
 
+test("owned handoff lets Pi retry after typed overflow recovery", async () => {
+  const harness = makeHarness();
+  await triggerAutomatic(harness);
+
+  assert.equal(
+    harness.handlers.get("session_before_compact")(
+      { reason: "overflow", willRetry: true },
+      harness.ctx,
+    ),
+    undefined,
+    "canceling would prevent Pi from retrying the failed request",
+  );
+  assert.equal(harness.compactCalls.length, 0, "Pi owns retrying overflow compaction");
+  assert.equal(harness.controller.snapshot().state, "idle");
+
+  harness.handlers.get("session_compact")(
+    {
+      reason: "overflow",
+      willRetry: true,
+      fromExtension: false,
+      compactionEntry: { type: "compaction" },
+    },
+    harness.ctx,
+  );
+  const pickups = harness.messages.filter(
+    ({ message }) => message.customType === "auto-compact.pickup",
+  );
+  assert.equal(pickups.length, 1);
+  assert.deepEqual(pickups[0].options, { triggerTurn: false });
+});
+
 test("external compaction completion supersedes an interrupted handoff exactly once", async () => {
   for (const scenario of [
     { reason: "manual", willRetry: false, triggerTurn: false },

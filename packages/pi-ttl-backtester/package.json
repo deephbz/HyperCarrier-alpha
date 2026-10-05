@@ -1,0 +1,31 @@
+{
+  "name": "@hypercarrier/pi-ttl-backtester",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "description": "Backtest prompt-cache TTL strategies against local pi session usage.",
+  "keywords": [
+    "pi-package",
+    "prompt-cache",
+    "cost"
+  ],
+  "type": "module",
+  "bin": {
+    "pi-ttl-backtester": "./bin/pi-ttl-backtester.mjs"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "start": "node bin/pi-ttl-backtester.mjs"
+  },
+  "pi": {
+    "extensions": [
+      "./src/extension.mjs"
+    ]
+  },
+  "files": [
+    "bin",
+    "src",
+    "web",
+    "README.md"
+  ]
+}

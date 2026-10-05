@@ -55,22 +55,15 @@ herdr server reload-config
 ## Link and verify
 
 The public Pi Team Bright observation build must be available from the same
-HyperCarrier checkout. Run these commands from the checkout root:
+HyperCarrier checkout. Link the plugin, enable it, and request one complete
+reconciliation:
 
 ```bash
-plugin_root="$PWD/tools/pi-teams-hierarchy"
+plugin_root="$(git rev-parse --show-toplevel)/tools/pi-teams-hierarchy"
 herdr plugin link "$plugin_root"
 herdr plugin enable pi-teams-hierarchy
-herdr plugin list --plugin pi-teams-hierarchy --json
-herdr config check
-herdr server reload-config
 herdr plugin action invoke pi-teams-hierarchy.refresh-all
 ```
-
-The JSON record must show plugin id `pi-teams-hierarchy`, the exact
-`plugin_root`, enabled state, and both actions. The example role row is in
-`config/herdr.example.toml` in a public Alpha checkout. Merge that row into the
-live `[ui.sidebar.agents]` table before the check and reload steps.
 
 The startup hook reconciles all live Agents. `pane.agent_detected` retries for
 a bounded interval because Herdr can detect Pi before Pi Team Bright publishes
