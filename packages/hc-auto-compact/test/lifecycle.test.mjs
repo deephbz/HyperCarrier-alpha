@@ -321,11 +321,11 @@ test("handoff prompt forbids context gathering and makes that invariant override
   assert.match(prompt, /do not gather more context/i);
   assert.match(prompt, /do not read files, search, browse, inspect logs/i);
   assert.match(prompt, /do not .*run verification/i);
-  assert.match(prompt, /using only information already present in this Session/i);
-  assert.match(prompt, /immediately write or update the minimum durable/i);
-  assert.match(prompt, /only already-known paths and safe write or edit operations/i);
-  assert.match(prompt, /if no safe durable update is possible.*do not inspect/i);
-  assert.match(prompt, /no-inspection rule takes precedence/i);
+  assert.match(prompt, /use only information already in this Session and paths you already know/i);
+  assert.match(prompt, /use only safe write or edit operations/i);
+  assert.match(prompt, /write or update the minimum durable/i);
+  assert.match(prompt, /if no safe write is possible without inspection, skip this step/i);
+  assert.match(prompt, /no-inspection rule overrides any guidance above/i);
   assert.ok(
     prompt.lastIndexOf("no-inspection rule") >
       prompt.indexOf("Read the project status first"),
@@ -333,7 +333,7 @@ test("handoff prompt forbids context gathering and makes that invariant override
   );
   assert.match(
     prompt,
-    /minimal preservation write is complete, or no safe write is possible, call auto_compact_ready/i,
+    /2\. Call auto_compact_ready with no arguments, alone, as your final action/i,
   );
 });
 
@@ -349,7 +349,7 @@ test("automatic crossing starts one visible handoff with fixed preservation sema
   assert.equal(message.display, true);
   assert.deepEqual(message.details, { projection: "handoff" });
   assert.deepEqual(options, { triggerTurn: true, deliverAs: "steer" });
-  assert.match(message.content, /approaching the configured limit/i);
+  assert.match(message.content, /near the configured limit/i);
   assert.match(message.content, /native compaction/i);
   assert.match(message.content, /durable Evergreen\/work artifacts/i);
   assert.match(message.content, /do not gather more context/i);
@@ -640,7 +640,7 @@ test("successful native compaction injects pickup exactly once and high usage st
   assert.deepEqual(pickups[0].options, { triggerTurn: true });
   assert.equal(
     pickups[0].message.content,
-    "Auto Compact finished Pi's native compaction. Resume the prior request if work remains; if the request is complete, stop normally.",
+    "Auto Compact pickup: Pi compacted this Session. Continue the prior request if work remains. If it is complete, stop.",
   );
   assert.match(harness.notices.at(-1).text, /pickup instruction requested/i);
   assert.doesNotMatch(harness.notices.at(-1).text, /pickup instruction sent/i);
@@ -984,7 +984,7 @@ test("external compaction completion supersedes an interrupted handoff exactly o
     );
     assert.equal(
       pickups[0].message.content,
-      "The earlier Auto Compact handoff is no longer active because a separate native Pi compaction finished. Ignore that earlier handoff notice and its readiness instruction. Resume the prior request if work remains; if the request is complete, stop normally.",
+      "Auto Compact handoff cancelled: a separate Pi compaction finished first. Ignore the earlier handoff notice and do not call auto_compact_ready. Continue the prior request if work remains. If it is complete, stop.",
       scenario.reason,
     );
     assert.equal(harness.controller.snapshot().state, "idle");

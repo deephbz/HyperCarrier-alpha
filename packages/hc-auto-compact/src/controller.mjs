@@ -27,17 +27,30 @@ export const AUTO_COMPACT_STATES = Object.freeze([
   "pickup",
 ]);
 
-const PICKUP_PROMPT =
-  "Auto Compact finished Pi's native compaction. Resume the prior request if work remains; if the request is complete, stop normally.";
-const SUPERSESSION_PICKUP_PROMPT =
-  "The earlier Auto Compact handoff is no longer active because a separate native Pi compaction finished. Ignore that earlier handoff notice and its readiness instruction. Resume the prior request if work remains; if the request is complete, stop normally.";
+const RESUME_INSTRUCTION =
+  "Continue the prior request if work remains. If it is complete, stop.";
+const PICKUP_PROMPT = `Auto Compact pickup: Pi compacted this Session. ${RESUME_INSTRUCTION}`;
+const SUPERSESSION_PICKUP_PROMPT = `Auto Compact handoff cancelled: a separate Pi compaction finished first. Ignore the earlier handoff notice and do not call auto_compact_ready. ${RESUME_INSTRUCTION}`;
 
+// Configurable guidance comes first so the framework-owned rules that follow
+// it take precedence.
 export function buildPreCompactPrompt(additionalGuidance) {
   const guidance =
     typeof additionalGuidance === "string" && additionalGuidance.trim()
-      ? `\n\nAdditional preservation guidance:\n${additionalGuidance.trim()}`
+      ? `\n\nPreservation guidance:\n${additionalGuidance.trim()}`
       : "";
-  return `Context is approaching the configured limit. Auto Compact will run Pi's native compaction after you report that this handoff is complete. This handoff notice applies only while auto_compact_ready is available; if that tool is unavailable, ignore this notice. Do not gather more context during this handoff: do not read files, search, browse, inspect logs, or run verification. Using only information already present in this Session, immediately write or update the minimum durable Evergreen/work artifacts needed to preserve current progress, decisions, unresolved work, and continuation state. Use only already-known paths and safe write or edit operations. If no safe durable update is possible without inspection, do not inspect.${guidance}\n\nThe no-inspection rule takes precedence over any additional preservation guidance. When the minimal preservation write is complete, or no safe write is possible, call auto_compact_ready with no arguments as your final and only action.`;
+  return `Auto Compact handoff: context is near the configured limit. Pi will run native compaction after you call auto_compact_ready.${guidance}
+
+Rules (the no-inspection rule overrides any guidance above):
+- Do not gather more context: do not read files, search, browse, inspect logs, or run verification.
+- Use only information already in this Session and paths you already know.
+- Use only safe write or edit operations.
+
+Steps:
+1. Write or update the minimum durable Evergreen/work artifacts that preserve current progress, decisions, unresolved work, and next steps. If no safe write is possible without inspection, skip this step.
+2. Call auto_compact_ready with no arguments, alone, as your final action.
+
+This notice applies only while auto_compact_ready is available. If that tool is unavailable, ignore this notice.`;
 }
 
 function friendlyPercent(value) {
@@ -495,7 +508,7 @@ export function createAutoCompactController(pi, options = {}) {
     name: AUTO_COMPACT_TOOL_NAME,
     label: "Auto Compact Ready",
     description:
-      "Report that preservation for the current Auto Compact handoff is complete. Call this with no arguments as your final and only action. It is valid only while an Auto Compact handoff is pending.",
+      "Finish the pending Auto Compact handoff after you preserve work. Call it with no arguments, alone, as your final action. Valid only while a handoff is pending.",
     promptSnippet:
       "auto_compact_ready: finish the current Auto Compact handoff after durable preservation",
     parameters: Type.Object({}, { additionalProperties: false }),
