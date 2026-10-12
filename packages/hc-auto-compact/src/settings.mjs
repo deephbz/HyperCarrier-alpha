@@ -15,6 +15,9 @@ export const DEFAULT_PRE_COMPACT_PROMPT =
 export const DEFAULT_AUTO_COMPACT_SETTINGS = Object.freeze({
   enabled: true,
   threshold: 90,
+  preservation: "artifact-handoff",
+  method: "native",
+  execution: "foreground",
   pre_compact_prompt: DEFAULT_PRE_COMPACT_PROMPT,
 });
 
@@ -28,9 +31,20 @@ export function mergeAutoCompactSettings(
   globalSettings = {},
   projectSettings = {},
 ) {
+  const global = settingsObject(globalSettings?.auto_compact);
+  const project = settingsObject(projectSettings?.auto_compact);
   return {
-    ...settingsObject(globalSettings?.auto_compact),
-    ...settingsObject(projectSettings?.auto_compact),
+    ...global,
+    ...project,
+    ...(global.modelOverrides !== undefined ||
+    project.modelOverrides !== undefined
+      ? {
+          modelOverrides: {
+            ...settingsObject(global.modelOverrides),
+            ...settingsObject(project.modelOverrides),
+          },
+        }
+      : {}),
   };
 }
 
@@ -57,6 +71,41 @@ export function resolveAutoCompactSettings(
       );
   }
 
+  if (configured.budget_tokens !== undefined) {
+    if (
+      Number.isSafeInteger(configured.budget_tokens) &&
+      configured.budget_tokens > 0
+    )
+      settings.budget_tokens = configured.budget_tokens;
+    else errors.push("auto_compact.budget_tokens must be a positive integer");
+  }
+
+  if (configured.modelOverrides !== undefined) {
+    settings.modelOverrides = {};
+    for (const [key, override] of Object.entries(
+      settingsObject(configured.modelOverrides),
+    )) {
+      if (
+        override &&
+        typeof override === "object" &&
+        !Array.isArray(override) &&
+        override.budget_tokens === undefined
+      )
+        continue;
+      if (
+        Number.isSafeInteger(override?.budget_tokens) &&
+        override.budget_tokens > 0
+      )
+        settings.modelOverrides[key] = {
+          budget_tokens: override.budget_tokens,
+        };
+      else
+        errors.push(
+          `auto_compact.modelOverrides[${key}].budget_tokens must be a positive integer`,
+        );
+    }
+  }
+
   if (configured.pre_compact_prompt !== undefined) {
     if (
       typeof configured.pre_compact_prompt === "string" &&
@@ -67,7 +116,38 @@ export function resolveAutoCompactSettings(
       errors.push("auto_compact.pre_compact_prompt must be a non-empty string");
   }
 
-  return { settings, errors };
+  for (const [key, values] of Object.entries({
+    preservation: ["artifact-handoff", "none"],
+    method: ["native", "summary", "keepset"],
+    execution: ["foreground", "background"],
+  })) {
+    if (configured[key] === undefined) continue;
+    if (values.includes(configured[key])) settings[key] = configured[key];
+    else errors.push(`auto_compact.${key} must be ${values.join(" or ")}`);
+  }
+  if (settings.execution === "background" && settings.method === "native")
+    errors.push("background requires method summary or keepset");
+
+  const globalOverrides = settingsObject(
+    globalSettings.compaction?.modelOverrides,
+  );
+  const projectOverrides = settingsObject(
+    projectSettings.compaction?.modelOverrides,
+  );
+  const modelOverrides = { ...globalOverrides, ...projectOverrides };
+  for (const [key, override] of Object.entries(projectOverrides)) {
+    if (override && typeof override === "object" && !Array.isArray(override))
+      modelOverrides[key] = {
+        ...settingsObject(globalOverrides[key]),
+        ...override,
+      };
+  }
+  const compaction = {
+    ...settingsObject(globalSettings.compaction),
+    ...settingsObject(projectSettings.compaction),
+    modelOverrides,
+  };
+  return { settings, errors, compaction };
 }
 
 export function configuredAgentDir(env = process.env) {

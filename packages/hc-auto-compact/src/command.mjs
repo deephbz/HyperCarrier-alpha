@@ -1,10 +1,10 @@
 import { isValidThreshold } from "./threshold.mjs";
 
 const AUTO_COMPACT_SYNTAX =
-  "/auto-compact [status|on|off|threshold <percent>|run [prompt...]]";
+  "/auto-compact [status|on|off|threshold <percent>|budget <tokens|default>|run [prompt...]]";
 export const AUTO_COMPACT_USAGE = `Usage: ${AUTO_COMPACT_SYNTAX}`;
 
-const SUBCOMMANDS = ["status", "on", "off", "threshold", "run"];
+const SUBCOMMANDS = ["status", "on", "off", "threshold", "budget", "run"];
 
 export function autoCompactCommandDescription() {
   return AUTO_COMPACT_SYNTAX;
@@ -36,6 +36,18 @@ export function parseAutoCompactCommand(input = "") {
     const prompt = /^\s/.test(remainder) ? remainder.slice(1) : "";
     if (!prompt.trim()) return { ok: true, subcommand };
     return { ok: true, subcommand, prompt };
+  }
+
+  if (subcommand === "budget") {
+    if (args.length === 1 && args[0] === "default")
+      return { ok: true, subcommand, budget: "default" };
+    const value =
+      args.length === 1 && /^\d+k?$/i.test(args[0])
+        ? Number(args[0].replace(/k$/i, "")) * (/k$/i.test(args[0]) ? 1000 : 1)
+        : undefined;
+    if (!Number.isSafeInteger(value) || value <= 0)
+      return { ok: false, error: "invalid_budget", usage: AUTO_COMPACT_USAGE };
+    return { ok: true, subcommand, budget: value };
   }
 
   if (subcommand === "threshold") {

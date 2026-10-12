@@ -1,0 +1,4 @@
+# Insert these color-free defaults inside the Herdr server [ui] table.
+pane_borders = "auto"
+pane_gaps = false
+pane_outer_borders = true

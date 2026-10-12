@@ -160,6 +160,13 @@ find "$candidate" -type f | sort
    acceptance in your own terminal. The compose command does not install, select,
    or reload a live configuration.
 
+## Environment orientation
+
+[`whereami`](tools/whereami/README.md) is a standalone Python CLI for local
+host/client orientation. It reports environment facts and suggests follow-up
+probes. It requires no Pi package or Node.js installation. Its output can expose
+private host and network data; review it before sharing.
+
 ## Optional terminal integration examples
 
 The `config/` directory contains a portable terminal behavior/keybinding bundle:
@@ -170,13 +177,16 @@ The `config/` directory contains a portable terminal behavior/keybinding bundle:
 - `herdr.plugins.lock.toml` records complete plugin installation intent for the
   three plugins shipped in this checkout and the pinned external file viewer;
 - `ghostty.example.config` combines non-color terminal settings with the macOS
-  keybindings that pass those controls through.
+  keybindings that pass those controls through;
+- `herdr-gpui.example.toml` provides an optional GPUI layout override without
+  requiring a font or theme. See [`config/README.md`](config/README.md) for the
+  server/client split and optional dependencies.
 
-These are examples, not a replacement for a live configuration. First install
-and enable the checkout-local plugins from this checkout, then selectively merge
+These are examples, not a replacement for a live configuration. Selectively merge
 only the desired Herdr tables/key commands and Ghostty settings into your own
-files. For the external viewer, install the exact lock revision rather than an
-unpinned latest release:
+files. If you select plugin controls, install and enable their checkout-local
+plugins. For the external viewer, install the exact lock revision rather than
+an unpinned latest release:
 
 ```sh
 herdr plugin link "$PWD/tools/agent-view-presets"
@@ -214,6 +224,16 @@ Use `/auto-compact status` inside Pi to inspect its effective configuration and
 runtime state. Once loaded, it is enabled by default at a 90% effective-context
 threshold. Its package README documents the cooperative handoff, durable
 settings, manual trigger, and failure behavior.
+
+Cache Goblin is an independent Pi prompt-cache policy under
+[`packages/pi-cache-goblin`](packages/pi-cache-goblin). It places the Anthropic
+prompt-cache prefix, selects the Session cache TTL, and holds one cache anchor.
+It does not own compaction or conversation retention. Auto Compact uses its
+anchors when both extensions are loaded:
+
+```sh
+pi -e "$PWD/packages/pi-cache-goblin/src/extension.mjs"
+```
 
 System Prompt Audit is under
 [`packages/systemp-prompt-audit`](packages/systemp-prompt-audit). Its Pi command

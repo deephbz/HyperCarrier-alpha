@@ -7,6 +7,8 @@ function stageLabel(name, status) {
       return `● ${name} (active)`;
     case "done":
       return `✓ ${name}`;
+    case "skipped":
+      return `— ${name} (skipped)`;
     case "failed":
       return `× ${name} (failed)`;
     case "interrupted":
@@ -41,18 +43,25 @@ export function renderHumanReceipt(
     includePrompt && receipt.instructionRequested
       ? `\n\n${AGENT_INSTRUCTION_LABEL}\n${receipt.prompt}`
       : "";
-  return `${title}\n${rail}\n${receipt.outcome}${prompt}`;
+  const forced = receipt.forced
+    ? receipt.overshootTokens === undefined
+      ? "\nForced: handoff settled without readiness."
+      : `\nForced at budget; overshoot ${receipt.overshootTokens} tokens.`
+    : "";
+  return `${title}\n${rail}\n${receipt.outcome}${forced}${prompt}`;
 }
 
 export function renderLifecycleHud(
   receipt,
-  { state, externalResolution = false },
+  { state, externalResolution = false, methodPhase },
 ) {
   const trigger = receipt.trigger === "manual" ? "MANUAL" : "AUTOMATIC";
   const phase = externalResolution
     ? "EXTERNAL COMPACTION — resolving interrupted handoff"
     : state === "queued"
-      ? "QUEUED — waiting behind current agent work"
+      ? `${receipt.preservation === "none" ? "QUEUED PLANNING" : "QUEUED"} — waiting behind current agent work`
+      : methodPhase && ["handoff_pending", "ready"].includes(state)
+        ? `${receipt.preservation === "none" ? "PLANNING" : "HANDOFF / PLANNING"} — ${methodPhase}`
       : state === "handoff_pending"
         ? "HANDOFF — awaiting readiness"
         : state === "ready"

@@ -9,10 +9,13 @@ focus_pane_left = ["prefix+h", "cmd+h"]
 focus_pane_down = ["prefix+j", "cmd+j"]
 focus_pane_up = ["prefix+k", "cmd+k"]
 focus_pane_right = ["prefix+l", "cmd+l"]
+previous_tab = ["prefix+p", "cmd+["]
+next_tab = ["prefix+n", "cmd+]"]
 # Ghostty passes Cmd+F through to this binding.
 zoom = "cmd+f"
 
 [ui]
+# Insert herdr-pane-defaults.toml here for shared pane behavior.
 agent_panel_sort = "spaces"
 show_agent_labels_on_pane_borders = true
 

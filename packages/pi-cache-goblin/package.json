@@ -1,0 +1,23 @@
+{
+  "name": "@hypercarrier/pi-cache-goblin",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "description": "Independent Pi prompt-cache prefix placement and session TTL policy.",
+  "keywords": ["pi-package"],
+  "files": ["src", "README.md"],
+  "exports": {
+    ".": "./src/extension.mjs",
+    "./plan": "./src/plan.mjs",
+    "./system-split": "./src/system-split.mjs"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=1.1.0 <2"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "pi": {
+    "extensions": ["./src/extension.mjs"]
+  }
+}

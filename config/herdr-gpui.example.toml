@@ -1,0 +1,4 @@
+# Herdr GPUI user-interface defaults. Merge with existing GPUI overrides.
+# Shows status and name; inherits theme and terminal fonts.
+# Use a preset listed by your installed version's View > Layout menu.
+layout = "minimal"

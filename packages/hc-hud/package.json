@@ -1,0 +1,22 @@
+{
+  "name": "@hypercarrier/hc-hud",
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "Session-local semantic HUD composer for Pi.",
+  "keywords": ["pi-package", "hud"],
+  "type": "module",
+  "scripts": { "test": "node --test test/*.test.mjs" },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "pi": { "extensions": ["./src/extension.mjs"] },
+  "exports": {
+    ".": "./src/extension.mjs",
+    "./extension": "./src/extension.mjs",
+    "./contract": "./src/contract.mjs",
+    "./composer": "./src/composer.mjs",
+    "./visual-language": "./src/visual-language.mjs"
+  },
+  "files": ["src", "README.md"]
+}

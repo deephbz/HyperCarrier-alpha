@@ -20,10 +20,7 @@ import {
 } from "../src/settings.mjs";
 
 test("command grammar defaults to status and keeps a small explicit surface", () => {
-  assert.equal(
-    `Usage: ${autoCompactCommandDescription()}`,
-    AUTO_COMPACT_USAGE,
-  );
+  assert.equal(`Usage: ${autoCompactCommandDescription()}`, AUTO_COMPACT_USAGE);
   assert.deepEqual(parseAutoCompactCommand(), {
     ok: true,
     subcommand: "status",
@@ -70,9 +67,45 @@ test("command grammar defaults to status and keeps a small explicit surface", ()
   );
   assert.deepEqual(
     getAutoCompactArgumentCompletions("").map(({ value }) => value),
-    ["status", "on", "off", "threshold", "run"],
+    ["status", "on", "off", "threshold", "budget", "run"],
   );
   assert.equal(getAutoCompactArgumentCompletions("threshold "), null);
+});
+
+test("budget command accepts token integers and k units with an explicit default reset", () => {
+  for (const [input, budget] of [
+    ["budget 400k", 400_000],
+    ["budget 272000", 272_000],
+    ["budget 2K", 2000],
+    ["budget default", "default"],
+  ])
+    assert.deepEqual(parseAutoCompactCommand(input), {
+      ok: true,
+      subcommand: "budget",
+      budget,
+    });
+  for (const input of [
+    "budget",
+    "budget 0",
+    "budget -1",
+    "budget 1.5",
+    "budget 1.5k",
+    "budget NaN",
+    "budget 1e5",
+    "budget 0k",
+    "budget Infinity",
+    "budget 9007199254740992",
+    "budget default extra",
+    "budget 20k extra",
+  ])
+    assert.deepEqual(parseAutoCompactCommand(input), {
+      ok: false,
+      error: "invalid_budget",
+      usage: AUTO_COMPACT_USAGE,
+    });
+  assert.deepEqual(getAutoCompactArgumentCompletions("b"), [
+    { value: "budget", label: "budget" },
+  ]);
 });
 
 test("threshold validation accepts only finite percentages strictly between 1 and 110", () => {

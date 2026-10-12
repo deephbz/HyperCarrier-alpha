@@ -1,0 +1,838 @@
+#!/usr/bin/env python3
+"""whereami: report where an agent runs relative to its human.
+
+Purpose: give an agent one cheap command for the environment facts it needs
+to share context with the user: the access chain from the user to this
+process, display and remote-desktop state, browser endpoints, terminal
+front end, network, storage, and agent harness.
+
+Scope: read-only local probes on macOS and Linux. Python 3 stdlib only. Every
+external command has a short timeout, and a missing tool degrades to an
+absent fact.
+
+Invariants:
+- Probes do not send pane input or control applications. Browser requests
+  start at loopback URLs; the HTTP client may use proxies or follow redirects.
+- Each fact is an observation with its source. A "hint" is an inference and
+  the output labels it so.
+
+Division of labor: whereami is the fixed, cheap part. It reports framework
+facts and names the next probe. The calling agent decides which extra probes
+its task needs and runs them itself.
+
+Non-goals: inventory of hardware, security audit, control of any surface,
+complete coverage of rare setups. Use the surface's own CLI (herdr, tmux,
+rex, CDP) for control.
+
+Status: exploration.
+"""
+
+from __future__ import annotations
+
+import argparse
+import concurrent.futures as cf
+import functools
+import json
+import os
+import platform
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import urllib.request
+from pathlib import Path
+
+SYSTEM = platform.system()  # "Darwin" or "Linux"
+TIMEOUT = 2.0
+
+
+# --- primitives -------------------------------------------------------------
+
+
+def run(*argv: str, timeout: float = TIMEOUT) -> str | None:
+    """Return stdout of argv, or None if the tool is absent, fails, or hangs."""
+    if not shutil.which(argv[0]):
+        return None
+    try:
+        p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout,
+                           stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return p.stdout if p.returncode == 0 else None
+
+
+def run_json(*argv: str, timeout: float = TIMEOUT):
+    out = run(*argv, timeout=timeout)
+    try:
+        return json.loads(out) if out else None
+    except ValueError:
+        return None
+
+
+def env(*names: str) -> dict[str, str]:
+    return {n: os.environ[n] for n in names if os.environ.get(n)}
+
+
+@functools.lru_cache(maxsize=None)
+def procs() -> dict[int, tuple[int, str]]:
+    """pid -> (ppid, args) for every visible process."""
+    table: dict[int, tuple[int, str]] = {}
+    out = run("ps", "-axww", "-o", "pid=,ppid=,args=") or ""
+    for line in out.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+            table[int(parts[0])] = (int(parts[1]), parts[2] if len(parts) > 2 else "")
+    return table
+
+
+def ancestry(pid: int) -> list[tuple[int, str]]:
+    """(pid, args) from pid up to, but excluding, init/launchd."""
+    chain, seen = [], set()
+    while pid > 1 and pid in procs() and pid not in seen:
+        seen.add(pid)
+        ppid, args = procs()[pid]
+        chain.append((pid, args))
+        pid = ppid
+    return chain
+
+
+def exe_name(args: str) -> str:
+    """Executable basename; keeps macOS app names such as 'Google Chrome'."""
+    m = re.search(r"/([^/]+)\.app/Contents/MacOS/", args)
+    if m:
+        return m.group(1)
+    first = args.split(" ", 1)[0]
+    # sshd retitles itself "sshd: user@pts/0"; login shells start with "-".
+    return os.path.basename(first).lstrip("-").rstrip(":")
+
+
+def port_open(port: int, host: str = "127.0.0.1", timeout: float = 0.2) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+# --- process classification -------------------------------------------------
+
+TRANSPORTS = {"sshd": "ssh", "sshd-session": "ssh", "mosh-server": "mosh",
+              "etserver": "eternal-terminal", "telnetd": "telnet",
+              "xrdp-sesman": "rdp", "Xvnc": "vnc"}
+MULTIPLEXERS = {"tmux": "tmux", "screen": "screen", "SCREEN": "screen",
+                "zellij": "zellij", "herdr": "herdr", "rex": "rex",
+                "abduco": "abduco", "dtach": "dtach", "emacs": "emacs",
+                "Emacs": "emacs", "nvim": "nvim-terminal"}
+TERMINALS = {"ghostty": "ghostty", "Ghostty": "ghostty", "iTerm2": "iterm2",
+             "Terminal": "apple-terminal", "kitty": "kitty",
+             "wezterm-gui": "wezterm", "WezTerm": "wezterm",
+             "alacritty": "alacritty", "Alacritty": "alacritty",
+             "Herdr": "herdr-gui", "Rex": "rex-app", "Warp": "warp",
+             "gnome-terminal-server": "gnome-terminal", "konsole": "konsole",
+             "xterm": "xterm", "foot": "foot", "Code": "vscode",
+             "Code Helper": "vscode", "Cursor": "cursor", "Zed": "zed"}
+AGENTS = ("pi", "claude", "codex", "opencode", "aider", "hermes", "amp",
+          "gemini", "cursor-agent", "goose", "crush")
+
+
+def classify(args: str) -> tuple[str, str] | None:
+    """Return (layer kind, label) for a process that marks a layer."""
+    name = exe_name(args)
+    if name in TRANSPORTS:
+        return "transport", TRANSPORTS[name]
+    if name in TERMINALS:
+        return "terminal", TERMINALS[name]
+    if name in MULTIPLEXERS:
+        if name in ("nvim",) and "term://" not in args:
+            return None
+        return "multiplexer", MULTIPLEXERS[name]
+    if name in AGENTS:
+        return "agent", name
+    if name in ("node", "bun", "deno", "python", "python3"):
+        for a in AGENTS:
+            if re.search(rf"[/@\s]{re.escape(a)}(?:[-/\s]|$)", args):
+                return "agent", a
+    if name in ("ssh", "mosh-client", "mosh"):
+        return "client", name
+    return None
+
+
+def layers(pid: int) -> list[dict]:
+    out = []
+    for p, args in ancestry(pid):
+        c = classify(args)
+        # sshd privilege separation shows one session as several sshd processes.
+        if c and out and (out[-1]["kind"], out[-1]["name"]) == c:
+            out[-1]["pid"] = p
+            out[-1]["daemonized"] = procs().get(p, (0, ""))[0] == 1
+            continue
+        if c:
+            out.append({"pid": p, "kind": c[0], "name": c[1],
+                        "daemonized": procs().get(p, (0, ""))[0] == 1})
+    return out
+
+
+# --- tailscale (shared by chain and net) ------------------------------------
+
+
+@functools.lru_cache(maxsize=None)
+def tailscale() -> dict | None:
+    return run_json("tailscale", "status", "--json")
+
+
+def tailnet_name(ip: str) -> str | None:
+    ts = tailscale()
+    if not ts or not ip:
+        return None
+    for peer in list((ts.get("Peer") or {}).values()) + [ts.get("Self") or {}]:
+        if ip in (peer.get("TailscaleIPs") or []):
+            return f"{peer.get('HostName')} ({peer.get('OS')}) via tailscale"
+    return None
+
+
+# --- sections ---------------------------------------------------------------
+
+
+def section_host() -> dict:
+    facts = {"os": SYSTEM, "arch": platform.machine(),
+             "hostname": socket.gethostname(),
+             "user": os.environ.get("USER") or str(os.getuid()),
+             "shell": os.environ.get("SHELL"), "cwd": os.getcwd()}
+    if SYSTEM == "Darwin":
+        facts["os_version"] = (run("sw_vers", "-productVersion") or "").strip()
+        vm = (run("sysctl", "-n", "kern.hv_vmm_present") or "").strip()
+        facts["virtual_machine"] = vm == "1"
+    else:
+        rel = Path("/etc/os-release")
+        if rel.exists():
+            m = re.search(r'^PRETTY_NAME="?([^"\n]+)', rel.read_text(), re.M)
+            facts["os_version"] = m.group(1) if m else None
+        virt = (run("systemd-detect-virt") or "none").strip()
+        facts["virtual_machine"] = virt if virt != "none" else False
+        try:
+            if "microsoft" in Path("/proc/version").read_text().lower():
+                facts["wsl"] = True
+        except OSError:
+            pass
+    container = None
+    if Path("/.dockerenv").exists():
+        container = "docker"
+    elif Path("/run/.containerenv").exists():
+        container = "podman"
+    elif os.environ.get("KUBERNETES_SERVICE_HOST"):
+        container = "kubernetes"
+    else:
+        try:
+            cg = Path("/proc/1/cgroup").read_text()
+            m = re.search(r"(docker|kubepods|containerd|lxc)", cg)
+            container = m.group(1) if m else None
+        except OSError:
+            pass
+    facts["container"] = container
+    return {"facts": facts}
+
+
+def mux_clients(mux: dict) -> list[dict]:
+    """Front ends attached to a daemonized multiplexer server."""
+    clients = []
+    if mux["name"] == "tmux":
+        sock = os.environ.get("TMUX", "").split(",")[0]
+        out = run("tmux", *(["-S", sock] if sock else []), "list-clients", "-F",
+                  "#{client_pid}\t#{client_tty}\t#{client_termname}\t"
+                  "#{client_width}x#{client_height}\t#{session_name}") or ""
+        for line in out.splitlines():
+            pid, tty, term, size, sess = (line.split("\t") + [""] * 5)[:5]
+            if pid.isdigit():
+                clients.append({"pid": int(pid), "tty": tty, "term": term,
+                                "size": size, "session": sess,
+                                "layers": layers(int(pid))})
+    elif mux["name"] in ("herdr", "zellij", "rex"):
+        # Clients are separate processes with the same executable, or the GUI app.
+        gui = {"herdr": "Herdr", "rex": "Rex"}.get(mux["name"])
+        for pid, (ppid, args) in procs().items():
+            name = exe_name(args)
+            if pid == mux["pid"]:
+                continue
+            is_cli = name == mux["name"] and ppid != 1 and not re.search(
+                r"\s(api|agent|pane|tab|workspace|status|server|--server)\b", args)
+            if is_cli or (gui and name == gui):
+                clients.append({"pid": pid, "kind": "gui" if name == gui else "cli",
+                                "layers": layers(pid)})
+    return clients
+
+
+def proc_env(pid: int) -> dict[str, str]:
+    """Environment of another process owned by this user, if readable."""
+    try:
+        raw = Path(f"/proc/{pid}/environ").read_bytes().decode(errors="replace")
+        return dict(x.split("=", 1) for x in raw.split("\0") if "=" in x)
+    except OSError:
+        pass
+    if SYSTEM == "Darwin":
+        out = run("ps", "-E", "-ww", "-o", "command=", "-p", str(pid)) or ""
+        m = re.search(r"\bSSH_CONNECTION=(\S+ \S+ \S+ \S+)", out)
+        return {"SSH_CONNECTION": m.group(1)} if m else {}
+    return {}
+
+
+def ssh_info(conn: str | None) -> dict | None:
+    if not conn:
+        return None
+    client_ip, _, server_ip, server_port = (conn.split() + [""] * 4)[:4]
+    return {"client_ip": client_ip, "server_ip": server_ip,
+            "server_port": server_port, "client_name": tailnet_name(client_ip)}
+
+
+def viewer(pid: int, depth: int = 0) -> dict:
+    """How one multiplexer client reaches the user: label, ssh origin, remote."""
+    ls = layers(pid)
+    if not ls:
+        return {"label": "?", "ssh": None, "remote": False}
+    outer = ls[-1]
+    if outer["kind"] == "multiplexer" and outer["daemonized"] and depth < 3:
+        inner = [viewer(c["pid"], depth + 1) for c in mux_clients(outer)]
+        labels = "/".join(sorted({v["label"] for v in inner})) or "no attached client"
+        return {"label": f"{outer['name']} in {labels}",
+                "ssh": next((v["ssh"] for v in inner if v["ssh"]), None),
+                "remote": any(v["remote"] for v in inner)}
+    # The client process itself carries the SSH_CONNECTION of its own login.
+    ssh = ssh_info(proc_env(pid).get("SSH_CONNECTION")) \
+        if any(l["name"] == "ssh" for l in ls) else None
+    label = outer["name"]
+    if ssh:
+        label = f"ssh from {ssh['client_name'] or ssh['client_ip']}"
+    if "remote-client-bridge" in procs().get(pid, (0, ""))[1]:
+        label = f"Herdr app over {label}"
+    return {"label": label, "ssh": ssh,
+            "remote": any(l["kind"] == "transport" for l in ls)}
+
+
+@functools.lru_cache(maxsize=None)
+def access() -> dict:
+    """One model of how the user reaches this process; sections share it.
+
+    Process ancestry is the authority. An inherited SSH_CONNECTION counts only
+    when sshd is in this process's own ancestry.
+    """
+    own = layers(os.getpid())
+    own_ssh = ssh_info(os.environ.get("SSH_CONNECTION")) \
+        if any(l["name"] == "ssh" for l in own) else None
+    muxes = [l for l in own if l["kind"] == "multiplexer"]
+    for m in muxes:
+        if m["daemonized"] or m["name"] in ("tmux", "zellij", "herdr", "rex"):
+            m["clients"] = mux_clients(m)
+            m["viewers"] = [viewer(c["pid"]) for c in m["clients"]]
+    tracked = [m for m in muxes if "viewers" in m]
+    if tracked:
+        viewers = tracked[-1]["viewers"]  # the outermost mux faces the user
+    elif own and own[-1]["kind"] in ("terminal", "transport"):
+        label = own[-1]["name"]
+        if own_ssh:
+            label = f"ssh from {own_ssh['client_name'] or own_ssh['client_ip']}"
+        viewers = [{"label": label, "ssh": own_ssh,
+                    "remote": own[-1]["kind"] == "transport"}]
+    else:
+        viewers = []
+    remote = any(l["kind"] == "transport" for l in own) or any(v["remote"] for v in viewers)
+    ssh = own_ssh or next((v["ssh"] for v in viewers if v["ssh"]), None)
+    return {"own": own, "tracked_mux": bool(tracked), "viewers": viewers,
+            "ssh": ssh, "remote": remote}
+
+
+def section_chain() -> dict:
+    acc = access()
+    own = acc["own"]
+    hints, facts = [], {"ancestry": own}
+    facts["env"] = env("SSH_CONNECTION", "SSH_TTY", "MOSH_CONNECTION", "TMUX",
+                       "TMUX_PANE", "STY", "ZELLIJ", "ZELLIJ_SESSION_NAME",
+                       "HERDR_ENV", "HERDR_PANE_ID", "HERDR_WORKSPACE_ID",
+                       "REX_SESSION", "REX_BLOCK", "REX_SERVER", "INSIDE_EMACS",
+                       "TERM_PROGRAM", "VSCODE_PID")
+    ssh = acc["ssh"]
+    if ssh:
+        facts["ssh"] = ssh
+    facts["viewers"] = acc["viewers"]
+    facts["remote"] = acc["remote"]
+    # An env marker survives into nested sessions; ancestry is the authority.
+    names = {l["name"] for l in own}
+    markers = {"TMUX": "tmux", "STY": "screen", "ZELLIJ": "zellij",
+               "HERDR_ENV": "herdr", "REX_SESSION": "rex",
+               "SSH_CONNECTION": "ssh", "INSIDE_EMACS": "emacs"}
+    facts["inherited_env_markers"] = sorted(
+        k for k, n in markers.items() if os.environ.get(k) and n not in names)
+    muxes = [l for l in own if l["kind"] == "multiplexer"]
+    facts["summary"] = render_chain(own)
+    if not muxes and not acc["viewers"]:
+        hints.append("No terminal or multiplexer in ancestry: the user probably "
+                     "does not see this process's output. Report through files, "
+                     "notifications, or the harness UI.")
+    for m in muxes:
+        if not m.get("clients") and m["name"] in ("tmux", "zellij", "herdr", "rex"):
+            hints.append(f"{m['name']} has no attached client now: panes you "
+                         "create are not visible until the user attaches.")
+        if m["name"] == "herdr":
+            hints.append("Visible demo: use `herdr pane split/run` (see `herdr --help`). "
+                         "Attached is not watched: check focus with "
+                         "`herdr pane get $HERDR_PANE_ID`.")
+        if m["name"] == "tmux":
+            hints.append("Visible demo: `tmux split-window -d` in $TMUX_PANE's window.")
+        if m["name"] == "rex":
+            hints.append("Visible demo: `rex split --focus=false -- CMD`; read with `rex capture`.")
+    return {"facts": facts, "hints": hints}
+
+
+def render_chain(own: list[dict]) -> str:
+    """User-to-agent chain, outermost first, as one line."""
+    ssh = ssh_info(os.environ.get("SSH_CONNECTION"))
+    parts = []
+    for l in reversed(own):
+        label = l["name"]
+        if l["kind"] == "transport" and l["name"] == "ssh" and ssh:
+            label = f"ssh from {ssh['client_name'] or ssh['client_ip']}"
+        if l.get("viewers"):
+            label += f" [viewed via {', '.join(sorted({v['label'] for v in l['viewers']}))}]"
+        parts.append(label)
+    return "user -> " + " -> ".join(parts or ["(no known layers)"])
+
+
+def seen_by() -> str:
+    """One line: can the user see this process's terminal output, and how."""
+    acc = access()
+    vs = acc["viewers"]
+    if vs:
+        where = "remote" if acc["remote"] else "local"
+        return f"{len(vs)} {where} viewer(s): " + "; ".join(sorted({v['label'] for v in vs}))
+    if acc["tracked_mux"]:
+        return "nobody: no client attached to the multiplexer"
+    return "unknown: no terminal or multiplexer in ancestry"
+
+
+def section_display() -> dict:
+    facts, hints = {}, []
+    if SYSTEM == "Darwin":
+        console = (run("stat", "-f", "%Su", "/dev/console") or "").strip()
+        me = os.environ.get("USER", "")
+        facts["console_user"] = console
+        facts["gui_session_is_mine"] = console == me
+        io = run("ioreg", "-n", "Root", "-d1") or ""
+        if "CGSSessionScreenIsLocked" in io:
+            facts["screen_locked"] = bool(re.search(r'"CGSSessionScreenIsLocked"\s*=\s*Yes', io))
+        names = {exe_name(a) for _, a in procs().values()}
+        remote = sorted(n for n in names if n in (
+            "screensharingd", "Jump Desktop Connect", "parsecd", "RustDesk",
+            "AnyDesk", "remoting_me2me_host", "Splashtop Streamer"))
+        facts["remote_desktop_processes"] = remote
+        if facts["gui_session_is_mine"]:
+            hints.append("This Mac's desktop is the user's GUI session: `open URL` "
+                         "or `open -a App` shows on that screen (only useful if the "
+                         "user is at this Mac or remote-desktops into it).")
+    else:
+        facts["env"] = env("DISPLAY", "WAYLAND_DISPLAY", "XDG_SESSION_TYPE",
+                           "XDG_CURRENT_DESKTOP", "XDG_SESSION_ID")
+        # Columns: SESSION UID USER SEAT TTY STATE ...; keep active seat/tty ones.
+        out = run("loginctl", "list-sessions", "--no-legend") or ""
+        facts["active_login_sessions"] = [
+            {"id": f[0], "user": f[2], "seat": f[3], "tty": f[4]}
+            for f in (l.split() for l in out.splitlines())
+            if len(f) >= 6 and f[5] == "active" and (f[3] != "-" or f[4] != "-")]
+        x11 = Path("/tmp/.X11-unix")
+        facts["x11_displays"] = sorted(":" + p.name[1:] for p in x11.glob("X*")) \
+            if x11.is_dir() else []
+        rt = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}")
+        facts["wayland_sockets"] = sorted(p.name for p in rt.glob("wayland-*")
+                                          if not p.name.endswith(".lock"))
+        names = {exe_name(a) for _, a in procs().values()}
+        facts["display_servers"] = sorted(names & {
+            "Xorg", "Xwayland", "Xvfb", "Xvnc", "gnome-shell", "kwin_wayland",
+            "sway", "Hyprland", "weston", "cage"})
+        facts["remote_desktop_processes"] = sorted(names & {
+            "xrdp", "xrdp-sesman", "x2goagent", "vncserver", "x11vnc",
+            "sunshine", "rustdesk", "nxserver"})
+        if not facts["env"].get("DISPLAY") and not facts["env"].get("WAYLAND_DISPLAY"):
+            if facts["x11_displays"] or facts["wayland_sockets"]:
+                hints.append("This process has no display, but the host runs a "
+                             "local graphical session. A GUI started there appears "
+                             "on the host's physical screen, which the user may not "
+                             "be watching. X11 also needs that session's XAUTHORITY.")
+            else:
+                hints.append("Headless host: run browsers headless or serve a "
+                             "URL the user opens on their own machine.")
+    return {"facts": facts, "hints": hints}
+
+
+def chrome_like(args: str) -> bool:
+    return bool(re.search(r"(Google Chrome|chromium|chrome-headless-shell|"
+                          r"Microsoft Edge|Brave Browser|/chrome(\s|$)|msedge)", args, re.I))
+
+
+def section_browser(detail: bool = False) -> dict:
+    facts, hints = {}, []
+    browsers = []
+    for pid, (ppid, args) in procs().items():
+        name = exe_name(args)
+        if not chrome_like(args) and name not in ("firefox", "firefox-bin", "Safari"):
+            continue
+        if " --type=" in args or "Helper" in args or "crashpad" in args:
+            continue  # child processes
+        browsers.append({
+            "pid": pid, "name": name,
+            "headless": "--headless" in args or "headless-shell" in args,
+            "automation": "ms-playwright" in args or "puppeteer" in args
+                          or "--enable-automation" in args,
+            "debug_port": (re.search(r"--remote-debugging-port=(\d+)", args) or [None, None])[1],
+            "user_data_dir": (re.search(r"--user-data-dir=(\S+)", args) or [None, None])[1],
+        })
+    facts["browsers"] = browsers
+    ports = sorted({int(b["debug_port"]) for b in browsers if b["debug_port"]
+                    and b["debug_port"] != "0"} | set(range(9222, 9230)))
+    endpoints = []
+    for port in ports:
+        if not port_open(port):
+            continue
+        ep = {"port": port}
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version",
+                                        timeout=0.5) as r:
+                v = json.load(r)
+            ep["browser"] = v.get("Browser")
+            ep["ws"] = v.get("webSocketDebuggerUrl")
+        except Exception as e:  # noqa: BLE001 - any failure is the observation
+            ep["json_version"] = f"unavailable ({type(e).__name__})"
+        endpoints.append(ep)
+    facts["cdp_endpoints"] = endpoints
+    if detail:
+        facts["devtools_active_port_files"] = devtools_port_files()
+    user = [b for b in browsers if not b["headless"] and not b["automation"]]
+    facts["on_users_screen"] = not access()["remote"]
+    if access()["remote"]:
+        hints.append("The user reaches this host remotely: browsers listed here "
+                     "render on this host, not on the user's screen. Show a page "
+                     "through a forwarded URL (see the net hint). Inspecting the "
+                     "user's own browser needs a debug port on their machine, "
+                     "forwarded here.")
+    elif user and endpoints:
+        hints.append("A headed user browser exposes a loopback debug port: attach "
+                     "over CDP to inspect what the user sees. Chrome 136+ may "
+                     "require the user to approve the connection; a missing "
+                     "/json/version is consistent with that.")
+    elif user:
+        hints.append("A user browser runs without a debug endpoint: attaching "
+                     "needs the user to enable a remote-debugging port.")
+    else:
+        hints.append("No user browser here: launch a new automation session, "
+                     "or forward a port so the user's own browser can open the page.")
+    return {"facts": facts, "hints": hints}
+
+
+def devtools_port_files() -> list[dict]:
+    if SYSTEM == "Darwin":
+        base = Path.home() / "Library/Application Support"
+        roots = ["Google/Chrome", "Google/Chrome Beta", "Chromium",
+                 "Microsoft Edge", "BraveSoftware/Brave-Browser"]
+    else:
+        base = Path.home() / ".config"
+        roots = ["google-chrome", "chromium", "microsoft-edge",
+                 "BraveSoftware/Brave-Browser"]
+    found = []
+    for r in roots:
+        f = base / r / "DevToolsActivePort"
+        if not f.exists():
+            continue
+        try:
+            port = f.read_text().splitlines()[0]
+            found.append({"profile_root": str(base / r), "port": port})
+        except OSError as e:
+            found.append({"profile_root": str(base / r), "error": e.strerror})
+    return found
+
+
+def section_terminal(detail: bool = False) -> dict:
+    facts, hints = {}, []
+    facts["env"] = env("TERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION",
+                       "COLORTERM", "LANG", "LC_ALL", "GHOSTTY_RESOURCES_DIR")
+    facts["stdin_tty"] = sys.stdin.isatty()
+    facts["stdout_tty"] = sys.stdout.isatty()
+    try:
+        fd = os.open("/dev/tty", os.O_RDONLY)
+        size = os.get_terminal_size(fd)
+        os.close(fd)
+        facts["controlling_tty_size"] = f"{size.columns}x{size.lines}"
+    except OSError:
+        facts["controlling_tty_size"] = None
+    names = {exe_name(a) for _, a in procs().values()}
+    facts["local_terminal_apps"] = sorted({TERMINALS[n] for n in names if n in TERMINALS})
+    if detail and shutil.which("ghostty"):
+        cfg = run("ghostty", "+show-config", timeout=3) or ""
+        keep = ("font-family", "font-size", "theme", "background", "foreground",
+                "window-padding-x", "macos-titlebar-style")
+        # In a remote session this is the host's Ghostty, not the user's terminal.
+        key = "host_ghostty_config" if access()["remote"] else "ghostty_config"
+        facts[key] = [l for l in cfg.splitlines()
+                                   if l.split(" =", 1)[0].strip() in keep]
+    if access()["remote"]:
+        hints.append("Remote session: the user's terminal emulator, fonts, and "
+                     "clipboard live on the client machine, not this host.")
+    return {"facts": facts, "hints": hints}
+
+
+def section_net(detail: bool = False) -> dict:
+    facts, hints = {}, []
+    facts["proxy_env"] = {k: re.sub(r"//[^@/]*@", "//<auth>@", v)
+                          for k, v in env("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+                                          "http_proxy", "https_proxy", "all_proxy",
+                                          "NO_PROXY", "no_proxy").items()}
+    if SYSTEM == "Darwin":
+        route = run("route", "-n", "get", "default") or ""
+        m = re.search(r"interface:\s*(\S+)", route)
+        g = re.search(r"gateway:\s*(\S+)", route)
+        facts["default_route"] = {"interface": m and m.group(1), "gateway": g and g.group(1)}
+        sp = run("scutil", "--proxy") or ""
+        facts["system_proxy"] = {k: v for k, v in re.findall(r"(\w+Proxy|\w+Port)\s*:\s*(\S+)", sp)}
+    else:
+        r = (run("ip", "route", "show", "default") or "").split()
+        facts["default_route"] = {"interface": r[r.index("dev") + 1] if "dev" in r else None,
+                                  "gateway": r[r.index("via") + 1] if "via" in r else None}
+    ts = tailscale()
+    if ts:
+        me = ts.get("Self") or {}
+        peers = list((ts.get("Peer") or {}).values())
+        facts["tailscale"] = {
+            "state": ts.get("BackendState"),
+            "tailnet": (ts.get("CurrentTailnet") or {}).get("Name"),
+            "self": me.get("HostName"), "ips": me.get("TailscaleIPs"),
+            "exit_node": next((p.get("HostName") for p in peers if p.get("ExitNode")), None),
+            "peers_online": sorted(p.get("HostName") for p in peers if p.get("Online")),
+        }
+    elif shutil.which("tailscale"):
+        facts["tailscale"] = {"state": "installed, status unavailable (stopped?)"}
+    if detail:
+        facts["listening_tcp"] = listening()
+        if SYSTEM == "Darwin":
+            s = run("ipconfig", "getsummary", facts["default_route"]["interface"] or "en0") or ""
+            m = re.search(r"\bSSID\s*:\s*(.+)", s)
+            facts["wifi_ssid"] = m.group(1).strip() if m else None
+        else:
+            facts["wifi_ssid"] = (run("iwgetid", "-r") or "").strip() or None
+    iface = facts["default_route"]["interface"] or ""
+    if re.match(r"(utun|tun|wg|tailscale)", iface):
+        hints.append(f"Default route goes through tunnel {iface} (VPN or proxy "
+                     "TUN): public IPs and DNS answers may be synthetic.")
+    ssh = access()["ssh"]
+    if ssh:
+        user = os.environ.get("USER") or ""
+        hints.append("Show a web UI on PORT: serve on 127.0.0.1 and give the user "
+                     f"`ssh -L PORT:127.0.0.1:PORT {user}@{ssh['server_ip']}`, "
+                     "then http://localhost:PORT. Binding "
+                     f"{ssh['server_ip']} or the tailnet IP also works if the "
+                     "firewall allows it.")
+    elif access()["remote"]:
+        hints.append("Remote user: a web UI on this host needs a forwarded port "
+                     "or an address the user's machine can reach.")
+    return {"facts": facts, "hints": hints}
+
+
+def listening() -> list[dict]:
+    rows = []
+    if SYSTEM == "Darwin":
+        out = run("lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-Fcn", timeout=4) or ""
+        cmd = None
+        for line in out.splitlines():
+            if line.startswith("c"):
+                cmd = line[1:]
+            elif line.startswith("n"):
+                rows.append({"process": cmd, "address": line[1:]})
+    else:
+        out = run("ss", "-Hltnp") or ""
+        for line in out.splitlines():
+            f = line.split()
+            if len(f) >= 4:
+                m = re.search(r'"([^"]+)"', line)
+                rows.append({"process": m and m.group(1), "address": f[3]})
+    uniq = {(r["process"], r["address"]): r for r in rows}
+    return sorted(uniq.values(), key=lambda r: (r["address"], r["process"] or ""))
+
+
+NETWORK_FS = ("nfs", "smbfs", "cifs", "afpfs", "fuse", "sshfs", "9p",
+              "virtiofs", "webdav", "macfuse", "osxfuse", "rclone")
+
+
+def section_storage() -> dict:
+    facts = {}
+    paths = {"home": str(Path.home()), "cwd": os.getcwd(),
+             "tmp": os.environ.get("TMPDIR", "/tmp")}
+    usage = {}
+    for label, p in paths.items():
+        try:
+            du = shutil.disk_usage(p)
+            usage[label] = {"path": p, "free_gb": round(du.free / 1e9, 1),
+                            "total_gb": round(du.total / 1e9, 1)}
+        except OSError:
+            pass
+    facts["disk"] = usage
+    mounts = []
+    for line in (run("mount") or "").splitlines():
+        if any(t in line for t in NETWORK_FS):
+            mounts.append(line.strip())
+    facts["network_or_fuse_mounts"] = mounts
+    cloud = Path.home() / "Library/CloudStorage"
+    if cloud.is_dir():
+        facts["cloud_storage"] = sorted(p.name for p in cloud.iterdir())
+    return {"facts": facts}
+
+
+def section_agent() -> dict:
+    facts = {}
+    e = dict(os.environ)
+    harness = []
+    for key, name in (("PI_CODING_AGENT", "pi"), ("CLAUDECODE", "claude-code"),
+                      ("CODEX_SANDBOX", "codex"), ("CODEX_MANAGED_BY_NPM", "codex"),
+                      ("OPENCODE", "opencode"), ("GEMINI_CLI", "gemini-cli"),
+                      ("AIDER_MODEL", "aider"), ("CURSOR_AGENT", "cursor")):
+        if e.get(key) and name not in harness:
+            harness.append(name)
+    for l in layers(os.getpid()):
+        if l["kind"] == "agent" and l["name"] not in harness:
+            harness.append(l["name"])
+    facts["harness"] = harness
+    facts["env"] = {k: v for k, v in e.items()
+                    if re.match(r"(PI_(MODEL|PROVIDER|SESSION_ID)|CODEX_SANDBOX|"
+                                r"CLAUDE_CODE_ENTRYPOINT|CI|GITHUB_ACTIONS)$", k)}
+    facts["interactive_stdin"] = sys.stdin.isatty()
+    return {"facts": facts}
+
+
+SECTIONS = {
+    "host": section_host,
+    "chain": section_chain,
+    "display": section_display,
+    "terminal": section_terminal,
+    "browser": section_browser,
+    "net": section_net,
+    "storage": section_storage,
+    "agent": section_agent,
+}
+DETAILED = {"terminal", "browser", "net"}
+
+
+# --- output -----------------------------------------------------------------
+
+
+def collect(names: list[str], detail: bool) -> dict:
+    procs()  # warm the shared caches before threads read them
+    access()
+    with cf.ThreadPoolExecutor(max_workers=len(names)) as pool:
+        futs = {n: pool.submit(SECTIONS[n], **({"detail": detail} if n in DETAILED else {}))
+                for n in names}
+        return {n: f.result() for n, f in futs.items()}
+
+
+def summary(data: dict) -> list[str]:
+    h, c, d = data["host"]["facts"], data["chain"]["facts"], data["display"]["facts"]
+    b, a = data["browser"]["facts"], data["agent"]["facts"]
+    where = f"{h['user']}@{h['hostname']}  {h['os']} {h.get('os_version') or ''} {h['arch']}"
+    if h.get("container"):
+        where += f"  container={h['container']}"
+    if h.get("virtual_machine"):
+        where += f"  vm={h['virtual_machine']}"
+    if SYSTEM == "Darwin":
+        desk = "desktop (GUI session is this user's)" if d.get("gui_session_is_mine") \
+            else f"no GUI session for this user (console: {d.get('console_user')})"
+        if d.get("screen_locked"):
+            desk += ", screen locked"
+    else:
+        de = d.get("env", {})
+        local = d.get("x11_displays", []) + d.get("wayland_sockets", [])
+        desk = (f"desktop {de.get('XDG_SESSION_TYPE') or ''} "
+                f"DISPLAY={de.get('DISPLAY')} WAYLAND={de.get('WAYLAND_DISPLAY')}"
+                if de.get("DISPLAY") or de.get("WAYLAND_DISPLAY") else
+                f"no display for this process; host has local graphics {', '.join(local)}"
+                if local else "headless")
+    if d.get("remote_desktop_processes"):
+        desk += f"; remote desktop: {', '.join(d['remote_desktop_processes'])}"
+    users = [x["name"] for x in b["browsers"] if not x["headless"] and not x["automation"]]
+    auto = [x for x in b["browsers"] if x["headless"] or x["automation"]]
+    br = (", ".join(sorted(set(users))) or "no user browser")
+    if auto:
+        br += f"; {len(auto)} automation/headless"
+    if b["cdp_endpoints"]:
+        br += "; CDP " + ", ".join(
+            f":{e['port']}" + ("" if e.get("browser") else "(no /json/version)")
+            for e in b["cdp_endpoints"])
+    n = data["net"]["facts"]
+    ts = n.get("tailscale") or {}
+    proxy = n.get("proxy_env") or {}
+    sysproxy = n.get("system_proxy") or {}
+    net = f"route via {n['default_route']['interface']}"
+    if ts:
+        net += f"; tailscale {ts.get('state')}"
+    if proxy or sysproxy.get("HTTPProxy"):
+        net += "; proxy " + (next(iter(proxy.values()), None) or
+                             f"{sysproxy['HTTPProxy']}:{sysproxy.get('HTTPPort')}")
+    lines = [f"host:     {where}",
+             f"chain:    {c['summary']}",
+             f"seen by:  {seen_by()}",
+             f"display:  {desk}",
+             f"browser:  {br}" + ("  (on this host, not the user's screen)"
+                                   if c.get("remote") else ""),
+             f"net:      {net}",
+             f"agent:    {', '.join(a['harness']) or 'unknown'}"]
+    hints = [x for n in data for x in data[n].get("hints", [])]
+    if hints:
+        lines.append("hints (inferred):")
+        lines += [f"  - {x}" for x in hints]
+    lines.append("more: whereami {chain|display|terminal|browser|net|storage|agent|all} [--json]")
+    return lines
+
+
+def compact(v) -> str:
+    return v if isinstance(v, str) else json.dumps(v, default=str, ensure_ascii=False)
+
+
+def text(name: str, sec: dict) -> list[str]:
+    lines = [f"[{name}]"]
+    for k, v in sec["facts"].items():
+        if isinstance(v, list) and v:
+            lines.append(f"  {k}:")
+            lines += [f"    - {compact(x)}" for x in v]
+        elif isinstance(v, (dict, list)):
+            lines.append(f"  {k}: {compact(v)}")
+        else:
+            lines.append(f"  {k}: {v}")
+    for h in sec.get("hints", []):
+        lines.append(f"  hint (inferred): {h}")
+    return lines
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(
+        prog="whereami",
+        description="Report where this agent runs relative to its human. "
+                    "No argument prints a fast summary; name a section for detail.")
+    ap.add_argument("section", nargs="*", metavar="SECTION",
+                    help=f"one or more of: {', '.join(SECTIONS)}, all")
+    ap.add_argument("--json", action="store_true", help="machine-readable output")
+    args = ap.parse_args(argv)
+    for s in args.section:
+        if s not in SECTIONS and s != "all":
+            ap.error(f"unknown section {s!r}")
+    if not args.section:
+        data = collect(list(SECTIONS), detail=False)
+        if args.json:
+            json.dump(data, sys.stdout, indent=2, default=str, ensure_ascii=False)
+            print()
+        else:
+            print("\n".join(summary(data)))
+        return 0
+    names = list(SECTIONS) if "all" in args.section else args.section
+    data = collect(names, detail=True)
+    if args.json:
+        json.dump(data, sys.stdout, indent=2, default=str, ensure_ascii=False)
+        print()
+    else:
+        print("\n\n".join("\n".join(text(n, data[n])) for n in names))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
