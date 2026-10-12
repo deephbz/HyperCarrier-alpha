@@ -82,6 +82,73 @@ export function continueFork(payload, assistantBlocks, note) {
 }
 
 /**
+ * Responses fork: the captured `input` stays identical and the handoff text is one new user item
+ * at the end, so the provider's automatic prefix cache (keyed by `prompt_cache_key`) can serve
+ * the captured prefix. Serves `openai-responses` and `openai-codex-responses`.
+ */
+export function buildResponsesForkPayload(base, handoffText) {
+  if (!Array.isArray(base.input) || base.input.length === 0) throw new Error("fork base has no input to extend");
+  return { payload: { ...base, input: [...base.input, { role: "user", content: [{ type: "input_text", text: handoffText }] }] } };
+}
+
+/** Collect the reply's output items from raw Responses stream events for exact replay. */
+export function createResponsesItemCollector() {
+  const items = [];
+  let final;
+  return {
+    push(event) {
+      if (event?.type === "response.output_item.done" && event.item) items[event.output_index ?? items.length] = structuredClone(event.item);
+      else if (["response.completed", "response.done", "response.incomplete"].includes(event?.type) &&
+        Array.isArray(event.response?.output) && event.response.output.length) final = structuredClone(event.response.output);
+    },
+    // The terminal output can carry reasoning.encrypted_content that output_item.done omitted.
+    blocks: () => final ?? items.filter(Boolean),
+  };
+}
+
+/** Next Responses fork request after the model called a tool: replay the output, answer each call. */
+export function continueResponsesFork(payload, outputItems, note) {
+  const results = outputItems.flatMap((item) => item.type === "function_call"
+    ? [{ type: "function_call_output", call_id: item.call_id, output: note }]
+    : item.type === "custom_tool_call" ? [{ type: "custom_tool_call_output", call_id: item.call_id, output: note }] : []);
+  const reply = results.length ? results : [{ role: "user", content: [{ type: "input_text", text: note }] }];
+  return { ...payload, input: [...payload.input, ...outputItems, ...reply] };
+}
+
+const ANTHROPIC = Object.freeze({
+  build: buildForkPayload, collector: createRawBlockCollector, continueFork, capped: true,
+  outputLimit: (payload) => payload.max_tokens,
+  capOutput: (payload, cap) => { payload.max_tokens = Math.min(payload.max_tokens, cap); },
+  thinkingBudget: (payload) => payload.thinking?.budget_tokens,
+  requestOptions: () => ({}),
+});
+const RESPONSES = Object.freeze({
+  build: buildResponsesForkPayload, collector: createResponsesItemCollector, continueFork: continueResponsesFork, capped: true,
+  outputLimit: (payload) => payload.max_output_tokens,
+  capOutput: (payload, cap) => { if (Number.isFinite(payload.max_output_tokens)) payload.max_output_tokens = Math.min(payload.max_output_tokens, cap); },
+  thinkingBudget: () => undefined,
+  requestOptions: () => ({}),
+});
+// The Codex backend routes its prompt cache by the session-id header. Pi derives that header and
+// prompt_cache_key from one Session value. SSE leaves the main conversation's WebSocket and its
+// continuation state alone.
+// Codex requests carry no output limit, so a Codex fork has none.
+const CODEX_RESPONSES = Object.freeze({
+  ...RESPONSES,
+  capped: false,
+  requestOptions: (payload) => typeof payload.prompt_cache_key === "string"
+    ? { transport: "sse", headers: { "session-id": payload.prompt_cache_key, "x-client-request-id": payload.prompt_cache_key } }
+    : { transport: "sse" },
+});
+const FORK_FORMATS = { "anthropic-messages": ANTHROPIC, "openai-responses": RESPONSES, "openai-codex-responses": CODEX_RESPONSES };
+
+/** Payload operations for a background fork, or undefined when the API has no fork support. */
+export function forkFormat(api) {
+  return Object.hasOwn(FORK_FORMATS, api) ? FORK_FORMATS[api] : undefined;
+}
+export const FORK_APIS = Object.freeze(Object.keys(FORK_FORMATS));
+
+/**
  * Read the plan from the fork's reply (a pi-ai AssistantMessage).
  * Text must contain one complete JSON object or one complete JSON code fence.
  * With `handoff`, the plan must also carry a nonempty handoff record string.

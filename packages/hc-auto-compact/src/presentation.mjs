@@ -29,7 +29,7 @@ export function renderStatus(view = {}) {
   if (view.phase) lines.push(row("phase", view.phase));
   if (view.heldCount) lines.push(row("input", `${view.heldCount} held`));
   if (view.nativeLimits) {
-    lines.push(row("limits", `${selected.execution === "background" ? `background output cap ${compactTokens(view.outputCap)} · ` : ""}summary caps history ${compactTokens(view.caps?.history)} · turn prefix ${compactTokens(view.caps?.prefix)} · reserve ${compactTokens(view.caps?.reserve)}`));
+    lines.push(row("limits", `${selected.execution === "background" ? `background output cap ${view.outputCap === null ? "none (provider default)" : compactTokens(view.outputCap)} · ` : ""}summary caps history ${compactTokens(view.caps?.history)} · turn prefix ${compactTokens(view.caps?.prefix)} · reserve ${compactTokens(view.caps?.reserve)}`));
   } else lines.push(row("limits", `output ceiling ${compactTokens(view.outputCeiling)} (Session request settings apply)`));
   if (view.last) {
     const last = view.last;

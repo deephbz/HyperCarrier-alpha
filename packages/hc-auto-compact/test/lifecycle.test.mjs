@@ -2793,7 +2793,7 @@ test("background artifact-handoff runs the handoff in the fork without a live ha
   harness.setIdle(false);
   harness.handlers.get("before_provider_request")({ payload: { max_tokens: 100, messages: [{ role: "user", content: [{ type: "text", text: "request" }] }] } }, harness.ctx);
   harness.handlers.get("message_update")({ message: { role: "assistant" }, assistantMessageEvent: { type: "text_delta" } }, harness.ctx);
-  assert.match(sent.messages[0].content.at(-1).text, /key handoff \(nonempty string\)/);
+  assert.match(sent.messages[0].content.at(-1).text, /JSON key "handoff" \(nonempty string\)/);
   finish({ stopReason: "stop", content: [{ type: "text", text: '{"summary":"plan","keep":[],"handoff":"intent at A"}' }] });
   await new Promise(setImmediate);
   assert.match(onlyWidgetText(harness), /HANDOFF \/ PLANNING.*waiting to install/);
@@ -2989,4 +2989,14 @@ test("a settings load that a switch overtakes reloads the committed selection", 
   await starting;
   assert.ok(!h.activeTools().includes(PLAN_TOOL));
   assert.equal(h.controller.snapshot().settings.execution, "background");
+});
+
+test("background status reports no output cap for a Codex model", async () => {
+  const h = makeHarness({ strategy: { preservation: "none", method: "keepset", execution: "background" } });
+  h.ctx.model.api = "openai-codex-responses";
+  await h.commands.get("auto-compact").handler("status", h.ctx);
+  assert.match(h.notices.at(-1).text, /background output cap none \(provider default\)/);
+  h.ctx.model.api = "openai-responses";
+  await h.commands.get("auto-compact").handler("status", h.ctx);
+  assert.match(h.notices.at(-1).text, /background output cap \d/);
 });

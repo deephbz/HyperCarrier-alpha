@@ -35,7 +35,7 @@ native compaction, regardless of the selected method.
   after settlement. The request keeps the live Session's provider, prefix, and
   replayed reasoning. The plan tool stays active from Session start when this
   method is configured. A missing plan uses the existing settled native fallback.
-  `background` captures the next ordinary Anthropic Messages request at A,
+  `background` captures the next ordinary provider request at A,
   then starts its side request when A streams content. The conversation and
   human input remain live until installation. Pi retains every entry after A
   through `firstKeptEntryId`. A missing anchor, newer compaction, or changed
@@ -55,8 +55,15 @@ A rejected plan leaves no record. The record lives only in Session context;
 Auto Compact writes no handoff file. A later compaction keeps it only if that
 compaction summarizes it. A race-free durable file record and crash recovery
 are deferred to the pi-durable harness migration.
-Background also rejects models outside `anthropic-messages` before starting. A routed
-payload model that differs from `ctx.model.id` is rejected before the fork.
+Background supports `anthropic-messages`, `openai-responses` and
+`openai-codex-responses`. It rejects other model APIs, such as
+`openai-completions`, before starting; use foreground there. An
+Anthropic fork appends the handoff text to the last user message. A Responses fork
+keeps the captured `input` and appends one user item, so the provider's automatic
+prefix cache can serve the captured prefix. Codex forks use SSE and send the
+captured `prompt_cache_key` as `session-id`, because the Codex backend routes its
+cache by that header. OpenAI caching is automatic and needs no Cache Goblin
+marks. A routed payload model that differs from `ctx.model.id` is rejected before the fork.
 Custom methods require Pi 1.1's `buildSessionProjection`. Background also
 requires custom compaction usage and the side-request API. Install Goblin and
 all other payload modifiers before Auto Compact. Capture runs inside its
@@ -80,10 +87,14 @@ planning usage remains on the native assistant entry and is not counted twice.
 The current
 assembly limits are 24,000 kept-tool tokens, 8,000 tokens per item, and 12,000
 conversation-record tokens. These estimates use characters/4. The foreground
-planner uses the main Session's output configuration; the background fork
-limits `max_tokens` to the native history cap. The fork is content-identical
-through A. Its output cap and stream transport can differ. An explicit captured
-thinking budget must be below the reduced fork cap. Auto Compact checks that
+planner uses the main Session's output configuration. An Anthropic background
+fork limits `max_tokens` to the native history cap, and an `openai-responses`
+fork limits `max_output_tokens` the same way when the captured request has it;
+without it the fork is uncapped. Codex requests carry no output
+limit, so a Codex fork has none; status shows `background output cap none
+(provider default)`. The fork is content-identical through A. Its output cap and
+stream transport can differ. An explicit captured Anthropic thinking budget must
+be below the reduced fork cap. Auto Compact checks that
 limit before dispatch; it does not rewrite thinking or prefix content to fit.
 Oversized background inputs or incompatible provider payloads fail without automatic
 native fallback. The owner hook returns explicit cancellation when it rejects
@@ -418,7 +429,13 @@ a fresh temporary artifact directory.
 
 From a source checkout, `node packages/hc-auto-compact/scripts/integration-runtime-verification.mjs`
 checks the combined extensions through installed Pi 1.1 RPC and a local Messages
-fixture. It makes no paid provider calls. The separate
+fixture. It makes no paid provider calls. `integration-openai-background.mjs --paid <provider>/<model> <summary|keepset> <none|artifact-handoff>`
+runs one live background compaction on a Responses model with the agent
+directory's credentials. It checks the captured prefix, installation, side-request
+cache reuse and post-compaction recall. It holds the side request until request
+A and one later turn settle, so it does not test overlapping requests or a
+tool-call retry of the fork. Evidence goes under
+`~/.local/share/pi-compaction-evidence/openai-background/`. The separate
 `integration-anthropic-smoke.mjs` requires `--paid`, an explicit
 `PI_CODING_AGENT_DIR`, and human spending authorization. Its request guards cover
 main and side requests. Provider receipts establish observed cache reuse; they

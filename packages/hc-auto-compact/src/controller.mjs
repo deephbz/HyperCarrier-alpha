@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { Type } from "typebox";
 import { createMethodEngine } from "./method-engine.mjs";
+import { FORK_APIS, forkFormat } from "./methods/fork.mjs";
 import { PLAN_TOOL } from "./methods/plan-apply.mjs";
 import {
   autoCompactCommandDescription,
@@ -665,8 +666,8 @@ export function createAutoCompactController(pi, options = {}) {
           (typeof ctx.sessionManager.buildSessionProjection !== "function" ||
            (effective.settings.execution === "background" && typeof ctx.modelRegistry?.streamSimple !== "function")))
         throw new Error("summary/keepset requires Pi 1.1 projection and side-request APIs");
-      if (effective.settings.execution === "background" && ctx.model?.api !== "anthropic-messages")
-        throw new Error("background summary/keepset requires anthropic-messages");
+      if (effective.settings.execution === "background" && !forkFormat(ctx.model?.api))
+        throw new Error(`background does not support ${ctx.model?.api ?? "this model API"}; it requires ${FORK_APIS.join(", ")}. Use /auto-compact fg`);
 
       const utilization = utilizationFor(ctx, effective);
       lastUtilization = utilization;
@@ -1629,7 +1630,9 @@ export function createAutoCompactController(pi, options = {}) {
           phase: phase ? state === "compacting" ? "installing" : phase : undefined,
           heldCount: heldBatch?.items.length ?? 0,
           nativeLimits, caps,
-          outputCap: methodEngine.outputLimit() ?? lifecycle?.methodOutputLimit ?? lifecycle?.summaryCaps?.history ?? caps.history,
+          outputCap: [methodEngine.outputLimit(), lifecycle?.methodOutputLimit,
+            forkFormat(ctx.model?.api)?.capped === false ? null : undefined,
+            lifecycle?.summaryCaps?.history, caps.history].find((value) => value !== undefined),
           outputCeiling: ctx.model?.maxTokens,
           last: lastCompactionDisplay,
           failure: compactionFailed ? failureNotice() : undefined,
