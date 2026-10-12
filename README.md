@@ -167,6 +167,15 @@ host/client orientation. It reports environment facts and suggests follow-up
 probes. It requires no Pi package or Node.js installation. Its output can expose
 private host and network data; review it before sharing.
 
+## Context-store procedures
+
+[`tools/tpm`](tools/tpm/README.md) holds reusable procedures for a private
+Markdown context store: an artifact contract, inner and outer review loops, a
+source inventory format, and Pulse provisional progress assessment. The
+scripts need only Python 3.9+. Keep personal policy, source inventories,
+results, and runtime state in your own private store. Pin an exact commit of
+this directory instead of a moving checkout.
+
 ## Optional terminal integration examples
 
 The `config/` directory contains a portable terminal behavior/keybinding bundle:
