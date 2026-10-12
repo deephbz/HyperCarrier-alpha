@@ -147,7 +147,34 @@ export function resolveAutoCompactSettings(
     ...settingsObject(projectSettings.compaction),
     modelOverrides,
   };
-  return { settings, errors, compaction };
+  return { settings, errors, compaction, strategyConfigured: Object.fromEntries(
+    STRATEGY_KEYS.map((key) => [key, configured[key]])), };
+}
+
+export const STRATEGY_KEYS = ["preservation", "method", "execution"];
+const STRATEGY_VALUES = {
+  preservation: ["artifact-handoff", "none"],
+  method: ["native", "summary", "keepset"],
+  execution: ["foreground", "background"],
+};
+
+// Resolve next-run intent independently from the active lifecycle snapshot.
+export function resolveSessionStrategy(base = {}, overrides = {}) {
+  const settings = { ...DEFAULT_AUTO_COMPACT_SETTINGS, ...base.settings };
+  const errors = (base.errors ?? []).filter((error) =>
+    !error.startsWith("background requires") &&
+    !(base.strategyConfigured && STRATEGY_KEYS.some((key) => error.startsWith(`auto_compact.${key} `))) &&
+    !STRATEGY_KEYS.some((key) => Object.hasOwn(overrides, key) && error.startsWith(`auto_compact.${key} `)));
+  for (const key of STRATEGY_KEYS) {
+    const value = Object.hasOwn(overrides, key) ? overrides[key]
+      : base.strategyConfigured ? base.strategyConfigured[key] : settings[key];
+    if (value === undefined) settings[key] = DEFAULT_AUTO_COMPACT_SETTINGS[key];
+    else if (STRATEGY_VALUES[key].includes(value)) settings[key] = value;
+    else errors.push(`auto_compact.${key} must be ${STRATEGY_VALUES[key].join(" or ")}`);
+  }
+  if (settings.execution === "background" && settings.method === "native")
+    errors.push("background requires method summary or keepset");
+  return { ...base, settings, errors };
 }
 
 export function configuredAgentDir(env = process.env) {

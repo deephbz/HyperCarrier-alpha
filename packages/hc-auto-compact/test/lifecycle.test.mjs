@@ -8,6 +8,7 @@ import {
   createAutoCompactController,
   utilizationAtOrAboveThreshold,
 } from "../src/controller.mjs";
+import { PLAN_TOOL } from "../src/methods/plan-apply.mjs";
 
 function deferred() {
   let resolve;
@@ -661,12 +662,13 @@ test("human command reports status, persists valid changes, and rejects invalid 
   const command = harness.commands.get("auto-compact");
   assert.match(
     command.description,
-    /status\|on\|off\|threshold <percent>\|budget <tokens\|default>\|run/,
+    /status\|on\|off\|threshold <percent>\|budget <tokens\|default>\|execution .*\|run/,
   );
 
   await command.handler("status", harness.ctx);
-  assert.match(harness.notices.at(-1).text, /is on at 90%/i);
-  assert.match(harness.notices.at(-1).text, /context 90%/i);
+  assert.match(harness.notices.at(-1).text, /^Auto Compact · ON · idle/);
+  assert.match(harness.notices.at(-1).text, /trigger 90% \(90k\)/);
+  assert.match(harness.notices.at(-1).text, /context\s+90%/i);
 
   await command.handler("threshold 84.5", harness.ctx);
   await command.handler("off", harness.ctx);
@@ -1025,7 +1027,7 @@ test("budget clamp drives threshold and status against true model capability", a
   await harness.commands.get("auto-compact").handler("status", harness.ctx);
   assert.match(
     harness.notices.at(-1).text,
-    /configured budget 400000 \(budget_tokens\); effective W 272000 \(clamped to model window\)/,
+    /budget\s+400k \(settings\) · clamped to model window 272k/,
   );
   assert.equal(harness.ctx.model.contextWindow, 272_000);
   assert.equal(
@@ -1043,7 +1045,7 @@ test("budget command persists branch-local overrides and resolves Session over m
   await command.handler("status", harness.ctx);
   assert.match(
     harness.notices.at(-1).text,
-    /configured budget 60000 \(model override test\/model\)/,
+    /budget\s+60k \(model override test\/model\)/,
   );
   await command.handler("budget 40k", harness.ctx);
   assert.equal(harness.controller.snapshot().budgetOverride, 40_000);
@@ -1055,7 +1057,7 @@ test("budget command persists branch-local overrides and resolves Session over m
   await command.handler("status", harness.ctx);
   assert.match(
     harness.notices.at(-1).text,
-    /configured budget 40000 \(Session override\); effective W 40000/,
+    /budget\s+40k \(branch override\)/,
   );
   await harness.handlers.get("session_start")({}, harness.ctx);
   assert.equal(harness.controller.snapshot().budgetOverride, 40_000);
@@ -1080,7 +1082,7 @@ test("budget command persists branch-local overrides and resolves Session over m
   await command.handler("status", harness.ctx);
   assert.match(
     harness.notices.at(-1).text,
-    /configured budget 60000 \(model override test\/model\)/,
+    /budget\s+60k \(model override test\/model\)/,
   );
   harness.setBranch([]);
   harness.handlers.get("session_tree")({}, harness.ctx);
@@ -1180,7 +1182,7 @@ test("off enforces budget through settled native compaction without handoff or c
   await harness.commands.get("auto-compact").handler("status", harness.ctx);
   assert.match(
     harness.notices.at(-1).text,
-    /mode off \(plain native budget compaction\)/,
+    /mode\s+off \(plain native budget compaction\)/,
   );
 });
 
@@ -1548,7 +1550,7 @@ test("explicit budget drives threshold and forces at W in pending and ready", as
     await harness.commands.get("auto-compact").handler("status", harness.ctx);
     assert.match(
       harness.notices.at(-1).text,
-      /configured budget 20000 \(budget_tokens\); effective W 20000; handoff budget 2000/,
+      /budget\s+20k \(settings\) · handoff room 2k/,
     );
     assert.match(harness.notices.at(-1).text, /overshoot 1234 tokens/);
   }
@@ -1560,7 +1562,7 @@ test("status names configured caps and the accepted reload and empty-Session per
   await command.handler("status", harness.ctx);
   assert.match(
     harness.notices.at(-1).text,
-    /configured summary caps history 13107, turn prefix 8192/,
+    /summary caps history 13\.1k · turn prefix 8\.2k/,
   );
   assert.match(
     harness.notices.at(-1).text,
@@ -1590,9 +1592,9 @@ test("status exposes native caps and keeps thinking warning out of the HUD", asy
   await harness.commands.get("auto-compact").handler("status", harness.ctx);
   assert.match(
     harness.notices.at(-1).text,
-    /configured budget 100000 \(model.contextWindow\); effective W 100000/,
+    /budget\s+100k \(model window\)/,
   );
-  assert.match(harness.notices.at(-1).text, /history 13107, turn prefix 8192/);
+  assert.match(harness.notices.at(-1).text, /history 13\.1k · turn prefix 8\.2k/);
   assert.match(
     harness.notices.at(-1).text,
     /Raise compaction.reserveTokens \(starting point 32768, unmeasured\)/,
@@ -1675,11 +1677,11 @@ test("caps use reserve without a thinking warning at R32768 and respect model.ma
     compaction: { reserveTokens: 32_768 },
   });
   await harness.commands.get("auto-compact").handler("status", harness.ctx);
-  assert.match(harness.notices.at(-1).text, /history 26214, turn prefix 16384/);
+  assert.match(harness.notices.at(-1).text, /history 26\.2k · turn prefix 16\.4k/);
   assert.doesNotMatch(harness.notices.at(-1).text, /Raise compaction/);
   harness.ctx.model.maxTokens = 10_000;
   await harness.commands.get("auto-compact").handler("status", harness.ctx);
-  assert.match(harness.notices.at(-1).text, /history 10000, turn prefix 10000/);
+  assert.match(harness.notices.at(-1).text, /history 10k · turn prefix 10k/);
 });
 
 test("held pickup send failure restores custody and records recovery", async () => {
@@ -2653,7 +2655,7 @@ for (const execution of ["foreground", "background"]) test(`${execution} rejecte
   assert.equal(harness.controller.snapshot().compactionFailed, true);
   if (execution === "foreground") {
     await harness.commands.get("auto-compact").handler("status", harness.ctx);
-    assert.match(harness.notices.at(-1).text, /model output ceiling/);
+    assert.match(harness.notices.at(-1).text, /output ceiling/);
     assert.doesNotMatch(harness.notices.at(-1).text, /"caps"|compaction.reserveTokens|summary caps history/);
   }
 });
@@ -2717,7 +2719,7 @@ test("background HUD and status show request, computation, install phases and ac
   await triggerManual(harness);
   assert.match(onlyWidgetText(harness), /PLANNING.*waiting for request/);
   await harness.commands.get("auto-compact").handler("status", harness.ctx);
-  assert.match(harness.notices.at(-1).text, /method phase waiting for request/);
+  assert.match(harness.notices.at(-1).text, /phase\s+waiting for request/);
   harness.setIdle(false);
   harness.handlers.get("before_provider_request")({ payload: { max_tokens: 100, messages: [{ role: "user", content: [{ type: "text", text: "request" }] }] } }, harness.ctx);
   harness.handlers.get("message_update")({ message: { role: "assistant" }, assistantMessageEvent: { type: "text_delta" } }, harness.ctx);
@@ -2729,9 +2731,9 @@ test("background HUD and status show request, computation, install phases and ac
   harness.setConfiguredSettings({ preservation: "artifact-handoff", method: "native", execution: "foreground" });
   await harness.commands.get("auto-compact").handler("status", harness.ctx);
   const status = harness.notices.at(-1).text;
-  assert.match(status, /configured selection: preservation artifact-handoff; method native; execution foreground/);
-  assert.match(status, /active run: preservation none; method keepset; execution background/);
-  assert.match(status, /method phase waiting to install/);
+  assert.match(status, /next\s+native · foreground · artifact-handoff/);
+  assert.match(status, /active\s+keepset · background · none/);
+  assert.match(status, /phase\s+waiting to install/);
   assert.match(status, /background output cap 100/);
   assert.doesNotMatch(status, /mode cooperative handoff/);
 });
@@ -2744,7 +2746,7 @@ test("custom foreground with skipped preservation says planning and shows model 
   assert.match(onlyWidgetText(harness), /PLANNING/);
   assert.doesNotMatch(onlyWidgetText(harness), /HANDOFF|awaiting readiness/);
   await harness.commands.get("auto-compact").handler("status", harness.ctx);
-  assert.match(harness.notices.at(-1).text, /model output ceiling 32000 \(Session request settings still apply\)/);
+  assert.match(harness.notices.at(-1).text, /output ceiling 32k \(Session request settings apply\)/);
   assert.doesNotMatch(harness.notices.at(-1).text, /configured summary caps|reload Pi.*native summary caps|mode cooperative handoff/);
 });
 
@@ -2787,7 +2789,7 @@ test("background artifact-handoff runs the handoff in the fork without a live ha
   assert.equal(harness.handlers.get("input")({ text: "new user input" }, harness.ctx), undefined);
   assert.match(onlyWidgetText(harness), /HANDOFF \/ PLANNING.*waiting for request/);
   await harness.commands.get("auto-compact").handler("status", harness.ctx);
-  assert.match(harness.notices.at(-1).text, /mode background planning \(fork handoff record in compaction context\)/);
+  assert.match(harness.notices.at(-1).text, /mode\s+background planning \(fork handoff record in compaction context\)/);
   harness.setIdle(false);
   harness.handlers.get("before_provider_request")({ payload: { max_tokens: 100, messages: [{ role: "user", content: [{ type: "text", text: "request" }] }] } }, harness.ctx);
   harness.handlers.get("message_update")({ message: { role: "assistant" }, assistantMessageEvent: { type: "text_delta" } }, harness.ctx);
@@ -2822,4 +2824,169 @@ test("TUI card failure falls back to an exact notice without changing the lifecy
     harness.messages[0].message.content,
   );
   assert.deepEqual(harness.activeTools(), ["read", AUTO_COMPACT_TOOL_NAME]);
+});
+
+test("Session switches reject unsafe order and default atomically without persistence", async () => {
+  const h = makeHarness();
+  const command = (text) => h.commands.get("auto-compact").handler(text, h.ctx);
+  await command("bg");
+  assert.deepEqual(h.controller.snapshot().selectionOverrides, {});
+  assert.match(h.notices.at(-1).text, /method keepset then \/auto-compact bg/);
+  await command("method keepset");
+  assert.ok(h.activeTools().includes("compaction_plan"));
+  await command("bg");
+  await command("preservation none");
+  const before = h.controller.snapshot();
+  await command("method default");
+  assert.deepEqual(h.controller.snapshot(), before);
+  assert.match(h.notices.at(-1).text, /fg then \/auto-compact method default/);
+  await command("status");
+  assert.match(h.notices.at(-1).text, /next\s+keepset\* · background\* · none\*/);
+  assert.match(h.notices.at(-1).text, /temporary: resets on \/reload or Session switch/);
+  assert.doesNotMatch(h.notices.at(-1).text, /Message-less/);
+  h.handlers.get("session_tree")({}, h.ctx);
+  assert.deepEqual(h.controller.snapshot().selectionOverrides, before.selectionOverrides);
+  await command("fg");
+  await command("method default");
+  assert.equal(h.controller.snapshot().settings.method, "native");
+  await h.handlers.get("session_start")({}, h.ctx);
+  assert.deepEqual(h.controller.snapshot().selectionOverrides, {});
+  await command("method summary");
+  h.handlers.get("session_shutdown")({}, h.ctx);
+  assert.deepEqual(h.controller.snapshot().selectionOverrides, {});
+  assert.equal(h.writes.length, 0);
+  assert.equal(h.recoveryEntries.length, 0);
+});
+
+test("late Session switches cannot overwrite newer intent or cross Session replacement", async () => {
+  const pending = [];
+  const h = makeHarness({ settingsLoader: () => { const d = deferred(); pending.push(d); return d.promise; } });
+  const command = (text) => h.commands.get("auto-compact").handler(text, h.ctx);
+  const older = command("method summary");
+  const newer = command("method keepset");
+  pending[1].resolve({ settings: {}, errors: [] });
+  await newer;
+  const after = h.controller.snapshot();
+  const notices = h.notices.length;
+  pending[0].resolve({ settings: {}, errors: [] });
+  await older;
+  assert.deepEqual(h.controller.snapshot(), after);
+  assert.equal(h.notices.length, notices);
+  const stale = command("preservation none");
+  const start = h.handlers.get("session_start")({}, h.ctx);
+  pending[3].resolve({ settings: {}, errors: [] });
+  await start;
+  pending[2].resolve({ settings: {}, errors: [] });
+  await stale;
+  assert.deepEqual(h.controller.snapshot().selectionOverrides, {});
+  assert.equal(h.notices.length, notices);
+});
+
+test("valid selection repairs a base combination error and re-arms a failed run", async () => {
+  const h = makeHarness({ strategy: { method: "native", execution: "background" },
+    settingsLoader: async () => ({ settings: { method: "native", execution: "background" }, errors: ["background requires method summary or keepset"] }) });
+  await h.commands.get("auto-compact").handler("method summary", h.ctx);
+  assert.deepEqual(h.controller.snapshot().settingsErrors, []);
+  assert.equal(h.controller.snapshot().settings.execution, "background");
+  const failed = makeHarness();
+  await triggerManual(failed);
+  await ready(failed);
+  failed.handlers.get("agent_settled")({}, failed.ctx);
+  failed.compactCalls[0].onError(new Error("failed"));
+  assert.equal(failed.controller.snapshot().compactionFailed, true);
+  await failed.commands.get("auto-compact").handler("status", failed.ctx);
+  assert.match(failed.notices.at(-1).text, /^Auto Compact · DISARMED/);
+  await failed.commands.get("auto-compact").handler("preservation none", failed.ctx);
+  assert.equal(failed.controller.snapshot().compactionFailed, false);
+  assert.equal(failed.controller.snapshot().thresholdArmed, true);
+});
+
+test("background job keeps its capture, claim and phase after selecting foreground", async () => {
+  const h = makeHarness({ strategy: { method: "keepset", execution: "background", preservation: "none" } });
+  h.ctx.model.api = "anthropic-messages";
+  const sourceEntry = { id: "A", type: "message", message: { role: "user", content: [{ type: "text", text: "request" }] } };
+  h.setBranch([sourceEntry]);
+  h.ctx.sessionManager.getSessionId = () => "session";
+  h.ctx.sessionManager.getLeafId = () => "A";
+  h.ctx.sessionManager.buildSessionProjection = () => ({ entries: [{ sourceEntry, messages: [sourceEntry.message] }] });
+  let finish;
+  h.ctx.modelRegistry = { streamSimple: () => ({ result: () => new Promise((resolve) => { finish = resolve; }) }) };
+  await triggerManual(h);
+  h.setIdle(false);
+  h.handlers.get("before_provider_request")({ payload: { max_tokens: 100, messages: [{ role: "user", content: [{ type: "text", text: "request" }] }] } }, h.ctx);
+  h.handlers.get("message_update")({ message: { role: "assistant" }, assistantMessageEvent: { type: "text_delta" } }, h.ctx);
+  const tools = h.activeTools();
+  const claims = [...h.methodClaims];
+  const pins = [...h.cachePins];
+  await h.commands.get("auto-compact").handler("fg", h.ctx);
+  assert.deepEqual(h.activeTools(), tools);
+  assert.deepEqual(h.methodClaims, claims);
+  assert.deepEqual(h.cachePins, pins);
+  await h.commands.get("auto-compact").handler("status", h.ctx);
+  assert.match(h.notices.at(-1).text, /active\s+keepset · background · none/);
+  assert.match(h.notices.at(-1).text, /phase\s+computing/);
+  assert.match(h.notices.at(-1).text, /background output cap 100/);
+  await new Promise(setImmediate);
+  finish({ stopReason: "stop", content: [{ type: "text", text: '{"summary":"plan","keep":[]}' }] });
+  await new Promise(setImmediate);
+  await h.commands.get("auto-compact").handler("status", h.ctx);
+  assert.match(h.notices.at(-1).text, /phase\s+waiting to install/);
+  assert.equal(h.compactCalls.length, 0);
+  h.handlers.get("session_shutdown")({}, h.ctx);
+});
+
+test("next-run switches leave foreground planner tools, claim and captured policy intact", async () => {
+  const h = makeHarness({ strategy: { method: "keepset", preservation: "none" } });
+  h.ctx.sessionManager.getSessionId = () => "session";
+  h.ctx.sessionManager.buildSessionProjection = () => ({ entries: [] });
+  await triggerManual(h);
+  const tools = h.activeTools();
+  const claims = [...h.methodClaims];
+  await h.commands.get("auto-compact").handler("bg", h.ctx);
+  assert.deepEqual(h.activeTools(), tools);
+  assert.deepEqual(h.methodClaims, claims);
+  assert.equal(h.controller.snapshot().state, "handoff_pending");
+  await h.commands.get("auto-compact").handler("status", h.ctx);
+  assert.match(h.notices.at(-1).text, /next\s+keepset · background\* · none/);
+  assert.match(h.notices.at(-1).text, /active\s+keepset · foreground · none/);
+  assert.match(h.notices.at(-1).text, /output ceiling 32k/);
+  assert.doesNotMatch(h.notices.at(-1).text, /background output cap/);
+});
+
+test("agent start during a background run keeps the run's tools after selecting foreground", async () => {
+  const h = makeHarness({ strategy: { preservation: "none", method: "keepset", execution: "background" } });
+  const sourceEntry = { id: "A", type: "message", message: { role: "user", content: [{ type: "text", text: "A_OK" }] } };
+  h.setBranch([sourceEntry]);
+  h.ctx.model.api = "anthropic-messages";
+  h.ctx.sessionManager.getSessionId = () => "session";
+  h.ctx.sessionManager.getLeafId = () => "A";
+  h.ctx.sessionManager.buildSessionProjection = () => ({ entries: [{ sourceEntry, messages: [sourceEntry.message] }] });
+  h.ctx.modelRegistry = { streamSimple: () => ({ result: () => new Promise(() => {}) }) };
+  await triggerManual(h);
+  assert.ok(h.controller.snapshot().lifecycle);
+  const tools = h.activeTools();
+  await h.commands.get("auto-compact").handler("fg", h.ctx);
+  await h.handlers.get("before_agent_start")({}, h.ctx);
+  assert.deepEqual(h.activeTools(), tools);
+  assert.ok(!h.activeTools().includes(PLAN_TOOL));
+});
+
+test("a settings load that a switch overtakes reloads the committed selection", async () => {
+  const loads = [];
+  const h = makeHarness({ settingsLoader: () => { const d = deferred(); loads.push(d); return d.promise; } });
+  const saved = () => ({ settings: { enabled: true, threshold: 90, pre_compact_prompt: "p", method: "keepset", execution: "foreground", preservation: "none" }, errors: [] });
+  const starting = h.handlers.get("before_agent_start")({}, h.ctx);
+  const switching = h.commands.get("auto-compact").handler("bg", h.ctx);
+  await new Promise(setImmediate);
+  assert.equal(loads.length, 2);
+  loads[1].resolve(saved());
+  await switching;
+  assert.ok(!h.activeTools().includes(PLAN_TOOL));
+  loads[0].resolve(saved());
+  await new Promise(setImmediate);
+  assert.equal(loads.length, 3);
+  loads[2].resolve(saved());
+  await starting;
+  assert.ok(!h.activeTools().includes(PLAN_TOOL));
+  assert.equal(h.controller.snapshot().settings.execution, "background");
 });

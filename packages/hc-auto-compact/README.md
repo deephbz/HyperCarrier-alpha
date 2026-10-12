@@ -322,6 +322,37 @@ cooperative handoff but still enforces W: a threshold crossing requests plain
 native compaction after `agent_settled`, without a handoff, delivery hold, or
 input capture. Plain compaction uses the same failure record and disarm rules.
 
+Status uses aligned rows and compact token units (`30.8k`, `1M`). The header
+shows ON, OFF, or DISARMED after a failure. OFF still enforces the native
+budget. `next` shows the next run's selection; `active` appears only when its
+captured policy differs. Limits describe the active path. Failures and recovery
+actions precede the unchanged workflow receipt.
+
+Switch the next run without editing settings:
+
+```text
+/auto-compact execution foreground|background|default
+/auto-compact execution fg|bg
+/auto-compact fg
+/auto-compact bg
+/auto-compact method native|summary|keepset|default
+/auto-compact preservation artifact-handoff|none|default
+```
+
+These selections are temporary memory overrides. `default` restores the saved
+setting for that key. Status marks each override with `*` and the legend
+`temporary: resets on /reload or Session switch`. Same-Session tree navigation
+retains the selection. Session start and shutdown clear it. No settings file or
+Session entry records these switches. The branch budget has a separate lifetime.
+
+A valid switch re-arms future admission and refreshes status. It does not start
+compaction or change an active lifecycle, planner job, tool set, or method claim.
+An invalid switch changes nothing, including an invalid `default` reset. For
+background from native, use `/auto-compact method keepset` then `/auto-compact bg`.
+To restore native from background, use `/auto-compact fg` then
+`/auto-compact method native`. Preservation never changes implicitly. Command
+completion includes selection values.
+
 `/auto-compact budget <tokens|default>` accepts positive integers and k units
 such as `400k`. It appends `auto-compact.budget` as a native Session custom entry
 and does not change settings files. The latest entry on the active branch

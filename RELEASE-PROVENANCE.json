@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
   "sourceRepository": "HyperCarrier",
-  "sourceCommit": "f45dd6bd18e15ad8d28af341e533b9273be58940",
-  "sourceTree": "bf4b345578c6e43bd86bdc751b0ce8d47291a883",
+  "sourceCommit": "25b2f02a8f5b36421306f86a3143b145b2cb0144",
+  "sourceTree": "56dc096d4211b634c7fedf7513faa652bee222bb",
   "sourceWorktreeDirty": false,
-  "exportContentSha256": "6d539a6ddf5a49c246bca9d4162a601a8ba0d0d77971aee975477f7559bd8f95",
+  "exportContentSha256": "73bb6ff1d43b6bd334bf7703ec6cfa19e19be49582639a8192e7a2a2f3e579b9",
   "exportManifestSha256": "aa67fd48700d92da3574812d7e99c73d65353dec6cb0fba0e50f6c82b25f2e24",
   "dependencies": [],
   "submodules": [
@@ -12,24 +12,24 @@
       "name": "packages/pi-team-bright",
       "path": "packages/pi-team-bright",
       "repository": "https://github.com/deephbz/pi-team-bright.git",
-      "commit": "9a7fe5a5a26370c03c2c4214f57abba603bae6d0",
-      "tree": "b21b4e88161b565260f8453f77ae2eff7fa4bf95",
+      "commit": "8a8d50bf43641d047add0ac5dd1a893f61626e40",
+      "tree": "0cb33145db76dec2aed4f1db9fbb9d95a6b2a438",
       "identity": {
         "kind": "npm-package",
         "name": "@hypercarrier/pi-team-bright",
-        "version": "0.23.0"
+        "version": "0.23.1"
       }
     },
     {
       "name": "packages/pi-openai-blackmagic-compact",
       "path": "packages/pi-openai-blackmagic-compact",
       "repository": "https://github.com/deephbz/pi-openai-blackmagic-compact.git",
-      "commit": "b3a18117ebfdc60780bcc0bcb8241aaac2725671",
-      "tree": "fdb66c41a57e6c781d52488901ee6c1c702b60e4",
+      "commit": "85677d606dc84599bafcefe5246d559b6eb7f074",
+      "tree": "ea73c0aaffd932d2ce55e021b2f3ca20176c0edc",
       "identity": {
         "kind": "npm-package",
         "name": "@hypercarrier/pi-openai-blackmagic-compact",
-        "version": "0.1.0"
+        "version": "0.1.1"
       }
     },
     {
@@ -48,12 +48,12 @@
       "name": "packages/hc-rarebit",
       "path": "packages/hc-rarebit",
       "repository": "https://github.com/deephbz/rarebit.git",
-      "commit": "838b5543281b91f6a4dd44aef1ac812a2dd9a3cf",
-      "tree": "693ae05ea99968753614bc1474ad0ae8604203f6",
+      "commit": "faba9b04119059cfaf5cdaccb57c78bb3b846440",
+      "tree": "cbbfe0c863782426743799f257afbf0fb0bc7576",
       "identity": {
         "kind": "npm-package",
         "name": "@hypercarrier/rarebit",
-        "version": "0.5.0"
+        "version": "0.5.1"
       }
     }
   ],

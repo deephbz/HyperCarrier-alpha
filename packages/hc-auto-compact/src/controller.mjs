@@ -8,9 +8,10 @@ import {
   getAutoCompactArgumentCompletions,
   parseAutoCompactCommand,
 } from "./command.mjs";
-import { renderHumanReceipt, renderLifecycleHud } from "./presentation.mjs";
+import { renderHumanReceipt, renderLifecycleHud, renderStatus } from "./presentation.mjs";
 import {
   DEFAULT_AUTO_COMPACT_SETTINGS,
+  resolveSessionStrategy,
   readConfiguredAutoCompactSettings,
   writeConfiguredAutoCompactSettings,
 } from "./settings.mjs";
@@ -119,6 +120,8 @@ export function createAutoCompactController(pi, options = {}) {
   let sessionGeneration = 0;
   let automaticEnabledOverride;
   let sessionBudgetOverride;
+  let sessionSelectionOverrides = {};
+  let selectionIntentSequence = 0;
   let plainCompaction;
   let configurationWarning;
   let configurationIntentSequence = 0;
@@ -280,7 +283,10 @@ export function createAutoCompactController(pi, options = {}) {
   };
   const configurePlannerTool = (effective) => {
     const active = pi.getActiveTools();
-    const wanted = foregroundPlan() || (effective.settings.enabled && effective.settings.method !== "native" && effective.settings.execution === "foreground");
+    // An active lifecycle owns the tool set; the next selection applies after it ends.
+    const wanted = lifecycle
+      ? foregroundPlan()
+      : effective.settings.enabled && effective.settings.method !== "native" && effective.settings.execution === "foreground";
     if (wanted && !active.includes(PLAN_TOOL)) pi.setActiveTools([...active, PLAN_TOOL]);
     if (!wanted && active.includes(PLAN_TOOL)) pi.setActiveTools(active.filter((name) => name !== PLAN_TOOL));
   };
@@ -583,8 +589,12 @@ export function createAutoCompactController(pi, options = {}) {
     if (state !== "idle") transition("idle", { reason, priorId: prior?.id });
   };
 
-  const loadEffective = async (ctx) => {
+  // Without explicit overrides, the result follows the committed Session selection:
+  // a switch that starts during the load causes a reload, so no caller acts on an old selection.
+  const loadEffective = async (ctx, candidate, publish = true) => {
     const generation = sessionGeneration;
+    const intent = selectionIntentSequence;
+    const overrides = candidate ?? sessionSelectionOverrides;
     let loaded;
     try {
       loaded = await settingsLoader({
@@ -599,22 +609,25 @@ export function createAutoCompactController(pi, options = {}) {
         ],
       };
     }
+    const resolved = resolveSessionStrategy(loaded, overrides);
     const effective = {
       settings: {
         ...DEFAULT_AUTO_COMPACT_SETTINGS,
-        ...(loaded?.settings ?? {}),
+        ...resolved.settings,
         ...(automaticEnabledOverride === undefined
           ? {}
           : { enabled: automaticEnabledOverride }),
       },
       errors: [
-        ...(loaded?.errors ?? []),
+        ...resolved.errors,
         ...(configurationWarning ? [configurationWarning] : []),
       ],
       compaction: loaded?.compaction ?? {},
       ...(loaded?.rawRefs ? { rawRefs: loaded.rawRefs } : {}),
     };
-    if (generation === sessionGeneration) settingsSnapshot = effective;
+    if (!candidate && generation === sessionGeneration && intent !== selectionIntentSequence)
+      return loadEffective(ctx, undefined, publish);
+    if (publish && generation === sessionGeneration && intent === selectionIntentSequence) settingsSnapshot = effective;
     return effective;
   };
 
@@ -1054,6 +1067,8 @@ export function createAutoCompactController(pi, options = {}) {
     pendingExternalResolution = undefined;
     clearHumanReceipts();
     setLifecycleWidget(ctx);
+    sessionSelectionOverrides = {};
+    selectionIntentSequence += 1;
     resetLifecycle("session_start");
     thresholdArmed = true;
     plainCompaction = undefined;
@@ -1088,6 +1103,8 @@ export function createAutoCompactController(pi, options = {}) {
     pendingExternalResolution = undefined;
     clearHumanReceipts();
     setLifecycleWidget(ctx);
+    sessionSelectionOverrides = {};
+    selectionIntentSequence += 1;
     resetLifecycle("session_shutdown");
     thresholdArmed = true;
     sessionBudgetOverride = undefined;
@@ -1538,6 +1555,35 @@ export function createAutoCompactController(pi, options = {}) {
         return;
       }
 
+      if (["execution", "method", "preservation"].includes(command.subcommand)) {
+        const generation = sessionGeneration;
+        const intent = ++selectionIntentSequence;
+        const candidate = { ...sessionSelectionOverrides };
+        if (command.value === "default") delete candidate[command.subcommand];
+        else candidate[command.subcommand] = command.value;
+        const effective = await loadEffective(ctx, candidate, false);
+        if (generation !== sessionGeneration || intent !== selectionIntentSequence) return;
+        const invalid = effective.errors.filter((error) => /auto_compact\.(preservation|method|execution)|background requires/.test(error));
+        if (invalid.length) {
+          const order = effective.settings.execution === "background" && effective.settings.method === "native"
+            ? command.subcommand === "execution"
+              ? "/auto-compact method keepset then /auto-compact bg"
+              : `/auto-compact fg then /auto-compact ${command.subcommand} ${command.value}`
+            : "/auto-compact execution foreground then /auto-compact method keepset";
+          notify(ctx, `Selection unchanged: ${invalid.join("; ")}. Use ${order}.`, "warning");
+          return;
+        }
+        sessionSelectionOverrides = candidate;
+        settingsSnapshot = effective;
+        compactionFailed = false;
+        thresholdArmed = true;
+        if (!lifecycle) configurePlannerTool(effective);
+        setLifecycleWidget(ctx);
+        setBudgetFooter(ctx, effective);
+        notify(ctx, `Next run: ${command.subcommand} ${effective.settings[command.subcommand]}; ${command.value === "default" ? "saved setting restored" : "temporary; not saved"}. Resets on /reload or Session switch${lifecycle ? "; active run unchanged" : ""}.`);
+        return;
+      }
+
       if (command.subcommand === "status") {
         const effective = await loadEffective(ctx);
         const usage = utilizationFor(ctx, effective);
@@ -1546,12 +1592,8 @@ export function createAutoCompactController(pi, options = {}) {
         const caps = summaryCaps(ctx);
         const thinking = pi.getThinkingLevel?.() ?? "off";
         const selected = lifecycle?.settings ?? effective.settings;
-        const selection = (settings) => `preservation ${settings.preservation}; method ${settings.method}; execution ${settings.execution}`;
         const selectionDiffers = lifecycle && ["preservation", "method", "execution", "enabled", "threshold"].some(
           (key) => selected[key] !== effective.settings[key]);
-        const selectionText = selectionDiffers
-          ? `; configured selection: ${selection(effective.settings)}; active run: ${selection(selected)}; active threshold ${friendlyPercent(selected.threshold)}%; active policy ${selected.enabled ? "on" : "off"}`
-          : `; ${selection(effective.settings)}`;
         const nativeLimits = selected.method === "native" || selected.execution === "background" || (!lifecycle && !effective.settings.enabled);
         const modeText = lifecycle || effective.settings.enabled
           ? selected.preservation === "none"
@@ -1561,12 +1603,8 @@ export function createAutoCompactController(pi, options = {}) {
               : "; mode cooperative handoff"
           : `; mode off (plain native budget compaction)${plainCompaction ? `; plain compaction ${plainCompaction.phase}` : ""}`;
         const phase = currentMethodPhase();
-        const phaseText = phase ? `; method phase ${state === "compacting" ? "installing" : phase}` : "";
         const displayState = phase && ["handoff_pending", "ready"].includes(state) ? "planning" : state.replaceAll("_", " ");
-        const limitText = nativeLimits
-          ? `${selected.execution === "background" ? `; background output cap ${methodEngine.outputLimit() ?? lifecycle?.methodOutputLimit ?? lifecycle?.summaryCaps?.history ?? caps.history}` : ""}; configured summary caps history ${caps.history}, turn prefix ${caps.prefix}`
-          : `; model output ceiling ${ctx.model?.maxTokens ?? "unavailable"} (Session request settings still apply)`;
-        const budgetText = `; configured budget ${budget.configured ?? "unavailable"} (${budget.source}); effective W ${Number.isFinite(window) ? window : "unavailable"}${budget.clamped ? " (clamped to model window)" : ""}; ${selected.preservation === "none" ? "planning" : "handoff"} budget ${Number.isFinite(window) ? Math.round(window * (1 - effective.settings.threshold / 100)) : "unavailable"}${limitText}`;
+
         const settingsHint = nativeLimits
           ? "\nAfter changing compaction.reserveTokens, reload Pi (/reload or restart) to refresh native summary caps." : "";
         const persistenceHint =
@@ -1580,27 +1618,30 @@ export function createAutoCompactController(pi, options = {}) {
         const lastCompactionDisplay = !nativeLimits && lastCompaction
           ? Object.fromEntries(Object.entries(lastCompaction).filter(([key]) => key !== "caps"))
           : lastCompaction;
-        const compactionText = lastCompactionDisplay
-          ? `\nLast compaction: ${JSON.stringify(lastCompactionDisplay)}${compactionFailed ? `\n${failureNotice()}\nRe-arm: successful compaction, settings command, /auto-compact run${nativeLimits ? ", or changed compaction.reserveTokens" : ""}.` : ""}`
-          : "";
-        const usageText = usage.known
-          ? `; context ${friendlyPercent(usage.percent)}%`
-          : "; context unavailable";
-        const invalidText = effective.errors.length
-          ? `; invalid settings: ${effective.errors.join("; ")}`
-          : "";
         const receipt = currentWorkflowReceipt ?? lastWorkflowReceipt;
-        const workflow = receipt
-          ? `\n\n${renderHumanReceipt(receipt, {
-              heading: currentWorkflowReceipt
-                ? "Current workflow"
-                : "Last workflow",
-              includePrompt: true,
-            })}`
-          : "\n\nNo Auto Compact run this Session";
+        const view = {
+          next: effective.settings,
+          active: selectionDiffers ? selected : undefined,
+          overrides: { ...sessionSelectionOverrides },
+          failed: compactionFailed, state: displayState, usage, budget,
+          room: Number.isFinite(window) ? Math.round(window * (1 - selected.threshold / 100)) : undefined,
+          mode: modeText.replace(/^; mode /, ""),
+          phase: phase ? state === "compacting" ? "installing" : phase : undefined,
+          heldCount: heldBatch?.items.length ?? 0,
+          nativeLimits, caps,
+          outputCap: methodEngine.outputLimit() ?? lifecycle?.methodOutputLimit ?? lifecycle?.summaryCaps?.history ?? caps.history,
+          outputCeiling: ctx.model?.maxTokens,
+          last: lastCompactionDisplay,
+          failure: compactionFailed ? failureNotice() : undefined,
+          rearm: compactionFailed ? `Re-arm: successful compaction, settings command, /auto-compact run${nativeLimits ? ", or changed compaction.reserveTokens" : ""}.` : undefined,
+          errors: effective.errors,
+          warnings: [capWarning, persistenceHint].filter(Boolean).map((text) => text.trim()),
+          hints: [settingsHint].filter(Boolean).map((text) => text.trim()),
+          receipt, receiptHeading: currentWorkflowReceipt ? "Current workflow" : "Last workflow",
+        };
         notify(
           ctx,
-          `Auto Compact is ${effective.settings.enabled ? "on" : "off"} at ${friendlyPercent(effective.settings.threshold)}%${selectionText}; state ${displayState}${usageText}${modeText}${phaseText}${budgetText}${invalidText}${capWarning}${settingsHint}${persistenceHint}${compactionText}${workflow}`,
+          renderStatus(view),
           effective.errors.length ? "warning" : "info",
         );
         return;
@@ -1715,6 +1756,7 @@ export function createAutoCompactController(pi, options = {}) {
         startInFlight,
         thresholdArmed,
         budgetOverride: sessionBudgetOverride,
+        selectionOverrides: { ...sessionSelectionOverrides },
         plainCompaction: plainCompaction?.phase,
         compactionFailed,
         lastCompaction,

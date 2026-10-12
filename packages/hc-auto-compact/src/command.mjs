@@ -1,10 +1,15 @@
 import { isValidThreshold } from "./threshold.mjs";
 
 const AUTO_COMPACT_SYNTAX =
-  "/auto-compact [status|on|off|threshold <percent>|budget <tokens|default>|run [prompt...]]";
+  "/auto-compact [status|on|off|threshold <percent>|budget <tokens|default>|execution <foreground|background|fg|bg|default>|fg|bg|method <native|summary|keepset|default>|preservation <artifact-handoff|none|default>|run [prompt...]]";
 export const AUTO_COMPACT_USAGE = `Usage: ${AUTO_COMPACT_SYNTAX}`;
 
-const SUBCOMMANDS = ["status", "on", "off", "threshold", "budget", "run"];
+const VALUES = {
+  execution: ["foreground", "background", "fg", "bg", "default"],
+  method: ["native", "summary", "keepset", "default"],
+  preservation: ["artifact-handoff", "none", "default"],
+};
+const SUBCOMMANDS = ["status", "on", "off", "threshold", "budget", "run", "execution", "fg", "bg", "method", "preservation"];
 
 export function autoCompactCommandDescription() {
   return AUTO_COMPACT_SYNTAX;
@@ -12,7 +17,12 @@ export function autoCompactCommandDescription() {
 
 export function getAutoCompactArgumentCompletions(prefix) {
   const normalized = String(prefix ?? "").trimStart();
-  if (normalized.includes(" ")) return null;
+  if (normalized.includes(" ")) {
+    const match = /^(\S+)\s+(\S*)$/.exec(normalized);
+    if (!match || !VALUES[match[1]]) return null;
+    return VALUES[match[1]].filter((value) => value.startsWith(match[2]))
+      .map((value) => ({ value: `${match[1]} ${value}`, label: value }));
+  }
   return SUBCOMMANDS.filter((value) => value.startsWith(normalized)).map(
     (value) => ({ value, label: value }),
   );
@@ -29,6 +39,15 @@ export function parseAutoCompactCommand(input = "") {
       error: "unknown_subcommand",
       usage: AUTO_COMPACT_USAGE,
     };
+
+  if (VALUES[subcommand] || subcommand === "fg" || subcommand === "bg") {
+    const shortcut = subcommand === "fg" || subcommand === "bg";
+    const key = shortcut ? "execution" : subcommand;
+    const value = shortcut ? subcommand : args[0];
+    if ((shortcut ? args.length !== 0 : args.length !== 1) || !VALUES[key].includes(value))
+      return { ok: false, error: "invalid_selection", usage: AUTO_COMPACT_USAGE };
+    return { ok: true, subcommand: key, value: value === "fg" ? "foreground" : value === "bg" ? "background" : value };
+  }
 
   if (subcommand === "run") {
     const leading = rawInput.trimStart();

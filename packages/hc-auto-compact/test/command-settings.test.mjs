@@ -67,7 +67,7 @@ test("command grammar defaults to status and keeps a small explicit surface", ()
   );
   assert.deepEqual(
     getAutoCompactArgumentCompletions("").map(({ value }) => value),
-    ["status", "on", "off", "threshold", "budget", "run"],
+    ["status", "on", "off", "threshold", "budget", "run", "execution", "fg", "bg", "method", "preservation"],
   );
   assert.equal(getAutoCompactArgumentCompletions("threshold "), null);
 });
@@ -105,6 +105,7 @@ test("budget command accepts token integers and k units with an explicit default
     });
   assert.deepEqual(getAutoCompactArgumentCompletions("b"), [
     { value: "budget", label: "budget" },
+    { value: "bg", label: "bg" },
   ]);
 });
 
