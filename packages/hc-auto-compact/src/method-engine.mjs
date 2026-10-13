@@ -18,7 +18,15 @@ export function methodPrompt(method, rounds, background = false, handoffGuidance
   const handoff = background && handoffGuidance
     ? ` Also include the JSON key "handoff" (nonempty string): a handoff record of current intent, progress, decisions, unresolved work and next steps as of this point, within ${OPTIONS.handoffBudgetTokens} tokens. Guidance: ${handoffGuidance}`
     : "";
-  return `This is a compaction step. Summarize goals, decisions, verified work, open questions and next actions. ${background ? "Cover only the captured prefix. Later turns remain verbatim." : "Do not continue the task."}\n${background ? `Return JSON text with the keys "summary" (string) and "keep" (array of labels).${handoff} Do not call tools.` : `Call ${PLAN_TOOL} alone as your final action with summary (string) and keep (array of labels).`} ${method === "summary" ? "Keep must be empty." : "Keep contains labels of needed tool output."}\n${renderManifest(rounds, { budgetTokens: OPTIONS.keepBudgetTokens })}`;
+  const keep = method === "summary"
+    ? "Keep must be empty."
+    : `Keep lists the labels of tool outputs you still need verbatim, most important first; labels past the budget are dropped. Each kept output is cut at about ${OPTIONS.perItemTokens} tokens.`;
+  return [
+    `This is a compaction step. ${background ? "Cover only the captured prefix. Later turns remain verbatim." : "Do not continue the task."}`,
+    "Write the summary for yourself after compaction. Preserve the essential goals, constraints, decisions, verified results, open questions and next action. Compaction also keeps selected recent conversation within a budget and the kept tool outputs; avoid long quotations of them. Dropped tool outputs leave the context; to see one again, repeat a read-only call. Never replay a mutating call to recover its output.",
+    `${background ? `Return JSON text with the keys "summary" (string) and "keep" (array of labels).${handoff} Do not call tools.` : `Call ${PLAN_TOOL} alone as your final action with summary (string) and keep (array of labels).`} ${keep}`,
+    renderManifest(rounds, { budgetTokens: OPTIONS.keepBudgetTokens }),
+  ].join("\n");
 }
 const forkHandoff = (job) => job.background && job.settings.preservation === "artifact-handoff";
 export function addUsage(usages) {
@@ -132,7 +140,8 @@ export function createMethodEngine(pi) {
     const prefix = projection(ctx).filter((e) => ids.has(e.id));
     if (JSON.stringify(prefix) !== JSON.stringify(current.entries)) throw new Error("captured projection changed");
     const applied = applyPlan({ plan: current.plan, rounds: current.rounds,
-      branchEntries: current.entries, options: { ...OPTIONS, mode: current.settings.method, anchorEntryId: current.anchor } });
+      branchEntries: current.entries, options: { ...OPTIONS, mode: current.settings.method } });
+    current.view = { ...applied.view, execution: current.settings.execution };
     return { compaction: { summary: applied.summary, firstKeptEntryId,
       tokensBefore: event.preparation?.tokensBefore ?? 0, usage: current.usage,
       details: { autoCompact: { ...applied.details, preservation: current.settings.preservation,
@@ -160,5 +169,7 @@ export function createMethodEngine(pi) {
     outputLimit: () => !job ? undefined : job.format?.capped === false ? null
       : job.base ? (Number.isFinite(job.format.outputLimit(job.base)) ? Math.min(job.format.outputLimit(job.base), job.caps.history) : null)
       : job.caps.history,
+    // Human projection of the installed plan; undefined until compact() assembles it.
+    view: () => job?.view,
     ready: () => job?.phase === "ready" };
 }

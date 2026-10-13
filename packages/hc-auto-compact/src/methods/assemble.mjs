@@ -96,15 +96,17 @@ export function resolveKeep(rounds, keepLabels, { budgetTokens, perItemTokens })
   return { kept, unknown, overBudget, tokens: used };
 }
 
+// A fence longer than any backtick run in the body keeps embedded fences and headings inside it.
+const fence = (text) => "`".repeat(Math.max(3, ...[...text.matchAll(/`+/g)].map((m) => m[0].length + 1)));
+
 export function renderKeptRounds(kept, { perItemTokens }) {
   return kept
-    .map(
-      (round) =>
-        `### ${round.label} · ${round.name} ${JSON.stringify(round.args)}${round.isError ? " (error)" : ""}\n` +
-        "```\n" +
-        clip(round.resultText, perItemTokens) +
-        "\n```",
-    )
+    .map((round) => {
+      const body = clip(round.resultText, perItemTokens);
+      const marker = fence(body);
+      return `### ${round.label} · ${round.name} ${JSON.stringify(round.args)}${round.isError ? " (error)" : ""}\n` +
+        `${marker}\n${body}\n${marker}`;
+    })
     .join("\n\n");
 }
 
@@ -119,15 +121,15 @@ export function renderDroppedIndex(dropped, stubPaths) {
 }
 
 /** Bounded fork handoff record; undefined when the plan carries none. */
-export function renderHandoffRecord(handoff, { budgetTokens, anchorEntryId }) {
+export function renderHandoffRecord(handoff, { budgetTokens }) {
   if (typeof handoff !== "string" || !handoff.trim()) return undefined;
   return {
-    heading: `## Handoff record (written by the background compaction fork; state as of entry ${anchorEntryId ?? "A"}; later turns supersede it)`,
+    heading: "## Handoff record (written by the background compaction fork; messages after this summary are newer and supersede it)",
     text: clip(handoff.trim(), budgetTokens),
   };
 }
 
-export function assembleSummary({ planSummary, handoffRecord, rarebit, keptText, droppedText, mode }) {
+export function assembleSummary({ planSummary, handoffRecord, rarebit, keptText, droppedText, droppedSaved = false, mode }) {
   const parts = [
     "## Working-state summary (written by you just before compaction)",
     planSummary.trim() || "(no summary provided)",
@@ -142,7 +144,9 @@ export function assembleSummary({ planSummary, handoffRecord, rarebit, keptText,
     );
   }
   parts.push(
-    "## Dropped tool results (read the file path, where given, to recover the full output, or re-run the tool)",
+    droppedSaved
+      ? "## Dropped tool results (read the saved file where given, or re-run the tool)"
+      : "## Dropped tool results (output not in context; repeat a read-only call if needed, never a mutating one)",
     droppedText || "(none)",
   );
   return parts.join("\n\n");

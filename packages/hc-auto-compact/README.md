@@ -184,7 +184,18 @@ The handoff event uses custom type
 events use `auto-compact.pickup`. Handoff steers and triggers a turn; an
 unprompted normal pickup triggers a turn, while a prompted manual pickup does
 not because its paired ordinary user message starts the sole continuation;
-corrective pickup does not trigger a turn. In TUI mode, the above-editor HUD is a separate
+corrective pickup does not trigger a turn.
+
+The transcript shows the handoff collapsed to one line: what the agent was asked
+to do and how many tool results the manifest lists. The `compaction_plan` call
+shows the summary size and keep count. Pi removes both blocks when compaction
+ends, so the pickup also carries a human view of the installed plan in
+`details.plan`: method, execution, plan summary, handoff record, kept labels,
+and rejected labels. The model does not read `details`. Expand a block with
+the `app.tools.expand` key (default Ctrl+O) or, in fullscreen mode, a left
+click on that block.
+
+In TUI mode, the above-editor HUD is a separate
 transient, one-line current-control projection:
 `AUTO COMPACT · <MANUAL|AUTOMATIC> · <phase>`. Its phases identify handoff
 awaiting readiness, ready awaiting turn end, compacting, pickup requesting the

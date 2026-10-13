@@ -106,7 +106,10 @@ test("budget command accepts token integers and k units with an explicit default
   assert.deepEqual(getAutoCompactArgumentCompletions("b"), [
     { value: "budget", label: "budget" },
     { value: "bg", label: "bg" },
-  ]);
+  ]);  // A fully typed sole match must leave Enter to submit the command.
+  for (const prefix of ["fg", "status", "method keepset", "preservation none"])
+    assert.equal(getAutoCompactArgumentCompletions(prefix), null, prefix);
+  assert.deepEqual(getAutoCompactArgumentCompletions("execution b").map(({ value }) => value), ["execution background", "execution bg"]);
 });
 
 test("threshold validation accepts only finite percentages strictly between 1 and 110", () => {

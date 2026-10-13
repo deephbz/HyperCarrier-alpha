@@ -24,9 +24,9 @@ export function writeStubFiles(dir, dropped) {
  * @param {{summary: string, keep: string[], handoff?: string}} plan
  * @param {object[]} rounds manifest rounds the plan's labels refer to
  * @param {object[]} branchEntries entries the conversation record covers
- * @param {object} options keepset options (mode, budgets, includeCustomMessages, anchorEntryId)
+ * @param {object} options keepset options (mode, budgets, includeCustomMessages)
  * @param {string|undefined} stubDir where dropped outputs are saved; undefined saves nothing
- * @returns {{summary: string, details: object}}
+ * @returns {{summary: string, details: object, view: object}} view is the human projection of the plan
  */
 export function applyPlan({ plan, rounds, branchEntries, options, stubDir }) {
   const { kept, unknown, overBudget, tokens: keptTokens } = resolveKeep(
@@ -43,7 +43,6 @@ export function applyPlan({ plan, rounds, branchEntries, options, stubDir }) {
   });
   const handoffRecord = renderHandoffRecord(plan.handoff, {
     budgetTokens: options.handoffBudgetTokens,
-    anchorEntryId: options.anchorEntryId,
   });
   const summary = assembleSummary({
     planSummary: plan.summary,
@@ -51,10 +50,23 @@ export function applyPlan({ plan, rounds, branchEntries, options, stubDir }) {
     rarebit,
     keptText: renderKeptRounds(kept, options),
     droppedText: renderDroppedIndex(dropped, stubPaths),
+    droppedSaved: stubPaths.size > 0,
     mode: options.mode,
   });
   return {
     summary,
+    view: {
+      method: options.mode,
+      summary: plan.summary,
+      // The installed (clipped) handoff record, so the human sees what the model sees.
+      ...(handoffRecord ? { handoff: handoffRecord.text } : {}),
+      kept: kept.map((round) => ({ label: round.label, name: round.name, tokens: Math.min(round.tokens, options.perItemTokens),
+        ...(round.tokens > options.perItemTokens ? { cut: true } : {}) })),
+      dropped: dropped.length,
+      unknown,
+      overBudget,
+      summaryTokens: estimateTokens(summary),
+    },
     details: {
       mode: options.mode,
       requested: plan.keep,

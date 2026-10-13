@@ -442,7 +442,7 @@ test("automatic crossing starts one visible handoff with fixed preservation sema
   const [{ message, options }] = harness.messages;
   assert.equal(message.customType, "auto-compact.handoff");
   assert.equal(message.display, true);
-  assert.deepEqual(message.details, { projection: "handoff" });
+  assert.deepEqual(message.details, { projection: "handoff", method: "native", preservation: "artifact-handoff" });
   assert.deepEqual(options, { triggerTurn: true, deliverAs: "steer" });
   assert.match(message.content, /near the configured limit/i);
   assert.match(message.content, /native compaction/i);
@@ -588,7 +588,7 @@ test("automatic and manual handoffs preserve the exact visible Session event and
     const handoff = harness.messages[0];
     assert.equal(handoff.message.display, true);
     assert.equal(handoff.message.customType, "auto-compact.handoff");
-    assert.deepEqual(handoff.message.details, { projection: "handoff" });
+    assert.deepEqual(handoff.message.details, { projection: "handoff", method: "native", preservation: "artifact-handoff" });
     assert.equal(
       handoff.message.content,
       buildPreCompactPrompt("Preserve the exact current work."),
@@ -2608,6 +2608,10 @@ test("foreground custom method claims ownership before compaction and reports sk
   assert.equal(calls, 0, "foreground must use the main session response, not a side request");
   assert.equal(result.compaction.usage, undefined, "main assistant usage must not be double-counted");
   harness.compactCalls[0].onComplete();
+  const pickup = harness.messages.find(({ message }) => message.customType === "auto-compact.pickup").message;
+  assert.equal(pickup.details.plan.summary, "Summary", "the pickup keeps the plan for the human view");
+  assert.equal(pickup.details.plan.execution, "foreground");
+  assert.doesNotMatch(pickup.content, /Summary/, "the plan view stays out of model content");
   assert.match(harness.notices.at(-1).text, /HANDOFF \(skipped\)/);
   assert.doesNotMatch(harness.notices.at(-1).text, /✓ HANDOFF/);
   assert.ok(harness.methodClaims.some((c) => !c.active && c.token === claim.token));

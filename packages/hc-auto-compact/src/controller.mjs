@@ -10,6 +10,7 @@ import {
   parseAutoCompactCommand,
 } from "./command.mjs";
 import { renderHumanReceipt, renderLifecycleHud, renderStatus } from "./presentation.mjs";
+import { renderHandoffMessage, renderPickupMessage, renderPlanCall, renderPlanResult } from "./transcript.mjs";
 import {
   DEFAULT_AUTO_COMPACT_SETTINGS,
   resolveSessionStrategy,
@@ -706,7 +707,11 @@ export function createAutoCompactController(pi, options = {}) {
         pickup: "pending",
         outcome: queueBehindCurrentWork
           ? "Manual handoff queued behind current agent work."
-          : "Waiting for the agent to preserve work and report ready.",
+          : !foregroundPlan()
+            ? "Waiting for the agent to preserve work and report ready."
+            : effective.settings.preservation === "none"
+              ? "Waiting for the agent's compaction plan."
+              : "Waiting for the agent to preserve work and return its compaction plan.",
         instructionRequested: false,
         terminal: false,
       };
@@ -735,8 +740,10 @@ export function createAutoCompactController(pi, options = {}) {
             ? {
                 projection: "handoff",
                 queuedRun: lifecycle.queueToken,
+                method: effective.settings.method,
+                preservation: effective.settings.preservation,
               }
-            : { projection: "handoff" },
+            : { projection: "handoff", method: effective.settings.method, preservation: effective.settings.preservation },
         },
         {
           triggerTurn: true,
@@ -897,6 +904,7 @@ export function createAutoCompactController(pi, options = {}) {
           compactionFailed = false;
           setBudgetFooter(ctx);
           pi.events?.emit("hc.compaction-method", { owner: "hc-auto-compact", active: false, token: lifecycle.holdToken });
+          const plan = methodEngine.view();
           methodEngine.cancel();
           transition("pickup");
           const completing = receiptForRun(runId);
@@ -936,6 +944,7 @@ export function createAutoCompactController(pi, options = {}) {
                     projection: "pickup",
                     runToken: lifecycle.holdToken,
                     heldCount: items.length,
+                    ...(plan ? { plan } : {}),
                   },
                 },
                 { triggerTurn: true },
@@ -954,6 +963,7 @@ export function createAutoCompactController(pi, options = {}) {
                 details: {
                   projection: "pickup",
                   runToken: lifecycle.holdToken,
+                  ...(plan ? { plan } : {}),
                 },
               },
               { triggerTurn: !lifecycle.pickupPrompt },
@@ -992,12 +1002,20 @@ export function createAutoCompactController(pi, options = {}) {
     }
   };
 
+  pi.registerMessageRenderer?.("auto-compact.handoff", renderHandoffMessage);
+  pi.registerMessageRenderer?.("auto-compact.pickup", renderPickupMessage);
+
   pi.registerTool({
     name: PLAN_TOOL,
     label: "Compaction plan",
     description: "Return the requested foreground compaction plan. Call it alone as your final action. Never call it outside a pending compaction step.",
-    parameters: Type.Object({ summary: Type.String(), keep: Type.Array(Type.String()) }, { additionalProperties: false }),
+    parameters: Type.Object({
+      summary: Type.String({ description: "Working state for yourself after compaction. Omit what compaction adds verbatim." }),
+      keep: Type.Array(Type.String(), { description: "Manifest labels of tool outputs to keep verbatim, most important first. Empty for the summary method." }),
+    }, { additionalProperties: false }),
     executionMode: "sequential",
+    renderCall: renderPlanCall,
+    renderResult: renderPlanResult,
     async execute(_id, params, _signal, _onUpdate, ctx) {
       if (state !== "handoff_pending" || !foregroundPlan() || !methodEngine.acceptPlan(params, ctx))
         return { content: [{ type: "text", text: "No foreground compaction plan is pending." }], details: { status: "ignored" } };

@@ -15,17 +15,22 @@ export function autoCompactCommandDescription() {
   return AUTO_COMPACT_SYNTAX;
 }
 
+// An exact sole match returns null: Pi applies an argument completion on Enter
+// instead of submitting, so a fully typed command would need a second Enter.
+const complete = (values, token, toValue) => {
+  const matches = values.filter((value) => value.startsWith(token));
+  if (matches.length === 1 && matches[0] === token) return null;
+  return matches.map((value) => ({ value: toValue(value), label: value }));
+};
+
 export function getAutoCompactArgumentCompletions(prefix) {
   const normalized = String(prefix ?? "").trimStart();
   if (normalized.includes(" ")) {
     const match = /^(\S+)\s+(\S*)$/.exec(normalized);
     if (!match || !VALUES[match[1]]) return null;
-    return VALUES[match[1]].filter((value) => value.startsWith(match[2]))
-      .map((value) => ({ value: `${match[1]} ${value}`, label: value }));
+    return complete(VALUES[match[1]], match[2], (value) => `${match[1]} ${value}`);
   }
-  return SUBCOMMANDS.filter((value) => value.startsWith(normalized)).map(
-    (value) => ({ value, label: value }),
-  );
+  return complete(SUBCOMMANDS, normalized, (value) => value);
 }
 
 export function parseAutoCompactCommand(input = "") {
