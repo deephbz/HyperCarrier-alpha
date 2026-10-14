@@ -918,27 +918,22 @@ export function createAutoCompactController(pi, options = {}) {
           }
           try {
             if (heldBatch?.items.length) {
-              const items = heldBatch.items;
+              const items = [...heldBatch.items];
+              heldBatch.pickupItems = items;
+              const pickupGeneration = sessionGeneration;
               const text = [
                 PICKUP_PROMPT,
                 "Messages the human sent during the handoff and compaction follow. They take priority over resuming the prior request.",
                 lifecycle.pickupPrompt
                   ? `Run prompt:\n${lifecycle.pickupPrompt}`
                   : undefined,
-                ...items.map(
-                  (item, index) =>
-                    `${item.source === "interactive" ? `Human message ${index + 1}` : `Message ${index + 1} [via ${item.source}]`}:\n${item.text}`,
-                ),
               ]
                 .filter(Boolean)
                 .join("\n\n");
-              const images = items.flatMap((item) => item.images ?? []);
               pi.sendMessage(
                 {
                   customType: "auto-compact.pickup",
-                  content: images.length
-                    ? [{ type: "text", text }, ...images]
-                    : text,
+                  content: text,
                   display: true,
                   details: {
                     projection: "pickup",
@@ -947,8 +942,13 @@ export function createAutoCompactController(pi, options = {}) {
                     ...(plan ? { plan } : {}),
                   },
                 },
-                { triggerTurn: true },
+                { triggerTurn: false },
               );
+              if (pickupGeneration !== sessionGeneration || lifecycle?.id !== runId) return;
+              const first = items[0];
+              pi.sendUserMessage(first.images?.length
+                ? [{ type: "text", text: heldText([first]) }, ...first.images]
+                : heldText([first]), { deliverAs: "steer", expandPromptTemplates: false });
               if (state !== "pickup" || lifecycle?.id !== runId) return;
               awaitPickupAdmission(ctx, runId);
               return;
@@ -1287,14 +1287,67 @@ export function createAutoCompactController(pi, options = {}) {
       message.details?.runToken !== lifecycle.holdToken
     )
       return false;
-    heldBatch = undefined;
+    if (heldBatch?.items.length) return true;
     finishPickup(ctx);
     return true;
+  };
+
+  const userText = (message) => typeof message.content === "string" ? message.content
+    : (message.content ?? []).filter((block) => block.type === "text").map((block) => block.text).join("\n");
+
+  const sendHeldTail = (message, ctx) => {
+    if (state !== "pickup" || !lifecycle || !heldBatch?.pickupItems || message?.role !== "user") return;
+    const first = heldBatch.pickupItems?.[0];
+    if (!first || userText(message) !== heldText([first])) return;
+    // Pi is running when its first user record appears. Queue the tail there,
+    // so runtimes without a startup busy guard cannot start parallel runs.
+    if (!heldBatch.tailSent) {
+      heldBatch.tailSent = true;
+      const items = heldBatch.pickupItems.slice(1);
+      const runId = lifecycle.id;
+      const generation = sessionGeneration;
+      try {
+        for (const item of items) {
+          if (generation !== sessionGeneration || lifecycle?.id !== runId) return;
+          pi.sendUserMessage(item.images?.length
+            ? [{ type: "text", text: heldText([item]) }, ...item.images]
+            : heldText([item]), { deliverAs: "steer", expandPromptTemplates: false });
+        }
+      } catch (error) {
+        const receipt = receiptForRun(runId);
+        if (receipt) { receipt.pickup = "failed"; receipt.outcome = "Held user messages could not be requested."; }
+        const archived = finalizeCurrentReceipt(runId);
+        disposeHeld(ctx, "Pickup failed");
+        resetLifecycle("pickup_failed");
+        notifyHumanReceipt(ctx, archived, { level: "error" });
+      }
+    }
+  };
+
+  const admitHeldContext = (messages, ctx) => {
+    if (state !== "pickup" || !lifecycle || !heldBatch?.pickupItems) return;
+    const start = messages.findIndex((message) => message.role === "custom" &&
+      message.customType === "auto-compact.pickup" && message.details?.runToken === lifecycle.holdToken);
+    if (start < 0) return;
+    const items = heldBatch.pickupItems;
+    let admitted = 0;
+    for (const message of messages.slice(start + 1)) {
+      if (message.role === "user" && userText(message) === heldText([items[admitted]])) admitted += 1;
+      if (admitted === items.length) break;
+    }
+    heldBatch.items = items.slice(admitted);
+    refreshBudgetState();
+    if (heldBatch.items.length) setLifecycleWidget(ctx);
+    if (!heldBatch.items.length) {
+      heldBatch = undefined;
+      finishPickup(ctx);
+    }
   };
 
   pi.on("message_start", (event, ctx) => {
     activateDeliveredQueuedHandoff(event.message, ctx);
     admitPickup(event.message, ctx);
+    sendHeldTail(event.message, ctx);
   });
 
   pi.on("context", (event, ctx) => {
@@ -1302,6 +1355,7 @@ export function createAutoCompactController(pi, options = {}) {
       activateDeliveredQueuedHandoff(message, ctx);
       admitPickup(message, ctx);
     }
+    admitHeldContext(event.messages, ctx);
   });
 
   pi.on("agent_settled", (event, ctx) => {

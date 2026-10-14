@@ -26,8 +26,13 @@ native compaction, regardless of the selected method.
   `none` skips that request and reports `HANDOFF (skipped)`.
 - `method`: `native` uses Pi's existing compaction-hook lane. This can include
   Blackmagic when loaded. `summary` and `keepset` use Auto Compact's planner.
-  Both retain budgeted user prose, assistant prose, and harness custom messages
-  from Pi's active projection. Internal control messages are excluded.
+  Both use the canonical Rarebit selector from `@hypercarrier/rarebit/core`
+  over Pi's active projection. The budgeted record retains user messages,
+  agent continuations (`toolUse`), and agent stops (`stop`). Extension messages
+  are excluded. Assistant prose from turns that ended with `length`, `error`,
+  or `aborted` is excluded. The planner carries needed extension content into
+  its summary. For content a tool can read again, it keeps the tool and the
+  recovery ID.
   `keepset` also assembles selected tool output and a dropped-output index.
 - `execution`: `foreground` requests a planning turn in the live conversation.
   The model calls `compaction_plan({summary, keep})` as its final action. The
@@ -70,6 +75,11 @@ all other payload modifiers before Auto Compact. Capture runs inside its
 `before_provider_request` handler; later payload rewriting is unsupported. Cache cooperation
 uses `cache-goblin:pin`, `cache-goblin:unpin`, and `cache-goblin:placed`.
 Cache absence does not block correctness.
+Through magpie's Claude subscription bridge, an Anthropic fork reads only the
+shared prefix from the cache. The bridge starts the fork in a new Claude Code
+run, and that run's prompt cannot match the turns the live run cached
+(measured: 4,613 of 20,137 tokens). Through the Anthropic API, the fork reads
+the whole captured prefix. See yetone/magpie#1717.
 
 Do not load either independent keepset experiment extension with Auto Compact.
 Do not load another custom compaction generator alongside summary/keepset
@@ -182,8 +192,9 @@ pickup.
 The handoff event uses custom type
 `auto-compact.handoff`; both the normal and external-corrective visible pickup
 events use `auto-compact.pickup`. Handoff steers and triggers a turn; an
-unprompted normal pickup triggers a turn, while a prompted manual pickup does
-not because its paired ordinary user message starts the sole continuation;
+unprompted normal pickup without held input triggers a turn. A prompted manual
+pickup or a pickup with held input does not trigger a turn; its paired user
+message starts or steers the continuation;
 corrective pickup does not trigger a turn.
 
 The transcript shows the handoff collapsed to one line: what the agent was asked
@@ -206,11 +217,13 @@ external-compaction resolution. Completion or cancellation removes the
 workflow HUD. A compaction error retains a separate failure HUD. The
 exact prompt snapshot and last terminal workflow remain inspectable on demand
 through `/auto-compact status` until a new run or Session/active-branch
-boundary. Every normal pickup carries `details.runToken`. The controller keeps `pickup`
-and the delivery hold active until `message_start` or `context` observes that
-exact custom message. Admission proves that Pi received it; it does not prove
-that the agent acted on it. An idle watchdog checks for missing admission every
-5 seconds. It surfaces held input and releases the hold on failure.
+boundary. Every normal pickup carries `details.runToken`. Without held input,
+the controller keeps `pickup` and the delivery hold active until `message_start`
+or `context` observes that exact custom message. With held input, custody ends
+only when `context` contains the token-bearing pickup and the expected user
+messages in order. Admission proves that Pi received the messages; it does not
+prove that the agent acted on them. An idle watchdog checks for missing admission
+every 5 seconds. It surfaces undelivered held input and releases the hold on failure.
 
 During `handoff_pending`, `ready`, and `compacting`, the `input` hook holds
 input from all sources when `ctx.hasUI` is true (TUI or RPC). The HUD shows
@@ -220,11 +233,18 @@ pickup use the existing custody contract. Pi runs extension commands before
 this hook. Input rejected before the hook
 is outside this guarantee.
 
-With held input, one custom pickup triggers the continuation. Its content
-contains the priority instruction, the manual run prompt, ordered labeled
-messages, and image blocks. The controller does not send a separate user
-message. Held templates and skills do not expand. Held content skips
-`before_agent_start` and does not appear as a user entry in Session history.
+With held input, the custom pickup contains only the priority instruction and
+any manual run prompt. It does not trigger a turn. The controller sends the
+first held item as a user message with its own images. Once that user message
+starts, it steers each remaining item into the same agent run, in order.
+Pi can deliver the items in separate model turns of that run. Each item becomes
+a user entry in Session history. Interactive text stays verbatim;
+non-interactive text keeps the `[via source]` line. Held templates and skills
+do not expand. Earlier extensions can transform or handle the input again.
+An item whose delivered text differs from the expected text stays in custody
+and is restored for resubmission when the idle watchdog fires. The recovery
+notice covers text that also appears in chat. A steered item can briefly appear
+in Pi's queued-steering area before its user message appears.
 Input after the pickup send follows ordinary Pi delivery behavior.
 
 On failure or cancellation, the controller first appends a recovery entry
@@ -405,9 +425,10 @@ an undelivered queued run terminates without compaction when the agent settles.
 lifecycle only: after successful native compaction, the normal visible
 `auto-compact.pickup` event is requested first with `{ triggerTurn: false }`,
 then the unchanged prompt is requested as the sole continuation turn. With
-held input, the prompt appears inside the single custom pickup instead.
-Zero-argument manual and automatic pickups trigger a turn. External-corrective
-pickups do not trigger a turn.
+held input, the prompt stays in the untriggered custom pickup; held user
+messages start or steer the continuation instead.
+Zero-argument manual and automatic pickups without held input trigger a turn.
+External-corrective pickups do not trigger a turn.
 
 ### Session scope and evidence
 

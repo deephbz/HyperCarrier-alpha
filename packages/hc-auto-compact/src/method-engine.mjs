@@ -4,7 +4,7 @@ import { collectToolRounds, markSuperseded, renderManifest } from "./methods/man
 import { FORK_APIS, forkFormat, keptFrom, readPlan } from "./methods/fork.mjs";
 
 const OPTIONS = Object.freeze({ keepBudgetTokens: 24000, perItemTokens: 8000,
-  rarebitBudgetTokens: 12000, handoffBudgetTokens: 4000, includeCustomMessages: true });
+  rarebitBudgetTokens: 12000, handoffBudgetTokens: 4000 });
 const projection = (ctx) => structuredClone(ctx.sessionManager.buildSessionProjection().entries.flatMap(
   ({ sourceEntry, messages }) => messages.map((message) => message.role === "custom"
     ? { ...sourceEntry, type: "custom_message", content: message.content }
@@ -23,7 +23,7 @@ export function methodPrompt(method, rounds, background = false, handoffGuidance
     : `Keep lists the labels of tool outputs you still need verbatim, most important first; labels past the budget are dropped. Each kept output is cut at about ${OPTIONS.perItemTokens} tokens.`;
   return [
     `This is a compaction step. ${background ? "Cover only the captured prefix. Later turns remain verbatim." : "Do not continue the task."}`,
-    "Write the summary for yourself after compaction. Preserve the essential goals, constraints, decisions, verified results, open questions and next action. Compaction also keeps selected recent conversation within a budget and the kept tool outputs; avoid long quotations of them. Dropped tool outputs leave the context; to see one again, repeat a read-only call. Never replay a mutating call to recover its output.",
+    "Write the summary for yourself after compaction. Preserve the essential goals, constraints, decisions, verified results, open questions and next action. Compaction also keeps the user's recent messages and your recent prose within a budget, and the kept tool outputs; avoid long quotations of them. It does not keep messages that extensions delivered, such as task, team, or alert notices. Write what you still need from them into the summary. If a tool can read some content again, write only the tool and the ID that reads it. Dropped tool outputs leave the context; to see one again, repeat a read-only call. Never replay a mutating call to recover its output.",
     `${background ? `Return JSON text with the keys "summary" (string) and "keep" (array of labels).${handoff} Do not call tools.` : `Call ${PLAN_TOOL} alone as your final action with summary (string) and keep (array of labels).`} ${keep}`,
     renderManifest(rounds, { budgetTokens: OPTIONS.keepBudgetTokens }),
   ].join("\n");

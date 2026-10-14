@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { heldRuntime } from './helpers/held-runtime.mjs';
 
 import {
   AUTO_COMPACT_TOOL_NAME,
@@ -9,6 +10,7 @@ import {
   utilizationAtOrAboveThreshold,
 } from "../src/controller.mjs";
 import { PLAN_TOOL } from "../src/methods/plan-apply.mjs";
+import { renderRarebitRecord } from '../src/methods/assemble.mjs';
 
 function deferred() {
   let resolve;
@@ -214,6 +216,7 @@ function makeHarness({
   });
 
   return {
+    pi,
     handlers,
     commands,
     tools,
@@ -1396,6 +1399,11 @@ test("budget slot publishes held counts during custody and removes them on admis
   harness.handlers.get("message_start")({ message: {
     ...harness.messages.at(-1).message, role: "custom",
   } }, harness.ctx);
+  assert.equal(harness.hudSlots.at(-1).value.held, 2);
+  harness.handlers.get('context')({ messages: [
+    { ...harness.messages.at(-1).message, role: 'custom' },
+    { role: 'user', content: 'first' }, { role: 'user', content: 'second' }
+  ] }, harness.ctx);
   assert.equal(harness.hudSlots.at(-1).value.held, undefined);
 
   const cancelled = makeHarness();
@@ -1750,7 +1758,7 @@ test("capture covers every source and held state, but excludes queued, pickup, a
   assert.equal(capture(queued, "queued"), undefined);
 });
 
-test("held pickup carries priority, prompt, source labels and images; matching token admits custody", async () => {
+test("held pickup sends instruction then ordered user messages; only matching context admits custody", async () => {
   const timers = fakeTimers();
   const harness = makeHarness({ timers });
   await triggerManual(harness, "manual objective");
@@ -1761,14 +1769,11 @@ test("held pickup carries priority, prompt, source labels and images; matching t
   harness.handlers.get("agent_settled")({}, harness.ctx);
   harness.compactCalls[0].onComplete();
   const pickup = harness.messages.at(-1);
-  assert.deepEqual(pickup.options, { triggerTurn: true });
+  assert.deepEqual(pickup.options, { triggerTurn: false });
   assert.equal(pickup.message.details.heldCount, 2);
-  assert.match(
-    pickup.message.content[0].text,
-    /take priority[\s\S]*Run prompt:\nmanual objective[\s\S]*Human message 1:\nfirst human[\s\S]*Message 2 \[via rpc\]:\nsecond source/,
-  );
-  assert.deepEqual(pickup.message.content[1], image);
-  assert.deepEqual(harness.userMessages, []);
+  assert.match(pickup.message.content, /take priority[\s\S]*Run prompt:\nmanual objective/);
+  assert.doesNotMatch(pickup.message.content, /first human|second source|via rpc/);
+  assert.deepEqual(harness.userMessages, ['first human']);
   assert.equal(harness.controller.snapshot().state, "pickup");
   harness.handlers.get("message_start")(
     {
@@ -1781,10 +1786,24 @@ test("held pickup carries priority, prompt, source labels and images; matching t
     harness.ctx,
   );
   assert.equal(harness.controller.snapshot().heldCount, 2);
-  harness.handlers.get("context")(
-    { messages: [{ ...pickup.message, role: "custom" }] },
-    harness.ctx,
-  );
+  const custom = { ...pickup.message, role: "custom" };
+  harness.handlers.get("message_start")({ message: custom }, harness.ctx);
+  assert.equal(harness.controller.snapshot().heldCount, 2, 'custom admission keeps custody');
+  assert.equal(harness.holdSignals.at(-1).payload.active, true);
+  const first = { role: 'user', content: [{ type: 'text', text: 'first human' }] };
+  harness.handlers.get("message_start")({ message: first }, harness.ctx);
+  assert.deepEqual(harness.userMessages, [
+    'first human', [{ type: 'text', text: '[via rpc]\nsecond source' }, image]
+  ]);
+  assert.deepEqual(harness.deliveries.slice(-3).map(delivery => delivery.kind), ['custom', 'user', 'user']);
+  for (const delivery of harness.deliveries.slice(-2))
+    assert.deepEqual(delivery.options, { deliverAs: 'steer', expandPromptTemplates: false });
+  harness.handlers.get("context")({ messages: [custom, first, { role: 'user', content: 'unrelated' }] }, harness.ctx);
+  assert.equal(harness.controller.snapshot().heldCount, 1);
+  assert.equal(harness.holdSignals.at(-1).payload.active, true);
+  harness.handlers.get("context")({ messages: [custom, first,
+    { role: 'user', content: [{ type: 'text', text: '[via rpc]\nsecond source' }, image] }
+  ] }, harness.ctx);
   assert.equal(harness.controller.snapshot().heldCount, 0);
   assert.equal(harness.controller.snapshot().state, "idle");
   assert.equal(harness.holdSignals.at(-1).payload.active, false);
@@ -2993,6 +3012,148 @@ test("a settings load that a switch overtakes reloads the committed selection", 
   await starting;
   assert.ok(!h.activeTools().includes(PLAN_TOOL));
   assert.equal(h.controller.snapshot().settings.execution, "background");
+});
+
+for (const execution of ['foreground', 'background']) test(`${execution} summary installation uses the held user pickup path`, async () => {
+  const h = makeHarness({ autoAdmission: false, timers: fakeTimers(),
+    strategy: { preservation: 'none', method: 'summary', execution } });
+  const sourceEntry = { id: 'A', type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'Request' }] } };
+  h.setBranch([sourceEntry]);
+  h.ctx.model.api = 'anthropic-messages';
+  h.ctx.sessionManager.getSessionId = () => 'source';
+  h.ctx.sessionManager.getLeafId = () => 'A';
+  h.ctx.sessionManager.buildSessionProjection = () => ({ entries: [{ sourceEntry, messages: [sourceEntry.message] }] });
+  h.ctx.modelRegistry = { streamSimple: () => ({ result: async () => ({ stopReason: 'stop',
+    content: [{ type: 'text', text: '{"summary":"State","keep":[]}' }] }) }) };
+  await triggerManual(h);
+  if (execution === 'foreground') {
+    await h.tools.get(PLAN_TOOL).execute('plan', { summary: 'State', keep: [] }, undefined, undefined, h.ctx);
+  } else {
+    h.setIdle(false);
+    h.handlers.get('before_provider_request')({ payload: { max_tokens: 100, messages: [{ role: 'user', content: [{ type: 'text', text: 'Request' }] }] } }, h.ctx);
+    h.handlers.get('message_update')({ message: { role: 'assistant' }, assistantMessageEvent: { type: 'text_delta' } }, h.ctx);
+    await new Promise(setImmediate);
+  }
+  h.setIdle(true);
+  h.handlers.get('agent_settled')({}, h.ctx);
+  assert.equal(h.controller.snapshot().state, 'compacting');
+  capture(h, 'Installation input');
+  await h.handlers.get('session_before_compact')({ reason: 'manual' }, h.ctx);
+  h.compactCalls[0].onComplete();
+  const pickup = h.messages.at(-1);
+  assert.deepEqual(pickup.options, { triggerTurn: false });
+  assert.deepEqual(h.userMessages, ['Installation input']);
+  assert.equal(h.controller.snapshot().heldCount, 1);
+  h.handlers.get('context')({ messages: [{ ...pickup.message, role: 'custom' },
+    { role: 'user', content: 'Installation input' }] }, h.ctx);
+  assert.equal(h.controller.snapshot().heldCount, 0);
+  assert.equal(h.holdSignals.at(-1).payload.active, false);
+});
+
+for (const busy of [false, true]) test(`real Pi held pickup uses one run and ordered user records (${busy ? 'busy' : 'idle'})`, { timeout: 10000 }, async () => {
+  const harness = makeHarness({ autoAdmission: false, timers: fakeTimers() });
+  await triggerManual(harness);
+  const image = { type: 'image', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==', mimeType: 'image/png' };
+  capture(harness, 'Repeated input', 'interactive', [image]);
+  capture(harness, 'Repeated input');
+  capture(harness, 'Image input', 'rpc', [image]);
+  await ready(harness);
+  harness.handlers.get('agent_settled')({}, harness.ctx);
+  const runtime = await heldRuntime(harness, { busy });
+  try {
+    harness.compactCalls[0].onComplete();
+    assert.equal(harness.controller.snapshot().heldCount, 3, 'pickup alone cannot release held custody');
+    assert.equal(harness.holdSignals.at(-1).payload.active, true);
+    runtime.release();
+    await runtime.idle();
+    assert.deepEqual(runtime.errors, []);
+    assert.equal(runtime.events.filter(event => event.type === 'agent_start').length, 1);
+    const users = runtime.session.sessionManager.getBranch().filter(entry => entry.type === 'message' && entry.message.role === 'user').map(entry => entry.message);
+    assert.deepEqual(users.slice(busy ? 1 : 0).map(message => message.content.filter(block => block.type === 'text').map(block => block.text).join('\n')),
+      ['Repeated input', 'Repeated input', '[via rpc]\nImage input']);
+    assert.deepEqual(users[busy ? 1 : 0].content.filter(block => block.type === 'image'), [image]);
+    assert.deepEqual(users[busy ? 2 : 1].content.filter(block => block.type === 'image'), []);
+    assert.deepEqual(users.at(-1).content.filter(block => block.type === 'image'), [image]);
+    const record = renderRarebitRecord(runtime.session.sessionManager.getBranch(), { budgetTokens: 12000 });
+    assert.match(record.text, /\[USER\]\nRepeated input/);
+    assert.match(record.text, /\[USER\]\n\[via rpc\]\nImage input/);
+    assert.doesNotMatch(record.text, /Auto Compact pickup:/);
+    assert.equal(harness.controller.snapshot().heldCount, 0);
+    assert.equal(harness.controller.snapshot().state, 'idle');
+    assert.equal(harness.holdSignals.at(-1).payload.active, false);
+    assert.ok(runtime.events.some(event => event.type === 'context' && event.held === 0));
+    assert.deepEqual(harness.recoveryEntries, []);
+  } finally { runtime.close(); }
+});
+
+for (const failure of ['handled', 'transformed', 'rejected', 'partial']) test(`real Pi ${failure} held delivery stays recoverable`, { timeout: 10000 }, async () => {
+  const timers = fakeTimers();
+  const harness = makeHarness({ autoAdmission: false, timers });
+  await triggerManual(harness);
+  capture(harness, 'First held');
+  capture(harness, 'Second held');
+  await ready(harness);
+  harness.handlers.get('agent_settled')({}, harness.ctx);
+  const runtime = await heldRuntime(harness, {
+    handle: failure === 'handled' ? 'First held' : failure === 'partial' ? 'Second held' : undefined,
+    transform: failure === 'transformed' ? 'First held' : undefined,
+    reject: failure === 'rejected',
+  });
+  try {
+    harness.compactCalls[0].onComplete();
+    await runtime.idle();
+    assert.equal(harness.controller.snapshot().heldCount, failure === 'partial' ? 1 : 2);
+    timers.fire(5000);
+    assert.equal(harness.controller.snapshot().state, 'idle');
+    assert.equal(harness.holdSignals.at(-1).payload.active, false);
+    assert.equal(harness.ctx.ui.getEditorText(), failure === 'partial' ? 'Second held' : 'First held\n\nSecond held');
+    assert.equal(harness.recoveryEntries.at(-1).customType, 'auto-compact.held-input');
+    if (failure === 'rejected') assert.ok(runtime.errors.some(error => error.event === 'send_user_message'));
+  } finally { runtime.close(); }
+});
+
+for (const boundary of ['session_start', 'session_tree']) test(`${boundary} fences unsent held tail and recovers the original target's text`, async () => {
+  const harness = makeHarness({ autoAdmission: false, timers: fakeTimers() });
+  await triggerManual(harness);
+  capture(harness, 'first'); capture(harness, 'second'); capture(harness, 'third');
+  await ready(harness);
+  harness.handlers.get('agent_settled')({}, harness.ctx);
+  harness.compactCalls[0].onComplete();
+  const custom = { ...harness.messages.at(-1).message, role: 'custom' };
+  harness.handlers.get('message_start')({ message: custom }, harness.ctx);
+  harness.handlers.get('context')({ messages: [custom, { role: 'user', content: 'first' }] }, harness.ctx);
+  const send = harness.pi.sendUserMessage;
+  let switching;
+  harness.pi.sendUserMessage = (content, options) => {
+    send(content, options);
+    switching = harness.handlers.get(boundary)({}, harness.ctx);
+  };
+  harness.handlers.get('message_start')({ message: { role: 'user', content: 'first' } }, harness.ctx);
+  await switching;
+  assert.deepEqual(harness.userMessages, ['first', 'second']);
+  assert.equal(harness.ctx.ui.getEditorText(), 'second\n\nthird');
+  assert.equal(harness.recoveryEntries.length, 0, 'the source Session is no longer current');
+  assert.equal(harness.controller.snapshot().heldCount, 0);
+  assert.equal(harness.holdSignals.at(-1).payload.active, false);
+});
+
+test('duplicate held text requires two distinct records across context events', async () => {
+  const harness = makeHarness({ autoAdmission: false, timers: fakeTimers() });
+  await triggerManual(harness);
+  capture(harness, 'same'); capture(harness, 'same');
+  await ready(harness);
+  harness.handlers.get('agent_settled')({}, harness.ctx);
+  harness.compactCalls[0].onComplete();
+  const custom = { ...harness.messages.at(-1).message, role: 'custom' };
+  const user = { role: 'user', content: 'same' };
+  for (let i = 0; i < 2; i++) {
+    harness.handlers.get('context')({ messages: [custom, user] }, harness.ctx);
+    assert.equal(harness.controller.snapshot().heldCount, 1);
+    assert.equal(harness.holdSignals.at(-1).payload.active, true);
+  }
+  harness.handlers.get('context')({ messages: [custom, user, { ...user }] }, harness.ctx);
+  assert.equal(harness.controller.snapshot().heldCount, 0);
+  assert.equal(harness.holdSignals.at(-1).payload.active, false);
 });
 
 test("background status reports no output cap for a Codex model", async () => {

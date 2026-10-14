@@ -24,7 +24,7 @@ export function writeStubFiles(dir, dropped) {
  * @param {{summary: string, keep: string[], handoff?: string}} plan
  * @param {object[]} rounds manifest rounds the plan's labels refer to
  * @param {object[]} branchEntries entries the conversation record covers
- * @param {object} options keepset options (mode, budgets, includeCustomMessages)
+ * @param {object} options keepset options (mode, budgets)
  * @param {string|undefined} stubDir where dropped outputs are saved; undefined saves nothing
  * @returns {{summary: string, details: object, view: object}} view is the human projection of the plan
  */
@@ -39,7 +39,6 @@ export function applyPlan({ plan, rounds, branchEntries, options, stubDir }) {
   const stubPaths = writeStubFiles(stubDir, dropped);
   const rarebit = renderRarebitRecord(branchEntries, {
     budgetTokens: options.rarebitBudgetTokens,
-    includeCustomMessages: options.includeCustomMessages,
   });
   const handoffRecord = renderHandoffRecord(plan.handoff, {
     budgetTokens: options.handoffBudgetTokens,

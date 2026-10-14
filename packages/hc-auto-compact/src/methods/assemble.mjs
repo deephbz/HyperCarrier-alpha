@@ -1,22 +1,8 @@
 // Assemble a compaction plan with budgeted conversation prose and selected output.
 // Callers supply Pi's active context projection; raw hidden history stays outside.
 
-// Compaction-local prose selection over Pi's active context projection.
-function selectRarebits(entries) {
-  const occurrences = [];
-  for (const entry of entries) {
-    const message = entry?.message;
-    if (!["user", "assistant"].includes(message?.role)) continue;
-    if (message.role === "assistant" && message.content?.some?.((b) => b.type === "toolCall")) continue;
-    const text = typeof message.content === "string" ? message.content :
-      (message.content ?? []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
-    if (text.trim()) occurrences.push({ role: message.role, text });
-  }
-  return { occurrences };
-}
+import { selectRarebits } from "@hypercarrier/rarebit/core";
 import { estimateTokens } from "./manifest.mjs";
-
-export const HANDOFF_CUSTOM_TYPE = "auto-compact.handoff";
 
 const clip = (text, maxTokens) => {
   const maxChars = maxTokens * 4;
@@ -24,36 +10,18 @@ const clip = (text, maxTokens) => {
   return `${text.slice(0, maxChars)}\n[… truncated, ${estimateTokens(text) - maxTokens} more tokens omitted]`;
 };
 
-/**
- * Compaction-local conversation record. Select newest prose within the budget
- * and render it oldest-first. This does not implement Rarebit's public ontology.
- */
-export function renderRarebitRecord(branch, { budgetTokens, includeCustomMessages = true }) {
-  const visible = (branch ?? [])
-    .filter((entry) => !(entry?.type === "custom_message" &&
-      [HANDOFF_CUSTOM_TYPE, "auto-compact.pickup", "keepset.handoff"].includes(entry?.customType)))
-    // Harness-delivered messages (e.g. PiTeams task and inbox deliveries) reach the model as user turns.
-    .map((entry) =>
-      includeCustomMessages && entry?.type === "custom_message"
-        ? {
-            type: "message",
-            id: entry.id,
-            timestamp: entry.timestamp,
-            message: {
-              role: "user",
-              content: typeof entry.content === "string" ? [{ type: "text", text: entry.content }] : entry.content,
-            },
-          }
-        : entry,
-    );
-  const { occurrences } = selectRarebits(visible);
+/** Select newest Rarebit prose within the budget and render it oldest-first. */
+export function renderRarebitRecord(branch, { budgetTokens }) {
+  const { occurrences } = selectRarebits(branch);
   const picked = [];
   let used = 0;
   let omitted = 0;
   for (let i = occurrences.length - 1; i >= 0; i -= 1) {
     const occ = occurrences[i];
+    const text = occ.text.trim();
+    if (!text) continue;
     const label = occ.role === "user" ? "USER" : "AGENT";
-    const block = `[${label}]\n${occ.text.trim()}`;
+    const block = `[${label}]\n${text}`;
     const cost = estimateTokens(block);
     if (used + cost > budgetTokens) {
       omitted += 1;
