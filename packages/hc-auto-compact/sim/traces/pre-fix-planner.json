@@ -1,0 +1,172 @@
+{
+  "version": 1,
+  "scenario": {
+    "seed": 37,
+    "profile": "magpie",
+    "writer": "planner"
+  },
+  "piVersion": "1.1.0",
+  "requests": [
+    {
+      "sequence": 0,
+      "at": 1800000000000,
+      "family": "openai-completions",
+      "gateway": "anthropic",
+      "url": "https://pi-sim.invalid/v1/chat/completions",
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": {
+        "model": "claude/sim-model",
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are a synthetic verification assistant. Follow the user instructions.\n\n<cwd>\n/sim/workspace\n</cwd>"
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "First request"
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "store": false,
+        "max_completion_tokens": 4096,
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "anchor",
+              "description": "Synthetic read-only anchor",
+              "parameters": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          }
+        ]
+      },
+      "outcome": "completed",
+      "status": 200,
+      "completedAt": 1800000000000,
+      "endedAt": 1800000000000
+    },
+    {
+      "sequence": 1,
+      "at": 1800000000000,
+      "family": "openai-completions",
+      "gateway": "anthropic",
+      "url": "https://pi-sim.invalid/v1/chat/completions",
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": {
+        "model": "claude/sim-model",
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are a synthetic verification assistant. Follow the user instructions.\n\n<cwd>\n/sim/workspace\n</cwd>"
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "First request"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": "First"
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Second request"
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "store": false,
+        "max_completion_tokens": 4096,
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "anchor",
+              "description": "Synthetic read-only anchor",
+              "parameters": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "compaction_plan",
+              "description": "Return the requested foreground compaction plan. Call it alone as your final action. Never call it outside a pending compaction step.",
+              "parameters": {
+                "type": "object",
+                "required": [
+                  "summary",
+                  "keep"
+                ],
+                "properties": {
+                  "summary": {
+                    "type": "string",
+                    "description": "Working state for yourself after compaction. Omit what compaction adds verbatim."
+                  },
+                  "keep": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Manifest labels of tool outputs to keep verbatim, most important first. Empty for the summary method."
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        ]
+      },
+      "outcome": "completed",
+      "status": 200,
+      "completedAt": 1800000000000,
+      "endedAt": 1800000000000
+    }
+  ],
+  "findings": [
+    {
+      "sequence": 1,
+      "family": "openai-completions",
+      "authority": "policy",
+      "evidence": "documented",
+      "source": "hc-pi-sim:stable-cache-prefix",
+      "basis": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
+      "property": "stable-cache-prefix",
+      "commonBlocks": 1,
+      "protectedBlocks": 3
+    }
+  ],
+  "metrics": {
+    "wallMs": 60,
+    "virtualMs": 0,
+    "speedRatio": 0
+  }
+}

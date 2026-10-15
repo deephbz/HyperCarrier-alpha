@@ -99,3 +99,30 @@ Actual contrast depends on the active theme and terminal; it is not guaranteed.
 Literal golden tests cover layout, content-fit boundaries, and degraded states. Cost spans all native Session entries. Cache hit uses the latest
 assistant prompt, as Pi's FooterComponent does. The display floors its percent.
 Existing extension statuses keep Pi's sorted third-line presentation.
+
+## Simulator scope
+
+No separate RPC simulator lane is added for HUD. HUD reads Session data and
+producer slots. It does not change provider requests, tools, prompts, or
+Session history. The shared `hc-pi-sim` harness defaults to RPC mode.
+`createComposer.start()` installs the footer only in TUI mode. An RPC campaign
+would skip the owned rendering and producer-handoff path.
+
+Existing tests provide the bounded checks:
+
+- `test/composer.test.mjs`: presence and fallback ordering, synchronous replay,
+  late producers, Session clearing, shutdown, idle staleness, slot ownership,
+  old timestamps, compaction/branch usage, and stats-cache invalidation.
+- `test/extension.test.mjs`: lifecycle registration, settings, and commands.
+- `test/visual-language.test.mjs`, `test/content-fit.test.mjs`,
+  `test/attention-colors.test.mjs`, and `test/degraded.test.mjs`: literal layout
+  expectations, terminal widths, colour intent, and degraded data.
+
+The [shared composition lane](../hc-pi-sim/composition/README.md) loads the
+real HUD extension in TUI mode and invokes its footer renderer at a headless
+UI boundary. The harness isolates the loader's transpiler cache under the
+world's temporary root. The composition test runs on Pi 1.1.0 and 1.2.0.
+
+A real TUI canary still must check terminal redraws and producer fallback
+handoff with the deployed extension set. The headless boundary does not prove
+terminal input, cursor/focus behavior, ANSI output, or visual quality.

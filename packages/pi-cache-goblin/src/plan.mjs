@@ -12,6 +12,10 @@ export const TTLS = Object.freeze(["5m", "1h"]);
 const TTL_RANK = { "5m": 1, "1h": 2 };
 // Block types pi itself marks (pi-ai anthropic-messages.js, last-user-message marker).
 const MARKABLE = new Set(["text", "image", "document", "tool_result", "tool_addition", "tool_removal"]);
+// Pi 1.1/1.2 Messages transcripts append prompt and tool transitions in system
+// messages. Keep their native text, tool_addition and tool_removal blocks cacheable.
+// Unknown system content stays outside the recognizable Messages contract.
+const SYSTEM_CONTENT_TYPES = new Set(["text", "tool_addition", "tool_removal"]);
 const CONTENT_TYPES = new Set([...MARKABLE, "tool_use", "thinking", "redacted_thinking", "server_tool_use",
   "web_search_tool_result", "web_fetch_tool_result", "code_execution_tool_result", "bash_code_execution_tool_result",
   "text_editor_code_execution_tool_result", "container_upload"]);
@@ -29,7 +33,8 @@ export function isAnthropicMessagesPayload(payload) {
     (!payload.tools || (Array.isArray(payload.tools) && payload.tools.every((tool) =>
       tool && typeof tool === "object" && tool.type !== "function" && (tool.input_schema || typeof tool.type === "string")))) &&
     payload.messages.every((message) => message && ["user", "assistant", "system"].includes(message.role) &&
-      (message.role !== "system" || (Array.isArray(message.content) && message.content.length === 0)) &&
+      (message.role !== "system" || (Array.isArray(message.content) &&
+        message.content.every((block) => SYSTEM_CONTENT_TYPES.has(block?.type)))) &&
       (typeof message.content === "string" || (Array.isArray(message.content) && message.content.every((block) =>
         block && typeof block === "object" && CONTENT_TYPES.has(block.type) &&
         (block.type !== "text" || typeof block.text === "string")))))

@@ -81,7 +81,11 @@ Pi 1.1 exposes only the payload at the request hook. `ctx.model` can name a
 virtual selection. Placement therefore recognizes the Messages payload shape
 without gating on `ctx.model`. OpenAI, Bedrock, Google, malformed payloads,
 unknown content types, and Messages requests without a recognizable system field
-pass through unchanged. They produce no `placed` event. A custom protocol with
+pass through unchanged. Native Messages system deltas with array content can
+contain text, `tool_addition`, and `tool_removal`. Pi 1.1.0 and 1.2.0 use these
+blocks for appended instructions and tool transitions. Goblin preserves their
+content and continues placement. Other system block types pass through
+unchanged and produce no `placed` event. A custom protocol with
 an identical Messages shape cannot be distinguished by this hook. Its provider
 must honor Messages cache controls. Provider headers and per-call retention
 options are unavailable here. Custom integrations that override retention must
@@ -117,7 +121,12 @@ npm test
 npm pack --dry-run --ignore-scripts
 ```
 
-Tests use synthetic payloads and a Pi event harness. The optional installed
+The [simulator lane](sim/README.md) runs real Pi sessions and provider request
+builders across supported families. It checks outgoing placement, live-prefix
+stability, background Auto Compact, branch changes and deliberate mutants.
+`npm run test:sim:campaign` runs the longer seeded campaign.
+
+Unit tests use synthetic payloads and a Pi event harness. The optional installed
 runtime proof uses the actual Pi 1.1 loader, prompt builder, and Messages converter
 with a local SDK client. Set `PI_CACHE_GOBLIN_PI_MODULES` to that installation's
 `node_modules` directory to include it in `npm test`. The test saves exact

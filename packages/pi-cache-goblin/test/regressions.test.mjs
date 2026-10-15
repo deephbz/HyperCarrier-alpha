@@ -53,7 +53,10 @@ test("unknown and OpenAI-shaped content fails open at payload recognition", () =
   for (const change of [{ response_format: {} }, { system: undefined },
     { messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: "synthetic" } }] }] },
     { tools: [{ type: "function", function: { name: "read" } }] },
-    { messages: [{ role: "system", content: "instructions" }] }]) {
+    { messages: [{ role: "system", content: "instructions" }] },
+    { messages: [{ role: "system", content: [{ type: "image", source: {} }] }] },
+    { messages: [{ role: "system", content: [{ type: "tool_use", id: "synthetic", name: "read", input: {} }] }] },
+    { messages: [{ role: "system", content: [{ type: "future_system_delta" }] }] }]) {
     assert.equal(isAnthropicMessagesPayload({ ...payload(), ...change }), false);
   }
 });

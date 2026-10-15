@@ -15,7 +15,9 @@
     "@earendil-works/pi-coding-agent": ">=1.1.0 <2"
   },
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs sim/*.test.mjs",
+    "test:sim": "node --test sim/*.test.mjs",
+    "test:sim:campaign": "HC_PI_SIM_RUNS=${HC_PI_SIM_RUNS:-100} node --test sim/*.test.mjs"
   },
   "pi": {
     "extensions": ["./src/extension.mjs"]

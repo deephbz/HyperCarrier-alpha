@@ -1,0 +1,156 @@
+{
+  "version": 1,
+  "scenario": {
+    "seed": 37,
+    "profile": "magpie",
+    "writer": "ready"
+  },
+  "piVersion": "1.1.0",
+  "requests": [
+    {
+      "sequence": 0,
+      "at": 1800000000000,
+      "family": "openai-completions",
+      "gateway": "anthropic",
+      "url": "https://pi-sim.invalid/v1/chat/completions",
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": {
+        "model": "claude/sim-model",
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are a synthetic verification assistant. Follow the user instructions.\n\n<cwd>\n/sim/workspace\n</cwd>"
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "First request"
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "store": false,
+        "max_completion_tokens": 4096,
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "anchor",
+              "description": "Synthetic read-only anchor",
+              "parameters": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          }
+        ]
+      },
+      "outcome": "completed",
+      "status": 200,
+      "completedAt": 1800000000000,
+      "endedAt": 1800000000000
+    },
+    {
+      "sequence": 1,
+      "at": 1800000000000,
+      "family": "openai-completions",
+      "gateway": "anthropic",
+      "url": "https://pi-sim.invalid/v1/chat/completions",
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": {
+        "model": "claude/sim-model",
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are a synthetic verification assistant. Follow the user instructions.\n\n<cwd>\n/sim/workspace\n</cwd>"
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "First request"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": "First"
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Auto Compact handoff: context is near the configured limit. Pi will run native compaction after you call auto_compact_ready.\n\nPreservation guidance:\nPreserve current progress, decisions, unresolved work, and the continuation context needed for the prior request.\n\nRules (the no-inspection rule overrides any guidance above):\n- Do not gather more context: do not read files, search, browse, inspect logs, or run verification.\n- Use only information already in this Session and paths you already know.\n- Use only safe write or edit operations.\n- Do not write a reply, summary, or status message to the human. Emit no assistant text; use only tool calls. The human reads your progress after pickup.\n\nSteps:\n1. Write or update the minimum durable Evergreen/work artifacts that preserve current progress, decisions, unresolved work, and next steps. If no safe write is possible without inspection, skip this step.\n2. Call auto_compact_ready with no arguments, alone, as your final action.\n\nThis notice applies only while auto_compact_ready is available. If that tool is unavailable, ignore this notice."
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "store": false,
+        "max_completion_tokens": 4096,
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "anchor",
+              "description": "Synthetic read-only anchor",
+              "parameters": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "auto_compact_ready",
+              "description": "Finish the pending Auto Compact handoff after you preserve work. Call it with no arguments, alone, as your final action. Valid only while a handoff is pending.",
+              "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        ]
+      },
+      "outcome": "completed",
+      "status": 200,
+      "completedAt": 1800000000000,
+      "endedAt": 1800000000000
+    }
+  ],
+  "findings": [
+    {
+      "sequence": 1,
+      "family": "openai-completions",
+      "authority": "policy",
+      "evidence": "documented",
+      "source": "hc-pi-sim:stable-cache-prefix",
+      "basis": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
+      "property": "stable-cache-prefix",
+      "commonBlocks": 1,
+      "protectedBlocks": 3
+    }
+  ],
+  "metrics": {
+    "wallMs": 57,
+    "virtualMs": 10,
+    "speedRatio": 0.17543859649122806
+  }
+}

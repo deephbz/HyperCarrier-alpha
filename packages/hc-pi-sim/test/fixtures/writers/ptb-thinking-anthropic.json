@@ -1,0 +1,388 @@
+{
+  "version": 1,
+  "source": "pi-team-bright@9c7dd67037b8b238e547309ac912784ee3aedf05",
+  "profile": "anthropic",
+  "piVersion": "1.1.0",
+  "seed": 43,
+  "scenario": [
+    "unbound Worker startup",
+    "prompt",
+    "thinking off -> low",
+    "prompt"
+  ],
+  "writers": [
+    {
+      "phase": "startup",
+      "writer": "registerTool",
+      "tools": [
+        "task_read"
+      ]
+    },
+    {
+      "phase": "startup",
+      "writer": "registerTool",
+      "tools": [
+        "task_update"
+      ]
+    },
+    {
+      "phase": "startup",
+      "writer": "registerTool",
+      "tools": [
+        "alert_send"
+      ]
+    },
+    {
+      "phase": "startup",
+      "writer": "setActiveTools",
+      "tools": [
+        "task_read",
+        "task_update",
+        "alert_send"
+      ]
+    }
+  ],
+  "requests": [
+    {
+      "sequence": 0,
+      "at": 1800000000000,
+      "family": "anthropic",
+      "url": "https://pi-sim.invalid/v1/messages?beta=true",
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": {
+        "model": "sim-model",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "First synthetic request.",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "max_tokens": 4096,
+        "stream": true,
+        "system": [
+          {
+            "type": "text",
+            "text": "You are a synthetic verification assistant. Follow the user instructions.\n\n<cwd>\n/sim/workspace\n</cwd>\n\nYou are Worker 'synthetic-worker' on Team 'null'.\nYour lead is 'team-lead'.\nYour current Pi model selection is sim-provider/sim-model with thinking level off. This is runtime Session evidence.\nAssigned Tasks are your work contracts. Canonical Task changes are delivered in context, but presentation never changes Task state. Waiting and ready are derived. Claim a ready Task before work. When the goal passes its external criteria, call task_update with goal_achieved and exact evidence. Use goal_failed when criteria fail; Task authority then applies any bounded failure edge. Use block only for an external blocker, and include blocker evidence. Use alert_send only for exceptional clarification or escalation; an alert never changes Task state. Re-read Task authority before a conflicting write.",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "tools": [
+          {
+            "name": "task_read",
+            "description": "Read current Task cards by ID from the active Team.",
+            "eager_input_streaming": true,
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "task_id": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "task_id"
+              ]
+            }
+          },
+          {
+            "name": "task_update",
+            "description": "Apply one explicit graph-native Task transition with an exact Task version. dependency_waiting and ready are derived.",
+            "eager_input_streaming": true,
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "task_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "operation_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "expected_version": {
+                  "type": "string",
+                  "pattern": "^v_[0-9a-f]{16}$",
+                  "minLength": 18,
+                  "maxLength": 18
+                },
+                "transition": {
+                  "enum": [
+                    "claim",
+                    "block",
+                    "resume",
+                    "goal_achieved",
+                    "goal_failed",
+                    "cancel"
+                  ]
+                },
+                "current_context": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                },
+                "evidence": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "task_id",
+                "operation_id",
+                "expected_version"
+              ]
+            }
+          },
+          {
+            "name": "alert_send",
+            "description": "Send exceptional clarification or attention to team-lead.",
+            "eager_input_streaming": true,
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "clarification",
+                    "attention"
+                  ]
+                },
+                "text": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "task_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "task_version": {
+                  "type": "string",
+                  "pattern": "^v_[0-9a-f]{16}$",
+                  "minLength": 18,
+                  "maxLength": 18
+                }
+              },
+              "required": [
+                "kind",
+                "text"
+              ]
+            },
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "thinking": {
+          "type": "disabled"
+        }
+      },
+      "outcome": "completed",
+      "status": 200,
+      "completedAt": 1800000000000,
+      "endedAt": 1800000000000
+    },
+    {
+      "sequence": 1,
+      "at": 1800000000000,
+      "family": "anthropic",
+      "url": "https://pi-sim.invalid/v1/messages?beta=true",
+      "headers": {
+        "anthropic-beta": "interleaved-thinking-2025-05-14",
+        "content-type": "application/json"
+      },
+      "body": {
+        "model": "sim-model",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "First synthetic request."
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "First synthetic answer."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Second synthetic request.",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ],
+        "max_tokens": 4096,
+        "stream": true,
+        "system": [
+          {
+            "type": "text",
+            "text": "You are a synthetic verification assistant. Follow the user instructions.\n\n<cwd>\n/sim/workspace\n</cwd>\n\nYou are Worker 'synthetic-worker' on Team 'null'.\nYour lead is 'team-lead'.\nYour current Pi model selection is sim-provider/sim-model with thinking level low. This is runtime Session evidence.\nAssigned Tasks are your work contracts. Canonical Task changes are delivered in context, but presentation never changes Task state. Waiting and ready are derived. Claim a ready Task before work. When the goal passes its external criteria, call task_update with goal_achieved and exact evidence. Use goal_failed when criteria fail; Task authority then applies any bounded failure edge. Use block only for an external blocker, and include blocker evidence. Use alert_send only for exceptional clarification or escalation; an alert never changes Task state. Re-read Task authority before a conflicting write.",
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "tools": [
+          {
+            "name": "task_read",
+            "description": "Read current Task cards by ID from the active Team.",
+            "eager_input_streaming": true,
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "task_id": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "task_id"
+              ]
+            }
+          },
+          {
+            "name": "task_update",
+            "description": "Apply one explicit graph-native Task transition with an exact Task version. dependency_waiting and ready are derived.",
+            "eager_input_streaming": true,
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "task_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "operation_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "expected_version": {
+                  "type": "string",
+                  "pattern": "^v_[0-9a-f]{16}$",
+                  "minLength": 18,
+                  "maxLength": 18
+                },
+                "transition": {
+                  "enum": [
+                    "claim",
+                    "block",
+                    "resume",
+                    "goal_achieved",
+                    "goal_failed",
+                    "cancel"
+                  ]
+                },
+                "current_context": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                },
+                "evidence": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "task_id",
+                "operation_id",
+                "expected_version"
+              ]
+            }
+          },
+          {
+            "name": "alert_send",
+            "description": "Send exceptional clarification or attention to team-lead.",
+            "eager_input_streaming": true,
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "clarification",
+                    "attention"
+                  ]
+                },
+                "text": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "task_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "task_version": {
+                  "type": "string",
+                  "pattern": "^v_[0-9a-f]{16}$",
+                  "minLength": 18,
+                  "maxLength": 18
+                }
+              },
+              "required": [
+                "kind",
+                "text"
+              ]
+            },
+            "cache_control": {
+              "type": "ephemeral"
+            }
+          }
+        ],
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 2048,
+          "display": "summarized"
+        }
+      },
+      "outcome": "completed",
+      "status": 200,
+      "completedAt": 1800000000000,
+      "endedAt": 1800000000000
+    }
+  ],
+  "findings": [
+    {
+      "sequence": 1,
+      "family": "anthropic",
+      "authority": "policy",
+      "evidence": "documented",
+      "source": "hc-pi-sim:stable-cache-prefix",
+      "basis": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
+      "property": "stable-cache-prefix",
+      "commonBlocks": 3,
+      "protectedBlocks": 5
+    }
+  ],
+  "hostViolations": [
+    "unmodeled host effect rejected: child_process.spawnSync",
+    "unmodeled host effect rejected: child_process.spawnSync"
+  ],
+  "qualification": "Request-level evidence only. PTB process probes are rejected by the host guard. No bound Team or process lifecycle is simulated."
+}

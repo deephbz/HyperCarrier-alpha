@@ -107,6 +107,7 @@ function makeHarness({
     },
     registerTool(tool) {
       tools.set(tool.name, tool);
+      currentActiveTools = [...currentActiveTools.filter(name => name !== tool.name), tool.name];
     },
     getActiveTools() {
       return [...currentActiveTools];
@@ -455,11 +456,11 @@ test("automatic crossing starts one visible handoff with fixed preservation sema
   assert.match(message.content, /auto_compact_ready with no arguments/i);
   assert.match(
     message.content,
-    /applies only while auto_compact_ready is available/i,
+    /applies only to this pending handoff/i,
   );
-  assert.match(message.content, /if that tool is unavailable, ignore/i);
+  assert.match(message.content, /after pickup or cancellation, ignore/i);
   assert.match(message.content, /active experiment receipt/);
-  assert.deepEqual(harness.activeTools(), ["read", AUTO_COMPACT_TOOL_NAME]);
+  assert.deepEqual(harness.activeTools(), ["read", PLAN_TOOL, AUTO_COMPACT_TOOL_NAME]);
   assert.match(harness.notices.at(-1).text, /AUTO COMPACT · AUTOMATIC/);
   assert.ok(
     harness.debug.some(
@@ -487,7 +488,7 @@ test("busy manual run queues its typed handoff until the native follow-up reache
   await triggerManual(harness, pickupPrompt);
 
   assert.equal(harness.controller.snapshot().state, "queued");
-  assert.deepEqual(harness.activeTools(), ["read", AUTO_COMPACT_TOOL_NAME]);
+  assert.deepEqual(harness.activeTools(), ["read", PLAN_TOOL, AUTO_COMPACT_TOOL_NAME]);
   assert.equal(harness.messages.length, 1);
   const queued = harness.messages[0];
   assert.equal(queued.message.customType, "auto-compact.handoff");
@@ -514,7 +515,7 @@ test("busy manual run queues its typed handoff until the native follow-up reache
     harness.ctx,
   );
   assert.equal(harness.controller.snapshot().state, "queued");
-  assert.deepEqual(harness.activeTools(), ["read", AUTO_COMPACT_TOOL_NAME]);
+  assert.deepEqual(harness.activeTools(), ["read", PLAN_TOOL, AUTO_COMPACT_TOOL_NAME]);
 
   const prematureReady = await ready(harness);
   assert.equal(prematureReady.details.status, "ignored");
@@ -526,7 +527,7 @@ test("busy manual run queues its typed handoff until the native follow-up reache
     harness.ctx,
   );
   assert.equal(harness.controller.snapshot().state, "handoff_pending");
-  assert.deepEqual(harness.activeTools(), ["read", AUTO_COMPACT_TOOL_NAME]);
+  assert.deepEqual(harness.activeTools(), ["read", PLAN_TOOL, AUTO_COMPACT_TOOL_NAME]);
   assertCompactHud(
     harness,
     "AUTO COMPACT · MANUAL · HANDOFF — awaiting readiness",
@@ -546,7 +547,7 @@ test("automatic handoffs remain steers even when the agent is busy", async () =>
     triggerTurn: true,
     deliverAs: "steer",
   });
-  assert.deepEqual(harness.activeTools(), ["read", AUTO_COMPACT_TOOL_NAME]);
+  assert.deepEqual(harness.activeTools(), ["read", PLAN_TOOL, AUTO_COMPACT_TOOL_NAME]);
 });
 
 test("a queued manual handoff removed before delivery terminates without compacting", async () => {
@@ -557,7 +558,7 @@ test("a queued manual handoff removed before delivery terminates without compact
   harness.handlers.get("agent_settled")({}, harness.ctx);
 
   assert.equal(harness.controller.snapshot().state, "idle");
-  assert.deepEqual(harness.activeTools(), ["read"]);
+  assert.deepEqual(harness.activeTools(), ["read", PLAN_TOOL, AUTO_COMPACT_TOOL_NAME]);
   assert.equal(harness.compactCalls.length, 0);
   assertLifecycleWidgetCleared(harness);
   assert.match(harness.notices.at(-1).text, /removed before delivery/i);
@@ -570,14 +571,14 @@ test("canceling a queued run fences its late typed handoff", async () => {
 
   await harness.commands.get("auto-compact").handler("off", harness.ctx);
   assert.equal(harness.controller.snapshot().state, "idle");
-  assert.deepEqual(harness.activeTools(), ["read"]);
+  assert.deepEqual(harness.activeTools(), ["read", PLAN_TOOL, AUTO_COMPACT_TOOL_NAME]);
 
   harness.handlers.get("context")(
     { messages: [{ role: "custom", ...queued }] },
     harness.ctx,
   );
   assert.equal(harness.controller.snapshot().state, "idle");
-  assert.deepEqual(harness.activeTools(), ["read"]);
+  assert.deepEqual(harness.activeTools(), ["read", PLAN_TOOL, AUTO_COMPACT_TOOL_NAME]);
   assert.equal(harness.compactCalls.length, 0);
 });
 
@@ -651,12 +652,12 @@ test("unresolved external compaction has a one-line current-owner HUD", async ()
   );
 });
 
-test("session start removes a ready tool that Pi activated during registration", () => {
+test("session start keeps both phase-gated tools that Pi activated during registration", () => {
   const harness = makeHarness({
     activeTools: ["read", AUTO_COMPACT_TOOL_NAME],
   });
   harness.handlers.get("session_start")({}, harness.ctx);
-  assert.deepEqual(harness.activeTools(), ["read"]);
+  assert.deepEqual(harness.activeTools(), ["read", PLAN_TOOL, AUTO_COMPACT_TOOL_NAME]);
   assert.equal(harness.controller.snapshot().state, "idle");
 });
 
@@ -710,7 +711,7 @@ test("ready is a temporary zero-parameter capability and defers native compact u
   const harness = makeHarness();
   const tool = harness.tools.get(AUTO_COMPACT_TOOL_NAME);
   assert.ok(tool);
-  assert.equal(harness.activeTools().includes(AUTO_COMPACT_TOOL_NAME), false);
+  assert.equal(harness.activeTools().includes(AUTO_COMPACT_TOOL_NAME), true);
   assert.deepEqual(tool.parameters.properties, {});
   assert.equal(tool.parameters.additionalProperties, false);
 
@@ -723,7 +724,7 @@ test("ready is a temporary zero-parameter capability and defers native compact u
   assert.equal(accepted.details.status, "accepted");
   assert.equal(accepted.terminate, true);
   assert.equal(harness.compactCalls.length, 0);
-  assert.deepEqual(harness.activeTools(), ["read"]);
+  assert.deepEqual(harness.activeTools(), ["read", PLAN_TOOL, AUTO_COMPACT_TOOL_NAME]);
 
   const duplicate = await ready(harness);
   assert.equal(duplicate.details.status, "ignored");
@@ -763,7 +764,7 @@ test("successful native compaction injects pickup exactly once and high usage st
   assert.match(harness.notices.at(-1).text, /pickup instruction requested/i);
   assert.doesNotMatch(harness.notices.at(-1).text, /pickup instruction sent/i);
   assert.equal(harness.controller.snapshot().state, "idle");
-  assert.deepEqual(harness.activeTools(), ["read"]);
+  assert.deepEqual(harness.activeTools(), ["read", PLAN_TOOL, AUTO_COMPACT_TOOL_NAME]);
   assert.deepEqual(harness.userMessages, []);
 
   harness.setUsage({
@@ -951,7 +952,7 @@ test("a settled handoff without readiness forces compaction once", async () => {
     harness.handlers.get("agent_settled")({ aborted: false }, harness.ctx);
   assert.equal(harness.controller.snapshot().state, "compacting");
   assert.equal(harness.compactCalls.length, 1);
-  assert.equal(harness.activeTools().includes(AUTO_COMPACT_TOOL_NAME), false);
+  assert.equal(harness.activeTools().includes(AUTO_COMPACT_TOOL_NAME), true);
   await harness.commands.get("auto-compact").handler("status", harness.ctx);
   assert.match(
     harness.notices.at(-1).text,
@@ -1554,7 +1555,7 @@ test("explicit budget drives threshold and forces at W in pending and ready", as
     });
     await harness.handlers.get("turn_end")({}, harness.ctx);
     assert.equal(harness.compactCalls.length, 1);
-    assert.equal(harness.activeTools().includes(AUTO_COMPACT_TOOL_NAME), false);
+    assert.equal(harness.activeTools().includes(AUTO_COMPACT_TOOL_NAME), true);
     await harness.commands.get("auto-compact").handler("status", harness.ctx);
     assert.match(
       harness.notices.at(-1).text,
@@ -1948,7 +1949,7 @@ test("only native threshold compaction is suppressed and external compaction int
     undefined,
   );
   assert.equal(harness.controller.snapshot().state, "idle");
-  assert.deepEqual(harness.activeTools(), ["read"]);
+  assert.deepEqual(harness.activeTools(), ["read", PLAN_TOOL, AUTO_COMPACT_TOOL_NAME]);
   assert.match(harness.notices.at(-1).text, /separate native Pi compaction/i);
   assert.equal((await ready(harness)).details.status, "ignored");
 });
@@ -2006,7 +2007,7 @@ test("external compaction completion supersedes an interrupted handoff exactly o
       undefined,
     );
     assert.equal(harness.controller.snapshot().state, "idle");
-    assert.deepEqual(harness.activeTools(), ["read"]);
+    assert.deepEqual(harness.activeTools(), ["read", PLAN_TOOL, AUTO_COMPACT_TOOL_NAME]);
     assert.equal(harness.notices.length, 2);
     const interruptedNotice = harness.notices.at(-1).text;
     const interruptedStages = lifecycleStages(interruptedNotice);
@@ -2071,7 +2072,7 @@ test("external compaction completion supersedes an interrupted handoff exactly o
       scenario.reason,
     );
     assert.equal(harness.controller.snapshot().state, "idle");
-    assert.deepEqual(harness.activeTools(), ["read"]);
+    assert.deepEqual(harness.activeTools(), ["read", PLAN_TOOL, AUTO_COMPACT_TOOL_NAME]);
     assert.deepEqual(harness.userMessages, []);
     assertLifecycleWidgetCleared(harness);
 
@@ -2105,7 +2106,7 @@ test("external compaction after readiness preserves completed HANDOFF truth", as
       undefined,
     );
     assert.equal(harness.controller.snapshot().state, "idle");
-    assert.deepEqual(harness.activeTools(), ["read"]);
+    assert.deepEqual(harness.activeTools(), ["read", PLAN_TOOL, AUTO_COMPACT_TOOL_NAME]);
     const interruptedStages = lifecycleStages(harness.notices.at(-1).text);
     assert.match(interruptedStages.handoff, /✓/);
     assert.doesNotMatch(interruptedStages.handoff, /↷|interrupted/i);
@@ -2192,7 +2193,7 @@ test("our own native compaction projects one pickup across Pi completion and cal
   );
   assert.deepEqual(pickups[0].options, { triggerTurn: true });
   assert.equal(harness.controller.snapshot().state, "idle");
-  assert.deepEqual(harness.activeTools(), ["read"]);
+  assert.deepEqual(harness.activeTools(), ["read", PLAN_TOOL, AUTO_COMPACT_TOOL_NAME]);
 });
 
 test("corrective external pickup failure clears the card but retains status", async () => {
@@ -2333,7 +2334,7 @@ test("session shutdown and tree changes invalidate pending or ready callbacks", 
     await triggerManual(pending);
     pending.handlers.get(event)({}, pending.ctx);
     assert.equal(pending.controller.snapshot().state, "idle", event);
-    assert.deepEqual(pending.activeTools(), ["read"], event);
+    assert.deepEqual(pending.activeTools(), ["read", PLAN_TOOL, AUTO_COMPACT_TOOL_NAME], event);
     assert.equal((await ready(pending)).details.status, "ignored", event);
 
     const acknowledged = makeHarness();
@@ -2396,7 +2397,7 @@ test("/off invalidates a pending or ready lifecycle before compaction", async ()
     assert.equal(harness.compactCalls.length, 0);
     assertLifecycleWidgetCleared(harness);
     assert.deepEqual(harness.writes, [{ enabled: false }]);
-    assert.deepEqual(harness.activeTools(), ["read"]);
+    assert.deepEqual(harness.activeTools(), ["read", PLAN_TOOL, AUTO_COMPACT_TOOL_NAME]);
     await harness.commands.get("auto-compact").handler("status", harness.ctx);
     const status = harness.notices.at(-1).text;
     assert.match(status, /last/i);
@@ -2564,7 +2565,7 @@ test("handoff injection failure emits a failed rail without a false instruction 
   await triggerManual(harness);
   assert.equal(harness.messages.length, 0);
   assert.equal(harness.controller.snapshot().state, "idle");
-  assert.deepEqual(harness.activeTools(), ["read"]);
+  assert.deepEqual(harness.activeTools(), ["read", PLAN_TOOL, AUTO_COMPACT_TOOL_NAME]);
   assert.equal(harness.notices.length, 1);
   assertLifecycleWidgetCleared(harness);
   assert.match(harness.notices[0].text, /could not be requested/i);
@@ -2595,7 +2596,7 @@ test("TUI notification failure never changes the control lifecycle", async () =>
   assert.equal(harness.controller.snapshot().state, "compacting");
   harness.compactCalls[0].onComplete();
   assert.equal(harness.controller.snapshot().state, "idle");
-  assert.deepEqual(harness.activeTools(), ["read"]);
+  assert.deepEqual(harness.activeTools(), ["read", PLAN_TOOL, AUTO_COMPACT_TOOL_NAME]);
   assert.equal(
     harness.messages.filter(
       ({ message }) => message.customType === "auto-compact.pickup",
@@ -2846,7 +2847,7 @@ test("TUI card failure falls back to an exact notice without changing the lifecy
     harness.notices.at(-1).text,
     harness.messages[0].message.content,
   );
-  assert.deepEqual(harness.activeTools(), ["read", AUTO_COMPACT_TOOL_NAME]);
+  assert.deepEqual(harness.activeTools(), ["read", PLAN_TOOL, AUTO_COMPACT_TOOL_NAME]);
 });
 
 test("Session switches reject unsafe order and default atomically without persistence", async () => {
@@ -2991,7 +2992,7 @@ test("agent start during a background run keeps the run's tools after selecting 
   await h.commands.get("auto-compact").handler("fg", h.ctx);
   await h.handlers.get("before_agent_start")({}, h.ctx);
   assert.deepEqual(h.activeTools(), tools);
-  assert.ok(!h.activeTools().includes(PLAN_TOOL));
+  assert.ok(h.activeTools().includes(PLAN_TOOL));
 });
 
 test("a settings load that a switch overtakes reloads the committed selection", async () => {
@@ -3004,13 +3005,13 @@ test("a settings load that a switch overtakes reloads the committed selection", 
   assert.equal(loads.length, 2);
   loads[1].resolve(saved());
   await switching;
-  assert.ok(!h.activeTools().includes(PLAN_TOOL));
+  assert.ok(h.activeTools().includes(PLAN_TOOL));
   loads[0].resolve(saved());
   await new Promise(setImmediate);
   assert.equal(loads.length, 3);
   loads[2].resolve(saved());
   await starting;
-  assert.ok(!h.activeTools().includes(PLAN_TOOL));
+  assert.ok(h.activeTools().includes(PLAN_TOOL));
   assert.equal(h.controller.snapshot().settings.execution, "background");
 });
 
@@ -3154,6 +3155,85 @@ test('duplicate held text requires two distinct records across context events', 
   harness.handlers.get('context')({ messages: [custom, user, { ...user }] }, harness.ctx);
   assert.equal(harness.controller.snapshot().heldCount, 0);
   assert.equal(harness.holdSignals.at(-1).payload.active, false);
+});
+
+for (const toolName of [PLAN_TOOL, AUTO_COMPACT_TOOL_NAME]) test(`${toolName} idle refusal tells the model to continue work`, async () => {
+  const h = makeHarness({ enabled: false });
+  const result = await h.tools.get(toolName).execute('idle', { summary: 'Unused', keep: [] }, undefined, undefined, h.ctx);
+  assert.equal(result.content[0].text, 'No Auto Compact compaction is pending. Continue your current work. Do not call this tool again until an Auto Compact notice asks for it.');
+  assert.equal(result.details.status, 'ignored');
+  assert.notEqual(result.terminate, true);
+  assert.equal(h.controller.snapshot().state, 'idle');
+  assert.equal(h.compactCalls.length, 0);
+});
+
+test('plan refusal during native handoff names the readiness tool and preserves pending state', async () => {
+  const h = makeHarness();
+  await triggerManual(h);
+  const result = await h.tools.get(PLAN_TOOL).execute('wrong-plan', { summary: 'Unused', keep: [] }, undefined, undefined, h.ctx);
+  assert.equal(result.content[0].text, 'This compaction uses auto_compact_ready. Follow the handoff notice and call auto_compact_ready.');
+  assert.equal(result.details.status, 'ignored');
+  assert.notEqual(result.terminate, true);
+  assert.equal(h.controller.snapshot().state, 'handoff_pending');
+  assert.equal(h.compactCalls.length, 0);
+  assert.equal((await ready(h)).details.status, 'accepted');
+  assert.equal(h.controller.snapshot().state, 'ready');
+});
+
+test('empty foreground summary refusal identifies the argument problem and permits correction', async () => {
+  const h = makeHarness({ strategy: { method: 'summary', execution: 'foreground', preservation: 'none' } });
+  h.ctx.sessionManager.getSessionId = () => 'session';
+  h.ctx.sessionManager.buildSessionProjection = () => ({ entries: [] });
+  h.ctx.modelRegistry = { streamSimple: () => { throw new Error('Foreground planning must not fork'); } };
+  await triggerManual(h);
+  const planTool = h.tools.get(PLAN_TOOL);
+  const result = await planTool.execute('empty-plan', { summary: ' \n\t', keep: [] }, undefined, undefined, h.ctx);
+  assert.equal(result.content[0].text, 'The summary was empty. Call compaction_plan again with a nonempty summary.');
+  assert.equal(result.details.status, 'ignored');
+  assert.notEqual(result.terminate, true);
+  assert.equal(h.controller.snapshot().state, 'handoff_pending');
+  assert.equal(h.compactCalls.length, 0);
+  const corrected = await planTool.execute('corrected-plan', { summary: 'State', keep: [] }, undefined, undefined, h.ctx);
+  assert.equal(corrected.details.status, 'accepted');
+  assert.equal(h.controller.snapshot().state, 'ready');
+});
+
+test('readiness refusal during foreground plan names the plan tool and preserves pending state', async () => {
+  const h = makeHarness({ strategy: { method: 'summary', execution: 'foreground', preservation: 'none' } });
+  h.ctx.sessionManager.getSessionId = () => 'session';
+  h.ctx.sessionManager.buildSessionProjection = () => ({ entries: [] });
+  h.ctx.modelRegistry = { streamSimple: () => { throw new Error('Foreground planning must not fork'); } };
+  await triggerManual(h);
+  const result = await ready(h);
+  assert.equal(result.content[0].text, 'This compaction needs a plan. Call compaction_plan with summary and keep.');
+  assert.equal(result.details.status, 'ignored');
+  assert.equal(result.terminate, false);
+  assert.equal(h.controller.snapshot().state, 'handoff_pending');
+  assert.equal(h.compactCalls.length, 0);
+  const plan = await h.tools.get(PLAN_TOOL).execute('right-plan', { summary: 'State', keep: [] }, undefined, undefined, h.ctx);
+  assert.equal(plan.details.status, 'accepted');
+  assert.equal(h.controller.snapshot().state, 'ready');
+});
+
+for (const [phase, text] of [
+  ['queued', 'Auto Compact is queued. Continue your current work until its handoff notice arrives.'],
+  ['ready', 'Auto Compact has received its final action. End your turn now without a reply. Do not call this tool again.'],
+  ['compacting', 'Auto Compact is installing the compaction. Wait for pickup. Do not call this tool again.'],
+  ['pickup', 'Auto Compact is resuming work. Follow the pickup message. Do not call this tool again.'],
+]) test(`${phase} refusal explains the current phase without repeating a final action`, async () => {
+  const h = makeHarness({ idle: phase !== 'queued', autoAdmission: false, timers: fakeTimers() });
+  await triggerManual(h);
+  if (phase !== 'queued') await ready(h);
+  if (['compacting', 'pickup'].includes(phase)) h.handlers.get('agent_settled')({}, h.ctx);
+  if (phase === 'pickup') h.compactCalls[0].onComplete();
+  assert.equal(h.controller.snapshot().state, phase);
+  for (const toolName of [PLAN_TOOL, AUTO_COMPACT_TOOL_NAME]) {
+    const result = await h.tools.get(toolName).execute('repeated', { summary: 'Unused', keep: [] }, undefined, undefined, h.ctx);
+    assert.equal(result.content[0].text, text);
+    assert.equal(result.details.status, 'ignored');
+    assert.notEqual(result.terminate, true);
+    assert.equal(h.controller.snapshot().state, phase);
+  }
 });
 
 test("background status reports no output cap for a Codex model", async () => {

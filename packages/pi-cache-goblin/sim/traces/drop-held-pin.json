@@ -1,0 +1,12 @@
+{
+  "seed": 37,
+  "family": "anthropic",
+  "mutant": "drop-held-pin",
+  "property": "G3-held-A",
+  "replies": [{ "text": "ok" }, { "text": "ok" }],
+  "actions": [
+    { "type": "prompt", "text": "/sim-pin" },
+    { "type": "prompt", "text": "A" },
+    { "type": "prompt", "text": "B" }
+  ]
+}

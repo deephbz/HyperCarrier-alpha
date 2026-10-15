@@ -1,0 +1,8 @@
+{
+  "seed": 37,
+  "family": "anthropic",
+  "mutant": "wrong-tail-ttl",
+  "property": "G2-runtime-ttl",
+  "replies": [{ "text": "ok" }],
+  "actions": [{ "type": "prompt", "text": "A" }]
+}

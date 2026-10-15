@@ -1,0 +1,40 @@
+{
+  "seed": 37,
+  "piVersions": ["1.1.0", "1.2.0"],
+  "family": "anthropic",
+  "compat": {
+    "supportsMidConvoSystemMessages": true,
+    "supportsMidConvoToolChanges": true
+  },
+  "actions": ["prompt A", "activate beta", "prompt B"],
+  "requests": [
+    {
+      "sequence": 0,
+      "tools": ["alpha", "deferred-placeholder"],
+      "system": ["<tools>\n\n<project_context>\nGLOBAL_SYNTHETIC", "PROJECT_a\n</project_context>\n<cwd>"],
+      "messages": [{"role":"user","text":"A","cache":"5m"}],
+      "markers": ["system[0]:1h","system[1]:1h","messages[0].content[0]:5m"]
+    },
+    {
+      "sequence": 1,
+      "tools": ["alpha", "deferred-placeholder"],
+      "system": ["<tools>\n\n<project_context>\nGLOBAL_SYNTHETIC\nPROJECT_a\n</project_context>\n<cwd>"],
+      "messages": [
+        {"role":"user","text":"A"},
+        {"role":"assistant","text":"ready"},
+        {"role":"user","text":"B"},
+        {"role":"system","type":"tool_addition","name":"beta","marker":"ephemeral"}
+      ],
+      "markers": ["tools[0]:5m","system[0]:5m","messages[3].content[0]:5m"]
+    }
+  ],
+  "checker": {
+    "authority": "policy",
+    "evidence": "documented",
+    "property": "stable-cache-prefix",
+    "commonBlocks": 1,
+    "protectedBlocks": 4,
+    "result": "fail"
+  },
+  "cause": "The payload recognizer rejected Pi's nonempty system tool_addition message. Goblin returned undefined, so Pi's unsplit top-level system and default cache marks passed through unchanged. The native tool_addition remained. The changed system split broke the stable prefix; Pi did not create a transcript checkpoint fallback."
+}

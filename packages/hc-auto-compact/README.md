@@ -38,8 +38,12 @@ native compaction, regardless of the selected method.
   The model calls `compaction_plan({summary, keep})` as its final action. The
   controller holds input and delivery during that turn, then installs the plan
   after settlement. The request keeps the live Session's provider, prefix, and
-  replayed reasoning. The plan tool stays active from Session start when this
-  method is configured. A missing plan uses the existing settled native fallback.
+  replayed reasoning. Both Auto Compact tools stay declared from Session start.
+  Tree navigation restores that inventory after Pi restores the selected
+  branch's historical tool loadout, including branches from older Sessions.
+  Their execution gates
+  accept calls only in the matching pending phase.
+  A missing plan uses the existing settled native fallback.
   `background` captures the next ordinary provider request at A,
   then starts its side request when A streams content. The conversation and
   human input remain live until installation. Pi retains every entry after A
@@ -164,8 +168,8 @@ Background execution always moves directly to `ready`. Foreground custom methods
 
 The runtime lifecycle is `idle → [queued →] handoff_pending → ready → compacting
 → pickup → idle`. At the configured context threshold, the extension requests a
-visible custom handoff Session event and temporarily enables the zero-argument
-`auto_compact_ready` tool. Its exact immutable instruction remains the
+visible custom handoff Session event. The zero-argument `auto_compact_ready`
+tool accepts readiness only while that handoff is pending. Its exact immutable instruction remains the
 agent-addressed historical record. Automatic and idle manual handoffs preserve
 `{ triggerTurn: true, deliverAs: "steer" }` delivery behavior; a busy manual run
 queues the same event with `deliverAs: "followUp"`. The agent preserves work in durable
@@ -360,7 +364,10 @@ gathering.
 Use `/auto-compact` or `/auto-compact status` to inspect effective
 configuration and runtime state. `/auto-compact on`, `/auto-compact off`, and
 `/auto-compact threshold <percent>` persist configuration. `off` disables
-cooperative handoff but still enforces W: a threshold crossing requests plain
+cooperative handoff but still enforces W. Both tools stay declared for the whole
+Session, including off mode and method native. Out-of-phase calls state the
+current phase and next action. Idle refusals direct the model to continue work
+until an Auto Compact notice asks for a tool. A threshold crossing requests plain
 native compaction after `agent_settled`, without a handoff, delivery hold, or
 input capture. Plain compaction uses the same failure record and disarm rules.
 
@@ -415,9 +422,11 @@ commands before exposing their submit behavior, so the extension cannot safely
 distinguish those keys; making every busy manual run a follow-up preserves the
 requested ordering. The queued HUD remains visible, but Pi's public pending-text
 and dequeue projections omit queued custom messages, so dequeue cannot restore
-the command text to the editor. Pi snapshots active tools for a low-level agent
-run, so the ready tool is schema-visible while the typed handoff waits in that
-run's queue; its state gate rejects premature calls without terminating work.
+the command text to the editor. Both Auto Compact tools remain schema-visible
+throughout the Session. Their state gates reject premature, stale, and idle calls
+without terminating work. This fixed inventory protects cache prefixes on direct
+Anthropic and magpie's OpenAI-compatible route. No tool-change compat flags are
+required. Reloading an older Session can change its inventory once.
 Only delivery of the exact run-token-bearing handoff makes readiness valid, and
 an undelivered queued run terminates without compaction when the agent settles.
 

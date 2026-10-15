@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "scenario": {
+    "name": "tree-navigation-restores-session-tools",
+    "seed": 37,
+    "profile": ["anthropic", "magpie"],
+    "legacyToolLoadouts": [[], ["compaction_plan"], ["compaction_plan", "auto_compact_ready"]],
+    "steps": [
+      "select legacy loadout with anchor",
+      "prompt and record legacy leaf",
+      "select full Auto Compact inventory and prompt on another leaf",
+      "navigate to legacy leaf without summary",
+      "verify full inventory restored once",
+      "send two prompts and verify inventory is unchanged"
+    ]
+  },
+  "expected": {
+    "toolsAfterNavigation": ["anchor", "compaction_plan", "auto_compact_ready"],
+    "oldEntriesUnchanged": true,
+    "postNavigationInventoryStable": true,
+    "magpiePrefixBreakAfterRepair": false,
+    "idleCallsAccepted": false
+  }
+}

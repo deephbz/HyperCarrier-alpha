@@ -1,0 +1,562 @@
+{
+  "version": 1,
+  "profile": "magpie",
+  "piVersion": "1.1.0",
+  "seed": 37,
+  "beforeSource": "d10442e",
+  "repair": "Phase-aware refusal guidance without a lifecycle change",
+  "cases": [
+    {
+      "method": "native",
+      "before": {
+        "request": {
+          "sequence": 3,
+          "at": 1800000000000,
+          "family": "openai-completions",
+          "gateway": "anthropic",
+          "url": "https://pi-sim.invalid/v1/chat/completions",
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": {
+            "model": "claude/sim-model",
+            "messages": [
+              {
+                "role": "system",
+                "content": "You are a synthetic verification assistant. Follow the user instructions.\n\n<cwd>\n/sim/workspace\n</cwd>"
+              },
+              {
+                "role": "user",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Original correction goal"
+                  }
+                ]
+              },
+              {
+                "role": "assistant",
+                "content": "Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. "
+              },
+              {
+                "role": "user",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Recent correction goal"
+                  }
+                ]
+              },
+              {
+                "role": "assistant",
+                "content": "Recent native context"
+              },
+              {
+                "role": "user",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Auto Compact handoff: context is near the configured limit. Pi will run native compaction after you call auto_compact_ready.\n\nPreservation guidance:\nPreserve current progress, decisions, unresolved work, and the continuation context needed for the prior request.\n\nRules (the no-inspection rule overrides any guidance above):\n- Do not gather more context: do not read files, search, browse, inspect logs, or run verification.\n- Use only information already in this Session and paths you already know.\n- Use only safe write or edit operations.\n- Do not write a reply, summary, or status message to the human. Emit no assistant text; use only tool calls. The human reads your progress after pickup.\n\nSteps:\n1. Write or update the minimum durable Evergreen/work artifacts that preserve current progress, decisions, unresolved work, and next steps. If no safe write is possible without inspection, skip this step.\n2. Call auto_compact_ready with no arguments, alone, as your final action.\n\nThis notice applies only to this pending handoff. After pickup or cancellation, ignore it. Calls outside a pending handoff do nothing."
+                  }
+                ]
+              },
+              {
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [
+                  {
+                    "id": "sim_2_tool_0",
+                    "type": "function",
+                    "function": {
+                      "name": "compaction_plan",
+                      "arguments": "{\"summary\":\"Synthetic working state\",\"keep\":[]}"
+                    }
+                  }
+                ]
+              },
+              {
+                "role": "tool",
+                "content": "No foreground compaction plan is pending.",
+                "tool_call_id": "sim_2_tool_0"
+              }
+            ],
+            "stream": true,
+            "stream_options": {
+              "include_usage": true
+            },
+            "store": false,
+            "max_completion_tokens": 4096,
+            "tools": [
+              {
+                "type": "function",
+                "function": {
+                  "name": "anchor",
+                  "description": "Synthetic read-only anchor",
+                  "parameters": {
+                    "type": "object",
+                    "properties": {}
+                  }
+                }
+              },
+              {
+                "type": "function",
+                "function": {
+                  "name": "compaction_plan",
+                  "description": "Return the requested foreground compaction plan. Call it alone as your final action. Never call it outside a pending compaction step.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "summary",
+                      "keep"
+                    ],
+                    "properties": {
+                      "summary": {
+                        "type": "string",
+                        "description": "Working state for yourself after compaction. Omit what compaction adds verbatim."
+                      },
+                      "keep": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "description": "Manifest labels of tool outputs to keep verbatim, most important first. Empty for the summary method."
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                }
+              },
+              {
+                "type": "function",
+                "function": {
+                  "name": "auto_compact_ready",
+                  "description": "Finish the pending Auto Compact handoff after you preserve work. Call it with no arguments, alone, as your final action. Valid only while a handoff is pending.",
+                  "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                  }
+                }
+              }
+            ]
+          },
+          "outcome": "completed",
+          "status": 200,
+          "completedAt": 1800000000100,
+          "endedAt": 1800000000100
+        },
+        "refusal": "No foreground compaction plan is pending.",
+        "pendingStatus": "Auto Compact · ON · handoff pending",
+        "compactionsAfterRefusal": 0,
+        "installedSummary": "Native state after corrected readiness\n\n---\n\n**Turn Context (split turn):**\n\nNative turn checkpoint",
+        "prefixFindings": []
+      },
+      "after": {
+        "request": {
+          "sequence": 3,
+          "at": 1800000000000,
+          "family": "openai-completions",
+          "gateway": "anthropic",
+          "url": "https://pi-sim.invalid/v1/chat/completions",
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": {
+            "model": "claude/sim-model",
+            "messages": [
+              {
+                "role": "system",
+                "content": "You are a synthetic verification assistant. Follow the user instructions.\n\n<cwd>\n/sim/workspace\n</cwd>"
+              },
+              {
+                "role": "user",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Original correction goal"
+                  }
+                ]
+              },
+              {
+                "role": "assistant",
+                "content": "Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. "
+              },
+              {
+                "role": "user",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Recent correction goal"
+                  }
+                ]
+              },
+              {
+                "role": "assistant",
+                "content": "Recent native context"
+              },
+              {
+                "role": "user",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Auto Compact handoff: context is near the configured limit. Pi will run native compaction after you call auto_compact_ready.\n\nPreservation guidance:\nPreserve current progress, decisions, unresolved work, and the continuation context needed for the prior request.\n\nRules (the no-inspection rule overrides any guidance above):\n- Do not gather more context: do not read files, search, browse, inspect logs, or run verification.\n- Use only information already in this Session and paths you already know.\n- Use only safe write or edit operations.\n- Do not write a reply, summary, or status message to the human. Emit no assistant text; use only tool calls. The human reads your progress after pickup.\n\nSteps:\n1. Write or update the minimum durable Evergreen/work artifacts that preserve current progress, decisions, unresolved work, and next steps. If no safe write is possible without inspection, skip this step.\n2. Call auto_compact_ready with no arguments, alone, as your final action.\n\nThis notice applies only to this pending handoff. After pickup or cancellation, ignore it. Calls outside a pending handoff do nothing."
+                  }
+                ]
+              },
+              {
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [
+                  {
+                    "id": "sim_2_tool_0",
+                    "type": "function",
+                    "function": {
+                      "name": "compaction_plan",
+                      "arguments": "{\"summary\":\"Synthetic working state\",\"keep\":[]}"
+                    }
+                  }
+                ]
+              },
+              {
+                "role": "tool",
+                "content": "This compaction uses auto_compact_ready. Follow the handoff notice and call auto_compact_ready.",
+                "tool_call_id": "sim_2_tool_0"
+              }
+            ],
+            "stream": true,
+            "stream_options": {
+              "include_usage": true
+            },
+            "store": false,
+            "max_completion_tokens": 4096,
+            "tools": [
+              {
+                "type": "function",
+                "function": {
+                  "name": "anchor",
+                  "description": "Synthetic read-only anchor",
+                  "parameters": {
+                    "type": "object",
+                    "properties": {}
+                  }
+                }
+              },
+              {
+                "type": "function",
+                "function": {
+                  "name": "compaction_plan",
+                  "description": "Return the requested foreground compaction plan. Call it alone as your final action. Never call it outside a pending compaction step.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "summary",
+                      "keep"
+                    ],
+                    "properties": {
+                      "summary": {
+                        "type": "string",
+                        "description": "Working state for yourself after compaction. Omit what compaction adds verbatim."
+                      },
+                      "keep": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "description": "Manifest labels of tool outputs to keep verbatim, most important first. Empty for the summary method."
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                }
+              },
+              {
+                "type": "function",
+                "function": {
+                  "name": "auto_compact_ready",
+                  "description": "Finish the pending Auto Compact handoff after you preserve work. Call it with no arguments, alone, as your final action. Valid only while a handoff is pending.",
+                  "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                  }
+                }
+              }
+            ]
+          },
+          "outcome": "completed",
+          "status": 200,
+          "completedAt": 1800000000100,
+          "endedAt": 1800000000100
+        },
+        "refusal": "This compaction uses auto_compact_ready. Follow the handoff notice and call auto_compact_ready.",
+        "pendingStatus": "Auto Compact · ON · handoff pending",
+        "compactionsAfterRefusal": 0,
+        "installedSummary": "Native state after corrected readiness\n\n---\n\n**Turn Context (split turn):**\n\nNative turn checkpoint",
+        "prefixFindings": []
+      }
+    },
+    {
+      "method": "summary",
+      "before": {
+        "request": {
+          "sequence": 2,
+          "at": 1800000000000,
+          "family": "openai-completions",
+          "gateway": "anthropic",
+          "url": "https://pi-sim.invalid/v1/chat/completions",
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": {
+            "model": "claude/sim-model",
+            "messages": [
+              {
+                "role": "system",
+                "content": "You are a synthetic verification assistant. Follow the user instructions.\n\n<cwd>\n/sim/workspace\n</cwd>"
+              },
+              {
+                "role": "user",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Original correction goal"
+                  }
+                ]
+              },
+              {
+                "role": "assistant",
+                "content": "Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. "
+              },
+              {
+                "role": "user",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Artifact preservation is skipped.\n\nThis is a compaction step. Do not continue the task.\nWrite the summary for yourself after compaction. Preserve the essential goals, constraints, decisions, verified results, open questions and next action. Compaction also keeps the user's recent messages and your recent prose within a budget, and the kept tool outputs; avoid long quotations of them. It does not keep messages that extensions delivered, such as task, team, or alert notices. Write what you still need from them into the summary. If a tool can read some content again, write only the tool and the ID that reads it. Dropped tool outputs leave the context; to see one again, repeat a read-only call. Never replay a mutating call to recover its output.\nCall compaction_plan alone as your final action with summary (string) and keep (array of labels). Keep must be empty.\nKeep budget: 24000 tokens in total.\nlabel | tool | arguments | size | flags"
+                  }
+                ]
+              },
+              {
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [
+                  {
+                    "id": "sim_1_tool_0",
+                    "type": "function",
+                    "function": {
+                      "name": "auto_compact_ready",
+                      "arguments": "{}"
+                    }
+                  }
+                ]
+              },
+              {
+                "role": "tool",
+                "content": "No current Auto Compact handoff is awaiting readiness.",
+                "tool_call_id": "sim_1_tool_0"
+              }
+            ],
+            "stream": true,
+            "stream_options": {
+              "include_usage": true
+            },
+            "store": false,
+            "max_completion_tokens": 4096,
+            "tools": [
+              {
+                "type": "function",
+                "function": {
+                  "name": "anchor",
+                  "description": "Synthetic read-only anchor",
+                  "parameters": {
+                    "type": "object",
+                    "properties": {}
+                  }
+                }
+              },
+              {
+                "type": "function",
+                "function": {
+                  "name": "compaction_plan",
+                  "description": "Return the requested foreground compaction plan. Call it alone as your final action. Never call it outside a pending compaction step.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "summary",
+                      "keep"
+                    ],
+                    "properties": {
+                      "summary": {
+                        "type": "string",
+                        "description": "Working state for yourself after compaction. Omit what compaction adds verbatim."
+                      },
+                      "keep": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "description": "Manifest labels of tool outputs to keep verbatim, most important first. Empty for the summary method."
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                }
+              },
+              {
+                "type": "function",
+                "function": {
+                  "name": "auto_compact_ready",
+                  "description": "Finish the pending Auto Compact handoff after you preserve work. Call it with no arguments, alone, as your final action. Valid only while a handoff is pending.",
+                  "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                  }
+                }
+              }
+            ]
+          },
+          "outcome": "completed",
+          "status": 200,
+          "completedAt": 1800000000100,
+          "endedAt": 1800000000100
+        },
+        "refusal": "No current Auto Compact handoff is awaiting readiness.",
+        "pendingStatus": "Auto Compact · ON · planning",
+        "compactionsAfterRefusal": 0,
+        "installedSummary": "## Working-state summary (written by you just before compaction)\n\nSynthetic working state\n\n## Conversation record (user messages and assistant prose)\n\n[USER]\nOriginal correction goal\n\n[AGENT]\nSynthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress.\n\n## Dropped tool results (output not in context; repeat a read-only call if needed, never a mutating one)\n\n(none)",
+        "prefixFindings": []
+      },
+      "after": {
+        "request": {
+          "sequence": 2,
+          "at": 1800000000000,
+          "family": "openai-completions",
+          "gateway": "anthropic",
+          "url": "https://pi-sim.invalid/v1/chat/completions",
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": {
+            "model": "claude/sim-model",
+            "messages": [
+              {
+                "role": "system",
+                "content": "You are a synthetic verification assistant. Follow the user instructions.\n\n<cwd>\n/sim/workspace\n</cwd>"
+              },
+              {
+                "role": "user",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Original correction goal"
+                  }
+                ]
+              },
+              {
+                "role": "assistant",
+                "content": "Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. "
+              },
+              {
+                "role": "user",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "Artifact preservation is skipped.\n\nThis is a compaction step. Do not continue the task.\nWrite the summary for yourself after compaction. Preserve the essential goals, constraints, decisions, verified results, open questions and next action. Compaction also keeps the user's recent messages and your recent prose within a budget, and the kept tool outputs; avoid long quotations of them. It does not keep messages that extensions delivered, such as task, team, or alert notices. Write what you still need from them into the summary. If a tool can read some content again, write only the tool and the ID that reads it. Dropped tool outputs leave the context; to see one again, repeat a read-only call. Never replay a mutating call to recover its output.\nCall compaction_plan alone as your final action with summary (string) and keep (array of labels). Keep must be empty.\nKeep budget: 24000 tokens in total.\nlabel | tool | arguments | size | flags"
+                  }
+                ]
+              },
+              {
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [
+                  {
+                    "id": "sim_1_tool_0",
+                    "type": "function",
+                    "function": {
+                      "name": "auto_compact_ready",
+                      "arguments": "{}"
+                    }
+                  }
+                ]
+              },
+              {
+                "role": "tool",
+                "content": "This compaction needs a plan. Call compaction_plan with summary and keep.",
+                "tool_call_id": "sim_1_tool_0"
+              }
+            ],
+            "stream": true,
+            "stream_options": {
+              "include_usage": true
+            },
+            "store": false,
+            "max_completion_tokens": 4096,
+            "tools": [
+              {
+                "type": "function",
+                "function": {
+                  "name": "anchor",
+                  "description": "Synthetic read-only anchor",
+                  "parameters": {
+                    "type": "object",
+                    "properties": {}
+                  }
+                }
+              },
+              {
+                "type": "function",
+                "function": {
+                  "name": "compaction_plan",
+                  "description": "Return the requested foreground compaction plan. Call it alone as your final action. Never call it outside a pending compaction step.",
+                  "parameters": {
+                    "type": "object",
+                    "required": [
+                      "summary",
+                      "keep"
+                    ],
+                    "properties": {
+                      "summary": {
+                        "type": "string",
+                        "description": "Working state for yourself after compaction. Omit what compaction adds verbatim."
+                      },
+                      "keep": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "description": "Manifest labels of tool outputs to keep verbatim, most important first. Empty for the summary method."
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                }
+              },
+              {
+                "type": "function",
+                "function": {
+                  "name": "auto_compact_ready",
+                  "description": "Finish the pending Auto Compact handoff after you preserve work. Call it with no arguments, alone, as your final action. Valid only while a handoff is pending.",
+                  "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                  }
+                }
+              }
+            ]
+          },
+          "outcome": "completed",
+          "status": 200,
+          "completedAt": 1800000000100,
+          "endedAt": 1800000000100
+        },
+        "refusal": "This compaction needs a plan. Call compaction_plan with summary and keep.",
+        "pendingStatus": "Auto Compact · ON · planning",
+        "compactionsAfterRefusal": 0,
+        "installedSummary": "## Working-state summary (written by you just before compaction)\n\nSynthetic working state\n\n## Conversation record (user messages and assistant prose)\n\n[USER]\nOriginal correction goal\n\n[AGENT]\nSynthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress. Synthetic durable progress.\n\n## Dropped tool results (output not in context; repeat a read-only call if needed, never a mutating one)\n\n(none)",
+        "prefixFindings": []
+      }
+    }
+  ]
+}

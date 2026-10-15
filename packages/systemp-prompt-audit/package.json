@@ -15,7 +15,9 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --test *.test.mjs",
+    "test": "node --test *.test.mjs && npm run test:sim",
+    "test:sim": "node --test --test-concurrency=1 sim/*.test.mjs",
+    "test:sim:campaign": "HC_PI_SIM_RUNS=100 npm run test:sim",
     "check": "npm test && node --check render-snapshot.mjs && node --check system-prompt-export.mjs && node --check system-prompt-review.mjs"
   },
   "bin": {
@@ -29,6 +31,9 @@
     "README.md",
     "LICENSE"
   ],
+  "devDependencies": {
+    "@hypercarrier/pi-sim": "*"
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
   },

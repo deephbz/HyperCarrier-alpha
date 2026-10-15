@@ -1,0 +1,25 @@
+{
+  "name": "@hypercarrier/pi-sim",
+  "version": "0.2.1",
+  "private": true,
+  "type": "module",
+  "description": "Deterministic HTTP-boundary verification for real Pi extensions",
+  "exports": "./src/index.mjs",
+  "license": "MIT",
+  "files": ["src", "README.md", "LICENSE"],
+  "engines": { "node": ">=22.19.0" },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 test/*.test.mjs",
+    "test:sim": "npm test && npm run test:integration",
+    "test:integration": "node --test --test-concurrency=1 integration/*.test.mjs",
+    "test:consumer": "node scripts/fresh-consumer.mjs",
+    "test:sim:composition": "node --test --test-concurrency=1 composition/*.test.mjs",
+    "test:sim:campaign": "HC_PI_SIM_RUNS=100 node --test --test-concurrency=1 test/world.test.mjs"
+  },
+  "dependencies": {
+    "fast-check": "^4.3.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=1.1.0 <2"
+  }
+}

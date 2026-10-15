@@ -53,7 +53,18 @@ Steps:
 1. Write or update the minimum durable Evergreen/work artifacts that preserve current progress, decisions, unresolved work, and next steps. If no safe write is possible without inspection, skip this step.
 2. Call auto_compact_ready with no arguments, alone, as your final action.
 
-This notice applies only while auto_compact_ready is available. If that tool is unavailable, ignore this notice.`;
+This notice applies only to this pending handoff. After pickup or cancellation, ignore it. Calls outside a pending handoff do nothing.`;
+}
+
+function compactionToolRefusal(state, method) {
+  if (state === "handoff_pending") return method === "native"
+    ? "This compaction uses auto_compact_ready. Follow the handoff notice and call auto_compact_ready."
+    : "This compaction needs a plan. Call compaction_plan with summary and keep.";
+  if (state === "queued") return "Auto Compact is queued. Continue your current work until its handoff notice arrives.";
+  if (state === "ready") return "Auto Compact has received its final action. End your turn now without a reply. Do not call this tool again.";
+  if (state === "compacting") return "Auto Compact is installing the compaction. Wait for pickup. Do not call this tool again.";
+  if (state === "pickup") return "Auto Compact is resuming work. Follow the pickup message. Do not call this tool again.";
+  return "No Auto Compact compaction is pending. Continue your current work. Do not call this tool again until an Auto Compact notice asks for it.";
 }
 
 function friendlyPercent(value) {
@@ -135,6 +146,7 @@ export function createAutoCompactController(pi, options = {}) {
   let lastCompaction;
   let heldBatch;
   let lastUtilization;
+  let repairToolsBeforeNextTurn = false;
   let settingsSnapshot = {
     settings: { ...DEFAULT_AUTO_COMPACT_SETTINGS },
     errors: [],
@@ -260,37 +272,13 @@ export function createAutoCompactController(pi, options = {}) {
     );
   };
 
-  const deactivateReadyTool = () => {
-    try {
-      const active = pi.getActiveTools();
-      if (!active.includes(AUTO_COMPACT_TOOL_NAME)) return;
-      pi.setActiveTools(
-        active.filter((toolName) => toolName !== AUTO_COMPACT_TOOL_NAME),
-      );
-      debug("tool_deactivated");
-    } catch (error) {
-      debug("tool_deactivation_failed", {
-        error: String(error?.message ?? error),
-      });
-    }
-  };
-
   const foregroundPlan = () => lifecycle?.settings.method !== "native" && lifecycle?.settings.execution === "foreground";
-  const activateReadyTool = () => {
-    const name = foregroundPlan() ? PLAN_TOOL : AUTO_COMPACT_TOOL_NAME;
+  const configureSessionTools = () => {
+    // Declare both tools before the first request. Phase checks in execute own
+    // permission; lifecycle and strategy changes must not rewrite the prefix.
     const active = pi.getActiveTools();
-    if (active.includes(name)) return;
-    pi.setActiveTools([...active, name]);
-    debug("tool_activated");
-  };
-  const configurePlannerTool = (effective) => {
-    const active = pi.getActiveTools();
-    // An active lifecycle owns the tool set; the next selection applies after it ends.
-    const wanted = lifecycle
-      ? foregroundPlan()
-      : effective.settings.enabled && effective.settings.method !== "native" && effective.settings.execution === "foreground";
-    if (wanted && !active.includes(PLAN_TOOL)) pi.setActiveTools([...active, PLAN_TOOL]);
-    if (!wanted && active.includes(PLAN_TOOL)) pi.setActiveTools(active.filter((name) => name !== PLAN_TOOL));
+    const missing = [PLAN_TOOL, AUTO_COMPACT_TOOL_NAME].filter(name => !active.includes(name));
+    if (missing.length) pi.setActiveTools([...active, ...missing]);
   };
 
   const failureNotice = () => {
@@ -585,7 +573,6 @@ export function createAutoCompactController(pi, options = {}) {
     methodEngine.cancel();
     pi.events?.emit("hc.compaction-method", { owner: "hc-auto-compact", active: false, token: lifecycle?.holdToken });
     signalHold(false);
-    deactivateReadyTool();
     const prior = lifecycle;
     lifecycle = undefined;
     if (state !== "idle") transition("idle", { reason, priorId: prior?.id });
@@ -729,7 +716,6 @@ export function createAutoCompactController(pi, options = {}) {
         if (effective.settings.execution === "foreground" && ctx.isIdle()) beginCompaction(ctx);
         return { started: true };
       }
-      activateReadyTool();
       if (!queueBehindCurrentWork) signalHold(true);
       pi.sendMessage(
         {
@@ -1017,8 +1003,12 @@ export function createAutoCompactController(pi, options = {}) {
     renderCall: renderPlanCall,
     renderResult: renderPlanResult,
     async execute(_id, params, _signal, _onUpdate, ctx) {
-      if (state !== "handoff_pending" || !foregroundPlan() || !methodEngine.acceptPlan(params, ctx))
-        return { content: [{ type: "text", text: "No foreground compaction plan is pending." }], details: { status: "ignored" } };
+      if (state !== "handoff_pending" || !foregroundPlan())
+        return { content: [{ type: "text", text: compactionToolRefusal(state, lifecycle?.settings.method) }], details: { status: "ignored" } };
+      if (!methodEngine.acceptPlan(params, ctx))
+        return { content: [{ type: "text", text: typeof params.summary === "string" && !params.summary.trim()
+          ? "The summary was empty. Call compaction_plan again with a nonempty summary."
+          : compactionToolRefusal(state, lifecycle?.settings.method) }], details: { status: "ignored" } };
       transition("ready");
       const receipt = receiptForRun(lifecycle.id);
       if (receipt) {
@@ -1036,7 +1026,7 @@ export function createAutoCompactController(pi, options = {}) {
     description:
       "Finish the pending Auto Compact handoff after you preserve work. Call it with no arguments, alone, as your final action. Valid only while a handoff is pending.",
     promptSnippet:
-      "auto_compact_ready: finish the current Auto Compact handoff after durable preservation",
+      "auto_compact_ready: call only when an Auto Compact handoff notice asks for it.",
     parameters: Type.Object({}, { additionalProperties: false }),
     executionMode: "sequential",
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
@@ -1046,7 +1036,7 @@ export function createAutoCompactController(pi, options = {}) {
           content: [
             {
               type: "text",
-              text: "No current Auto Compact handoff is awaiting readiness.",
+              text: compactionToolRefusal(state, lifecycle?.settings.method),
             },
           ],
           details: { status: "ignored" },
@@ -1060,7 +1050,6 @@ export function createAutoCompactController(pi, options = {}) {
           "Handoff reported ready; waiting for the agent run to settle.";
       }
       transition("ready");
-      deactivateReadyTool();
       setLifecycleWidget(ctx);
       debug("ready_accepted");
       return {
@@ -1081,6 +1070,7 @@ export function createAutoCompactController(pi, options = {}) {
     compactionFailed = false;
     lastCompaction = undefined;
     sessionGeneration += 1;
+    repairToolsBeforeNextTurn = false;
     automaticEnabledOverride = undefined;
     configurationWarning = undefined;
     pendingExternalResolution = undefined;
@@ -1096,14 +1086,16 @@ export function createAutoCompactController(pi, options = {}) {
     const generation = sessionGeneration;
     const effective = await loadEffective(ctx);
     if (generation === sessionGeneration) {
-      configurePlannerTool(effective);
+      configureSessionTools();
       setBudgetFooter(ctx, effective);
     }
   });
   pi.on("before_agent_start", async (_event, ctx) => {
-    const generation = sessionGeneration;
-    const effective = await loadEffective(ctx);
-    if (generation === sessionGeneration) configurePlannerTool(effective);
+    if (repairToolsBeforeNextTurn) {
+      repairToolsBeforeNextTurn = false;
+      configureSessionTools();
+    }
+    await loadEffective(ctx);
   });
 
   pi.on("model_select", async (_event, ctx) => {
@@ -1117,6 +1109,7 @@ export function createAutoCompactController(pi, options = {}) {
     compactionFailed = false;
     lastCompaction = undefined;
     sessionGeneration += 1;
+    repairToolsBeforeNextTurn = false;
     automaticEnabledOverride = undefined;
     configurationWarning = undefined;
     pendingExternalResolution = undefined;
@@ -1157,6 +1150,10 @@ export function createAutoCompactController(pi, options = {}) {
     clearHumanReceipts();
     setLifecycleWidget(ctx);
     resetLifecycle("session_tree");
+    // Pi restores the target branch's historical tool set before this event.
+    // Re-establish the Session contract once at that boundary, not per turn.
+    configureSessionTools();
+    repairToolsBeforeNextTurn = true;
     thresholdArmed = true;
     plainCompaction = undefined;
     restoreBudgetOverride(ctx);
@@ -1196,7 +1193,6 @@ export function createAutoCompactController(pi, options = {}) {
         receipt.forced = true;
         receipt.overshootTokens = utilization.tokens - window;
       }
-      deactivateReadyTool();
       if (foregroundPlan() && !methodEngine.ready()) {
         lifecycle.settings.method = "native";
         methodEngine.cancel();
@@ -1247,7 +1243,6 @@ export function createAutoCompactController(pi, options = {}) {
     delete lifecycle.queueToken;
     transition("handoff_pending", { trigger: lifecycle.trigger });
     signalHold(true);
-    activateReadyTool();
     setLifecycleWidget(ctx);
     debug("queued_handoff_delivered");
     return true;
@@ -1389,7 +1384,6 @@ export function createAutoCompactController(pi, options = {}) {
         receipt.outcome =
           "Handoff settled without readiness; forced compaction.";
       }
-      deactivateReadyTool();
       transition("ready", { forced: true });
     }
     if (state === "ready") {
@@ -1650,7 +1644,6 @@ export function createAutoCompactController(pi, options = {}) {
         settingsSnapshot = effective;
         compactionFailed = false;
         thresholdArmed = true;
-        if (!lifecycle) configurePlannerTool(effective);
         setLifecycleWidget(ctx);
         setBudgetFooter(ctx, effective);
         notify(ctx, `Next run: ${command.subcommand} ${effective.settings[command.subcommand]}; ${command.value === "default" ? "saved setting restored" : "temporary; not saved"}. Resets on /reload or Session switch${lifecycle ? "; active run unchanged" : ""}.`);

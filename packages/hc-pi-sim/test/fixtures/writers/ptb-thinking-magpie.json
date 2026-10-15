@@ -1,0 +1,383 @@
+{
+  "version": 1,
+  "source": "pi-team-bright@9c7dd67037b8b238e547309ac912784ee3aedf05",
+  "profile": "magpie",
+  "piVersion": "1.1.0",
+  "seed": 43,
+  "scenario": [
+    "unbound Worker startup",
+    "prompt",
+    "thinking off -> low",
+    "prompt"
+  ],
+  "writers": [
+    {
+      "phase": "startup",
+      "writer": "registerTool",
+      "tools": [
+        "task_read"
+      ]
+    },
+    {
+      "phase": "startup",
+      "writer": "registerTool",
+      "tools": [
+        "task_update"
+      ]
+    },
+    {
+      "phase": "startup",
+      "writer": "registerTool",
+      "tools": [
+        "alert_send"
+      ]
+    },
+    {
+      "phase": "startup",
+      "writer": "setActiveTools",
+      "tools": [
+        "task_read",
+        "task_update",
+        "alert_send"
+      ]
+    }
+  ],
+  "requests": [
+    {
+      "sequence": 0,
+      "at": 1800000000000,
+      "family": "openai-completions",
+      "gateway": "anthropic",
+      "url": "https://pi-sim.invalid/v1/chat/completions",
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": {
+        "model": "claude/sim-model",
+        "messages": [
+          {
+            "role": "developer",
+            "content": "You are a synthetic verification assistant. Follow the user instructions.\n\n<cwd>\n/sim/workspace\n</cwd>\n\nYou are Worker 'synthetic-worker' on Team 'null'.\nYour lead is 'team-lead'.\nYour current Pi model selection is magpie/claude/sim-model with thinking level off. This is runtime Session evidence.\nAssigned Tasks are your work contracts. Canonical Task changes are delivered in context, but presentation never changes Task state. Waiting and ready are derived. Claim a ready Task before work. When the goal passes its external criteria, call task_update with goal_achieved and exact evidence. Use goal_failed when criteria fail; Task authority then applies any bounded failure edge. Use block only for an external blocker, and include blocker evidence. Use alert_send only for exceptional clarification or escalation; an alert never changes Task state. Re-read Task authority before a conflicting write."
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "First synthetic request."
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "store": false,
+        "max_completion_tokens": 4096,
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "task_read",
+              "description": "Read current Task cards by ID from the active Team.",
+              "parameters": {
+                "type": "object",
+                "required": [
+                  "task_id"
+                ],
+                "properties": {
+                  "task_id": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "task_update",
+              "description": "Apply one explicit graph-native Task transition with an exact Task version. dependency_waiting and ready are derived.",
+              "parameters": {
+                "type": "object",
+                "required": [
+                  "task_id",
+                  "operation_id",
+                  "expected_version"
+                ],
+                "properties": {
+                  "task_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "operation_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "expected_version": {
+                    "type": "string",
+                    "pattern": "^v_[0-9a-f]{16}$",
+                    "minLength": 18,
+                    "maxLength": 18
+                  },
+                  "transition": {
+                    "enum": [
+                      "claim",
+                      "block",
+                      "resume",
+                      "goal_achieved",
+                      "goal_failed",
+                      "cancel"
+                    ]
+                  },
+                  "current_context": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2000
+                  },
+                  "evidence": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "additionalProperties": false,
+                "minProperties": 4,
+                "description": "Apply one explicit Task transition or record current context. dependency_waiting and ready cannot be authored."
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "alert_send",
+              "description": "Send exceptional clarification or attention to team-lead.",
+              "parameters": {
+                "type": "object",
+                "required": [
+                  "kind",
+                  "text"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "clarification",
+                      "attention"
+                    ]
+                  },
+                  "text": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "task_id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "task_version": {
+                    "type": "string",
+                    "pattern": "^v_[0-9a-f]{16}$",
+                    "minLength": 18,
+                    "maxLength": 18
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "outcome": "completed",
+      "status": 200,
+      "completedAt": 1800000000000,
+      "endedAt": 1800000000000
+    },
+    {
+      "sequence": 1,
+      "at": 1800000000000,
+      "family": "openai-completions",
+      "gateway": "anthropic",
+      "url": "https://pi-sim.invalid/v1/chat/completions",
+      "headers": {
+        "content-type": "application/json"
+      },
+      "body": {
+        "model": "claude/sim-model",
+        "messages": [
+          {
+            "role": "developer",
+            "content": "You are a synthetic verification assistant. Follow the user instructions.\n\n<cwd>\n/sim/workspace\n</cwd>\n\nYou are Worker 'synthetic-worker' on Team 'null'.\nYour lead is 'team-lead'.\nYour current Pi model selection is magpie/claude/sim-model with thinking level low. This is runtime Session evidence.\nAssigned Tasks are your work contracts. Canonical Task changes are delivered in context, but presentation never changes Task state. Waiting and ready are derived. Claim a ready Task before work. When the goal passes its external criteria, call task_update with goal_achieved and exact evidence. Use goal_failed when criteria fail; Task authority then applies any bounded failure edge. Use block only for an external blocker, and include blocker evidence. Use alert_send only for exceptional clarification or escalation; an alert never changes Task state. Re-read Task authority before a conflicting write."
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "First synthetic request."
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": "First synthetic answer."
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Second synthetic request."
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "store": false,
+        "max_completion_tokens": 4096,
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "task_read",
+              "description": "Read current Task cards by ID from the active Team.",
+              "parameters": {
+                "type": "object",
+                "required": [
+                  "task_id"
+                ],
+                "properties": {
+                  "task_id": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "task_update",
+              "description": "Apply one explicit graph-native Task transition with an exact Task version. dependency_waiting and ready are derived.",
+              "parameters": {
+                "type": "object",
+                "required": [
+                  "task_id",
+                  "operation_id",
+                  "expected_version"
+                ],
+                "properties": {
+                  "task_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "operation_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "expected_version": {
+                    "type": "string",
+                    "pattern": "^v_[0-9a-f]{16}$",
+                    "minLength": 18,
+                    "maxLength": 18
+                  },
+                  "transition": {
+                    "enum": [
+                      "claim",
+                      "block",
+                      "resume",
+                      "goal_achieved",
+                      "goal_failed",
+                      "cancel"
+                    ]
+                  },
+                  "current_context": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2000
+                  },
+                  "evidence": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "additionalProperties": false,
+                "minProperties": 4,
+                "description": "Apply one explicit Task transition or record current context. dependency_waiting and ready cannot be authored."
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "alert_send",
+              "description": "Send exceptional clarification or attention to team-lead.",
+              "parameters": {
+                "type": "object",
+                "required": [
+                  "kind",
+                  "text"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "clarification",
+                      "attention"
+                    ]
+                  },
+                  "text": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "task_id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "task_version": {
+                    "type": "string",
+                    "pattern": "^v_[0-9a-f]{16}$",
+                    "minLength": 18,
+                    "maxLength": 18
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "reasoning_effort": "low"
+      },
+      "outcome": "completed",
+      "status": 200,
+      "completedAt": 1800000000000,
+      "endedAt": 1800000000000
+    }
+  ],
+  "findings": [
+    {
+      "sequence": 1,
+      "family": "openai-completions",
+      "authority": "policy",
+      "evidence": "documented",
+      "source": "hc-pi-sim:stable-cache-prefix",
+      "basis": "https://platform.claude.com/docs/en/build-with-claude/prompt-caching",
+      "property": "stable-cache-prefix",
+      "commonBlocks": 3,
+      "protectedBlocks": 5
+    }
+  ],
+  "hostViolations": [
+    "unmodeled host effect rejected: child_process.spawnSync",
+    "unmodeled host effect rejected: child_process.spawnSync"
+  ],
+  "qualification": "Request-level evidence only. PTB process probes are rejected by the host guard. No bound Team or process lifecycle is simulated."
+}

@@ -134,4 +134,10 @@ Snapshots and reviews can contain sensitive instructions and local paths. Keep
 ```sh
 npm test
 npm run check
+npm run test:sim:campaign
 ```
+
+The [simulator lane](sim/README.md) checks real Pi capture after prompt/tool
+transitions, including an active-run override. It runs in the default test
+command. It uses the HC workspace harness and synthetic inputs. It does not
+measure the user's normal profile or actual provider token counts.
