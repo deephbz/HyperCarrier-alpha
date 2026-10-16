@@ -52,6 +52,16 @@ herdr config check
 herdr server reload-config
 ```
 
+## Node startup
+
+All manifest commands use `/bin/sh ../herdr-node/launch.sh`. Keep the shared
+[`herdr-node`](../herdr-node/README.md) sibling from the full HC or Alpha checkout.
+Herdr runs commands from the linked plugin root; the export manifest preserves
+this layout. The shared README records source evidence and resolution order.
+Use `$(herdr plugin config-dir pi-teams-hierarchy)/node-path` to select an
+absolute Node path without restarting the server. The launcher logs its chosen
+path/version and requires Node major 22. Use Node 22.19 or newer for dependencies.
+
 ## Link and verify
 
 The public Pi Team Bright observation build must be available from the same

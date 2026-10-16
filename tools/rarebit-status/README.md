@@ -8,6 +8,16 @@ gate or a Rarebit, Session, runtime, Task, or delivery authority.
 It requires Herdr 0.7.5 or newer, Node.js 22.19 or newer, and this checkout's
 verified `packages/hc-rarebit` submodule.
 
+## Node startup
+
+All manifest commands use `/bin/sh ../herdr-node/launch.sh`, including the popup.
+Keep the shared [`herdr-node`](../herdr-node/README.md) sibling from the full HC
+or Alpha checkout. Herdr runs commands from the linked plugin root; the export
+manifest preserves this layout. The shared README records source evidence and
+resolution order. Use `$(herdr plugin config-dir rarebit-status)/node-path` to
+select an absolute Node path without restarting the server. The launcher logs
+its chosen path/version and checks Node major 22 before running plugin code.
+
 ## Install and open
 
 Run these commands from the HyperCarrier checkout root:

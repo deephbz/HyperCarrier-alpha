@@ -1,0 +1,688 @@
+<!doctype html>
+<!-- Session mirror web IDE. Owns browser presentation and hub requests.
+     Rendering, paging, search and switching are local. Only the composer, Esc (interrupt) and
+     the remote screen cross the link. Large Sessions render as a window of entries:
+     older entries load on scroll-up, search jumps re-center the window. -->
+<meta charset="utf-8">
+<title>Pi Sessions</title>
+<script src="/vendor/marked.js"></script>
+<style>
+  :root { color-scheme: dark; --bg:#0d0f12; --side:#121418; --panel:#16191e; --line:#23272f; --fg:#e4e6eb; --dim:#8a919c; --faint:#5c636e;
+          --acc:#8ab4ff; --ok:#7ccf8a; --warn:#f0b35a; --err:#f2777a; --user:#1e2a3d; --code:#0a0c0f; }
+  * { box-sizing:border-box; }
+  body { margin:0; height:100vh; display:grid; grid-template-columns: 290px 1fr auto; background:var(--bg); color:var(--fg);
+         font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif; overflow:hidden; }
+  button { font:inherit; color:inherit; background:none; border:0; cursor:pointer; }
+  kbd { font: 11px ui-monospace, Menlo, monospace; border:1px solid var(--line); border-radius:4px; padding:0 4px; color:var(--dim); }
+  /* sidebar */
+  #side { background:var(--side); border-right:1px solid var(--line); display:flex; flex-direction:column; min-height:0; }
+  #brand { padding:14px 14px 8px; display:flex; align-items:center; gap:8px; }
+  #brand b { font-size:13px; letter-spacing:.02em; }
+  .chip { font-size:11px; padding:1px 7px; border-radius:9px; background:#1d2129; color:var(--dim); }
+  .chip.live { color:var(--ok); } .chip.down { color:var(--err); }
+  #filter { margin:4px 12px 8px; padding:7px 10px; border-radius:8px; border:1px solid var(--line); background:#0f1114; color:var(--fg); font:inherit; font-size:13px; outline:none; }
+  #filter:focus { border-color:#3a4252; }
+  #threads { overflow:auto; flex:1; padding-bottom:20px; }
+  .sec { padding:12px 14px 4px; font-size:11px; color:var(--faint); text-transform:uppercase; letter-spacing:.06em; display:flex; justify-content:space-between; }
+  .th { margin:1px 8px; padding:6px 8px; border-radius:7px; cursor:pointer; display:grid; grid-template-columns: 14px 1fr auto; gap:6px; align-items:center; }
+  .th:hover { background:#1a1d23; } .th.sel { background:#222733; }
+  .th .nm { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:13px; }
+  .th .ag { font-size:11px; color:var(--faint); }
+  .th .sub { grid-column:2 / 4; font-size:11px; color:var(--faint); margin-top:-3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .dot { width:8px; height:8px; border-radius:50%; background:#3a404a; }
+  .dot.working { background:var(--ok); box-shadow:0 0 0 3px #7ccf8a22; animation:pulse 1.4s infinite; }
+  .dot.blocked { background:var(--err); } .dot.attn { background:var(--warn); }
+  /* Pi Team Bright clusters: team header, lead row, indented worker rows. Absent without team data. */
+  #teamline { margin:-2px 14px 4px; font-size:11px; color:var(--faint); } #teamline:empty { display:none; }
+  #teamline .w { color:var(--warn); } #teamline .e { color:var(--err); }
+  .tm { margin:6px 8px 1px; padding:4px 8px; border-radius:7px; cursor:pointer; display:flex; gap:7px; align-items:center; font-size:12px; color:var(--faint); }
+  .tm:hover { background:#1a1d23; } .tm .tw { width:10px; color:var(--dim); }
+  .tm .tn { color:var(--dim); font-weight:600; flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .tm .ok { color:var(--ok); } .tm .w { color:var(--warn); } .tm .e { color:var(--err); }
+  .th.ld { margin-left:16px; } .th.wk { margin-left:28px; }
+  .th .role { font-size:10px; padding:0 5px; margin-left:6px; border:1px solid #2f3b52; border-radius:6px; color:var(--acc); vertical-align:1px; }
+  @keyframes pulse { 50% { opacity:.4 } }
+  /* main */
+  #main { display:flex; flex-direction:column; min-width:0; min-height:0; position:relative; }
+  #head { height:52px; flex:none; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:10px; padding:0 20px; }
+  #head .t { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #head .m { color:var(--dim); font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #head .sp { flex:1; }
+  .pill { font-size:11px; padding:2px 9px; border-radius:10px; border:1px solid var(--line); color:var(--dim); white-space:nowrap; }
+  .pill.working { color:var(--ok); border-color:#2f4d36; } .pill.blocked { color:var(--err); border-color:#5a2c2e; }
+  .iconbtn { padding:4px 8px; border-radius:6px; color:var(--dim); font-size:12px; border:1px solid var(--line); white-space:nowrap; }
+  .iconbtn:hover { color:var(--fg); background:#1a1d23; }
+  #pane { flex:1; min-height:0; position:relative; display:flex; flex-direction:column; }
+  #scroll { flex:1; overflow:auto; min-height:0; overflow-anchor:none; }
+  #pin { position:absolute; top:0; left:0; right:12px; z-index:2; display:none; pointer-events:none; }
+  #pin > div { pointer-events:auto; max-width:764px; margin:0 auto; padding:6px 14px; background:var(--user);
+    border:1px solid var(--line); border-top:none; border-radius:0 0 10px 10px; cursor:pointer; font-size:12.5px;
+    display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; white-space:pre-wrap; word-break:break-word; }
+  #pin > div:hover { border-color:var(--acc); } #pin b { color:var(--dim); font-weight:500; margin-right:6px; }
+  #thread { max-width:820px; margin:0 auto; padding:24px 28px 40px; }
+  .empty { color:var(--faint); text-align:center; margin-top:30vh; }
+  .edge { color:var(--faint); font-size:12px; text-align:center; padding:8px; }
+  .u { display:flex; justify-content:flex-end; margin:22px 0 10px; }
+  .u > div { background:var(--user); border-radius:16px 16px 4px 16px; padding:9px 14px; max-width:78%; white-space:pre-wrap; word-break:break-word; }
+  .u.pending > div { opacity:.6; } .u .st { display:block; font-size:11px; color:var(--dim); margin-top:3px; text-align:right; }
+  .a { margin:6px 0; word-break:break-word; }
+  .a p { margin:.5em 0; } .a pre { background:var(--code); border:1px solid var(--line); border-radius:8px; padding:10px 12px; overflow:auto; font-size:12.5px; }
+  .a code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12.5px; background:#1a1e25; padding:1px 4px; border-radius:4px; }
+  .a pre code { background:none; padding:0; } .a table { border-collapse:collapse; } .a td, .a th { border:1px solid var(--line); padding:3px 8px; }
+  .a a { color:var(--acc); }
+  .meta { color:var(--faint); font-size:12px; margin:10px 0; text-align:center; }
+  .meta.compact { color:var(--warn); border-top:1px dashed #5a4a2a; padding-top:6px; }
+  .meta.cmd { color:var(--acc); }
+  /* work log */
+  details.work { margin:8px 0; border:1px solid var(--line); border-radius:10px; background:var(--panel); }
+  details.work > summary { list-style:none; padding:7px 12px; color:var(--dim); font-size:12.5px; cursor:pointer; display:flex; gap:8px; align-items:center; }
+  details.work > summary::-webkit-details-marker { display:none; }
+  details.work > summary::before { content:'›'; display:inline-block; transition:transform .12s; }
+  details.work[open] > summary::before { transform:rotate(90deg); }
+  .work .spin { width:10px; height:10px; border:2px solid #3a4252; border-top-color:var(--ok); border-radius:50%; animation:spin .8s linear infinite; display:none; }
+  .work.active .spin { display:inline-block; }
+  @keyframes spin { to { transform:rotate(360deg) } }
+  .work .items { padding:2px 8px 8px; }
+  .tool { margin:2px 0; border-radius:6px; }
+  .tool > summary { list-style:none; cursor:pointer; padding:3px 6px; border-radius:6px; font-family:ui-monospace, Menlo, monospace; font-size:12px; color:#c6b4ff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .tool > summary::-webkit-details-marker { display:none; }
+  .tool > summary:hover { background:#1d2129; }
+  .tool > summary .r { color:var(--faint); } .tool.err > summary .r { color:var(--err); } .tool.wait > summary .r::after { content:' running…'; color:var(--ok); }
+  .tool pre, .think pre { margin:4px 0 6px 6px; background:var(--code); border:1px solid var(--line); border-radius:6px; padding:8px 10px; max-height:380px; overflow:auto;
+               font: 12px/1.45 ui-monospace, Menlo, monospace; white-space:pre-wrap; word-break:break-word; color:#c9cdd4; }
+  .think > summary { list-style:none; cursor:pointer; padding:3px 6px; font-size:12px; color:var(--faint); font-style:italic; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .think > summary::-webkit-details-marker { display:none; }
+  .diff .del { color:#f2a0a2; background:#3a1d20; display:block; } .diff .add { color:#a6e3b0; background:#1b3322; display:block; }
+  ::highlight(hit) { background:#6b5a1e; color:#fff; }
+  ::highlight(hitcur) { background:#f0b35a; color:#111; }
+  .flash { animation:flash 1.2s ease-out; border-radius:8px; }
+  @keyframes flash { from { box-shadow:0 0 0 2px var(--warn); } to { box-shadow:0 0 0 2px transparent; } }
+  /* in-Session search */
+  #find { display:none; position:absolute; top:60px; right:24px; width:440px; z-index:5; background:#171a20; border:1px solid #2b313b; border-radius:10px; box-shadow:0 12px 40px #0009; }
+  #find.on { display:block; }
+  #find .bar { display:flex; align-items:center; gap:8px; padding:6px 8px 6px 12px; }
+  #find input { flex:1; border:0; outline:none; background:none; color:var(--fg); font:inherit; font-size:14px; }
+  #find .cnt { font-size:12px; color:var(--dim); white-space:nowrap; }
+  #find .hits { max-height:46vh; overflow:auto; border-top:1px solid var(--line); padding:4px; }
+  #find .hits:empty { display:none; }
+  #find .hit { padding:5px 8px; border-radius:6px; cursor:pointer; font-size:12px; color:var(--dim); display:grid; grid-template-columns:52px 1fr; gap:6px; }
+  #find .hit b { color:var(--faint); font-weight:normal; font-variant-numeric:tabular-nums; }
+  #find .hit mark { background:#6b5a1e; color:#fff; border-radius:2px; }
+  #find .hit.on, #find .hit:hover { background:#232835; color:var(--fg); }
+  /* composer */
+  #composer { flex:none; padding:10px 28px 18px; }
+  #composer .box { max-width:820px; margin:0 auto; border:1px solid #2b313b; background:var(--panel); border-radius:14px; padding:10px 12px 8px; }
+  #composer .box:focus-within { border-color:#3e4859; }
+  #input { width:100%; resize:none; border:0; outline:none; background:none; color:var(--fg); font:inherit; max-height:220px; min-height:24px; }
+  #input.cmd { color:var(--acc); font-family:ui-monospace, Menlo, monospace; }
+  #composer .row { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--faint); }
+  #composer .row .sp { flex:1; }
+  #send { background:var(--fg); color:#111; border-radius:8px; padding:4px 12px; font-size:12.5px; font-weight:600; }
+  #send.stop { background:var(--err); }
+  #send:disabled { opacity:.35; cursor:default; }
+  .float { position:absolute; left:50%; transform:translateX(-50%); bottom:120px; display:none; background:#262b35; border:1px solid #333a46; color:var(--fg); padding:5px 12px; border-radius:14px; font-size:12px; }
+  #toast { bottom:170px; background:#2a2330; }
+  /* right panel */
+  #right { width:0; overflow:hidden; border-left:1px solid var(--line); background:var(--side); display:flex; flex-direction:column; transition:width .15s; }
+  body.panel #right { width:420px; }
+  #right h4 { margin:14px 14px 6px; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--faint); font-weight:600; display:flex; justify-content:space-between; align-items:center; }
+  #screen { margin:0 12px; background:var(--code); border:1px solid var(--line); border-radius:8px; padding:8px 10px; font:11.5px/1.4 ui-monospace, Menlo, monospace;
+            white-space:pre; color:#b9bec6; min-height:120px; max-height:56vh; overflow:auto; }
+  #facts { margin:0 14px; font-size:12px; color:var(--dim); display:grid; grid-template-columns: 90px 1fr; gap:3px 8px; word-break:break-all; }
+  #facts b { color:var(--faint); font-weight:normal; }
+  /* switcher */
+  #switcher { position:fixed; inset:0; background:#0008; display:none; align-items:flex-start; justify-content:center; padding-top:14vh; z-index:9; }
+  #switcher.on { display:flex; }
+  #switcher .card { width:560px; background:#171a20; border:1px solid #2b313b; border-radius:12px; overflow:hidden; box-shadow:0 20px 60px #000a; }
+  #switcher input { width:100%; padding:13px 16px; border:0; border-bottom:1px solid var(--line); background:none; color:var(--fg); font:inherit; font-size:15px; outline:none; }
+  #switcher .list { max-height:50vh; overflow:auto; padding:6px; }
+  #switcher .it { padding:7px 10px; border-radius:7px; display:flex; gap:10px; align-items:center; cursor:pointer; font-size:13px; }
+  #switcher .it.on, #switcher .it:hover { background:#232835; }
+  #switcher .it span:last-child { margin-left:auto; color:var(--faint); font-size:11px; }
+</style>
+<aside id="side">
+  <div id="brand"><b>Pi Sessions</b><span id="link" class="chip">connecting</span></div>
+  <input id="filter" placeholder="Filter Sessions   ⌘K jump"><div id="teamline"></div>
+  <div id="threads"></div>
+</aside>
+<main id="main">
+  <header id="head"><div class="empty" style="margin:0">Select a Session</div></header>
+  <div id="find"><div class="bar"><input id="fq" placeholder="Search this Session" spellcheck="false"><span class="cnt" id="fcnt"></span>
+    <button class="iconbtn" id="fclose" title="Close (Esc)">✕</button></div><div class="hits" id="fhits"></div></div>
+  <div id="pane"><div id="pin"><div></div></div>
+  <div id="scroll"><div id="thread"><div class="empty">Remote Pi Sessions, rendered locally.<br>Pick one on the left, or press ⌘K.</div></div></div></div>
+  <button id="jump" class="float">↓ Latest</button>
+  <div id="toast" class="float"></div>
+  <div id="composer"><div class="box">
+    <textarea id="input" rows="1" placeholder="Select a Session to send a message" disabled></textarea>
+    <div class="row"><span id="hint"><kbd>⏎</kbd> send · <kbd>/</kbd> command · <kbd>esc</kbd> interrupt · <kbd>⌘F</kbd> search</span><span class="sp"></span><span id="sendState"></span><button id="send" disabled>Send</button></div>
+  </div></div>
+</main>
+<aside id="right">
+  <h4><span>Remote screen</span><button class="iconbtn" id="peek" title="Stream the remote screen for 30 s">Show 30s</button></h4><div id="screen">Shown while the agent works.</div>
+  <h4>Session</h4><div id="facts"></div>
+</aside>
+<div id="switcher"><div class="card"><input id="swq" placeholder="Jump to Session…"><div class="list" id="swl"></div></div></div>
+<script>
+const $ = (s) => document.querySelector(s);
+const token = Math.random().toString(36).slice(2);
+const PAGE = 300;
+let agents = [], link = null, sel = localStorage.ideSel || null;
+let win = { from: 0, to: 0, total: 0 }; // loaded entry range of the open Session; to === total means following live
+let opening = false, follow = true, live = new Map(), allOpen = false, loading = false, model = '';
+const pendingSends = []; // optimistic user bubbles awaiting their persisted entry
+
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+const ago = (t) => { if (!t) return ''; const s = (Date.now() - t) / 1000; return s < 60 ? 'now' : s < 3600 ? `${s/60|0}m` : s < 86400 ? `${s/3600|0}h` : `${s/86400|0}d`; };
+const textOf = (c) => typeof c === 'string' ? c : (c || []).map((p) => p.type === 'text' ? p.text : p.type === 'image' ? '[image]' : '').join('');
+const short = (s, n = 110) => { s = String(s ?? '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n) + '…' : s; };
+const niceTitle = (a) => (a.title || a.name || a.session.split('/').pop()).replace(/^π - /, '').replace(/^\d{8}-/, '').replace(/ - [^-]+$/, '');
+// The hub flags a copy that stays behind the remote file; never let a stale view look current.
+const stale = (a) => a?.behindBytes ? ` · <b style="color:#f85149">copy stalled, ${(a.behindBytes / 1e6).toFixed(1)} MB behind</b>` : '';
+const attn = (a) => a.status === 'blocked' || !!a.tokens?.rarebit_state_attention;
+const agentOf = (p) => agents.find((a) => a.session === p);
+const api = (u, body) => fetch(u, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : undefined).then((r) => r.json()).catch((e) => ({ ok: false, error: e.message }));
+marked.use({ gfm: true, breaks: false, renderer: { html: (t) => esc(typeof t === 'string' ? t : t.text) } });
+const md = (s) => { try { return marked.parse(s || ''); } catch { return `<pre>${esc(s)}</pre>`; } };
+function toast(msg, ms = 2500) { const t = $('#toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toast.h); toast.h = setTimeout(() => (t.style.display = 'none'), ms); }
+
+// ---------- sidebar ----------
+// Agents group by project (cwd basename). With Pi Team Bright, a team's members form one cluster
+// under its lead's project: header, lead row, then workers by member name. Agents without a team
+// render as before. The hub sends `team` only for an exact pane + Session Membership join.
+let closedTeams = new Set(JSON.parse(localStorage.ideClosedTeams || '[]'));
+const project = (a) => a.cwd?.split('/').pop() || '?';
+const teamOfA = (a) => a.team ? `${a.team.name} › ${a.team.member}` : '';
+function renderSide() {
+  const q = $('#filter').value.toLowerCase();
+  const list = agents.filter((a) => !q || `${niceTitle(a)} ${a.cwd} ${a.name} ${a.team?.name ?? ''} ${a.team?.member ?? ''}`.toLowerCase().includes(q));
+  const dot = (a) => `<span class="dot ${a.status === 'working' ? 'working' : a.status === 'blocked' ? 'blocked' : attn(a) ? 'attn' : ''}"></span>`;
+  const subOf = (a) => `${a.mirrored} entries${stale(a)}${a.tokens?.rarebit_state_attention ? ' · ' + esc(a.tokens.rarebit_state_attention) : ''}`;
+  const row = (a) => `<div class="th ${a.session === sel ? 'sel' : ''}" data-p="${esc(a.session)}">${dot(a)}
+      <span class="nm">${esc(niceTitle(a))}</span><span class="ag">${ago(a.updatedAt)}</span>
+      <span class="sub">${a.team ? esc(teamOfA(a)) : esc(a.tabLabel ?? '')} · ${subOf(a)}</span></div>`;
+  // In a cluster the row name is the member; the sub line names the pane title, which is not the member's Task.
+  const memberRow = (a) => `<div class="th ${a.team.role === 'lead' ? 'ld' : 'wk'} ${a.session === sel ? 'sel' : ''}" data-p="${esc(a.session)}">${dot(a)}
+      <span class="nm">${a.team.role === 'lead' ? esc(a.team.member) + '<span class="role">lead</span>' : '↳ ' + esc(a.team.member)}</span><span class="ag">${ago(a.updatedAt)}</span>
+      <span class="sub" title="pane title">${esc(niceTitle(a))} · ${subOf(a)}</span></div>`;
+  const recent = (l) => Math.max(...l.map((a) => a.updatedAt));
+  const clusters = new Map();
+  for (const a of list) if (a.team) (clusters.get(a.team.name) ?? clusters.set(a.team.name, []).get(a.team.name)).push(a);
+  const groups = new Map(); // project -> items: { at, html }
+  const put = (k, item) => (groups.get(k) ?? groups.set(k, []).get(k)).push(item);
+  for (const [name, l] of clusters) {
+    const lead = l.find((a) => a.team.role === 'lead');
+    const leadLive = lead || agents.some((a) => a.team?.name === name && a.team.role === 'lead');
+    const ws = l.filter((a) => a !== lead).sort((x, y) => x.team.member.localeCompare(y.team.member));
+    const working = l.filter((a) => a.status === 'working').length, needs = l.filter(attn).length;
+    const closed = closedTeams.has(name);
+    const head = `<div class="tm" data-team="${esc(name)}" title="Pi Team Bright team"><span class="tw">${closed ? '▸' : '▾'}</span><span class="tn">${esc(name)}</span>
+      ${needs ? `<span class="w">${needs} need you</span>` : ''}${working ? `<span class="ok">${working} working</span>` : ''}
+      ${leadLive ? '' : '<span class="w">lead not live</span>'}<span>${l.length}</span></div>`;
+    const rows = (lead ? [lead, ...ws] : ws).filter((a) => !closed || a.session === sel).map(memberRow).join('');
+    put(project(lead ?? l.reduce((x, y) => (y.updatedAt > x.updatedAt ? y : x))), { at: recent(l), n: l.length, html: head + rows });
+  }
+  for (const a of list) if (!a.team) put(project(a), { at: a.updatedAt, n: 1, html: row(a) });
+  const needs = list.filter(attn);
+  let h = needs.length ? `<div class="sec"><span>Needs you</span><span>${needs.length}</span></div>` + needs.map(row).join('') : '';
+  for (const [k, items] of [...groups].sort((x, y) => Math.max(...y[1].map((i) => i.at)) - Math.max(...x[1].map((i) => i.at))))
+    h += `<div class="sec"><span>${esc(k)}</span><span>${items.reduce((n, i) => n + i.n, 0)}</span></div>` + items.sort((x, y) => y.at - x.at).map((i) => i.html).join('');
+  $('#threads').innerHTML = h;
+}
+// Quiet team status: nothing without Pi Team Bright; otherwise live team count or the read failure.
+function renderTeamLine() {
+  const t = link?.teams, el = $('#teamline');
+  if (!t || t.status === 'absent') { el.innerHTML = ''; return; }
+  const n = new Set(agents.filter((a) => a.team).map((a) => a.team.name)).size;
+  const codes = t.codes?.length ? ` (${esc(t.codes.join(', '))})` : '';
+  el.innerHTML = t.status === 'available' ? `Teams: ${n} live`
+    : t.status === 'partial' ? `Teams: ${n} live · <span title="Some teams could not be read${codes}">partial</span>`
+    : `Teams: ${n} shown · <span class="e">${t.status === 'unavailable' ? 'unavailable' : 'read error'}${codes}, ${t.goodAt ? `view from ${ago(t.goodAt)} ago` : 'no view yet'}</span>`;
+}
+$('#threads').addEventListener('click', (e) => {
+  const t = e.target.closest('.tm');
+  if (t) { const n = t.dataset.team; closedTeams.has(n) ? closedTeams.delete(n) : closedTeams.add(n); localStorage.ideClosedTeams = JSON.stringify([...closedTeams]); return renderSide(); }
+});
+$('#threads').addEventListener('click', (e) => { const el = e.target.closest('.th'); if (el) open(el.dataset.p); });
+$('#filter').addEventListener('input', renderSide);
+
+// ---------- thread rendering ----------
+// Each loaded page renders into its own .chunk element with its own renderer state.
+// Tool results find their call across pages through `tools` and `orphans`.
+// Heavy bodies (tool output, thinking, diffs) render on first open: `lazy` maps a <details> to its body.
+let tools = new Map(), orphans = new Map(), entryEls = new Map(), lazy = new WeakMap(), tail = null;
+function newChunk(where) {
+  const el = document.createElement('div');
+  el.className = 'chunk';
+  if (where === 'top') $('#thread').prepend(el); else $('#thread').appendChild(el);
+  return { T: el, work: null };
+}
+function closeWork(R) { if (R.work) { R.work.el.classList.remove('active'); R.work = null; } }
+function workBlock(R) {
+  if (R.work) return R.work;
+  const el = document.createElement('details');
+  el.className = 'work'; if (allOpen) el.open = true;
+  el.innerHTML = `<summary><span class="spin"></span><span class="sum"></span></summary><div class="items"></div>`;
+  R.T.appendChild(el);
+  R.work = { el, items: el.querySelector('.items'), n: 0, names: {}, t0: null, t1: null };
+  return R.work;
+}
+function updateWorkSummary(w) {
+  const names = Object.entries(w.names).sort((a, b) => b[1] - a[1]).map(([k, v]) => v > 1 ? `${k}×${v}` : k).join(', ');
+  const dur = w.t0 && w.t1 ? Math.round((w.t1 - w.t0) / 1000) : 0;
+  w.el.querySelector('.sum').textContent = `${w.n ? `${w.n} tool call${w.n > 1 ? 's' : ''}` : 'Thinking'}${dur ? ` · ${dur >= 60 ? `${dur / 60 | 0}m ${dur % 60}s` : `${dur}s`}` : ''}${names ? ` — ${names}` : ''}`;
+}
+const toolHint = (a) => { a = a || {}; return a.command ?? a.path ?? a.file_path ?? a.pattern ?? a.query ?? a.url ?? a.task_id ?? a.text ?? JSON.stringify(a); };
+function argsView(name, a) {
+  if (name === 'edit' && Array.isArray(a?.edits)) {
+    return `<pre class="diff">${esc(a.path)}\n${a.edits.map((e) => (e.oldText || '').split('\n').map((l) => `<span class="del">- ${esc(l)}</span>`).join('') +
+      (e.newText || '').split('\n').map((l) => `<span class="add">+ ${esc(l)}</span>`).join('')).join('\n')}</pre>`;
+  }
+  if (name === 'bash') return `<pre>$ ${esc(a?.command)}</pre>`;
+  if (name === 'write') return `<pre>${esc(a?.path)}\n\n${esc(String(a?.content ?? '').slice(0, 8000))}</pre>`;
+  return `<pre>${esc(JSON.stringify(a, null, 2))}</pre>`;
+}
+function stamp(w, ts) { const t = Date.parse(ts); if (!t) return; w.t0 ??= t; w.t1 = t; }
+function fold(cls, summary, body) {
+  const el = document.createElement('details');
+  el.className = cls;
+  el.innerHTML = `<summary>${summary}</summary>`;
+  lazy.set(el, body);
+  return el;
+}
+function fill(el) { const b = lazy.get(el); if (b) { lazy.delete(el); el.insertAdjacentHTML('beforeend', b()); } }
+document.addEventListener('toggle', (e) => { if (e.target.open) fill(e.target); }, true);
+function attachResult(t, m) {
+  const out = textOf(m.content);
+  t.el.classList.remove('wait');
+  if (m.isError) t.el.classList.add('err');
+  t.el.querySelector('.r').textContent = `${m.isError ? '✗' : '✓'} ${out.split('\n').length} lines`;
+  const prev = lazy.get(t.el) ?? (() => '');
+  lazy.set(t.el, () => prev() + `<pre>${esc(out.slice(0, 30000))}</pre>`);
+  if (t.el.open) fill(t.el);
+}
+
+function renderEntry(R, e, i) {
+  const els = [];
+  const add = (html) => { R.T.insertAdjacentHTML('beforeend', html); els.push(R.T.lastElementChild); };
+  if (e.type === 'message') {
+    const m = e.message;
+    if (m.role === 'user') {
+      closeWork(R);
+      const text = textOf(m.content);
+      // Replace a matching optimistic bubble instead of showing the message twice.
+      const k = pendingSends.findIndex((p) => p.text.trim() === text.trim());
+      if (k >= 0) { pendingSends[k].el.remove(); pendingSends.splice(k, 1); }
+      add(`<div class="u" data-i="${i}"><div>${esc(text)}</div></div>`);
+    } else if (m.role === 'assistant') {
+      if (m.model) model = m.model;
+      for (const p of m.content || []) {
+        if (p.type === 'text' && p.text?.trim()) {
+          closeWork(R); // text after tool calls ends the work log ("worked for…" shape)
+          add(`<div class="a">${md(p.text)}</div>`);
+        } else if (p.type === 'thinking' && p.thinking?.trim()) {
+          const w = workBlock(R); stamp(w, e.timestamp);
+          const el = fold('think', `thought · ${esc(short(p.thinking, 90))}`, () => `<pre>${esc(p.thinking)}</pre>`);
+          w.items.appendChild(el); els.push(el);
+          updateWorkSummary(w);
+        } else if (p.type === 'toolCall') {
+          const w = workBlock(R); stamp(w, e.timestamp);
+          w.n++; w.names[p.name] = (w.names[p.name] || 0) + 1;
+          const el = fold('tool wait', `${esc(p.name)} <span style="color:var(--fg)">${esc(short(toolHint(p.arguments)))}</span> <span class="r"></span>`, () => argsView(p.name, p.arguments));
+          w.items.appendChild(el); els.push(el);
+          const t = { el, w };
+          tools.set(p.id, t);
+          if (orphans.has(p.id)) { attachResult(t, orphans.get(p.id).m); entryEls.set(orphans.get(p.id).i, [el]); orphans.delete(p.id); }
+          updateWorkSummary(w);
+          if (agentOf(sel)?.status === 'working' && R === tail) w.el.classList.add('active');
+        }
+      }
+      if (m.stopReason === 'aborted' || /operation was aborted/i.test(m.errorMessage || '')) add(`<div class="meta" style="color:var(--warn)">⏹ interrupted</div>`);
+      else if (m.stopReason === 'error' || m.errorMessage) add(`<div class="meta" style="color:var(--err)">⚠ ${esc(m.errorMessage || 'error')}</div>`);
+    } else if (m.role === 'toolResult') {
+      const t = tools.get(m.toolCallId);
+      if (t) { attachResult(t, m); stamp(t.w, e.timestamp); updateWorkSummary(t.w); els.push(t.el); }
+      else orphans.set(m.toolCallId, { m, i }); // its call is on an older page
+    } else if (m.role === 'bashExecution') {
+      closeWork(R);
+      const el = fold('tool', `! ${esc(m.command)}`, () => `<pre>${esc(m.output)}</pre>`);
+      R.T.appendChild(el); els.push(el);
+    }
+  } else if (e.type === 'custom_message' && e.display !== false) {
+    const w = workBlock(R);
+    const el = fold('think', `${esc(e.customType)} · ${esc(short(textOf(e.content), 80))}`, () => `<pre>${esc(textOf(e.content).slice(0, 20000))}</pre>`);
+    w.items.appendChild(el); els.push(el);
+  } else if (e.type === 'compaction') {
+    closeWork(R);
+    add(`<div class="meta compact">Context compacted</div>`);
+    const el = fold('think', 'summary', () => `<pre>${esc(e.summary)}</pre>`);
+    R.T.appendChild(el); els.push(el);
+  } else if (e.type === 'model_change') add(`<div class="meta">model → ${esc(e.modelId)}</div>`);
+  if (els.length) entryEls.set(i, els);
+}
+function renderPage(R, entries, from) { entries.forEach((e, k) => renderEntry(R, e, from + k)); }
+function edgeNote() {
+  $('#topEdge')?.remove();
+  const note = win.from > 0 ? `${win.from} earlier entries · scroll up to load` : agentOf(sel) && win.total ? 'Start of Session' : '';
+  if (note) $('#thread').insertAdjacentHTML('afterbegin', `<div class="edge" id="topEdge">${note}</div>`);
+}
+
+// ---------- open / page / follow ----------
+async function open(p, around) {
+  sel = p; localStorage.ideSel = p; follow = around == null; tail = null; opening = true;
+  const a = agentOf(p);
+  renderSide(); renderHead();
+  await fetch(`/watch?token=${token}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ panes: a?.pane ? [a.pane] : [], sessions: [p] }) });
+  const q = around == null ? '' : `&from=${Math.max(0, around - PAGE / 2)}&to=${around + PAGE / 2}`;
+  const r = await api('/session?path=' + encodeURIComponent(p) + q);
+  if (sel !== p) return;
+  opening = false;
+  tools = new Map(); orphans = new Map(); entryEls = new Map(); model = '';
+  $('#thread').innerHTML = '';
+  win = { from: r.from, to: r.to, total: r.total, prompt: r.prompt };
+  tail = newChunk('bottom');
+  renderPage(tail, r.entries, r.from);
+  if (a?.status !== 'working') closeWork(tail);
+  edgeNote(); renderHead(); renderPanel();
+  if (around == null) $('#scroll').scrollTop = $('#scroll').scrollHeight;
+  $('#jump').style.display = win.to < win.total ? 'block' : 'none';
+  updatePin();
+  const inp = $('#input'); inp.disabled = !a?.pane;
+  inp.placeholder = a?.pane ? `Message ${niceTitle(a)}  ·  /command` : 'This Session has no live pane';
+  updateSend();
+  if (around == null) inp.focus();
+}
+async function loadOlder() {
+  if (loading || win.from <= 0) return;
+  loading = true;
+  const p = sel, to = win.from, from = Math.max(0, to - PAGE);
+  const r = await api(`/session?path=${encodeURIComponent(p)}&from=${from}&to=${to}`);
+  if (sel === p) {
+    const s = $('#scroll'), h0 = s.scrollHeight;
+    $('#topEdge')?.remove();
+    const R = newChunk('top');
+    renderPage(R, r.entries, from);
+    closeWork(R);
+    win.from = from; win.prompt = r.prompt;
+    edgeNote();
+    s.scrollTop += s.scrollHeight - h0; // keep the reader's place
+  }
+  loading = false;
+}
+async function loadNewer() {
+  if (loading || win.to >= win.total) return;
+  loading = true;
+  const p = sel, from = win.to;
+  const r = await api(`/session?path=${encodeURIComponent(p)}&from=${from}&to=${from + PAGE}`);
+  if (sel === p) {
+    renderPage(tail, r.entries, from);
+    win.to = r.to; win.total = Math.max(win.total, r.total);
+    $('#jump').style.display = win.to < win.total ? 'block' : 'none';
+  }
+  loading = false;
+}
+function toLatest() {
+  if (win.to < win.total - PAGE) return open(sel); // far away: reload the last page
+  loadNewer().then(() => { $('#scroll').scrollTop = $('#scroll').scrollHeight; follow = true; $('#jump').style.display = 'none'; });
+}
+$('#scroll').addEventListener('scroll', () => {
+  const s = $('#scroll');
+  const nearBottom = s.scrollHeight - s.scrollTop - s.clientHeight < 60;
+  follow = nearBottom && win.to >= win.total;
+  if (follow) $('#jump').style.display = 'none';
+  if (s.scrollTop < 600) loadOlder();
+  if (nearBottom && win.to < win.total) loadNewer();
+  updatePin();
+});
+$('#jump').onclick = toLatest;
+
+// ---------- pinned prompt: the user message the entries at the top of the view answer ----------
+// A loaded prompt pins once its bubble scrolls above the view. With no loaded prompt above the view,
+// the hub's `prompt` (the newest one before the loaded window) pins. A prompt on screen does not pin.
+let pinQueued = false, pinned = null;
+function updatePin() {
+  if (pinQueued) return;
+  pinQueued = true;
+  requestAnimationFrame(() => {
+    pinQueued = false;
+    const top = $('#scroll').getBoundingClientRect().top;
+    const us = document.querySelectorAll('#thread .u[data-i]');
+    let held = null;
+    for (const u of us) {
+      if (u.getBoundingClientRect().bottom > top + 4) break;
+      held = u;
+    }
+    // A prompt in the top band is already on screen, and the pin would cover it.
+    const band = [...us].some((u) => { const r = u.getBoundingClientRect(); return r.bottom > top + 4 && r.top < top + 80; });
+    // Without a loaded prompt above, the top entries answer the hub's prompt.
+    pinned = band ? null : held ? { i: Number(held.dataset.i), text: held.textContent }
+      : win.from > 0 && win.prompt ? win.prompt : null;
+    const box = $('#pin');
+    box.style.display = pinned ? 'block' : 'none';
+    if (pinned) {
+      box.firstElementChild.innerHTML = `<b>↑ #${pinned.i}</b>${esc(pinned.text)}`;
+      box.firstElementChild.title = 'Show this message';
+    }
+  });
+}
+$('#pin').addEventListener('click', async () => {
+  if (!pinned) return;
+  const i = pinned.i;
+  // Load the prompt near the top of the window, so the turns it started fill the view below it.
+  if (i < win.from || i >= win.to) await open(sel, i + PAGE / 2 - 20);
+  const el = document.querySelector(`#thread .u[data-i="${i}"]`);
+  if (!el) return toast(`entry #${i} is not loaded`);
+  follow = false;
+  el.scrollIntoView({ block: 'start' });
+  $('#scroll').scrollTop -= 12;
+  el.classList.add('flash');
+  setTimeout(() => el.classList.remove('flash'), 1300);
+});
+new ResizeObserver(updatePin).observe($('#scroll'));
+
+function renderHead() {
+  const a = agentOf(sel);
+  if (!a) return;
+  $('#head').innerHTML = `<div style="min-width:0"><div class="t">${esc(niceTitle(a))}</div><div class="m">${a.team ? `${esc(teamOfA(a))} (${a.team.role === 'lead' ? 'lead' : 'worker'}) · ` : ''}${esc(a.cwd)} · ${esc(model)} · ${esc(a.pane)} · ${win.total} entries${stale(a)}</div></div>
+    <span class="sp"></span><span class="pill ${esc(a.status)}">${esc(a.status)}</span>
+    <button class="iconbtn" id="tgFind" title="Search this Session (⌘F)">Search</button>
+    <button class="iconbtn" id="tgAll" title="Expand all work logs">${allOpen ? 'Collapse' : 'Expand'} work</button>
+    <button class="iconbtn" id="tgPanel" title="Remote screen and Session facts">Panel</button>`;
+  $('#tgFind').onclick = findOpen;
+  $('#tgPanel').onclick = () => setPanel(!document.body.classList.contains('panel'));
+  $('#tgAll').onclick = () => { allOpen = !allOpen; document.querySelectorAll('details.work').forEach((d) => (d.open = allOpen)); renderHead(); };
+}
+function setPanel(on) { document.body.classList.toggle('panel', on); localStorage.idePanel = on ? '1' : ''; }
+function renderPanel() {
+  const a = agentOf(sel);
+  if (!a) return;
+  const scr = live.get(a.pane);
+  $('#screen').textContent = scr ? scr.replace(/\s+$/, '') : `Agent is ${a.status}. The remote screen streams here while it works, after a /command, or with “Show 30s”.`;
+  $('#facts').innerHTML = [['status', a.status], ['pane', a.pane], ['tab', a.tabLabel ?? a.tab], ['model', model], ['entries', `${win.total} (showing ${win.from}–${win.to})`],
+    ['rarebit', a.tokens?.rarebit_state_attention || a.tokens?.rarebit_state_neutral || a.tokens?.rarebit_state_muted || '—'],
+    ['session', a.session], ['link', `${link?.state} · lag ${link?.lastLagMs ?? '?'}ms`]]
+    .map(([k, v]) => `<b>${esc(k)}</b><span>${esc(v ?? '')}</span>`).join('');
+}
+$('#peek').onclick = async () => { const r = await api('/screen', { session: sel, ms: 30000 }); toast(r.ok ? `Streaming remote screen for 30s · ${r.rttMs}ms` : `✗ ${r.error}`); };
+
+// ---------- in-Session search (hub-side index; jumps re-center the window) ----------
+let F = { q: '', hits: [], cur: -1, ctl: null };
+function findOpen() { $('#find').classList.add('on'); $('#fq').focus(); $('#fq').select(); }
+function findClose() { $('#find').classList.remove('on'); CSS.highlights?.clear(); $('#input').focus(); }
+$('#fclose').onclick = findClose;
+$('#fq').addEventListener('input', async () => {
+  const q = $('#fq').value;
+  F.ctl?.abort(); F.ctl = new AbortController();
+  if (!q) { F = { ...F, q, hits: [], cur: -1 }; $('#fhits').innerHTML = ''; $('#fcnt').textContent = ''; CSS.highlights?.clear(); return; }
+  const t0 = performance.now();
+  let r;
+  try { r = await fetch(`/search?path=${encodeURIComponent(sel)}&q=${encodeURIComponent(q)}&limit=500`, { signal: F.ctl.signal }).then((r) => r.json()); } catch { return; }
+  // Newest first: the reader usually looks for something recent.
+  F = { ...F, q, hits: r.hits.reverse(), cur: -1, total: r.total };
+  $('#fcnt').textContent = r.total ? `${r.total} entries · ${r.matches} hits · ${Math.round(performance.now() - t0)}ms` : `no match · ${Math.round(performance.now() - t0)}ms`;
+  const needle = q.toLowerCase();
+  const mark = (s) => { const k = s.toLowerCase().indexOf(needle); return k < 0 ? esc(s) : esc(s.slice(0, k)) + `<mark>${esc(s.slice(k, k + q.length))}</mark>` + esc(s.slice(k + q.length)); };
+  $('#fhits').innerHTML = F.hits.slice(0, 200).map((h, k) => `<div class="hit" data-k="${k}"><b>#${h.i}</b><span>${mark(h.snippet)}</span></div>`).join('');
+});
+$('#fq').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); if (F.hits.length) gotoHit((F.cur + (e.shiftKey ? -1 : 1) + F.hits.length) % F.hits.length); }
+  if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); findClose(); }
+});
+$('#fhits').addEventListener('click', (e) => { const el = e.target.closest('.hit'); if (el) gotoHit(Number(el.dataset.k)); });
+async function gotoHit(k) {
+  F.cur = k;
+  document.querySelectorAll('#fhits .hit').forEach((el) => el.classList.toggle('on', Number(el.dataset.k) === k));
+  document.querySelector(`#fhits .hit[data-k="${k}"]`)?.scrollIntoView({ block: 'nearest' });
+  const i = F.hits[k].i;
+  if (i < win.from || i >= win.to) await open(sel, i);
+  reveal(i, F.q);
+}
+// Opens the folds that hold entry i, highlights the query, and scrolls the first match into view.
+function reveal(i, q) {
+  const els = entryEls.get(i) || [];
+  const needle = q.toLowerCase();
+  const ranges = [];
+  for (const el of els) {
+    for (let d = el.closest('details') ?? el; d; d = d.parentElement?.closest('details')) { fill(d); d.open = true; }
+    if (el.tagName === 'DETAILS') { fill(el); el.open = true; }
+    const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    for (let n; (n = walk.nextNode()) && ranges.length < 300;) {
+      const s = n.data.toLowerCase();
+      for (let at = s.indexOf(needle); at >= 0 && ranges.length < 300; at = s.indexOf(needle, at + needle.length)) {
+        const r = new Range(); r.setStart(n, at); r.setEnd(n, at + needle.length); ranges.push(r);
+      }
+    }
+  }
+  if (CSS.highlights) {
+    CSS.highlights.set('hit', new Highlight(...ranges.slice(1)));
+    CSS.highlights.set('hitcur', new Highlight(...ranges.slice(0, 1)));
+  }
+  follow = false;
+  const target = ranges[0]?.startContainer.parentElement ?? els[0];
+  if (!target) return toast(`entry #${i} has no visible text`);
+  target.scrollIntoView({ block: 'center' });
+  // Scroll the inner <pre> too when the match sits deep inside a long tool output.
+  const pre = target.closest('pre');
+  if (pre && ranges[0]) { const rr = ranges[0].getBoundingClientRect(), pr = pre.getBoundingClientRect(); pre.scrollTop += rr.top - pr.top - pr.height / 2; }
+  (els[0].closest('.u,.a,details.work') ?? els[0]).classList.add('flash');
+  setTimeout(() => document.querySelectorAll('.flash').forEach((x) => x.classList.remove('flash')), 1300);
+}
+
+// ---------- composer: messages, /commands, interrupt ----------
+const input = $('#input');
+function updateSend() {
+  const a = agentOf(sel);
+  const stop = a?.status === 'working' && !input.value.trim();
+  const b = $('#send');
+  b.disabled = !a?.pane; b.classList.toggle('stop', stop); b.textContent = stop ? '■ Stop' : 'Send';
+  input.classList.toggle('cmd', input.value.startsWith('/'));
+}
+input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = Math.min(220, input.scrollHeight) + 'px'; updateSend(); });
+input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
+$('#send').onclick = () => ($('#send').classList.contains('stop') ? interrupt() : send());
+async function interrupt() {
+  const a = agentOf(sel);
+  if (!a?.pane) return;
+  if (a.status !== 'working') return toast(`Agent is ${a.status}; nothing to interrupt`);
+  toast('Interrupting…');
+  const r = await api('/interrupt', { session: sel });
+  toast(r.ok ? `Interrupt delivered · ${r.rttMs}ms` : `✗ ${r.error}`);
+}
+async function send() {
+  const text = input.value;
+  const a = agentOf(sel);
+  if (!text.trim() || !a?.pane) return;
+  input.value = ''; input.style.height = 'auto'; updateSend();
+  const isCmd = text.trim().startsWith('/');
+  const el = document.createElement('div');
+  if (isCmd) {
+    // Command output goes to the remote screen, not the Session file.
+    el.className = 'meta cmd';
+    el.textContent = `${text.trim()} · sending…`;
+    setPanel(true);
+  } else {
+    el.className = 'u pending';
+    el.innerHTML = `<div>${esc(text)}<span class="st">sending…</span></div>`;
+    pendingSends.push({ text, el });
+  }
+  tail.T.appendChild(el);
+  if (win.to >= win.total) $('#scroll').scrollTop = $('#scroll').scrollHeight;
+  const r = await api('/prompt', { session: sel, text });
+  if (isCmd) el.textContent = r.ok ? `${text.trim()} · ran on remote · ${r.rttMs}ms · output in Remote screen →` : `${text.trim()} · ✗ ${r.error}`;
+  else { const st = el.querySelector('.st'); if (st) st.textContent = r.ok ? `delivered · ${r.rttMs}ms · waiting for Pi` : `✗ ${r.error}`; }
+  $('#sendState').textContent = r.ok ? `last send ${r.rttMs}ms` : '';
+}
+
+// ---------- quick switcher ----------
+let swIdx = 0;
+function swRender() {
+  const q = $('#swq').value.toLowerCase();
+  const l = agents.filter((a) => `${niceTitle(a)} ${a.cwd} ${teamOfA(a)}`.toLowerCase().includes(q)).sort((x, y) => y.updatedAt - x.updatedAt).slice(0, 40);
+  swIdx = Math.min(swIdx, Math.max(0, l.length - 1));
+  $('#swl').innerHTML = l.map((a, i) => `<div class="it ${i === swIdx ? 'on' : ''}" data-p="${esc(a.session)}"><span class="dot ${a.status === 'working' ? 'working' : attn(a) ? 'attn' : ''}"></span><span>${esc(niceTitle(a))}</span><span>${a.team ? esc(teamOfA(a)) + ' · ' : ''}${esc(a.cwd?.split('/').pop())} · ${ago(a.updatedAt)}</span></div>`).join('');
+  return l;
+}
+function swOpen() { $('#switcher').classList.add('on'); $('#swq').value = ''; swIdx = 0; swRender(); $('#swq').focus(); }
+function swClose() { $('#switcher').classList.remove('on'); input.focus(); }
+$('#swq').addEventListener('input', () => { swIdx = 0; swRender(); });
+$('#swq').addEventListener('keydown', (e) => {
+  const l = swRender();
+  if (e.key === 'ArrowDown') { swIdx = Math.min(l.length - 1, swIdx + 1); swRender(); e.preventDefault(); }
+  if (e.key === 'ArrowUp') { swIdx = Math.max(0, swIdx - 1); swRender(); e.preventDefault(); }
+  if (e.key === 'Enter' && l[swIdx]) { swClose(); open(l[swIdx].session); }
+  if (e.key === 'Escape') { e.stopPropagation(); swClose(); }
+});
+$('#swl').addEventListener('click', (e) => { const el = e.target.closest('.it'); if (el) { swClose(); open(el.dataset.p); } });
+$('#switcher').addEventListener('click', (e) => { if (e.target.id === 'switcher') swClose(); });
+document.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); swOpen(); }
+  if ((e.metaKey || e.ctrlKey) && e.key === 'f' && sel) { e.preventDefault(); findOpen(); }
+  // Esc interrupts, like in Pi. Overlays (search, switcher) consume their own Esc first.
+  if (e.key === 'Escape' && !e.defaultPrevented && !$('#switcher').classList.contains('on') && !$('#find').classList.contains('on')) interrupt();
+  if (e.altKey && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+    const rows = [...document.querySelectorAll('.th')].map((x) => x.dataset.p);
+    const n = rows[rows.indexOf(sel) + (e.key === 'ArrowDown' ? 1 : -1)];
+    if (n) open(n);
+  }
+});
+
+// ---------- hub events ----------
+const es = new EventSource(`/events?token=${token}`);
+es.addEventListener('agents', (ev) => {
+  const prev = agentOf(sel), prevStatus = prev?.status, prevBehind = prev?.behindBytes;
+  agents = JSON.parse(ev.data);
+  renderSide(); renderTeamLine();
+  if (sel && !tail && !opening && agentOf(sel)) open(sel);
+  const a = agentOf(sel);
+  if (a && a.behindBytes !== prevBehind) renderHead();
+  if (a && a.status !== prevStatus) {
+    renderHead(); renderPanel(); updateSend();
+    if (tail) { if (a.status !== 'working') closeWork(tail); else tail.work?.el.classList.add('active'); }
+  }
+});
+es.addEventListener('append', (ev) => {
+  const d = JSON.parse(ev.data);
+  const a = agentOf(d.path);
+  if (a) { a.updatedAt = d.updatedAt; a.mirrored = d.total; }
+  if (d.path !== sel || !tail) return;
+  const following = win.to >= win.total;
+  win.total = d.total;
+  if (following && d.entries && d.from === win.to) { renderPage(tail, d.entries, d.from); win.to = d.total; }
+  else if (following) loadNewer(); // missed a page (e.g. before /watch applied): fetch it
+  renderHead(); renderPanel();
+  const s = $('#scroll');
+  if (follow && win.to >= win.total) s.scrollTop = s.scrollHeight; else $('#jump').style.display = 'block';
+  updatePin();
+});
+es.addEventListener('reset', (ev) => { if (JSON.parse(ev.data).path === sel) open(sel); });
+es.addEventListener('live', (ev) => { const d = JSON.parse(ev.data); live.set(d.pane, d.text); if (agentOf(sel)?.pane === d.pane) renderPanel(); });
+es.addEventListener('link', (ev) => {
+  link = JSON.parse(ev.data);
+  const el = $('#link');
+  el.className = 'chip ' + (link.state === 'live' ? 'live' : 'down');
+  renderTeamLine();
+  el.textContent = `${link.hello?.host?.replace(/\.local$/, '') ?? link.host} · ${link.state === 'live' ? `${link.lastLagMs ?? '?'}ms` : link.state}`;
+});
+if (localStorage.idePanel) setPanel(true);
+setInterval(renderSide, 15000);
+</script>

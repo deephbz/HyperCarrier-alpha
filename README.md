@@ -251,6 +251,12 @@ JSON. Its CLI verifies the payload hash and renders deterministic Markdown and
 script-free HTML without a model call. Snapshots and reviews can contain local
 paths and private instructions, so keep them as sensitive local artifacts.
 
+## Session mirror web IDE
+
+[`tools/session-mirror`](tools/session-mirror) provides local reading, search and
+steering for Pi Sessions through a loopback web hub. Local use is verified;
+remote SSH use remains experimental. Read its trust limits before starting it.
+
 ## Optional Herdr tools
 
 This checkout includes three Herdr plugins and one separate recovery CLI. They

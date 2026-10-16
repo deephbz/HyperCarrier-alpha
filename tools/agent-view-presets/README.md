@@ -6,6 +6,16 @@ notifications, attention counts, pane layout, or Agent metadata.
 
 It requires Herdr 0.7.5 or newer and Node.js 22.19 or newer.
 
+## Node startup
+
+All manifest commands use `/bin/sh ../herdr-node/launch.sh`. Keep the shared
+[`herdr-node`](../herdr-node/README.md) sibling from the full HC or Alpha checkout.
+Herdr runs commands from the linked plugin root; the export manifest preserves
+this layout. The shared README records source evidence and resolution order.
+Use `$(herdr plugin config-dir agent-view-presets)/node-path` to select an
+absolute Node path without restarting the server. The launcher logs its chosen
+path/version and checks Node major 22 before running plugin code.
+
 ## Install and verify
 
 Run these commands from the HyperCarrier checkout root:

@@ -22,6 +22,17 @@ import {
   shouldPublishRarebitMetadata,
 } from "./rarebit.mjs";
 
+async function writeNodeExecutable(path, source) {
+  const script = `${path}.cjs`;
+  const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+  await writeFile(script, source);
+  await writeFile(
+    path,
+    `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(script)} "$@"\n`,
+  );
+  await chmod(path, 0o755);
+}
+
 const user = {
   occurrenceId: "o-user",
   sourceEntryId: "e-user",
@@ -588,11 +599,10 @@ test("awaiting artifacts never publishes a syncing sidebar token", async () => {
   const fakeHerdr = join(root, "herdr");
   const stateDirectory = join(root, "state");
   const invoked = join(root, "invoked");
-  await writeFile(
+  await writeNodeExecutable(
     fakeHerdr,
-    `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(invoked)}, process.argv.slice(2).join(' '));\nprocess.stdout.write('{}\\n');\n`,
+    `require('node:fs').writeFileSync(${JSON.stringify(invoked)}, process.argv.slice(2).join(' '));\nprocess.stdout.write('{}\\n');\n`,
   );
-  await chmod(fakeHerdr, 0o755);
   const oldBin = process.env.HERDR_BIN_PATH;
   const oldState = process.env.HERDR_PLUGIN_STATE_DIR;
   process.env.HERDR_BIN_PATH = fakeHerdr;
@@ -629,11 +639,10 @@ test("reports sync, applicability, and independent artifact refs", async () => {
   const fakeHerdr = join(root, "herdr");
   const stateDirectory = join(root, "state");
   const invoked = join(root, "invoked.json");
-  await writeFile(
+  await writeNodeExecutable(
     fakeHerdr,
-    `#!/usr/bin/env node\nrequire("node:fs").writeFileSync(${JSON.stringify(invoked)}, JSON.stringify(process.argv.slice(2)));\nprocess.stdout.write("{}\\n");\n`,
+    `require("node:fs").writeFileSync(${JSON.stringify(invoked)}, JSON.stringify(process.argv.slice(2)));\nprocess.stdout.write("{}\\n");\n`,
   );
-  await chmod(fakeHerdr, 0o755);
   const oldBin = process.env.HERDR_BIN_PATH;
   const oldState = process.env.HERDR_PLUGIN_STATE_DIR;
   process.env.HERDR_BIN_PATH = fakeHerdr;

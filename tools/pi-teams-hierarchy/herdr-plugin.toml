@@ -6,24 +6,24 @@ description = "Exact-Membership Team and Worker labels for Herdr Agents"
 platforms = ["linux", "macos"]
 
 [[startup]]
-command = ["node", "scripts/startup.mjs"]
+command = ["/bin/sh", "../herdr-node/launch.sh", "scripts/startup.mjs"]
 
 [[actions]]
 id = "refresh-all"
 title = "Pi Teams hierarchy: refresh all exact Memberships"
 contexts = ["global", "workspace", "tab", "pane"]
-command = ["node", "scripts/action.mjs", "refresh-all"]
+command = ["/bin/sh", "../herdr-node/launch.sh", "scripts/action.mjs", "refresh-all"]
 
 [[actions]]
 id = "clear-all"
 title = "Pi Teams hierarchy: clear all projected labels"
 contexts = ["global", "workspace", "tab", "pane"]
-command = ["node", "scripts/action.mjs", "clear-all"]
+command = ["/bin/sh", "../herdr-node/launch.sh", "scripts/action.mjs", "clear-all"]
 
 [[events]]
 on = "pane.agent_detected"
-command = ["node", "scripts/event.mjs"]
+command = ["/bin/sh", "../herdr-node/launch.sh", "scripts/event.mjs"]
 
 [[events]]
 on = "pane.closed"
-command = ["node", "scripts/event.mjs"]
+command = ["/bin/sh", "../herdr-node/launch.sh", "scripts/event.mjs"]
