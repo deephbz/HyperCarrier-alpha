@@ -31,6 +31,28 @@ function herdrBin() {
   return null;
 }
 const herdr = herdrBin();
+const herdrSession = cfg.herdrSession || 'default';
+const scoped = (argv) => ['--session', herdrSession, ...argv];
+let sessionReady = false, checking;
+// A scoped CLI call can create a missing server. Every retry starts with this list.
+function checkSession() {
+  if (!herdr) return Promise.resolve(false);
+  checking ||= new Promise((resolve) => cp.execFile(herdr, ['session', 'list', '--json'], { timeout: 3000 }, (err, stdout) => {
+    let running = false;
+    try { running = !err && JSON.parse(stdout).sessions.some((s) => s.name === herdrSession && s.running === true); } catch {}
+    sessionReady = running;
+    out({ t: 'status', state: running ? 'live' : `session ${herdrSession} not running`, at: Date.now() });
+    resolve(running);
+  })).finally(() => { checking = null; });
+  return checking;
+}
+function runHerdr(argv, options, cb) {
+  if (!sessionReady) return cb(new Error('Herdr session unavailable'));
+  cp.execFile(herdr, scoped(argv), options, (err, stdout, stderr) => {
+    if (err) { sessionReady = false; out({ t: 'status', state: 'Herdr session check required', at: Date.now() }); }
+    cb(err, stdout, stderr);
+  });
+}
 
 function track(p) {
   if (tracked.has(p)) return;
@@ -98,7 +120,11 @@ function fallbackAgents() {
   return agents;
 }
 
-function discover() {
+let discovering = false;
+async function discover() {
+  if (discovering) return;
+  discovering = true;
+  try {
   const done = (agents) => {
     lastAgents = agents;
     for (const a of agents) {
@@ -109,17 +135,17 @@ function discover() {
   };
   // Tab and workspace labels let local clients reproduce the remote layout.
   const labels = {};
-  if (herdr) {
-    for (const kind of ['tab', 'workspace']) {
-      try {
-        const r = JSON.parse(cp.execFileSync(herdr, [kind, 'list'], { timeout: 3000 })).result;
-        for (const x of r[kind + 's']) labels[x[kind + '_id']] = x.label;
-      } catch {}
-    }
-  }
   if (!herdr) return done(fallbackAgents());
-  cp.execFile(herdr, ['agent', 'list'], { timeout: 5000, maxBuffer: 32 << 20 }, (err, stdout) => {
-    if (err) return done(fallbackAgents());
+  if (!await checkSession()) return done([]);
+  for (const kind of ['tab', 'workspace']) {
+    await new Promise((resolve) => runHerdr([kind, 'list'], { timeout: 3000 }, (err, stdout) => {
+      try { if (!err) for (const x of JSON.parse(stdout).result[kind + 's']) labels[x[kind + '_id']] = x.label; } catch {}
+      resolve();
+    }));
+  }
+  await new Promise((resolve) => runHerdr(['agent', 'list'], { timeout: 5000, maxBuffer: 32 << 20 }, (err, stdout) => {
+    resolve();
+    if (err) return done([]);
     try {
       const list = JSON.parse(stdout).result.agents;
       done(list.filter((a) => a.agent_session?.kind === 'path').map((a) => ({
@@ -129,8 +155,9 @@ function discover() {
         status: a.agent_status, focused: a.focused, tokens: a.tokens || {},
         source: 'herdr', pi: a.agent === 'pi' && a.agent_session.agent === 'pi',
       })));
-    } catch { done(fallbackAgents()); }
-  });
+    } catch { done([]); }
+  }));
+  } finally { discovering = false; }
 }
 
 // ---- write path and live screen tail ----
@@ -139,18 +166,27 @@ const liveLast = new Map();
 const forceUntil = new Map(); // pane -> time until which the screen streams regardless of status
 let lastAgents = [];
 
-function command(msg) {
+async function command(msg) {
   if (msg.t === 'watch') { watched = new Set(msg.panes || []); return; }
   if (!herdr) return out({ t: 'ack', id: msg.id, ok: false, error: 'herdr not found on remote' });
   const ack = (err, stdout, stderr) =>
     out({ t: 'ack', id: msg.id, ok: !err, error: err ? String(stderr || stdout || err.message).trim().slice(0, 500) : undefined, at: Date.now() });
-  if (msg.t === 'screen') { forceUntil.set(msg.pane, Date.now() + msg.ms); liveTail(); return ack(); }
-  if (msg.t === 'keys') return cp.execFile(herdr, ['agent', 'send-keys', msg.pane, ...msg.keys], { timeout: 15000 }, ack);
-  if (msg.t === 'prompt') {
-    // Slash commands print to the screen, not the Session file: stream the screen for a while.
-    if (msg.text.trim().startsWith('/')) forceUntil.set(msg.pane, Date.now() + 15000);
-    cp.execFile(herdr, ['agent', 'prompt', msg.pane, msg.text], { timeout: 15000 }, ack);
-  }
+  if (!await checkSession()) return ack(new Error('Herdr session not running'));
+  // Recheck the exact binding on the named server. Never infer it from a pane ID.
+  runHerdr(['agent', 'get', msg.pane], { timeout: 5000 }, (err, stdout) => {
+    let a;
+    try { a = JSON.parse(stdout).result.agent; } catch {}
+    if (err || a?.agent_session?.kind !== 'path' || a.agent_session.value !== msg.session) return ack(new Error('pane Session binding changed'));
+    if (msg.t === 'screen') { forceUntil.set(msg.pane, Date.now() + msg.ms); liveTail(); return ack(); }
+    if (msg.t === 'keys') {
+      if (a.agent_status !== 'working') return ack(new Error('agent is not working'));
+      return runHerdr(['agent', 'send-keys', msg.pane, ...msg.keys], { timeout: 15000 }, ack);
+    }
+    if (msg.t === 'prompt') {
+      if (msg.text.trim().startsWith('/')) forceUntil.set(msg.pane, Date.now() + 15000);
+      runHerdr(['agent', 'prompt', msg.pane, msg.text], { timeout: 15000 }, ack);
+    }
+  });
 }
 let inBuf = '';
 process.stdin.setEncoding('utf8');
@@ -159,13 +195,13 @@ process.stdin.on('data', (d) => {
   let i;
   while ((i = inBuf.indexOf('\n')) >= 0) {
     const line = inBuf.slice(0, i); inBuf = inBuf.slice(i + 1);
-    try { command(JSON.parse(line)); } catch {}
+    try { command(JSON.parse(line)).catch(() => {}); } catch {}
   }
 });
 process.stdin.on('end', () => process.exit(0));
 
 function liveTail() {
-  if (!herdr) return;
+  if (!herdr || !sessionReady) return;
   for (const a of lastAgents) {
     if (!watched.has(a.pane)) continue;
     const active = a.status === 'working' || a.status === 'blocked' || Date.now() < (forceUntil.get(a.pane) || 0);
@@ -173,7 +209,7 @@ function liveTail() {
       if (liveLast.get(a.pane)) { liveLast.set(a.pane, ''); out({ t: 'live', pane: a.pane, session: a.session, text: '', at: Date.now() }); }
       continue;
     }
-    cp.execFile(herdr, ['agent', 'read', a.pane, '--source', 'visible'], { timeout: 3000, maxBuffer: 4 << 20 }, (err, stdout) => {
+    runHerdr(['agent', 'read', a.pane, '--source', 'visible'], { timeout: 3000, maxBuffer: 4 << 20 }, (err, stdout) => {
       if (err) return;
       let text = stdout;
       try { const j = JSON.parse(stdout); text = j.result?.text ?? j.result?.output ?? stdout; } catch {}
@@ -244,7 +280,7 @@ function report(status, codes = []) {
   if (key !== teamsSent) { teamsSent = key; out({ ...msg, goodAt, at: Date.now() }); }
 }
 
-out({ t: 'hello', host: os.hostname(), pid: process.pid, herdr: !!herdr, at: Date.now() });
+out({ t: 'hello', host: os.hostname(), pid: process.pid, herdr: !!herdr, herdrSession, at: Date.now() });
 for (const p of Object.keys(offsets)) track(p);
 discover();
 setInterval(discover, discoverMs);
