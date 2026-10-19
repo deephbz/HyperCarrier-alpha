@@ -1,0 +1,91 @@
+.panel[data-panel-name="rarebit"] { min-width: 320px; }
+.panel[data-panel-name="rarebit"] > .panel-body { display: flex; padding: 0; overflow: hidden; }
+.rb-view { display: flex; flex-direction: column; min-height: 0; min-width: 0; width: 100%; font-size: 13px; background: var(--bg); }
+.rb-header { padding: 8px 12px; border-bottom: 1px solid var(--border); max-height: 55%; overflow-y: auto; flex: none; }
+.rb-toolbar { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.rb-toolbar > strong, .rb-toolbar > .rb-meta { line-height: var(--line-ui); margin-right: auto; }
+.rb-panel-summary > .rb-meta { white-space: nowrap; flex: 1; }
+.rb-panel-summary { gap: 0; }
+.rb-panel-summary > button { flex: none; }
+.rb-panel-summary > .btn.small:not(.rb-icon) { padding-inline: 4px; }
+.rb-footer > .rb-toolbar { justify-content: flex-end; }
+.rb-meta { color: var(--text-2); font-size: 12px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.rb-scroll { overflow: auto; flex: 1; min-height: 0; padding: 12px; overflow-wrap: anywhere; }
+.rb-message { max-width: 76ch; padding: 0 0 4px 8px; margin: 0 0 12px; }
+.rb-message-heading { line-height: var(--line-ui); display: flex; align-items: center; gap: 8px; font-size: var(--font-ui); color: inherit; text-decoration: none; margin-bottom: 4px; font-variant-numeric: tabular-nums; }
+.rb-message-heading time { color: var(--text-2); font-weight: 400; }
+.rb-user { margin-left: auto; max-width: 82%; border: 1px solid var(--rb-user); border-radius: 8px; padding: 8px; background: var(--bg-user); }
+.rb-user .rb-message-heading { color: var(--rb-user); font-weight: 500; justify-content: flex-end; }
+.rb-continuation .rb-message-heading { color: var(--rb-cont); }
+.rb-stop .rb-message-heading { color: var(--text); font-weight: 500; }
+.rb-error { color: var(--err); font-size: 12px; overflow-wrap: anywhere; }
+.rb-error .rb-message-heading { font-weight: 500; }
+.rb-message .md { font-size: var(--font-body); line-height: var(--line-body); }
+.rb-message .md pre { max-width: 100%; overflow: auto; }
+.rb-target { outline: 2px solid var(--accent); outline-offset: 4px; }
+.rb-compaction { margin: 16px 0 24px; text-align: center; font-size: 12px; }
+.rb-compaction a { color: var(--text-2); text-decoration: none; }
+.rb-compaction a:hover { text-decoration: underline; }
+.rb-item-actions { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
+.rb-icon, .rb-icon.btn.small { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 24px; height: 24px; padding: 4px; color: var(--text-2); text-decoration: none; border-radius: 4px; }
+.rb-icon svg { flex: none; }
+.rb-icon:hover { color: var(--text); background: var(--bg-soft); }
+.rb-message .md > :first-child { margin-top: 0; }
+.rb-message .md > :last-child { margin-bottom: 0; }
+.rb-timeline { color: var(--text-2); font-size: 12px; text-decoration: none; }
+.rb-timeline:hover { color: var(--accent); text-decoration: underline; }
+.rb-compaction .rb-timeline { display: block; margin-top: 4px; }
+.rb-state { margin: 12px 0; color: var(--text-2); max-width: 60ch; }
+.rb-earlier { display: block; margin: 0 auto 16px; }
+.rb-footer { flex: none; padding: 8px 12px 12px; border-top: 1px solid var(--border); background: var(--bg); }
+.rb-ask { display: flex; align-items: flex-end; gap: 8px; margin-top: 8px; }
+.rb-ask textarea { width: 100%; min-width: 0; resize: vertical; max-height: 120px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg); padding: 8px; font-size: 13px; }
+.rb-ask button { border-color: var(--accent); color: var(--accent); }
+.rb-side-heading { display: flex; justify-content: space-between; align-items: center; position: sticky; top: -16px; padding: 8px 0; background: var(--bg); z-index: 1; }
+.rb-side > .rb-meta { margin: 4px 0 12px; }
+.rb-models { margin-top: 8px; }
+.rb-models label { display: block; margin-bottom: 8px; font-size: 12px; color: var(--text-2); }
+.rb-models input { display: block; width: 100%; margin-top: 4px; background: var(--bg); border: 1px solid var(--border-strong); border-radius: 4px; padding: 4px 8px; }
+.rb-diagnosis { margin-top: 12px; }
+.rb-diagnosis-bar { margin-bottom: 12px; }
+.rb-diagnosis-bar strong { font-weight: 500; }
+.rb-bar { display: flex; height: 16px; width: 100%; margin: 8px 0; background: var(--bg-soft); }
+.rb-segment { height: 100%; border-right: 1px solid var(--bg); }
+.rb-color-user { background: #25984d; }
+.rb-color-continuation { background: #3e73e3; }
+.rb-color-stop { background: var(--text); }
+.rb-color-calls { background: #ba7917; }
+.rb-color-results { background: #8c765d; }
+.rb-color-thinking { background: #0f9293; }
+.rb-color-summary { background: #8e62bc; }
+.rb-color-other { background: var(--text-2); }
+.rb-legend { line-height: var(--line-ui); display: flex; flex-wrap: wrap; gap: 4px 8px; color: var(--text-2); font-size: var(--font-ui); margin-top: 4px; }
+.rb-legend > span { white-space: nowrap; }
+.rb-legend i { display: inline-block; width: 8px; height: 8px; margin-right: 4px; }
+.rb-rarebit-legend { font-weight: 500; color: var(--text); }
+.rb-controls { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.rb-controls a { text-decoration: none; }
+.rb-controls .btn.rb-lens-on { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); font-weight: 600; }
+.rb-controls .btn.rb-lens-off { color: var(--text-2); background: transparent; border-color: var(--border-strong); }
+/* Reserve the action's header before hover so it cannot cover prose or move the reader's place. */
+.msg.assistant:has(> .rb-jump) { position: relative; padding-top: 24px; }
+.rb-jump { position: absolute; top: 0; right: 0; font-size: 12px; line-height: 16px; color: var(--text-2); text-decoration: none; opacity: 0; transition: opacity 150ms cubic-bezier(0.23, 1, 0.32, 1); }
+.msg.user .rb-jump { position: static; }
+.msg:hover .rb-jump, .rb-jump:focus-visible { opacity: 1; }
+@media (hover: none) { .rb-jump { opacity: 1; } }
+.rb-jump:hover { color: var(--accent); }
+.rb-tools { color: var(--text-2); font-size: 12px; margin: 8px 0; }
+.rb-tools summary { cursor: pointer; white-space: nowrap; font-variant-numeric: tabular-nums; overflow-x: auto; }
+.rb-run-errors { color: var(--err); }
+.rb-tools summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rb-tools > div { padding: 4px 12px; }
+.rb-band { flex: none; max-height: 46vh; overflow: auto; border-top: 1px solid var(--border); padding: 4px 16px; font-size: 13px; }
+.rb-band > div { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; }
+.rb-band > div > span { flex: 1; max-width: 76ch; }
+.rb-band small { line-height: var(--line-ui); display: block; color: var(--text-2); font-size: var(--font-ui); }
+.rb-band a { color: var(--accent); font-size: 12px; }
+.rb-band-diagnosis { padding: 8px 0; }
+.rb-band-diagnosis > p { margin: 4px 0; }
+.rb-view button:active, .rb-controls button:active { transform: scale(.97); }
+.rb-view :focus-visible, .rb-controls :focus-visible, .rb-band :focus-visible, .rb-jump:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .rb-view *, .rb-controls *, .rb-band * { animation: none !important; transition: none !important; } }

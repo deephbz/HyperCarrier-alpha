@@ -1,7 +1,7 @@
 {
   "name": "hypercarrier-alpha",
-  "version": "0.1.7",
-  "description": "A local-first control plane for Pi, tmux, Project evidence, and agent-assisted work.",
+  "version": "0.1.8",
+  "description": "A single-user, local-first Work OS for directing many concurrent agent workstreams; Pi and Herdr are its current carriers.",
   "private": true,
   "license": "MIT",
   "engines": {
@@ -16,21 +16,21 @@
     "!packages/pi-openai-blackmagic-compact"
   ],
   "scripts": {
-    "start": "npm --workspace pi-session-timeline start",
-    "start:traffic": "npm --workspace @hypercarrier/traffic-analysis start",
-    "start:stack": "npm --workspace pi-session-timeline run start:stack",
-    "start:better-url": "npm --workspace pi-session-timeline run start:better-url",
-    "test": "npm run test:packages && npm run test:timeline && npm run test:traffic",
-    "test:packages": "npm --workspace @hypercarrier/pi-sim test && node --test packages/hc-auto-compact/test/*.test.mjs packages/pi-cache-goblin/test/*.test.mjs packages/hc-hud/test/*.test.mjs && npm --workspace @hypercarrier/rarebit test && npm --workspace @hypercarrier/systemp-prompt-audit test",
-    "test:timeline": "npm --workspace pi-session-timeline test",
+    "start": "npm run start:ampi",
+    "test": "npm run test:packages && npm run test:ampi && npm run test:trace-viewer && npm run test:trace-analytics",
+    "test:packages": "npm --workspace @hypercarrier/pi-sim test && node --test packages/hc-auto-compact/test/*.test.mjs packages/pi-cache-goblin/test/*.test.mjs packages/hc-hud/test/*.test.mjs && npm --workspace @hypercarrier/pi-hc-control test && npm --workspace @hypercarrier/durable-team test && npm --workspace @hypercarrier/durable-rarebit test && npm --workspace @hypercarrier/durable-compact test && npm --workspace @hypercarrier/rarebit test && npm --workspace @hypercarrier/systemp-prompt-audit test",
     "test:release": "node --test scripts/test/export*.test.mjs scripts/test/public-workflow-closure.test.mjs",
-    "test:traffic": "npm --workspace @hypercarrier/traffic-analysis test",
     "test:sim": "node scripts/test-sim.mjs",
     "test:composition": "node --test --test-concurrency=1 scripts/test/verify-composition.test.mjs scripts/test/verify-colorstack-composition.test.mjs scripts/test/compose-terminal-theme-candidate.test.mjs",
     "verify:composition": "node scripts/verify-composition.mjs",
     "verify:colorstack": "node scripts/verify-colorstack-composition.mjs",
     "compose:terminal-theme": "node scripts/compose-terminal-theme-candidate.mjs",
-    "build:timeline": "npm --workspace pi-session-timeline run build:web",
-    "build:traffic": "npm --workspace @hypercarrier/traffic-analysis run build"
+    "start:trace-viewer": "npm --workspace @hypercarrier/trace-viewer start",
+    "test:ampi": "npm --workspace @hypercarrier/ampi test",
+    "test:trace-viewer": "npm --workspace @hypercarrier/trace-viewer test",
+    "test:trace-analytics": "npm --workspace trace-analytics test",
+    "build:ampi": "npm --workspace @hypercarrier/ampi run build:web",
+    "build:trace-viewer": "npm --workspace @hypercarrier/trace-viewer run build",
+    "start:ampi": "npm --workspace @hypercarrier/ampi start"
   }
 }

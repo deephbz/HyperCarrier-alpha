@@ -1,4 +1,4 @@
-name: Native composition consistency
+name: Native composition and app checks
 
 on:
   pull_request:
@@ -24,4 +24,7 @@ jobs:
       - run: npm run verify:composition -- --debug
       - run: npm run verify:colorstack -- --debug
       - run: npm run test:composition
-      - run: npm --workspace pi-session-timeline test
+      - run: npm --workspace @hypercarrier/ampi test
+      - run: npm --workspace @hypercarrier/trace-viewer test
+      - run: npm run build:ampi
+      - run: npm run build:trace-viewer

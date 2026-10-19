@@ -18,7 +18,11 @@ live Agent inventory by both exact pane ID and exact Pi Session JSONL path. It p
 
 The containing Herdr tab is the Team-level visual container. The sidebar does
 not repeat the Team name on every Agent card. Reconciliation also clears the
-retired `pi_team_name` token from earlier local prototypes.
+retired `pi_team_name` token from earlier local prototypes. Revisit this
+choice if one tab routinely mixes members of different Teams, Team tabs cannot
+be identified without repeated card labels, or Herdr adds a native Team-group
+header that needs an explicit Team token. Any change must keep exact
+Membership-and-Session joining and must not infer Team identity from titles.
 
 An absent or stale Session match does not receive a label. An ambiguous match
 is unchanged. Partial observation can publish an exact positive match, but it

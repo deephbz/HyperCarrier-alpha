@@ -1,23 +1,23 @@
 {
   "schemaVersion": 1,
   "sourceRepository": "HyperCarrier",
-  "sourceCommit": "516c96923c78a4f468a61c9940ac736f5d1fa45e",
-  "sourceTree": "3c8f0046aaa2155a39c4f111fc38539212f79051",
+  "sourceCommit": "63c8bf0e18b242a8036b4f40a25f0515f8f635d2",
+  "sourceTree": "bb5b0b07eb94f7d0ed167043a776038f87c1a97f",
   "sourceWorktreeDirty": false,
-  "exportContentSha256": "c6f9d5dc0d75c922dbe83d7f95cc326900dd0191b2fc0009d07a1deedcbf4cf0",
-  "exportManifestSha256": "42582c58305db9a36f670a82c6df31c850314d02fa5e5b0bf79c9c0ff1a8b0d1",
+  "exportContentSha256": "bdd747e663fa1ef43889dc009d4cc57cedc8688c3e3890b3fb97faab2f52cb6e",
+  "exportManifestSha256": "84d9f299be6d0807f593b1ae3bca27d72aad79d1d6feb65ac39d0e135309161f",
   "dependencies": [],
   "submodules": [
     {
       "name": "packages/pi-team-bright",
       "path": "packages/pi-team-bright",
       "repository": "https://github.com/deephbz/pi-team-bright.git",
-      "commit": "97e8cfa0f19e2d9d297fabe082d8416279270ff3",
-      "tree": "8bc1b890c4439f79b1c04fa23cfc3ef8e3e8bec6",
+      "commit": "3c2306ce10c4e62c351d0e4eb4ecae99cb5c7be0",
+      "tree": "d0f9b67b18ed4d413856e75c93b81dd14f2a1d2e",
       "identity": {
         "kind": "npm-package",
         "name": "@hypercarrier/pi-team-bright",
-        "version": "0.24.0-rc.6"
+        "version": "0.24.0-rc.7"
       }
     },
     {
@@ -54,6 +54,18 @@
         "kind": "npm-package",
         "name": "@hypercarrier/rarebit",
         "version": "0.5.2"
+      }
+    },
+    {
+      "name": "apps/trace-analytics",
+      "path": "apps/trace-analytics",
+      "repository": "https://github.com/deephbz/trace-analytics.git",
+      "commit": "fd49c01a86e40f1d73195198cbe61a33115de9a5",
+      "tree": "59c52be5fef9c8f6bd47b9b961269c2fe365070c",
+      "identity": {
+        "kind": "npm-package",
+        "name": "trace-analytics",
+        "version": "0.2.0"
       }
     }
   ],

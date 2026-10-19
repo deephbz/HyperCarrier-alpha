@@ -1,0 +1,197 @@
+.cos-page { min-width: 0; overflow: hidden; font-size: 13px; font-variant-numeric: tabular-nums; }
+.cos-panel { width: 100%; container-type: inline-size; }
+.cos-panel .cos-header { gap: 8px; padding: 10px 12px; }
+.cos-panel .cos-header .cos-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cos-panel .cos-header > a, .cos-panel .cos-header > nav { font-size: 12px; }
+.cos-panel .cos-toolbar { gap: 4px; padding: 8px 10px; }
+.cos-panel .cos-caption, .cos-panel .cos-notice, .cos-panel .cos-error, .cos-panel .cos-empty { padding-left: 12px; padding-right: 12px; }
+.cos-panel .cos-axis, .cos-panel .cos-stream-row { grid-template-columns: 132px minmax(0, 1fr); padding-left: 10px; padding-right: 10px; }
+.cos-panel .cos-band-label { padding-right: 6px; }
+.cos-panel .cos-axis time:nth-child(2), .cos-panel .cos-axis time:nth-child(3), .cos-panel .cos-axis time:nth-child(4) { display: none; }
+.cos-panel .cos-brush-caption { flex-wrap: wrap; }
+.cos-panel .cos-inspector { overflow-wrap: anywhere; }
+.cos-panel .cos-range { padding-left: 10px; padding-right: 10px; }
+.cos-panel .cos-arc-body { padding: 0 12px 24px; }
+@container (max-width: 380px) {
+	.cos-panel .cos-axis, .cos-panel .cos-stream-row { grid-template-columns: 112px minmax(0, 1fr); padding-left: 8px; padding-right: 8px; }
+	.cos-panel .cos-band-label > span { font-size: 10px; }
+	.cos-panel .cos-header { gap: 4px; padding-left: 8px; padding-right: 8px; }
+	.cos-panel .cos-header .cos-meta { display: none; }
+	.cos-panel .cos-axis time:first-child { display: none; }
+	.cos-panel .cos-toolbar { font-size: 11px; }
+	.cos-panel .cos-toolbar a, .cos-panel .cos-toolbar button { padding: 3px 5px; }
+	.cos-panel .cos-chunk, .cos-panel .cos-transition { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+	.cos-panel .cos-chunk-time { flex-direction: row; gap: 8px; }
+}
+.cos-page a { color: var(--text-2); text-decoration: none; }
+.cos-page a:hover { color: var(--accent); text-decoration: underline; }
+.cos-page a:focus-visible, .cos-page button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cos-header { display: flex; align-items: center; gap: 16px; min-height: 52px; padding: 12px 20px; border-bottom: 1px solid var(--border); }
+.cos-header h1 { font-size: 16px; font-weight: 500; margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cos-arc-header { gap: 8px; }
+.cos-arc-header h1 { flex: 1 1 auto; }
+.cos-header > a, .cos-header > nav { margin-left: auto; flex-shrink: 0; }
+.cos-meta { color: var(--text-2); font-size: 12px; }
+.cos-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 12px 20px; flex-shrink: 0; }
+.cos-toolbar > span:first-child { color: var(--text-2); }
+.cos-toolbar a, .cos-toolbar button { padding: 3px 8px; border-radius: 4px; }
+.cos-toolbar a[aria-current], .cos-toolbar button[aria-current] { background: var(--accent-soft); color: var(--accent); }
+.cos-toolbar button { border: 1px solid var(--border-strong); background: var(--bg); min-width: 28px; }
+.cos-toolbar button:active { transform: scale(.97); }
+.cos-toolbar-divider { width: 1px; height: 16px; background: var(--border); margin: 0 4px; }
+.cos-caption { color: var(--text-2); margin: 0; padding: 0 20px 12px; font-size: 12px; max-width: 100%; }
+.cos-axis { display: grid; grid-template-columns: 220px minmax(0, 1fr); padding: 8px 20px; background: var(--bg-side); font-size: 12px; color: var(--text-2); }
+.cos-axis > div { display: flex; justify-content: space-between; gap: 8px; }
+.cos-axis time { white-space: nowrap; }
+.cos-axis time:nth-child(3) { text-align: center; }
+.cos-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.cos-stream-row { display: grid; grid-template-columns: 220px minmax(0, 1fr); padding: 0 20px; align-items: center; }
+.cos-stream-row:nth-child(even) { background: var(--bg-side); }
+.cos-stream-row.cos-focused { background: var(--accent-soft); }
+.cos-waiting .cos-band-label { border-left: 2px solid var(--attn); padding-left: 8px; }
+.cos-band-label a.cos-wait-label { color: var(--attn); font-weight: 500; }
+.cos-band-label a.cos-new-label { color: var(--accent); }
+.cos-band-label { min-width: 0; padding-right: 16px; display: flex; flex-direction: column; }
+.cos-band-label .session-title { flex: none; max-width: 100%; width: 100%; }
+/* Fixed width keeps the rest of the line still while the range changes. */
+.cos-total { display: inline-block; min-width: 6ch; text-align: right; color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
+.cos-band-label .session-title-line > a { min-width: 0; flex: 1; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.cos-band-label .session-copy svg { width: 14px; height: 14px; }
+.cos-toolbar .cos-team-merged { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); font-weight: 600; }
+.cos-toolbar .cos-team-separate { color: var(--text-2); background: transparent; border-color: var(--border-strong); }
+.cos-band-label > span { font-size: 12px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cos-live { color: var(--ok); }
+.cos-stream-row svg { width: 100%; height: 56px; overflow: hidden; }
+.cos-duration { stroke: var(--text-2); stroke-width: 1; stroke-dasharray: 2 4; opacity: .45; }
+.cos-band { fill: var(--cos-color); }
+.cos-now { stroke: var(--text-2); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.cos-moment { fill: var(--accent); opacity: .5; }
+.cos-stream-row svg a:hover .cos-band, .cos-stream-row svg a:focus .cos-band { stroke: var(--text); stroke-width: 1; }
+/* One categorical palette. Each solid mark exceeds 3:1 against white and #17171a. */
+.cos-color-0 { --cos-color: #537bbb; }
+.cos-color-1 { --cos-color: #ab6698; }
+.cos-color-2 { --cos-color: #478b80; }
+.cos-color-3 { --cos-color: #ab743b; }
+.cos-color-4 { --cos-color: #8474b5; }
+.cos-color-5 { --cos-color: #a96c64; }
+.cos-inspector { min-height: 44px; padding: 12px 20px; border-top: 1px solid var(--border); color: var(--text-2); font-size: 12px; }
+.cos-range { flex: none; padding: 8px 20px 16px; color: var(--text-2); font-size: 12px; }
+.cos-brush { position: relative; height: 40px; margin: 0 6px; background: var(--bg-side); touch-action: none; user-select: none; cursor: crosshair; }
+.cos-brush > svg { display: block; width: 100%; height: 40px; pointer-events: none; }
+.cos-brush > svg path { fill: var(--text-2); opacity: .5; }
+.cos-brush-window { position: absolute; top: 0; bottom: 0; min-width: 1px; border: 1px solid var(--accent); cursor: grab; }
+.cos-brush-window::before { content: ""; position: absolute; inset: 0; background: var(--accent); opacity: .12; pointer-events: none; }
+.cos-brush-window:active { cursor: grabbing; }
+.cos-brush-handle { position: absolute; top: -1px; bottom: -1px; width: 12px; padding: 0; border: 1px solid var(--accent); border-radius: 2px; background: var(--bg); cursor: ew-resize; touch-action: none; }
+.cos-brush-handle::after { content: ""; position: absolute; top: 12px; bottom: 12px; left: 4px; border-left: 2px solid var(--accent); }
+.cos-brush-start { left: -6px; }
+.cos-brush-end { right: -6px; }
+.cos-brush-caption { margin-top: 8px; min-height: 16px; }
+.cos-notice, .cos-error { margin: 0; padding: 12px 20px; max-width: 86ch; font-size: 12px; color: var(--text-2); }
+.cos-error { color: var(--err); }
+.cos-empty { padding: 32px 20px; margin: 0; color: var(--text-2); max-width: 76ch; }
+.cos-list { padding: 0 20px 20px; }
+.cos-list-head, .cos-list-row { display: grid; grid-template-columns: minmax(0, 1fr) 64px 72px 128px; gap: 16px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.cos-list-head { color: var(--text-2); font-size: 12px; padding-top: 12px; }
+.cos-session-name { display: flex; flex-direction: column; min-width: 0; }
+.cos-session-name > a { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+.cos-session-name > span { color: var(--text-2); font-size: 12px; }
+.cos-links { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.cos-header .cos-links { flex-wrap: nowrap; }
+.cos-arc-header .cos-links { gap: 8px; }
+.cos-arc-body { padding: 0 20px 32px; }
+.cos-arc-body section { margin: 20px 0 28px; }
+.cos-arc-body h2 { margin: 0 0 12px; font-size: 14px; font-weight: 500; }
+.cos-context-thread { margin: 12px 0; padding-left: 12px; border-left: 2px solid var(--border-strong); }
+.cos-context-thread h3, .cos-context-branch h3 { margin: 8px 0; font-size: 13px; font-weight: 500; }
+.cos-context-branch ul { margin: 0; padding-left: 20px; }
+.cos-context-branch li { margin: 6px 0; }
+.cos-context-branch a { margin-left: 4px; white-space: nowrap; }
+.cos-context-branch li.cos-context-closed { color: var(--text-2); }
+.cos-badge { margin-left: 2px; padding: 0 5px; line-height: 16px; font-weight: 400; border: 1px solid var(--border-strong); vertical-align: 1px; }
+.cos-leaf > summary { cursor: pointer; list-style: none; }
+.cos-leaf > summary::-webkit-details-marker { display: none; }
+.cos-leaf[open] > summary .cos-leaf-title { text-decoration: underline dotted var(--text-2); }
+.cos-leaf > p, .cos-leaf > blockquote { margin: 4px 0 0; padding-left: 8px; border-left: 2px solid var(--border-strong); font-size: 12px; color: var(--text-2); max-width: 86ch; }
+.cos-arc-body p.cos-context-empty { margin: 6px 0; font-size: 12px; }
+.cos-arc-body section[aria-label="Evergreen context"] h2 { margin-top: 20px; }
+.cos-arc-list-head, .cos-arc-list-row { grid-template-columns: minmax(0, 1fr) minmax(120px, 200px) 64px 72px 128px; }
+.cos-arc-head { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 12px; }
+.cos-arc-head strong { font-weight: 500; color: var(--attn); }
+.cos-arc-body details { margin: 20px 0 28px; }
+.cos-arc-body summary { cursor: pointer; font-size: 14px; font-weight: 500; }
+.cos-arc-body summary .cos-meta { font-weight: 400; }
+.cos-arc-body p { max-width: 76ch; margin: 4px 0 12px; overflow-wrap: anywhere; }
+.cos-headline { font-size: 14px; }
+.cos-project { display: flex; gap: 12px; margin: 12px 0; }
+.cos-project-mark { width: 4px; align-self: stretch; background: var(--cos-color); flex-shrink: 0; }
+.cos-project > div { min-width: 0; overflow-wrap: anywhere; }
+.cos-transition { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 20px; padding: 16px 0; border-bottom: 1px solid var(--border); }
+/* Chunk rows: start, end and project in fixed columns, so times line up down the page. */
+.cos-arc-body { container-type: inline-size; }
+.cos-chunk { display: grid; grid-template-columns: 112px 112px 160px minmax(0, 1fr); gap: 12px; align-items: baseline; padding: 16px 0; border-bottom: 1px solid var(--border); }
+.cos-chunk-start, .cos-chunk-end { font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cos-chunk-start:hover, .cos-chunk-end:hover { color: var(--accent); }
+.cos-chunk-project { min-width: 0; font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cos-chunk[data-state="unlabelled"] .cos-chunk-project { font-weight: 400; color: var(--text-2); }
+.cos-glyph { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.cos-glyph > span[aria-hidden] { color: var(--text-3); }
+.cos-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+/* Where the label state changes, coloured by the state that starts: labelled (ok), stale label (accent), unlabelled
+   (muted warning). Theme tokens only; the line also carries its state as text. */
+.cos-chunk-divider, .cos-chunk-key { --cos-state: color-mix(in srgb, var(--warn) 60%, var(--text-3)); }
+[data-state="labelled"].cos-chunk-divider, [data-state="labelled"].cos-chunk-key { --cos-state: var(--ok); }
+[data-state="stale"].cos-chunk-divider, [data-state="stale"].cos-chunk-key { --cos-state: var(--accent); }
+.cos-chunk-divider { display: flex; align-items: center; gap: 8px; margin: -1px 0 0; font-size: 11px; color: var(--cos-state); }
+.cos-chunk-divider::after { content: ""; flex: 1; border-top: 2px solid var(--cos-state); }
+.cos-chunk-key { display: inline-flex; align-items: center; gap: 4px; margin-left: 10px; white-space: nowrap; }
+.cos-chunk-key::before { content: ""; width: 16px; border-top: 2px solid var(--cos-state); }
+@container (max-width: 640px) {
+	.cos-chunk { grid-template-columns: max-content max-content minmax(0, 1fr); row-gap: 6px; }
+	.cos-chunk-content { grid-column: 1 / -1; }
+}
+.cos-chunk-content { min-width: 0; padding-left: 16px; border-left: 2px solid var(--border-strong); }
+.cos-chunk-content > p { margin: 8px 0; }
+.cos-chunk-content .cos-links > a { color: var(--text); font-weight: 500; }
+.cos-transition time { font-size: 12px; color: var(--text-2); }
+@media (max-width: 1100px) {
+	.cos-axis, .cos-stream-row { grid-template-columns: 172px minmax(0, 1fr); padding-left: 16px; padding-right: 16px; }
+	.cos-axis time:nth-child(2), .cos-axis time:nth-child(4) { display: none; }
+	.cos-list-head, .cos-list-row { grid-template-columns: minmax(0, 1fr) 48px 54px 64px; gap: 8px; }
+	.cos-list-row .cos-links { gap: 4px; }
+	.cos-arc-list-head, .cos-arc-list-row { grid-template-columns: minmax(0, 1fr) minmax(96px, 160px) 48px 54px 64px; }
+	.cos-transition { grid-template-columns: 124px minmax(0, 1fr); gap: 12px; }
+}
+/* A narrow Arcs list stacks each row, so the title keeps a full line: title, then context, then span, entries and links. */
+@container (max-width: 560px) {
+	.cos-arc-list-head { display: none; }
+	.cos-arc-list-row { grid-template-columns: max-content max-content minmax(0, 1fr); row-gap: 4px; }
+	.cos-arc-list-row > :nth-child(-n+2) { grid-column: 1 / -1; }
+	.cos-arc-list-row > :nth-child(4)::after { content: " entries"; }
+}
+
+/* The Arc panel beside a Pi Session (ArcPanel.tsx): the Arc page's tree, sized for the panel's padding. */
+.cos-arc-panel { font-size: 13px; }
+.cos-arc-panel-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.cos-arc-panel-head .spacer { flex: 1; }
+.cos-arc-panel .cos-caption, .cos-arc-panel .cos-notice, .cos-arc-panel .cos-error { padding: 0; margin: 0 0 8px; }
+.cos-arc-panel section { margin: 0 0 16px; }
+.cos-arc-panel h2 { margin: 16px 0 8px; font-size: 13px; font-weight: 500; }
+.cos-arc-panel details { margin: 12px 0; }
+.cos-arc-panel summary { cursor: pointer; font-weight: 500; }
+.cos-arc-panel summary .cos-meta { font-weight: 400; }
+.cos-arc-panel p { margin: 4px 0 8px; overflow-wrap: anywhere; }
+.cos-arc-panel p.cos-context-empty { margin: 4px 0; }
+.cos-arc-panel .cos-context-thread { padding-left: 8px; }
+.cos-arc-panel .cos-context-branch ul { padding-left: 16px; }
+.cos-arc-panel .cos-context-branch li { overflow-wrap: anywhere; }
+
+/* Arc Build log on the Arc page, and Overview's tier-2 Needs you groups. */
+.cos-builds { margin: 0; padding: 0 20px 12px; font-size: 12px; color: var(--text-2); }
+.cos-builds p { margin: 4px 0; }
+.cos-builds summary { cursor: pointer; }
+.cos-builds ul { margin: 4px 0 0; padding-left: 18px; }
+.ov-needs-kind h3 { margin: 10px 0 4px; font-size: 12px; font-weight: 600; color: var(--text-2); }
+/* The Rarebit view's row for an automatic Arc update: a quiet marker between messages, never a message. */
+.cos-arc-build-row { display: flex; gap: 6px; align-items: baseline; margin: 2px 0 10px; font-size: 11px; color: var(--text-3); }
+.cos-arc-build-row[data-state="error"] { color: var(--warn); }

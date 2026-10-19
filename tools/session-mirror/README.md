@@ -71,7 +71,7 @@ The IDE owns `themes.json` and its role bindings. Colorstack supplied reference
 values; it is not an authority or dependency for this renderer. Duplication is
 accepted. The recorded source commit is a courtesy note. No upstream checkout,
 Python runtime, source verification or generation-equality gate is required.
-Decision 0024 continues to exclude web palettes.
+The HyperCarrier terminal-palette contract (system.md C8) continues to exclude web palettes.
 
 Paper Mono covers the whole UI. The local faces load at their declared weights;
 the unmodified variable WOFF2 supplies a same-origin fallback with nonblocking

@@ -1,0 +1,31 @@
+import assert from "node:assert/strict";
+import { type ChildProcess, spawn } from "node:child_process";
+import { test } from "node:test";
+import { fileURLToPath } from "node:url";
+import { socketPath } from "../src/node/daemon.ts";
+import { TestClient, tempHome } from "./helpers.ts";
+import { BIN, SIM, startNode, kill } from "./crash-fixtures.ts";
+
+test("crash: a node killed after admitting its compaction does not compact again", async () => {
+	const home = tempHome();
+	const budget = { AMPI_WORKING_BUDGET: "2500", AMPI_COMPACT_KEEP_RECENT: "200" };
+	let { child, client } = await startNode(home, 50000, { ...budget, AMPI_FAULT: "after-compact-admitted" });
+	const died = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+	try {
+		// One turn whose answer is the only W crossing; the node dies after the compaction task is admitted.
+		const { threadId } = await client.req("thread.create", { cwd: home, model: SIM, prompt: "Draft the plan\n/sim long 10" });
+		await died; // the node killed itself right after compact() admitted the task
+		client.close();
+		({ child, client } = await startNode(home, 50000, budget));
+		const view = client.sub({ kind: "thread", threadId });
+		await client.until<any>(view, (v) => v.entries.some((e: any) => e.kind === "compaction"), 20_000);
+		await new Promise((r) => setTimeout(r, 1500)); // room for a wrongful second compaction
+		const history = await client.req("thread.history", { threadId, before: "1000000", limit: 500 });
+		assert.equal(history.entries.filter((e: any) => e.kind === "compaction").length, 1, "the pending decision ran once");
+		const { records } = await client.req("compact.records", { threadId });
+		assert.equal(records.length, 1, "one compaction record");
+		client.close();
+	} finally {
+		await kill(child);
+	}
+});

@@ -10,3 +10,6 @@
 [submodule "packages/hc-rarebit"]
 	path = packages/hc-rarebit
 	url = https://github.com/deephbz/rarebit.git
+[submodule "apps/trace-analytics"]
+	path = apps/trace-analytics
+	url = https://github.com/deephbz/trace-analytics.git

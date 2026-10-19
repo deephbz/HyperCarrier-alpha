@@ -1,0 +1,22 @@
+{
+  "name": "@hypercarrier/durable-compact",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "description": "HyperCarrier Auto Compact on pi-durable: a working budget mapped onto durable compaction, and a structured summary with a Rarebit conversation record over the full durable history.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@hypercarrier/durable-rarebit": "0.1.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-durable": "1.3.0",
+    "@earendil-works/pi-ai": "1.3.0",
+    "@earendil-works/chord": "1.3.0"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "@hypercarrier/pi-hc-control",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "Per-Session control socket for Pi: owner submit, abort, and status with evidence-backed acknowledgements.",
+  "keywords": ["pi-package"],
+  "files": ["src", "README.md"],
+  "exports": {
+    ".": "./src/extension.mjs",
+    "./control": "./src/control.mjs",
+    "./endpoint": "./src/endpoint.mjs",
+    "./client": "./src/client.mjs"
+  },
+  "engines": { "node": ">=22.19" },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=1.1.0 <2"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 test/*.test.mjs"
+  },
+  "pi": {
+    "extensions": ["./src/extension.mjs"]
+  }
+}

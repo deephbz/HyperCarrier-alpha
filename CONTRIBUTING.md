@@ -2,25 +2,27 @@
 
 Bug reports and focused pull requests are welcome during the Alpha.
 
-`HyperCarrier-alpha` is a generated public release projection. Pull requests
-are treated as candidate patches and evidence: accepted changes are first
-applied and verified in the private development authority, then returned here
-through the sanitized export workflow. Maintainers do not develop features
-directly in this checkout.
+`HyperCarrier-alpha` is a generated public release. Treat pull requests as
+candidate patches and evidence. Maintainers apply accepted changes to the
+private development source and return them through the export workflow.
 
-Before submitting a change:
+Before proposing changes to AmPi or Trace Viewer, read
+[Architecture](docs/ARCHITECTURE.md), [Concepts](docs/CONCEPTS.md), and
+[Known limitations](docs/KNOWN-LIMITATIONS.md). Run the package checks that
+cover the changed component:
 
 ```sh
 npm ci
-npm test
-npm run build:timeline
-npm --workspace pi-session-timeline run format:check
-npm --workspace pi-session-timeline run lint
+npm --workspace @hypercarrier/ampi test
+npm --workspace @hypercarrier/ampi run typecheck
+npm --workspace @hypercarrier/trace-viewer test
+npm run build:ampi
+npm run build:trace-viewer
 ```
 
-Use only synthetic fixtures. Do not commit real Pi Sessions, Project records,
-local paths, credentials, generated summaries, system-prompt snapshots or
-reviews, or screenshots that contain private metadata.
+Use synthetic fixtures. Do not commit real Pi Sessions, local paths,
+credentials, generated summaries, system-prompt snapshots, private reviews, or
+screenshots with private metadata.
 
-When reporting a bug, include the smallest sanitized reproduction and the
-relevant `/api/trace` diagnostics. Never attach raw private Session content.
+Report a small sanitized reproduction and relevant diagnostics. Never attach
+raw private Session content.

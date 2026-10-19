@@ -8,7 +8,7 @@ export const extensionPaths = [
   '../../systemp-prompt-audit/index.ts', '../../hc-rarebit/src/extension.mjs',
   '../../pi-cache-goblin/src/extension.mjs', '../../hc-auto-compact/src/extension.mjs',
   '../../hc-hud/src/extension.mjs', '../../pi-openai-blackmagic-compact/src/extension.mjs',
-  '../../../apps/timeline/pi/view-trace.mjs',
+  '../../../apps/trace-viewer/pi/view-trace.mjs',
 ].map(path => fileURLToPath(new URL(path, import.meta.url)));
 export const profiles = [
   ...['anthropic', 'openai-responses', 'openai-completions', 'google', 'vertex', 'bedrock'].map(family => ({ name: family, options: { family } })),

@@ -1,71 +1,75 @@
-# Architecture and authority boundaries
+# Architecture
+
+HyperCarrier Alpha contains two applications. AmPi supports active Pi work.
+Trace Viewer inspects one Pi Session branch. Shared packages connect these
+applications to Pi while preserving source evidence.
 
 ```text
-Pi Sessions + lifecycle leases + tmux + OS processes
-                       |
-                       v
-             apps/timeline collector
-                       |
-                  read-only APIs
-                       |
-                  timeline UI
+Pi Session JSONL ──► Trace Viewer local parser ──► Trace Viewer
+        │                                         /view-trace
+        └──► trace-analytics reader ──► AmPi hub ──► AmPi GUI
+                                             │
+                                             ├── HC Control socket
+                                             └── durable Team, Rarebit, and Compact packages
 
-selected user and assistant Rarebits
-             |
-             v
-packages/hc-rarebit          ----> append-only Rarebit materialization JSONL
-         ^
-         | exact verified gitlink; compatibility owned by HyperCarrier
-         |
-@hypercarrier/rarebit (CLI: rarebit), independent public authority
-
-effective Pi prompt + active tools
-             |
-             v
-packages/systemp-prompt-audit ----> immutable JSON snapshot
-             |
-             +--------------------> deterministic Markdown + HTML reviews
+Pi Team Bright graph ──► Team package ──► derived AmPi views
+Rarebit package ───────────────────────► derived summaries and selection
 ```
 
-## Component responsibilities
+## Authority
 
-### Rarebit source and composition
+- Pi Session JSONL is the source evidence for transcript content.
+- Pi owns the live Session and the effect of submitted input.
+- HC Control provides a local socket to submit input, abort, and read status.
+  Its acknowledgements describe observed Pi evidence.
+- AmPi renders bounded views and summaries. A view does not replace source
+  records.
+- Trace Viewer reads one exact Session branch with its local parser and offers
+  the corresponding source JSONL for download. Consolidation onto
+  `trace-analytics` remains deferred.
+- Pi Team Bright owns Team and Task graph state. The durable Team package
+  adapts those semantics for AmPi.
+- Rarebit selects conversational evidence and writes derived Summary and Title
+  receipts outside native history.
 
-`@hypercarrier/rarebit` is the independent public source/npm authority and
-`rarebit` is its CLI. HyperCarrier consumes the exact verified same-path
-`packages/hc-rarebit` gitlink and owns compatibility/integration only. The
-Alpha projection is configured as a gitlink without copied child source; its
-parent merge and publication remain separate release gates.
+## Components
 
-### Timeline application
+### AmPi
 
-Collects metadata from native Pi JSONL, tmux, process state, PiTeams runtime
-metadata, and Rarebit summary sidecars. It owns fleet projections and
-diagnostics, not the facts it displays.
+AmPi is a local GUI and hub for Pi Sessions. Its Timeline and Arc views show
+bounded session activity and derived summaries. It uses HC Control for a
+per-Session socket and pi-durable packages for experimental Team, Rarebit, and
+Compact behavior. The pi-durable node backend remains deferred.
 
-### Recent-output extension
+AmPi is an experimental midway snapshot with live Herdr integration paths.
+Full UX acceptance remains open. Arc cache, boundary, model, command, and
+performance work remains open.
 
-Selects the latest eligible assistant final messages and asks a configurable
-model for one compact reported-output summary. It excludes user messages,
-reasoning, tool calls, tool arguments, and tool results. The output is lossy and
-does not determine liveness, priority, delivery, or intervention.
+### Trace Viewer
 
-### System Prompt Audit
+`@hypercarrier/trace-viewer` serves an exact-session Pi trace view and the
+`/view-trace` command. It shows the active branch, record content, and source
+JSONL download. The AmPi reader uses `trace-analytics` for Pi record parsing
+and bounded range access. Trace Viewer keeps a local parser while reader
+consolidation remains deferred. It does not write to Session history.
 
-Registers an operator command in Pi to capture the current effective system
-prompt and active tool definitions. The snapshot is immutable JSON evidence.
-The separate CLI verifies its payload hash and renders deterministic Markdown
-and script-free HTML without a model call. Snapshots and reviews remain
-sensitive local artifacts.
+## Supporting packages
 
-### PiTeams
+- HC Control owns the local Session socket and evidence-backed acknowledgments.
+- `@hypercarrier/durable-team` adapts Pi Team Bright Task graph semantics to
+  pi-durable.
+- `@hypercarrier/durable-rarebit` uses Rarebit selection on durable entries.
+- `@hypercarrier/durable-compact` maps the Auto Compact budget and summary to
+  pi-durable.
+- Auto Compact, Cache Goblin, and System Prompt Audit remain independent Pi
+  packages.
+- Pi Team Bright and Rarebit remain independent package authorities.
 
-PiTeams remains a separate public orchestration component. HyperCarrier reads
-its runtime metadata and can project its Beads-backed Tasks; it does not take
-over teammate spawn, membership, or messaging.
+## Distribution and exposure
 
-## Data exposure
+This checkout is generated from selected committed source. The export manifest
+owns the file allowlist and child Git links. The generated provenance records
+the selected source revision and package closure.
 
-The timeline APIs intentionally omit prompt text, assistant text, reasoning,
-tool arguments/results, terminal output, and full process command lines.
-Metadata is still sensitive and the services remain loopback-only by default.
+The applications bind to loopback. Keep local access URLs and source Session
+files private. Review derived output before sharing it.
