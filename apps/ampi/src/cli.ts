@@ -1,8 +1,10 @@
 // `ampi [hub] | open | doctor | status | stop | version | node | bridge`
 import { instant, nameProcess, span, spanAsync } from "./trace.ts";
+import { localTime, startLoopWatch } from "./loop-watch.ts";
 import { connectSocket, runBridge, runDaemon, socketPath } from "./node/daemon.ts";
 import { existsSync, fchmodSync, fstatSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { format } from "node:util";
 import { spawn } from "node:child_process";
 import { hubConfigPath, Hub, hubProof, hubToken, loadHubConfig, newHubToken, saveHubToken } from "./hub/hub.ts";
 import { ampiHome, doctor, hubPort, versionLine } from "./doctor.ts";
@@ -49,6 +51,12 @@ switch (command) {
 	case "hub": {
 		nameProcess("hub");
 		instant("modules-loaded");
+		// hub.log is this output: each line carries its local time with offset, and long event-loop blocks are named (loop-watch.ts).
+		if (!process.stdout.isTTY) for (const name of ["log", "info", "warn", "error"] as const) {
+			const write = console[name].bind(console);
+			console[name] = (...args: unknown[]) => write(`${localTime()} ${format(...args)}`);
+		}
+		startLoopWatch();
 		keepOutputPrivate();
 		const configPath = flag("config") ?? hubConfigPath();
 		const rotated = rest.includes("--rotate-key") ? newHubToken() : undefined;

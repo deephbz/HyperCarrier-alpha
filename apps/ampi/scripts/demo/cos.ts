@@ -66,14 +66,17 @@ export function cosDemo({ dir, agentDir, sessions }: DemoContext) {
 		appendFileSync(big, out);
 	}
 	// Real ctx.ask transport, offline answer. Touch <DEMO_DIR>/cos-no-model to exercise a missing model, and
-	// <DEMO_DIR>/cos-empty-tree for a tier-2 answer with nothing in it.
+	// <DEMO_DIR>/cos-empty-tree for a step-2 answer whose tier-2 tree has nothing in it.
 	writeFileSync(join(dir, "cos-model.cjs"), `const fs = require('node:fs');
 if (fs.existsSync(${JSON.stringify(join(dir, "cos-no-model"))})) { console.error('No model available in this synthetic demo. Remove cos-no-model to enable the offline model.'); process.exit(2); }
 let input = ''; process.stdin.on('data', d => input += d).on('end', () => {
   fs.appendFileSync(${JSON.stringify(join(dir, "ask-calls.jsonl"))}, JSON.stringify({ kind: input.includes('Write the re-entry recap.') ? 'recap' : 'other' }) + '\\n');
   let p; try { p = JSON.parse(input); } catch { setTimeout(() => { if (/Question: "fail/i.test(input)) process.exit(3); console.log(input.includes('Write the re-entry recap.') ? 'The reader work has progressed; review the reported tests and decide the next step.' : 'The agent reports tests passing and changes to reader.ts. This is selected prose, not independent verification.'); }, 600); return; }
   const names = ['Session reader', 'One GUI', 'Verification'];
-  if (p.arcs && fs.existsSync(${JSON.stringify(join(dir, "cos-empty-tree"))})) { console.log(JSON.stringify({ asks: [], threads: [], unassigned: {} })); return; }
+  // Step 2 answers tier 1 from the chunk labels and tier 2 from the evidence, in one object.
+  const project = (c) => c.label?.project ?? 'Unlabelled';
+  const tier1 = p.arcs && { headline: 'Synthetic demo: reader → GUI → verification', projects: [...new Set(p.arcs.map(project))].map(name => ({ name, summary: 'Synthetic fixture, not a real model assessment.', status: 'paused' })), transitions: p.arcs.filter((c,i,a) => i && project(c) !== project(a[i-1])).map(c => ({ chunk: c.chunk, kind: 'new_project', from: 'Previous stage', to: project(c), why: 'Synthetic demonstration transition.' })) };
+  if (p.arcs && fs.existsSync(${JSON.stringify(join(dir, "cos-empty-tree"))})) { console.log(JSON.stringify({ ...tier1, asks: [], threads: [], unassigned: {} })); return; }
   if (p.arcs) {
     // Tier 2: cite real entry IDs from the supplied evidence and quote their first words. Every candidate becomes an
     // ask of a rotating kind; an ask whose next owner turn starts with "Yes" is answered by it. Enough leaves to fold.
@@ -82,7 +85,7 @@ let input = ''; process.stdin.on('data', d => input += d).on('end', () => {
     const leaf = (t, list, i) => { const id = at(list, i); return { text: t, citations: [id], quote: (said.get(id) || '').replace(/…$/, '').split(' ').slice(0, 6).join(' ') }; };
     const kinds = ['decision', 'approval', 'input', 'blocker'], answered = (p.askCandidates || []).find(c => /^Yes/.test(said.get(c.ownerTurnsAfter[0]) || ''));
     const thread = (label, state, n) => ({ label, state, progress: [leaf(label + ': step ' + n + ' landed and tests pass', a, n), leaf(label + ': review notes applied', a, n + 1)], decisions: [leaf('Keep ' + label + ' behind the existing Host boundary', a, n + 2)], blockers: [] });
-    console.log(JSON.stringify({
+    console.log(JSON.stringify({ ...tier1,
       asks: (p.askCandidates || []).map((c, i) => ({ candidates: [c.id], text: c.text.replace(/[*?]/g, '').slice(0, 90), kind: kinds[i % 4], answeredBy: c === answered ? c.ownerTurnsAfter[0] : null })),
       threads: [
         { label: 'Session reader', state: 'active', progress: [leaf('Host-qualified records land in the reader', a, 3)], decisions: [leaf('Persist the Rarebit fingerprint in the receipt', u, 2)], blockers: [] },
@@ -91,8 +94,7 @@ let input = ''; process.stdin.on('data', d => input += d).on('end', () => {
     }));
     return;
   }
-  if (p.chunks?.some(c => 'evidence' in c)) console.log(JSON.stringify({ chunks: p.chunks.map(c => ({ chunk: c.chunk, project: names[Math.floor(Number(c.chunk.slice(1)) / 2) % 3], topic: 'Synthetic stage ' + (Number(c.chunk.slice(1)) + 1) + ': ' + names[Math.floor(Number(c.chunk.slice(1)) / 2) % 3] })) }));
-  else console.log(JSON.stringify({ headline: 'Synthetic demo: reader → GUI → verification', projects: [...new Set(p.chunks.map(c => c.project))].map(name => ({ name, summary: 'Synthetic fixture, not a real model assessment.', status: 'paused' })), transitions: p.chunks.filter((c,i,a) => i && c.project !== a[i-1].project).map(c => ({ chunk: c.chunk, kind: 'new_project', from: 'Previous stage', to: c.project, why: 'Synthetic demonstration transition.' })) }));
+  console.log(JSON.stringify({ chunks: p.chunks.map(c => ({ chunk: c.chunk, project: names[Math.floor(Number(c.chunk.slice(1)) / 2) % 3], topic: 'Synthetic stage ' + (Number(c.chunk.slice(1)) + 1) + ': ' + names[Math.floor(Number(c.chunk.slice(1)) / 2) % 3] })) }));
 });`);
 	if (process.env.DEMO_ARC_NO_MODEL === "1") writeFileSync(join(dir, "cos-no-model"), "");
 	return "";

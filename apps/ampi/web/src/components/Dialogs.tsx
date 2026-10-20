@@ -5,6 +5,7 @@ import { COMPOSER_KEYS } from "../composer-keys.ts";
 import { dispatchKeyAction, keyAvailable, KEYMAP, registerOverlay, type KeyBinding } from "../keymap.ts";
 import type { Overlay } from "../focus.ts";
 import { PAGES } from "../views/registry.ts";
+import { carrier, navigate } from "../nav.ts";
 import { href } from "../util.ts";
 import type { HostThreads } from "./Sidebar.tsx";
 import type { ModelChoice } from "./ThreadView.tsx";
@@ -291,7 +292,7 @@ export function Palette({ data, onClose, query = "", onQuery }: { data: HostThre
 
 function bindingLabel(binding: KeyBinding) {
 	const modifiers = [binding.meta ? MOD : binding.ctrl ? "Ctrl" : "", binding.alt ? "Alt" : "", binding.shift ? "Shift" : ""].filter(Boolean);
-	const key = binding.code ? binding.code.replace(/^Key/, "").replace(/^Digit/, "").replace("Backslash", "\\").replace("Equal", "+").replace("Minus", "-").replace("Slash", "?") : "No shortcut";
+	const key = binding.code ? binding.code.replace(/^Key/, "").replace(/^Digit/, "").replace("Backslash", "\\").replace("BracketLeft", "[").replace("BracketRight", "]").replace("Equal", "+").replace("Minus", "-").replace("Slash", "?") : "No shortcut";
 	return [...modifiers, key].join("+");
 }
 
@@ -325,7 +326,7 @@ export function CommandPalette({ onClose, query: initialQuery = "", onQuery }: {
 	const [query, setQueryState] = useState(initialQuery);
 	const setQuery = (value: string) => { setQueryState(value); onQuery?.(value); };
 	const entries = [
-		...PAGES.map((page) => ({ label: page.label, key: "", run: () => { location.hash = href.page(page.name); } })),
+		...PAGES.map((page) => ({ label: page.label, key: "", run: () => { navigate(href.page(page.name)); } })),
 		// One row per action; an action with two chords (⌘L and ⌘\) lists both (focus R19).
 		...KEYMAP.filter((entry, i, all) => entry.palette && keyAvailable(entry) && all.findIndex((other) => other.id === entry.id && other.palette) === i).map((entry) => ({
 			label: entry.label,
@@ -341,7 +342,7 @@ export function HelpDialog({ onClose }: { onClose: () => void }) {
 		<Modal onClose={onClose} overlay="help">
 			<h2>Keys and help</h2>
 			<div data-help>
-				{(["global", "sidebar", "transcript", "composer", "panel"] as const).map((region) => <section key={region}><h3>{region[0]!.toUpperCase() + region.slice(1)}</h3><div className="kbd-grid">{KEYMAP.filter((binding) => binding.region === region && (keyAvailable(binding) || binding.context)).map((binding, i) => <Fragment key={`${binding.id}:${binding.code}:${i}`}><span className="kbd">{bindingLabel(binding)}{appOnly(binding) ? " · app only" : ""}</span><span>{binding.label}{keyAvailable(binding) ? "" : ` · ${binding.context}`}</span></Fragment>)}{region === "composer" && COMPOSER_KEYS.map(({ key, help }) => <Fragment key={key}><span className="kbd">{key}</span><span>{help}</span></Fragment>)}{region === "global" && <><Fragment><span className="kbd">Alt+↑ / Alt+↓</span><span>Previous or next Session</span></Fragment><Fragment><span className="kbd">Esc</span><span>Interrupt or close the current popup</span></Fragment></>}</div></section>)}
+				{(["global", "sidebar", "transcript", "composer", "panel"] as const).map((region) => <section key={region}><h3>{region[0]!.toUpperCase() + region.slice(1)}</h3><div className="kbd-grid">{KEYMAP.filter((binding) => binding.region === region && (keyAvailable(binding) || binding.context)).map((binding, i) => <Fragment key={`${binding.id}:${binding.code}:${i}`}><span className="kbd">{bindingLabel(binding)}{appOnly(binding) ? " · app only" : ""}</span><span>{binding.label}{binding.note ? ` · ${binding.note}` : ""}{binding.appNote && carrier() === "app" ? ` · ${binding.appNote}` : ""}{keyAvailable(binding) ? "" : ` · ${binding.context}`}</span></Fragment>)}{region === "composer" && COMPOSER_KEYS.map(({ key, help }) => <Fragment key={key}><span className="kbd">{key}</span><span>{help}</span></Fragment>)}{region === "global" && <><Fragment><span className="kbd">Alt+↑ / Alt+↓</span><span>Previous or next Session</span></Fragment><Fragment><span className="kbd">Esc</span><span>Interrupt or close the current popup</span></Fragment></>}</div></section>)}
 			</div>
 			<p className="hint">
 				In a terminal: <code>ampi doctor</code> checks this machine and every host and says how to fix what is missing;{" "}

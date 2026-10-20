@@ -6,7 +6,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { homedir, hostname } from "node:os";
-import { extname, join, normalize } from "node:path";
+import { basename, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { HostsFrame, HubOps, NodeFrame, Topic } from "../shared/protocol.ts";
@@ -14,13 +14,14 @@ import { type HostConfig, HostLink, type HostState } from "./hosts.ts";
 import { PiHost, type PiHostConfig } from "../pi/host.ts";
 import { buildQueue, deriveQueue } from "../pi/derive-queue.ts";
 import { complete, instant, nowUs, span, tracing } from "../trace.ts";
-import { type HelperModels, hubConfigPath, updateHubHosts, useHubConfig } from "./helper-models.ts";
+import { loopWindow, watched } from "../loop-watch.ts";
+import { type ArcEvidence, type HelperModels, hubConfigPath, updateHubHosts, useHubConfig } from "./helper-models.ts";
 
 export { hubConfigPath };
 
 // `models` names helper models; helper-models.ts reads them from the file on every call and owns every hub.json write.
 /** `persistentCookie`: the login cookie outlives the client session (see `loginCookie`). */
-export type HubConfig = { hosts: (HostConfig | PiHostConfig)[]; backend?: "pi"; self?: string; models?: HelperModels; persistentCookie?: boolean };
+export type HubConfig = { hosts: (HostConfig | PiHostConfig)[]; backend?: "pi"; self?: string; models?: HelperModels; arcEvidence?: ArcEvidence; persistentCookie?: boolean };
 
 /** Browser → hub frames: node frames addressed to one host, plus hub operations. */
 type BrowserFrame =
@@ -189,7 +190,7 @@ export class Hub {
 		this.config = config;
 		this.persistentCookie = options.persistentCookie ?? config.persistentCookie === true;
 		this.configPath = options.configPath;
-		useHubConfig(options.configPath, config.models);
+		useHubConfig(options.configPath, config.models, config.arcEvidence);
 		this.token = options.token ?? hubToken();
 		for (const host of config.hosts) this.#addLink(host);
 	}
@@ -410,7 +411,8 @@ export class Hub {
 					let frame: BrowserFrame | undefined;
 					try {
 						frame = JSON.parse(String(data)) as BrowserFrame;
-						this.#fromBrowser(client, frame);
+						const f = frame;
+						watched(() => `browser frame ${f.t}${"op" in f ? ` ${f.op}` : f.t === "sub" ? ` ${f.topic.kind === "view" ? f.topic.view : f.topic.kind}` : ""}`, () => this.#fromBrowser(client, f));
 					} catch {}
 					if (tracing) {
 						this.milestone("first-ws-frame");
@@ -510,14 +512,15 @@ export class Hub {
 		if (url.pathname === "/api/health") {
 			// Unauthenticated callers learn only that this hub answers and a proof that it holds the key, so the app hands
 			// the key only to the real hub, never to another process that took the port.
-			const body = this.#authorized(req) ? { ok: true, proof: hubProof(this.token), hosts: this.hostStates(), derive: deriveQueue(), builds: buildQueue() } : { ok: true, proof: hubProof(this.token) };
+			const body = this.#authorized(req) ? { ok: true, proof: hubProof(this.token), hosts: this.hostStates(), derive: deriveQueue(), builds: buildQueue(), loop: loopWindow() ?? null, missedInputs: [...this.links.values()].reduce((n, l) => n + (l instanceof PiHost ? l.missedInputs : 0), 0) } : { ok: true, proof: hubProof(this.token) };
 			res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(body));
 			return;
 		}
 		let path = normalize(decodeURIComponent(url.pathname)).replace(/^(\.\.[/\\])+/, "");
 		if (path === "/" || !extname(path)) path = "/index.html";
 		const file = join(WEB_DIST, path);
-		if (!file.startsWith(WEB_DIST) || !existsSync(file) || !statSync(file).isFile()) {
+		// Dotfiles in web/dist are build records (.web-inputs.json lists machine paths), not part of the bundle.
+		if (!file.startsWith(WEB_DIST) || basename(file).startsWith(".") || !existsSync(file) || !statSync(file).isFile()) {
 			res.writeHead(404).end("not found (did you run npm run build:web?)");
 			return;
 		}

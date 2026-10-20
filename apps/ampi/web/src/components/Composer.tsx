@@ -161,6 +161,9 @@ export function ContextMeter({ summary, budget }: { summary?: ThreadSummary; bud
 	);
 }
 
+/** Unsent drafts per Session, so leaving a Session (Back, ⌘0, a switch) and coming back keeps what was typed. Memory only. */
+const DRAFTS = new Map<string, string>();
+
 export function Composer({
 	host,
 	threadId,
@@ -179,7 +182,9 @@ export function Composer({
 	/** A Pi Session (D15): only messages, steer, queue, and interrupt; no models, images, or node commands. */
 	pi?: boolean;
 }) {
-	const [text, setText] = useState("");
+	const draftKey = `${host}/${threadId}`;
+	const [text, setText] = useState(() => DRAFTS.get(draftKey) ?? "");
+	useEffect(() => { if (text) DRAFTS.set(draftKey, text); else DRAFTS.delete(draftKey); }, [draftKey, text]);
 	const [images, setImages] = useState<Image[]>([]);
 	const [error, setError] = useState<string>();
 	const [note, setNote] = useState<string>();

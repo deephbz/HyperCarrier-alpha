@@ -1,10 +1,12 @@
 import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { overlayChord, type Overlay } from "./focus.ts";
+import { carrier } from "./nav.ts";
 
 export type KeyAction =
 	| "sidebar.toggle" | "panel.toggle" | "focus.composer"
 	| "session.palette" | "command.palette" | "help" | "find"
-	| "overview" | "new" | "shell" | "display" | "zoom.in" | "zoom.out" | "zoom.reset";
+	| "overview" | "new" | "shell" | "display" | "zoom.in" | "zoom.out" | "zoom.reset"
+	| "history.back" | "history.forward";
 
 export type KeyBinding = {
 	id: KeyAction;
@@ -17,9 +19,18 @@ export type KeyBinding = {
 	region: "global" | "sidebar" | "transcript" | "composer" | "panel";
 	palette?: boolean;
 	skipEditable?: boolean;
+	/** A plain browser runs this chord itself (Back, Forward); AmPi dispatches it only in AmPi.app. */
+	browserOwned?: boolean;
+	/** A rule help always shows beside the action. */
+	note?: string;
+	/** A rule that holds only in AmPi.app; help shows it there. */
+	appNote?: string;
 	/** Where the action is available; help shows it beside an action that is unavailable here. */
 	context?: string;
 };
+
+/** Panels, later Find jumps, scroll and focus make no steps (D20). */
+const HISTORY_NOTE = "Steps are Sessions, pages, entry links and the first Find jump";
 
 /** Single source for global bindings, help rows, and command-palette actions. */
 export const KEYMAP: readonly KeyBinding[] = [
@@ -32,6 +43,8 @@ export const KEYMAP: readonly KeyBinding[] = [
 	{ id: "find", code: "KeyF", meta: true, label: "Find in this Session", region: "global", context: "in a Pi Session" },
 	{ id: "overview", code: "Digit0", meta: true, label: "Overview", region: "global", palette: true },
 	{ id: "new", code: "KeyN", meta: true, label: "New Session", region: "global", palette: true },
+	{ id: "history.back", code: "BracketLeft", meta: true, label: "Back", region: "global", palette: true, browserOwned: true, note: HISTORY_NOTE, appNote: "does nothing at the first AmPi page" },
+	{ id: "history.forward", code: "BracketRight", meta: true, label: "Forward", region: "global", palette: true, browserOwned: true },
 	{ id: "shell", code: "KeyJ", meta: true, label: "Toggle shell", region: "global", palette: true, context: "on a Host page, or in a Session with a shell" },
 	{ id: "zoom.in", code: "Equal", meta: true, shift: true, label: "Increase display size", region: "global", palette: true },
 	{ id: "zoom.out", code: "Minus", meta: true, shift: true, label: "Decrease display size", region: "global", palette: true },
@@ -100,9 +113,12 @@ export function dispatchGlobalKey(event: KeyboardEvent) {
 		&& Boolean(event.shiftKey) === Boolean(entry.shift)
 		&& Boolean(event.altKey) === Boolean(entry.alt));
 	if (!binding || !keyAvailable(binding) || (binding.skipEditable && isEditableTarget(event.target))) return;
-	event.preventDefault();
 	const overlay = openOverlay();
-	if (overlay && overlayChord(overlay, binding.id) === "blocked") return;
+	const blocked = overlay !== undefined && overlayChord(overlay, binding.id) === "blocked";
+	// The browser's own Back runs unless a dialog blocks it (R12; that preventDefault is unproven against Chrome's accelerator).
+	if (binding.browserOwned && carrier() === "browser" && !blocked) return;
+	event.preventDefault();
+	if (blocked) return;
 	dispatchKeyAction(binding.id, event);
 }
 
@@ -139,8 +155,13 @@ export function focusRegion(region: "sidebar" | "transcript" | "composer" | "pan
 	return document.activeElement === target;
 }
 
-/** The first scrolling element of a page view, made focusable; else the page root. */
+/** The page's marked content scroller (data-page-scroller), else its first scrolling element made focusable, else the root. */
 function pageScroller(root: HTMLElement): HTMLElement {
+	const marked = root.querySelector<HTMLElement>("[data-page-scroller]");
+	if (marked) {
+		marked.dataset.pageFocus = "";
+		return marked;
+	}
 	for (const element of root.querySelectorAll<HTMLElement>("*")) {
 		if (element.scrollHeight <= element.clientHeight || !/(auto|scroll)/.test(getComputedStyle(element).overflowY)) continue;
 		if (element.tabIndex < 0 && !element.hasAttribute("tabindex")) element.tabIndex = -1;

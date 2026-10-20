@@ -6,6 +6,7 @@ import type { ThreadSummary } from "../../../src/shared/protocol.ts";
 import { openCalls } from "../../../src/shared/tool-state.ts";
 import { hub, useHosts, useTopic } from "../client.ts";
 import { isPiHost } from "./Sidebar.tsx";
+import { entryId, entryState, noteEntry } from "../nav.ts";
 import { ACTIVITY_LABEL, MOD, attentionOf, clock, go, href, money, tokens } from "../util.ts";
 import { PANELS } from "./Panel.tsx";
 import { Markdown } from "./Markdown.tsx";
@@ -418,8 +419,10 @@ export function ThreadView({
 	const [, setRestoreTick] = useState(0);
 	useEffect(() => {
 		const key = `${host}/${threadId}`;
-		const fromHistory = (history.state as { place?: { key: string; id: string; offset: number; limit: number } } | null)?.place;
-		const place = entry ? undefined : fromHistory?.key === key ? fromHistory : PLACES.get(key);
+		const fromHistory = entryState().place as { key: string; id: string; offset: number; limit: number } | undefined;
+		// Precedence (D20): this history entry's place, then the link's ?e= entry, then this Session's last place. The
+		// entry place makes Back return to where that entry was read; the newest end clears both places (savePlace).
+		const place = fromHistory?.key === key ? fromHistory : entry ? undefined : PLACES.get(key);
 		restore.current = place;
 		if (place) pinned.current = false;
 		setLimit(place ? Math.max(place.limit, FIRST_PAINT) : FIRST_PAINT);
@@ -444,6 +447,8 @@ export function ThreadView({
 	const saving = useRef(0);
 	const savePlace = () => {
 		if (saving.current) return;
+		// The entry scrolled in; the frame below can run after a navigation.
+		const at = entryId();
 		saving.current = requestAnimationFrame(() => {
 			saving.current = 0;
 			const el = scroller.current;
@@ -451,6 +456,7 @@ export function ThreadView({
 			if (!el || restore.current) return;
 			if (el.scrollHeight - el.scrollTop - el.clientHeight < 60) {
 				PLACES.delete(key); // at the newest end: come back there, following new messages
+				noteEntry({ place: undefined }, at);
 				return;
 			}
 			const top = el.getBoundingClientRect().top;
@@ -459,15 +465,15 @@ export function ThreadView({
 			const place = { id: anchor.dataset.entry!, offset: anchor.getBoundingClientRect().top - top, limit: limitRef.current };
 			PLACES.set(key, place);
 			// Also on this history entry, so Back and Forward return to where each entry was read (Amp's thread page
-			// restores per history entry too). replaceState keeps the URL and fires no navigation.
-			history.replaceState({ ...(history.state ?? {}), place: { key, ...place } }, "");
+			// restores per history entry too). The write is deferred and keeps the URL.
+			noteEntry({ place: { key, ...place } }, at);
 		});
 	};
 	// Back or Forward within the same Session (for example after following an entry link) restores that entry's place.
 	useEffect(() => {
 		const key = `${host}/${threadId}`;
-		const pop = (e: PopStateEvent) => {
-			const place = (e.state as { place?: { key: string; id: string; offset: number; limit: number } } | null)?.place;
+		const pop = () => {
+			const place = entryState().place as { key: string; id: string; offset: number; limit: number } | undefined;
 			if (!place || place.key !== key) return;
 			restore.current = place;
 			pinned.current = false;

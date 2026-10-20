@@ -1,11 +1,12 @@
 // The browser side of the hub protocol: one WebSocket, request/response, and replicated subscriptions. Views are
 // render-only replicas: a snapshot followed by chord delta ops, replaced wholesale after a host reconnects.
 
+import { native } from "./native.ts";
 import { applyImmutable, type Op } from "@earendil-works/chord/delta";
 import { useSyncExternalStore } from "react";
 import type { HostState } from "../../src/hub/hosts.ts";
 import type { ClientOps, HubOps, Topic, TopicValue } from "../../src/shared/protocol.ts";
-import { perfMarkOnce } from "./perf.ts";
+import { perfMark, perfMarkOnce } from "./perf.ts";
 
 export type { HostState };
 /** An op's arguments as a rest tuple: optional when every field is. */
@@ -46,13 +47,17 @@ export class HubClient {
 	#open(): void {
 		const ws = new WebSocket(this.url);
 		this.#ws = ws;
+		let opened = false;
 		ws.onopen = () => {
+			opened = true;
+			perfMark("ws-open");
 			this.connected = true;
 			this.#retry = 0;
 			for (const sub of this.subsByKey.values()) ws.send(JSON.stringify({ t: "sub", sid: sub.sid, host: sub.host, topic: sub.topic }));
 			this.#emit();
 		};
 		ws.onclose = () => {
+			if (!opened) void this.#reportAuthRefused();
 			this.connected = false;
 			for (const pending of this.#pending.values()) pending.reject(new Error("AmPi hub connection lost"));
 			this.#pending.clear();
@@ -61,6 +66,21 @@ export class HubClient {
 			setTimeout(() => this.#open(), Math.min(5000, 300 * 2 ** this.#retry++));
 		};
 		ws.onmessage = (event) => this.#frame(JSON.parse(String(event.data)));
+	}
+
+	#authChecked = false;
+	/**
+	 * A WebSocket closed before it opened: the hub is down, or it refused this page's login cookie (a key rotated while
+	 * AmPi.app ran). Health answers with `hosts` only to an authorized caller, so a reachable hub without `hosts` means a
+	 * refused cookie; AmPi.app then signs in once with its key link. Once per page load; a browser has no bridge.
+	 */
+	async #reportAuthRefused(): Promise<void> {
+		const shell = native();
+		if (!shell || this.#authChecked) return;
+		const health = await fetch("/api/health", { cache: "no-store" }).then((r) => (r.ok ? r.json() : undefined)).catch(() => undefined);
+		if (!health || "hosts" in health) return;
+		this.#authChecked = true;
+		shell.postMessage({ type: "auth-refused" });
 	}
 
 	// biome-ignore lint: frames are loosely typed JSON

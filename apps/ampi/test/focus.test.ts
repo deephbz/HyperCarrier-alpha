@@ -37,8 +37,19 @@ const rows: [string, View, Focus, KeyIntent, string, object?, boolean?][] = [
 	["find Esc, last panel gone → transcript", session, at(null, "panel"), "find.close", "transcript"],
 	["find match → transcript", session, at(null, "composer"), "find.go", "transcript"],
 	["Session switch → composer if lost", session, at("sidebar"), "session.switch", "composer", {}, true],
-	["⌘0 → sidebar if lost", session, at("transcript"), "overview", "sidebar", {}, true],
-	["⌘0 with the sidebar hidden → page root if lost", { ...session, sidebarHidden: true }, at("transcript"), "overview", "page", {}, true],
+	["⌘0 → Overview content (D20)", session, at("transcript"), "overview", "page"],
+	["⌘0 from the sidebar → Overview content (D20)", session, at("sidebar"), "overview", "page"],
+	["⌘0 with the sidebar hidden → Overview content", { ...session, sidebarHidden: true }, at("transcript"), "overview", "page"],
+	["Back to a Session entry left in the transcript → transcript", session, { ...at(null, "composer"), entry: "transcript" }, "history.move", "transcript"],
+	["Back to a Session entry left in the composer → composer", session, { ...at(null), entry: "composer" }, "history.move", "composer"],
+	["Back to a Session entry left in the panel, panel shown → panel", withPanel, { ...at(null), entry: "panel" }, "history.move", "panel"],
+	["Back to a Session entry left in the panel, panel gone → return target", session, { ...at(null, "composer"), entry: "panel" }, "history.move", "composer"],
+	["Back to a Session entry left in the sidebar → sidebar", session, { ...at(null), entry: "sidebar" }, "history.move", "sidebar"],
+	["Back to a Session entry left in a hidden sidebar → return target", { ...session, sidebarHidden: true }, { ...at(null), entry: "sidebar" }, "history.move", "transcript"],
+	["Back to a Session entry with no record → transcript, not the composer default", session, at("composer", "transcript"), "history.move", "transcript"],
+	["Forward to the Overview left on its content → page", page, { ...at(null), entry: "page" }, "history.move", "page"],
+	["Forward to a page left in the sidebar → sidebar", page, { ...at(null), entry: "sidebar" }, "history.move", "sidebar"],
+	["Back to a page with a Session record → page", page, { ...at(null), entry: "transcript" }, "history.move", "page"],
 	["panel ✕ or tab → last if lost", withPanel, at(null, "composer"), "panel.set", "composer", {}, true],
 	["panel ✕ with focus in panel, last panel → transcript if lost", session, at(null, "panel"), "panel.set", "transcript", {}, true],
 	["resize removes focus → last if lost", session, at(null, "composer"), "layout.change", "composer", {}, true],
@@ -60,7 +71,7 @@ for (const [name, view, focus, intent, expected, change, ifLost] of rows) {
 	});
 }
 
-const intents: KeyIntent[] = ["sidebar.toggle", "panel.toggle", "composer.toggle", "insert", "panel.close", "find.close", "find.go", "session.switch", "overview", "panel.set", "layout.change"];
+const intents: KeyIntent[] = ["sidebar.toggle", "panel.toggle", "composer.toggle", "insert", "panel.close", "find.close", "find.go", "session.switch", "overview", "history.move", "panel.set", "layout.change"];
 const regions: (Region | null)[] = ["sidebar", "transcript", "composer", "panel", null];
 const lasts: SessionRegion[] = ["transcript", "composer", "panel"];
 const views: View[] = [];
@@ -84,6 +95,18 @@ test("cell matrix: every move has a chain that ends at the page root and names o
 		assert(!(next.recent as string[]).includes("sidebar"), label);
 	}
 	assert.equal(cells, views.length * regions.length * lasts.length * intents.length);
+});
+
+test("history.move: every recorded target in every view resolves to a shown target, never by focus loss only", () => {
+	for (const view of views) for (const entry of ["sidebar", "transcript", "composer", "panel", "page", undefined] as const) {
+		const next = transition({ ...view, modal: false }, { ...at(null), entry }, "history.move");
+		const label = `${entry} in ${JSON.stringify(view)}`;
+		assert(next.kind === "move" && !next.ifLost, label);
+		const first = next.chain[0];
+		if (first === "sidebar") assert(!view.sidebarHidden, label);
+		if (first === "panel") assert(view.panelShown, label);
+		if (!view.session) assert(first === "sidebar" || first === "page", label);
+	}
 });
 
 test("an open Modal blocks every key intent; view changes still resolve", () => {

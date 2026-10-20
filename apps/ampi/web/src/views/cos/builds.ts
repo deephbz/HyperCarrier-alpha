@@ -19,28 +19,32 @@ export function buildText(b: ArcBuildRun): string {
 	return `${what}${b.cause ? ` · ${b.cause}` : ""} · ${calls}${reused}${gaps}${model}`;
 }
 
-/** Where each Arc purpose's model is set; the Build button and the Build tooltip both say it. */
-export const MODEL_KEYS = "Labels and context use models.arcLabels; synthesis uses models.arcSynthesis.";
+/** Where each Arc step's model is set; the Build button and the Build tooltip both say it. */
+export const MODEL_KEYS = "Labels use models.arcLabels; the Arc (synthesis and context) uses models.arcSynthesis.";
 
 /** Tooltip detail: the model and price per call purpose, tokens, and the error when there is one. */
 export function buildDetail(b: ArcBuildRun): string {
 	// An ask command (demo, tests, other carriers) reports no usage; zero tokens over real calls means "not reported".
 	const u = b.usage, reported = !b.calls || u.input || u.output || u.cacheRead || u.cacheWrite;
 	const usage = reported ? `${u.input.toLocaleString()} input · ${u.cacheRead.toLocaleString()} cache read · ${u.cacheWrite.toLocaleString()} cache write · ${u.output.toLocaleString()} output tokens` : "usage not reported";
-	const purposes = b.models ? (["labels", "synthesis", "context"] as const).map((p) => {
+	// Records before the two-step Build also name a separate context call.
+	const purposes = b.models ? (["labels", "synthesis", "context"] as const).filter((p) => b.models![p]).map((p) => {
 		const n = b.usageByPurpose?.[p];
-		return `${p}: ${b.models![p]}${n ? ` · ${n.calls} call${n.calls === 1 ? "" : "s"} · ${n.cost === null ? "price unavailable" : money(n.cost)}` : ""}`;
+		// Only the reduced step-2 input is named; the full evidence is the default.
+		const evidence = p === "synthesis" && b.arcEvidence === "labels" ? " · evidence: owner turns only (hub.json arcEvidence)" : "";
+		return `${p}: ${b.models![p]}${n ? ` · ${n.calls} call${n.calls === 1 ? "" : "s"} · ${n.cost === null ? "price unavailable" : money(n.cost)}` : ""}${evidence}`;
 	}).concat(MODEL_KEYS) : [];
 	// `models` names each purpose's provider/id; `model`, the last answering model, names only older records.
 	const head = b.models ? "models per purpose:" : b.missingModel ? `no model named ${b.missingModel}` : b.model ?? (b.calls ? "model unknown" : "no model calls");
 	return [`${new Date(b.startedAt).toLocaleString()} · ${head}`, ...purposes, usage, b.error ?? ""].filter(Boolean).join("\n");
 }
 
-/** Running Build progress: "2 / 3 calls · 2 of 21 chunks to label · Reading chunk evidence with the model…". */
+/** Running Build progress by step: "Labelling 6 of 21 chunks… · 1 / 5 calls", then "Writing the Arc… · 4 / 5 calls". */
 export function progressText(job: NonNullable<ArcValue["job"]>): string {
-	// A Build that waits for its Session to load has planned no calls yet; only the wait is news.
-	if (!job.total && job.waitingFor) return job.waitingFor;
-	return `${job.done} / ${job.total} calls · ${job.toLabel} of ${job.chunks} chunks to label · ${job.waitingFor ?? "Reading chunk evidence with the model…"}`;
+	// A Build that waits for its Session to load or for the model check has no step yet; only the wait is news.
+	if (!job.step) return job.waitingFor ?? "Starting Build arc…";
+	const step = job.step === "labels" ? `Labelling ${job.labelled ?? 0} of ${job.toLabel} chunk${job.toLabel === 1 ? "" : "s"}…` : "Writing the Arc…";
+	return `${step} · ${job.done} / ${job.total} calls${job.waitingFor ? ` · ${job.waitingFor}` : ""}`;
 }
 
 /**
@@ -56,15 +60,17 @@ export function lastFailure(v: Pick<ArcValue, "job" | "builds">): { failure: Arc
 
 /**
  * The failed Build line: what failed, the call and model whose reply stayed invalid, when, and which Arc shows.
- * `keptAt` is when the shown Arc was built (ArcValue.keptAt), or null when no valid Arc shows.
+ * `keptAt` is when the shown Arc was built (ArcValue.keptAt), or null when no valid Arc shows. `retry` (labelRetry)
+ * replaces the generic next action of a label failure: its message already states the gap.
  */
-export function failureText(f: ArcFailure, keptAt: string | null): string {
+export function failureText(f: ArcFailure, keptAt: string | null, retry = ""): string {
 	const at = ` · ${new Date(f.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
 	const stays = keptAt ? ` Showing the Arc built at ${dateTime(keptAt)}.` : "";
+	const model = f.model ? ` · ${f.model.split("/").pop()}` : "";
+	if (retry) return `${f.message.replace(/\.$/, "")}${model}${at}.${stays} ${retry}`;
 	// A failed model check made no call. A name that names no model carries its own fix, which replaces the generic one.
 	if (f.hint) return `${f.message.replace(/\.$/, "")}${at}. ${f.hint}${stays}`;
 	if (f.preflight) return `Build arc made no model call. ${f.message.replace(/\.$/, "")}${at}.${stays} ${failureHint(f.code)}`;
-	const model = f.model ? ` · ${f.model.split("/").pop()}` : "";
 	return `${failurePrefix(f.code)} ${f.message.replace(/\.$/, "")}${model}${at}.${stays} ${failureHint(f.code)}`;
 }
 
@@ -99,13 +105,20 @@ export function estimateText(e: ArcValue["buildEstimate"]): string {
 	return `≈${e.inputTokens.toLocaleString()} input tokens · ${e.calls} calls · synthesis rereads the whole Session${last}`;
 }
 
-/** Why the last finished Build left chunks unlabelled, and what to do; empty when every chunk has a current label. */
-export function gapText(b: ArcBuildRun | undefined, unmapped: number): string {
-	if (!b || b.state !== "done" || b.empty || !b.unlabelledChunks || !unmapped) return "";
-	const n = `${b.unlabelledChunks} chunk${b.unlabelledChunks === 1 ? "" : "s"}`;
-	switch (b.labelErrorCode) {
-		case "model": return `The last Build left ${n} unlabelled: a label call failed. Check Pi’s model configuration on the hub, then Build arc labels only those chunks.`;
-		case "answer": case undefined: return `The last Build left ${n} unlabelled: the model’s answer omitted them. Build arc labels only those chunks again.`;
-		default: return `The last Build left ${n} unlabelled: ${failurePrefix(b.labelErrorCode).toLowerCase().replace(/\.$/, "")}. Build arc labels only those chunks again.`;
-	}
+/**
+ * What Build arc labels after a label failure (the last Build record left chunks unlabelled), or "" for any other
+ * failure. With a kept Arc it labels the chunks that Arc lacks, a grown last chunk included; without one, all chunks.
+ */
+export function labelRetry(f: ArcFailure, v: Pick<ArcValue, "builds" | "coverage" | "keptAt">): string {
+	const b = v.builds?.at(-1);
+	if (f.purpose !== "label" || b?.state !== "error" || !b.unlabelledChunks) return "";
+	const all = v.coverage.labelledChunks + v.coverage.unmappedChunks, n = v.keptAt ? b.freshChunks ?? v.coverage.unmappedChunks : all;
+	return v.keptAt ? `Build arc labels the ${n} new or changed chunk${n === 1 ? "" : "s"}.` : `Build arc labels all ${n} chunk${n === 1 ? "" : "s"}.`;
+}
+
+/** Why automatic Builds wait after the same chunks failed to label twice (ArcValue.stuck), and what unlocks them. */
+export function stuckText(v: Pick<ArcValue, "stuck">): string {
+	if (!v.stuck) return "";
+	const n = v.stuck.chunks.length, unlock = v.stuck.until === "messages" ? "Automatic Builds wait for new messages" : "Automatic Builds stop until Build arc succeeds or AmPi updates";
+	return `${n === 1 ? "Chunk" : `${n} chunks`} ${v.stuck.chunks.join(", ")} failed to label in the last 2 Builds. ${unlock}; Build arc retries them now.`;
 }

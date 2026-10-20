@@ -21,6 +21,7 @@ export type KeyIntent =
 	| "find.go" // a find match opened: read there
 	| "session.switch" // Alt+↑/↓, palette Enter, sidebar row
 	| "overview" // ⌘0
+	| "history.move" // Back or Forward arrived on an entry: return to the target it held
 	// View changes without a focus key. They move focus only when it would drop to body (R11, I20 no focus steal).
 	| "panel.set" // panel ✕ or tab, ⌘J shell, hash panel, Arc toggle
 	| "layout.change"; // resize, squeeze, auto-collapse, any other removal of the focused element
@@ -41,6 +42,8 @@ export type Focus = {
 	region: Region | null;
 	/** Session regions that held focus, most recent first (a ref updated on focusin; never React state). */
 	recent: readonly SessionRegion[];
+	/** The target the history entry held when it was left (history.move only). */
+	entry?: Target;
 };
 
 export type ViewChange = { sidebar?: "show" | "hide"; panel?: "open" | "close" };
@@ -146,9 +149,16 @@ export function transition(view: View, focus: Focus, intent: KeyIntent): Next {
 			// Composer autofocus on Session open places focus; the model records the composer and catches a lost focus.
 			return { ...move(view, focus, "composer"), ifLost: true };
 		case "overview":
-			// ⌘0 opens the Overview (R9). Focus stays where it was if that region is still shown; a lost focus goes to the
-			// visible sidebar, else the page root.
-			return { ...move({ ...view, session: false }, focus, view.sidebarHidden ? "page" : "sidebar"), ifLost: true };
+			// ⌘0 opens the Overview and focuses its content, so Space and ↓ scroll it (D20, owner ruling 2026-10-20).
+			return move({ ...view, session: false }, focus, "page");
+		case "history.move": {
+			// The entry's own target if it is shown in this view; else the Session's return target, or the page.
+			const saved = focus.entry;
+			if (saved === "sidebar" && !view.sidebarHidden) return move(view, focus, "sidebar");
+			if (!view.session) return move(view, focus, "page");
+			const target = saved === "transcript" || saved === "composer" || (saved === "panel" && view.panelShown) ? saved : returnTarget(view, focus);
+			return move(view, focus, target);
+		}
 		case "find.close":
 			return view.session ? move(view, focus, returnTarget(view, focus)) : unavailable;
 		case "find.go":

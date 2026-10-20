@@ -2,12 +2,32 @@
 // is the only place that decides whether a reply has the shape its purpose needs. Callers read the typed result and
 // never re-check shape.
 
-/** What an Arc model call is for. */
-export type ArcPurpose = "label" | "synthesis" | "context";
+/** What an Arc model call is for: step 1 labels, step 2 synthesis. Records before receipt v5 may also name "context". */
+export type ArcPurpose = "label" | "synthesis";
 export type LabelReply = { chunks: unknown[] };
-export type SynthesisReply = { headline: string; projects: unknown[]; transitions: unknown[] };
-export type ContextReply = { asks: unknown[]; threads: unknown[]; unassigned: Record<string, unknown> };
-type Replies = { label: LabelReply; synthesis: SynthesisReply; context: ContextReply };
+/** Step 2: tier 1 (headline, projects, transitions) and tier 2 (asks, threads, unassigned) in one answer. */
+export type SynthesisReply = { headline: string; projects: unknown[]; transitions: unknown[]; asks: unknown[]; threads: unknown[]; unassigned: Record<string, unknown> };
+type Replies = { label: LabelReply; synthesis: SynthesisReply };
+type AskRequest = { system: string; prompt: string; purpose: "arcLabels" | "arcSynthesis"; model: string; resolved: true };
+/**
+ * One Arc model call through the Build: an invalid reply is asked once more with the reason, then fails the call.
+ * `accept` turns the parsed reply into what the Build stores; it throws InvalidReply when a purpose's rule fails.
+ */
+export type Call = <R, T = R>(purpose: ArcPurpose, req: AskRequest, accept?: (r: R) => T) => Promise<{ answer: { model?: string | null }; reply: T }>;
+
+/**
+ * Why a Build failed. `model`: no usable model, or the model runner or provider failed (ask codes model_not_found,
+ * registry_unreadable, no_model, model_error, timeout, no_result, busy). `answer`: the model answered without usable
+ * JSON or labels. `source`: the Session's derived data changed or was unreadable while the Build read its snapshot.
+ * `internal`: anything else.
+ */
+export type ArcErrorCode = "model" | "answer" | "source" | "internal";
+const MODEL_CODES = new Set(["model_not_found", "registry_unreadable", "no_model", "model_error", "timeout", "no_result", "busy"]);
+export const failure = (code: ArcErrorCode, message: string) => Object.assign(new Error(message), { code });
+export function errorCode(e: unknown): ArcErrorCode {
+	const code = (e as { code?: string })?.code;
+	return code === "answer" || code === "source" || code === "model" ? code : code && MODEL_CODES.has(code) ? "model" : "internal";
+}
 
 /**
  * An invalid reply: `reason` names the first missing or mistyped field, for the retry note. `message` defaults to
@@ -46,8 +66,7 @@ export function json(source: string): unknown {
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const REQUIRED: { [P in ArcPurpose]: [string, "array" | "object" | "text"][] } = {
 	label: [["chunks", "array"]],
-	synthesis: [["headline", "text"], ["projects", "array"], ["transitions", "array"]],
-	context: [["asks", "array"], ["threads", "array"], ["unassigned", "object"]],
+	synthesis: [["headline", "text"], ["projects", "array"], ["transitions", "array"], ["asks", "array"], ["threads", "array"], ["unassigned", "object"]],
 };
 
 /**

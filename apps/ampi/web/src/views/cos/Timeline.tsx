@@ -1,6 +1,7 @@
 import { Fragment, memo, useEffect, useMemo, useRef, useState } from "react";
 import type { TimelineSession, TimelineValue } from "../../../../src/pi/views/cos-timeline.ts";
 import { isSessionInScope, SESSION_SCOPE_MS } from "../../../../src/shared/session-scope.ts";
+import { navigate } from "../../nav.ts";
 import { href, money, tokens, type Route } from "../../util.ts";
 import { dateTime, FeedStatus, useFleet } from "./data.tsx";
 import { seenAt } from "../../seen.ts";
@@ -109,7 +110,7 @@ const Stream = memo(function Stream({ band, from, to, bucketMs, unit, scale, col
 			{band.end >= from && band.start <= to && <line x1={Math.max(0, x(band.start))} x2={Math.min(X, x(band.end))} y1="28" y2="28" className="cos-duration" />}
 			{now >= from && now <= to && <line x1={x(now)} x2={x(now)} y1="0" y2="56" className="cos-now" />}
 			{moment !== undefined && moment >= from && moment <= to && <rect x={x(moment) - 2} y="0" width="4" height="56" className="cos-moment" />}
-			<a href={link} aria-label={`Open ${band.title} at nearest entry`} onClick={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); void hub.request(band.target.host, "view.cos.timeline.locate", { threadId: band.target.threadId, at }).then((r) => { location.hash = href.thread(band.target.host, band.target.threadId, { entry: r.entry, panel: band.team ? "team" : "rarebit" }); }, (error) => onHover(String(error))); }} onFocus={() => report(at)} onMouseMove={(e) => { const box = e.currentTarget.closest("svg")!.getBoundingClientRect(); report(from + (e.clientX - box.left) / box.width * (to - from)); }}>
+			<a href={link} aria-label={`Open ${band.title} at nearest entry`} onClick={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); void hub.request(band.target.host, "view.cos.timeline.locate", { threadId: band.target.threadId, at }).then((r) => { navigate(href.thread(band.target.host, band.target.threadId, { entry: r.entry, panel: band.team ? "team" : "rarebit" })); }, (error) => onHover(String(error))); }} onFocus={() => report(at)} onMouseMove={(e) => { const box = e.currentTarget.closest("svg")!.getBoundingClientRect(); report(from + (e.clientX - box.left) / box.width * (to - from)); }}>
 				<path className={`cos-band cos-color-${color}`} d={top.join("")} />
 				<rect x={Math.max(0, x(band.start))} y="4" width={Math.max(0, Math.min(X, x(Math.max(band.end, band.start + 60_000))) - Math.max(0, x(band.start)))} height="48" fill="transparent" />
 			</a>
@@ -186,7 +187,7 @@ function TimelineView({ route, selected }: { route: Route; selected?: PanelSelec
 	const query = Object.fromEntries(queryParams);
 	const change = (q: Record<string, string | undefined>) => href.page("timeline", [], { ...query, ...q });
 	const update = (q: Record<string, string | undefined>) => {
-		if (!selected) { location.hash = change(q); return; }
+		if (!selected) { navigate(change(q)); return; }
 		const next = new URLSearchParams(queryParams);
 		for (const [key, value] of Object.entries(q)) value === undefined ? next.delete(key) : next.set(key, value);
 		setPanelQuery(next);

@@ -2502,11 +2502,66 @@ export const journeys = [
         await p.locator(transcript).waitFor({ timeout: 15_000 });
         return { switched: true };
       });
-      await j.step('overview', 'Press ⌘0 from the transcript: the Overview opens and the lost focus goes to the visible sidebar (R9)', async () => {
+      // D20: ⌘0 focuses the Overview content (the marked page scroller), so Space and ↓ scroll it at once.
+      const pageContentFocused = () => p.evaluate(() => document.activeElement?.matches('[data-page-root] [data-page-scroller]') ?? false);
+      const transcriptTop = () => p.evaluate(() => document.querySelector('[data-region="transcript"]').scrollTop);
+      await j.step('history', 'Read mid-transcript with a draft, ⌘0, then Back: the transcript returns at its place with focus and the draft; Forward returns to the Overview content. Browser path (history.back) and AmPi.app path (⌘[ / ⌘])', async () => {
+        await startIn('composer');
+        const draft = 'draft kept across Back';
+        await p.getByRole('textbox', { name: 'Message the agent' }).fill(draft);
+        await focusTranscript();
+        await p.evaluate(() => { const el = document.querySelector('[data-region="transcript"]'); el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight - 1500); });
+        await p.waitForTimeout(300);
+        const session = p.url();
+        const top = await transcriptTop();
+        const back = async (how) => {
+          await how();
+          await assertEventually(async () => p.url() === session, `${how.name}: Back did not return to the Session`, 10_000);
+          await p.locator(transcript).waitFor({ timeout: 15_000 });
+          await regionIs('transcript', `${how.name}: Back did not return focus to the transcript`);
+          await assertEventually(async () => Math.abs((await transcriptTop()) - top) <= 40, `${how.name}: Back did not return to the reading place (was ${top}, now ${await transcriptTop()})`, 10_000);
+          assert.equal(await p.getByRole('textbox', { name: 'Message the agent' }).inputValue(), draft, `${how.name}: the unsent draft was lost`);
+        };
+        const forward = async (how) => {
+          await how();
+          await p.waitForURL(/#\/v\/overview/, { timeout: 10_000 });
+          await assertEventually(pageContentFocused, `${how.name}: Forward did not focus the Overview content`, 10_000);
+        };
+        await p.keyboard.press('ControlOrMeta+Digit0');
+        await p.waitForURL(/#\/v\/overview/, { timeout: 10_000 });
+        // The browser carrier: AmPi binds no key there; the browser's own Back runs history.back().
+        await back(async function browserBack() { await p.evaluate(() => history.back()); });
+        await forward(async function browserForward() { await p.evaluate(() => history.forward()); });
+        // The AmPi.app carrier (its WKWebView message handler): AmPi's keymap runs Back and Forward.
+        await p.evaluate(() => { window.webkit = { messageHandlers: { ampi: { postMessage() {} } } }; });
+        try {
+          await back(async function appBack() { await p.keyboard.press('ControlOrMeta+BracketLeft'); });
+          await forward(async function appForward() { await p.keyboard.press('ControlOrMeta+BracketRight'); });
+          await back(async function appBackAgain() { await p.keyboard.press('ControlOrMeta+BracketLeft'); });
+        } finally {
+          await p.evaluate(() => { delete window.webkit; });
+        }
+        await p.getByRole('textbox', { name: 'Message the agent' }).fill('');
+        // Back to a Session or Host that no longer exists names that state, and Back leaves it again.
+        const gone = {};
+        for (const [name, swap, text] of [
+          ['session', h => h.replace(/\/t\/[^?]+/, '/t/pi%3Agone-session'), /Unknown Session on this Host/],
+          ['host', h => h.replace(/^#\/h\/[^/]+/, '#/h/gone-host'), /Unknown host gone-host/],
+        ]) {
+          await p.evaluate(hash => { location.hash = hash; }, swap(new URL(session).hash));
+          await assertEventually(async () => text.test(await p.locator('[data-page-root]').innerText()), `a gone ${name} does not say "${text.source}"; it shows: ${(await p.locator('[data-page-root]').innerText()).trim().slice(0, 160)}`, 15_000);
+          gone[name] = (await p.locator('[data-page-root] .empty').first().innerText()).trim();
+          await p.evaluate(() => history.back());
+          await assertEventually(async () => p.url() === session, `Back from a gone ${name} did not return`, 10_000);
+          await p.locator(transcript).waitFor({ timeout: 15_000 });
+        }
+        return { top, draft: true, gone };
+      });
+      await j.step('overview', 'Press ⌘0 from the transcript: the Overview opens with its content focused (D20)', async () => {
         await focusTranscript();
         await p.keyboard.press('ControlOrMeta+Digit0');
         await p.waitForURL(/#\/v\/overview/, { timeout: 10_000 });
-        await regionIs('sidebar', '⌘0 from the transcript did not move the lost focus to the sidebar');
+        await assertEventually(pageContentFocused, `⌘0 from the transcript did not focus the Overview content; focus is in ${await region()}`, 10_000);
         return { url: p.url().split('#')[1] };
       });
       await j.step('page-sidebar', 'On the Overview with the sidebar focused, ⌘B hides it and the page scroller takes focus with a ring and scrolls with ↓; ⌘B again shows and focuses the sidebar', async () => {

@@ -85,7 +85,9 @@ function runFile(file) {
 	return new Promise((done) => {
 		const fileStarted = Date.now();
 		// detached: the file and every process it spawns share one process group, which a timeout ends together.
-		const child = spawn(process.execPath, ["--test", `--test-timeout=${testTimeout}`, "--test-reporter=spec", file], { cwd: root, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+		// Isolation none: this process already is the file's process. Under Node 22 the default isolation also puts
+		// --test-timeout on the whole file, so a file whose tests together outlast one test bound failed in CI.
+		const child = spawn(process.execPath, ["--test", "--experimental-test-isolation=none", `--test-timeout=${testTimeout}`, "--test-reporter=spec", file], { cwd: root, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
 		running.add(child);
 		let output = "", timeout;
 		child.stdout.on("data", (chunk) => { output += chunk; });

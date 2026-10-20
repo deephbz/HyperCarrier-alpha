@@ -9,6 +9,7 @@
     "composer-keys.test.ts",
     "arc-reopen.test.ts",
     "focus.test.ts",
+    "nav.test.ts",
     "keymap.test.ts",
     "crash-a.test.ts",
     "crash-b.test.ts",
@@ -75,6 +76,9 @@
     "perf-report.test.ts",
     "trace.test.ts",
     "perf-browser.test.ts",
+    "perf-switch-target.test.ts",
+    "web-dist-stamp.test.ts",
+    "hub-static.test.ts",
     "tool-state.test.ts",
     "pin-guard.test.ts"
   ],

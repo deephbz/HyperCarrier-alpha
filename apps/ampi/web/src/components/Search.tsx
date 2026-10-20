@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { SearchResult } from "../../../src/pi/search.ts";
 import { hub, type HostState } from "../client.ts";
+import { findSteps, navigate } from "../nav.ts";
 import { href } from "../util.ts";
 
 export function SessionFind({ host, threadId, onClose, onGo }: { host: string; threadId: string; onClose: () => void; onGo?: () => void }) {
@@ -9,6 +10,14 @@ export function SessionFind({ host, threadId, onClose, onGo }: { host: string; t
  const [error, setError] = useState("");
  const [busy, setBusy] = useState(false);
  const generation = useRef(0);
+ // One Find session per open bar: its first match jump is a history step, later ones replace it (D20).
+ const step = useRef(findSteps()).current;
+ const go = (e: React.MouseEvent<HTMLAnchorElement>) => {
+  if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  e.preventDefault();
+  navigate(e.currentTarget.getAttribute("href")!, step());
+  onGo?.();
+ };
  useEffect(() => { generation.current++; setResult(undefined); setError(""); setBusy(false); }, [host, threadId]);
  const run = async () => {
   const token = ++generation.current; setBusy(true); setError(""); setResult(undefined);
@@ -22,7 +31,7 @@ export function SessionFind({ host, threadId, onClose, onGo }: { host: string; t
   <p className="hint">Copied active branch · text, thinking and tools · case-insensitive substring · no images or inactive branches</p>
   {error && <p role="alert">{error}</p>}
   {result && <><p role="status">{result.total} matching entries · {result.scanned} scanned{result.more ? " · first 200 shown" : ""}{result.invalidLines ? ` · ${result.invalidLines} invalid lines excluded` : ""}</p>
-   {result.hits.map((hit) => <p key={hit.entry}><a href={href.thread(host, threadId, { entry: hit.entry })} onClick={onGo}>{hit.snippet || hit.entry}</a><small className="hint"> · {hit.kind} · this copied branch</small></p>)}
+   {result.hits.map((hit) => <p key={hit.entry}><a href={href.thread(host, threadId, { entry: hit.entry })} onClick={go}>{hit.snippet || hit.entry}</a><small className="hint"> · {hit.kind} · this copied branch</small></p>)}
    <p className="hint">{result.scope}</p></>}
  </section>;
 }

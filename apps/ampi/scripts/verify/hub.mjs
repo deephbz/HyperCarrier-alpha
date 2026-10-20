@@ -9,10 +9,11 @@
 // (proofDir) and survives stop. The access key stays in <run>/hub.key (mode 600); logs carry no key.
 import { spawn, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { constants, homedir, tmpdir } from 'node:os';
 import { delimiter, dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { webDistCurrent } from '../web-inputs.mjs';
 import { ampiSubmodules, ownRepo, submoduleGit } from '../submodules.mjs';
 import { threadsSnapshot } from './live-rows.mjs';
 
@@ -40,16 +41,6 @@ function guardRunDir(run) {
 
 export function proofDirFor(runId) {
   return resolve(process.env.AMPI_VERIFY_PROOF ?? join(checkout, 'output/verify-ampi', runId));
-}
-
-function webBuildCurrent() {
-  const index = join(app, 'web/dist/index.html');
-  if (!existsSync(index)) return { ok: false, detail: 'web/dist/index.html missing; run npm run build:web -w @hypercarrier/ampi' };
-  const built = statSync(index).mtimeMs;
-  let newest = 0, newestFile = '';
-  const walk = dir => { for (const e of readdirSync(dir, { withFileTypes: true })) { const p = join(dir, e.name); if (e.isDirectory()) walk(p); else { const m = statSync(p).mtimeMs; if (m > newest) { newest = m; newestFile = p; } } } };
-  walk(join(app, 'web/src'));
-  return newest > built ? { ok: false, detail: `web/dist is older than ${relative(app, newestFile)}; rebuild` } : { ok: true, detail: 'web/dist newer than web/src' };
 }
 
 /**
@@ -81,7 +72,7 @@ export function submodulesPinned(root = target) {
 
 /** Start pi-demo.ts in its own process group with disposable HOME and AMPI_HOME on an OS-assigned port. */
 export async function launch({ runId = `run-${new Date().toISOString().replace(/[:.]/g, '-')}`, attempts = 3 } = {}) {
-  for (const ready of [submodulesPinned(), webBuildCurrent()]) {
+  for (const ready of [submodulesPinned(), webDistCurrent(target)]) {
     if (!ready.ok) throw new Error(ready.detail);
     for (const warning of ready.warnings ?? []) console.warn(`warning: ${warning}`);
   }
@@ -159,7 +150,7 @@ export async function doctor(state) {
   check('disposable paths', inside(state.home, state.run) && inside(state.demo, state.run) && !state.home.startsWith(join(homedir(), '.ampi')), `${state.run}`);
   const pinned = submodulesPinned();
   check('submodules pinned', pinned.ok, [pinned.detail, ...pinned.warnings.map(w => `warning: ${w}`)].join('\n'));
-  const build = webBuildCurrent();
+  const build = webDistCurrent(target);
   check('web build current', build.ok, build.detail);
   check('revision', true, state.revision);
   try {

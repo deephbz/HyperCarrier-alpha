@@ -74,3 +74,40 @@ test("an open overlay gates global chords in the dispatcher: its own chord and p
 		for (const done of off) done();
 	}
 });
+
+test("⌘[ / ⌘] have one owner per carrier: the browser's own Back, or AmPi.app's handler; a dialog blocks both (navhistory)", () => {
+	const fired: string[] = [];
+	const off = [registerKeyAction("history.back", () => fired.push("back")), registerKeyAction("history.forward", () => fired.push("forward"))];
+	const press = (code: string) => {
+		const event = { code, metaKey: true, ctrlKey: false, shiftKey: false, altKey: false, defaultPrevented: false, target: null, preventDefault() { event.defaultPrevented = true; } };
+		dispatchGlobalKey(event as unknown as KeyboardEvent);
+		return event.defaultPrevented;
+	};
+	let release = () => {};
+	// The AmPi.app bridge as native.ts reads it: `window.webkit.messageHandlers.ampi`.
+	const hadWindow = "window" in globalThis;
+	if (!hadWindow) Object.assign(globalThis, { window: {} });
+	const win = (globalThis as unknown as { window: { webkit?: unknown } }).window;
+	try {
+		assert.equal(press("BracketLeft"), false, "a plain browser runs its own Back");
+		assert.deepEqual(fired, []);
+		win.webkit = { messageHandlers: { ampi: {} } };
+		assert.equal(press("BracketLeft"), true);
+		assert.equal(press("BracketRight"), true);
+		assert.deepEqual(fired, ["back", "forward"]);
+		release = registerOverlay("dialog");
+		assert.equal(press("BracketLeft"), true);
+		delete win.webkit;
+		assert.equal(press("BracketLeft"), true, "a dialog also holds the browser's Back where preventDefault reaches it");
+		assert.deepEqual(fired, ["back", "forward"]);
+		// Help's first-page rule holds only where AmPi owns Back; a browser's Back leaves AmPi there.
+		const back = KEYMAP.find((binding) => binding.id === "history.back")!;
+		assert.equal(back.appNote, "does nothing at the first AmPi page");
+		assert(back.note && !back.note.includes("first AmPi page"));
+	} finally {
+		release();
+		delete win.webkit;
+		if (!hadWindow) delete (globalThis as { window?: unknown }).window;
+		for (const done of off) done();
+	}
+});

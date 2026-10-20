@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { Hub } from "../src/hub/hub.ts";
 import type { ArcListValue, ArcValue } from "../src/pi/views/cos-arc.ts";
-import { CONTEXT_VERSION } from "../src/pi/views/cos-arc.ts";
+import { STEP2_VERSION } from "../src/pi/views/cos-arc.ts";
 import type { TimelineValue } from "../src/pi/views/cos-timeline.ts";
 import { Browser } from "./helpers.ts";
 import { HELPER_MODELS } from "./pi-host-fixtures.ts";
@@ -25,7 +25,7 @@ async function setup(t: { after: (fn: () => unknown) => void }, header: object =
 	const fail = join(f.dir, "no-model");
 	const ask = `const fs = require('node:fs'); fs.appendFileSync(${JSON.stringify(calls)}, 'call\\n');
 if(fs.existsSync(${JSON.stringify(fail)})){ console.error('No model configured on this synthetic hub'); process.exit(2); }
-let s=''; process.stdin.on('data',d=>s+=d).on('end',()=>{try{const p=JSON.parse(s); console.log(JSON.stringify(p.arcs ? (()=>{const id=(p.arcs.map(a=>a.rarebitEvidence).join('\\n').match(/\\[([^\\]]+)\\]/)||[])[1]; return {asks:p.askCandidates[0]?[{candidates:[p.askCandidates[0].id],text:'Approve the deploy',kind:'approval',answeredBy:null}]:[],threads:[{label:'Reader work',state:'active',progress:[],decisions:[{text:'Pick the parser',citations:[id],quote:'user evidence u1'}],blockers:[]}],unassigned:{progress:[],decisions:[],blockers:[]}};})() : p.chunks.some(c=>'evidence' in c) ? {chunks:p.chunks.map(c=>({chunk:c.chunk,topic:'Label '+c.chunk,project:'Reader',ideas:[{text:'Cited idea',evidence:[c.evidence.match(/\\[([^\\]]+)\\]/)[1],'invented']},{text:'Invented only',evidence:['invented']}]}))} : {headline:'Reader arc',projects:[{name:'Canonical Reader',aliases:['Reader'],summary:'Synthetic work',status:'paused'}],transitions:[{chunk:'c0',kind:'pivot',to:'Reader'},{chunk:'invented',kind:'pivot'}]}));}catch(e){console.error(String(e.stack).replace(/\\n/g,' | ')+' INPUT '+s.slice(0,400));process.exit(3);}});`;
+let s=''; process.stdin.on('data',d=>s+=d).on('end',()=>{try{const p=JSON.parse(s); console.log(JSON.stringify(p.arcs ? (()=>{const id=(p.arcs.map(a=>a.rarebitEvidence).join('\\n').match(/\\[([^\\]]+)\\]/)||[])[1]; return {headline:'Reader arc',projects:[{name:'Canonical Reader',aliases:['Reader'],summary:'Synthetic work',status:'paused'}],transitions:[{chunk:'c0',kind:'pivot',to:'Reader'},{chunk:'invented',kind:'pivot'}],asks:p.askCandidates[0]?[{candidates:[p.askCandidates[0].id],text:'Approve the deploy',kind:'approval',answeredBy:null}]:[],threads:[{label:'Reader work',state:'active',progress:[],decisions:[{text:'Pick the parser',citations:[id],quote:'user evidence u1'}],blockers:[]}],unassigned:{progress:[],decisions:[],blockers:[]}};})() : {chunks:p.chunks.map(c=>({chunk:c.chunk,topic:'Label '+c.chunk,project:'Reader',ideas:[{text:'Cited idea',evidence:[c.evidence.match(/\\[([^\\]]+)\\]/)[1],'invented']},{text:'Invented only',evidence:['invented']}]}))}));}catch(e){console.error(String(e.stack).replace(/\\n/g,' | ')+' INPUT '+s.slice(0,400));process.exit(3);}});`;
 	const hub = new Hub({ backend: "pi", models: HELPER_MODELS, hosts: [{ id: "devbox", label: "devbox", kind: "pi-local", cacheDir: join(f.dir, "cache"), askCommand: [process.execPath, "-e", ask], agentConfig: { agentDir: f.agentDir, pollMs: 30, discoverMs: 150, teams: false }, env: { HOME: f.dir, HERDR_BIN: join(f.dir, "herdr"), FAKE_HERDR_STATE: join(f.dir, "state.json"), FAKE_HERDR_LOG: join(f.dir, "calls.jsonl") } }] }, { token: "c".repeat(64) });
 	const port = await hub.listen(0);
 	const browser = await Browser.open(port, undefined, `ampi_k_${port}=${"c".repeat(64)}`);
@@ -85,7 +85,7 @@ test("cos.arc: deterministic chunks keep a compaction inside and cut at an idle 
 	assert.equal(built.synthesis!.headline, "Reader arc");
 	assert.deepEqual(Object.keys(built.context!).sort(), ["answered", "asOfEntryId", "asOfRarebitCount", "builtAt", "coverage", "format", "model", "needsYou", "overtaken", "rarebitFingerprint", "threads", "unassigned"]);
 	assert.ok(Array.isArray(built.context!.answered), "answered asks remain available as an array");
-	assert.equal(built.context!.format, CONTEXT_VERSION, "the tree records its prompt version");
+	assert.equal(built.context!.format, STEP2_VERSION, "the tree records its prompt version");
 	assert.equal(built.contextStatus.formatChanged, false);
 	assert.deepEqual(built.context!.answered, [], "this fixture has no answered asks");
 	// The owner turn u2 follows the ask in a1 without answering it, so the ask is overtaken.
@@ -154,7 +154,7 @@ test("cos.arc: inherited parent evidence is excluded and the thirteenth owner tu
 	const value = await browser.until<ArcValue>(sid, (v) => v.chunks?.at(-1)?.lastEntryId === "own12");
 	assert.deepEqual(value.chunks.map((c) => [c.firstEntryId, c.lastEntryId, c.ownerTurns]), [["own0", "own11", 12], ["own12", "own12", 1]]);
 	assert.equal(value.coverage.excludedEntries, 3);
-	assert.equal(value.buildEstimate.calls, 3, "one combined Build adds one context call to the label and synthesis calls");
+	assert.equal(value.buildEstimate.calls, 2, "one label call and one step-2 call");
 	assert.equal(existsSync(calls), false);
 });
 

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import type { ThreadsState, ThreadSummary } from "../../src/shared/protocol.ts";
 import { type HostState, useHosts, useTopic } from "./client.ts";
 import { AccountsDialog } from "./components/Accounts.tsx";
@@ -21,6 +21,7 @@ import { perfMarkPainted } from "./perf.ts";
 import { focusRegion, handleRegionScrollKey, installKeymapDispatcher, openOverlay, useKeyAction } from "./keymap.ts";
 import { remember, transition, type KeyIntent, type Region, type SessionRegion, type Target, type View } from "./focus.ts";
 import { PANEL_DEFAULT_KEY, panelClosed } from "./views/cos/arc-reopen.ts";
+import { arriveEntry, goBack, goForward, installNavLinks, navigate, noteFocus, ROUTE_EVENT } from "./nav.ts";
 
 function savedWidth(key: string, fallback: number, min: number, max: number) {
 	const value = Number(localStorage.getItem(key) ?? fallback);
@@ -87,7 +88,8 @@ function useRoute() {
 	return useSyncExternalStore(
 		(listener) => {
 			window.addEventListener("hashchange", listener);
-			return () => window.removeEventListener("hashchange", listener);
+			window.addEventListener(ROUTE_EVENT, listener);
+			return () => { window.removeEventListener("hashchange", listener); window.removeEventListener(ROUTE_EVENT, listener); };
 		},
 		() => location.hash,
 	);
@@ -117,9 +119,9 @@ export function App() {
 	const pendingFocus = useRef<{ seq: number; chain: Target[]; ifLost?: true } | undefined>(undefined);
 	const [focusRequest, setFocusRequest] = useState<{ seq: number; chain: Target[]; ifLost?: true }>();
 	const applyView = useRef({ sidebar: (_show: boolean) => {}, panel: (_open: boolean) => {} });
-	const focusIntent = useRef((intent: KeyIntent): boolean => {
+	const focusIntent = useRef((intent: KeyIntent, entry?: Target): boolean => {
 		const region = (document.activeElement?.closest<HTMLElement>("[data-region]")?.dataset.region ?? null) as Region | null;
-		const next = transition({ ...viewRef.current, modal: openOverlay() !== undefined }, { region, recent: recentRegions.current }, intent);
+		const next = transition({ ...viewRef.current, modal: openOverlay() !== undefined }, { region, recent: recentRegions.current, entry }, intent);
 		if (next.kind === "unavailable") return false;
 		// A view-change request never displaces a pending key request; both resolve from `last`.
 		if (next.ifLost && pendingFocus.current && !pendingFocus.current.ifLost) return true;
@@ -148,7 +150,25 @@ export function App() {
 	useKeyAction("zoom.in", () => changeOverallZoom(0.05));
 	useKeyAction("zoom.out", () => changeOverallZoom(-0.05));
 	useKeyAction("zoom.reset", () => changeOverallZoom(0));
-	useKeyAction("overview", () => { location.hash = href.page("overview"); focusIntent("overview"); });
+	// A focus intent that waits for the route it navigated to; it runs once that route has rendered.
+	const routeIntent = useRef<KeyIntent | undefined>(undefined);
+	useKeyAction("overview", () => {
+		routeIntent.current = "overview";
+		if (navigate(href.page("overview"))) return;
+		routeIntent.current = undefined;
+		focusIntent("overview");
+	});
+	useKeyAction("history.back", goBack);
+	useKeyAction("history.forward", goForward);
+	useEffect(() => installNavLinks(), []);
+	// Each route arrival: Back, Forward or a reload returns to the target the entry held (history.move).
+	useLayoutEffect(() => {
+		const arrival = arriveEntry();
+		const intent = routeIntent.current;
+		routeIntent.current = undefined;
+		if (arrival.kind === "traverse") focusIntent("history.move", arrival.focus);
+		else if (intent) focusIntent(intent);
+	}, [hash]);
 	useKeyAction("new", () => setDialog("new"));
 	useEffect(() => installKeymapDispatcher(), []);
 	const changeOverallZoom = (delta: number) => {
@@ -179,6 +199,8 @@ export function App() {
 			lastFocused.current = event.target as Element;
 			const region = (event.target as Element | null)?.closest?.<HTMLElement>("[data-region]")?.dataset.region;
 			if (region === "transcript" || region === "composer" || region === "panel") recentRegions.current = remember(recentRegions.current, region);
+			const target = region ?? ((event.target as Element | null)?.closest?.("[data-page-root]") ? "page" : undefined);
+			if (target) noteFocus(target as Target);
 		};
 		document.addEventListener("focusin", record);
 		// A click on empty space leaves focus on body on purpose: forget the element, so a later removal steals nothing (R11).
@@ -300,7 +322,7 @@ export function App() {
 			if (!open && panel) panelClosed(panel);
 			setPanel(open ? defaultPanel() : undefined);
 			const r = hashRoute();
-			if (!open && r.panel && r.host && r.thread) history.replaceState(history.state, "", href.thread(r.host, r.thread, r.entry ? { entry: r.entry } : {}));
+			if (!open && r.panel && r.host && r.thread) navigate(href.thread(r.host, r.thread, r.entry ? { entry: r.entry } : {}), "replace");
 		},
 	};
 	// Where no shell panel exists (a Pi Session), ⌘J is unavailable: it does nothing and help names its context.

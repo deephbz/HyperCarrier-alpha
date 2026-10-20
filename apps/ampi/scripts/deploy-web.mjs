@@ -5,31 +5,19 @@
 // A cache entry is <cacheDir>/<key>/{dist,inputs.json}. The key hashes the content of every module Vite loaded for that
 // build, plus the build configuration, the lock file and the Node version. A new import changes an existing input, so
 // a lookup that recomputes each entry's key over the current files is exact.
+// The inputs come from web-inputs.mjs, which also stamps every build of web/vite.config.ts for the disposable hubs.
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { buildInputs, FIXED, hashFile } from "./web-inputs.mjs";
+
+export { FIXED };
 
 const SCHEMA = "deploy-web/2";
 const KEEP = 8;
 const MARK = ".deploy-web-key";
-// Inputs that shape the build without being modules. build() adds the resolved vite and plugin-react package.json.
-export const FIXED = [
-	"apps/ampi/web/vite.config.ts",
-	"apps/ampi/web/tsconfig.json",
-	"apps/ampi/web/index.html",
-	"apps/ampi/package.json",
-	"package.json",
-	"package-lock.json",
-];
-
-function hashFile(file, memo) {
-	if (!memo.has(file)) {
-		memo.set(file, existsSync(file) ? createHash("sha256").update(readFileSync(file)).digest("hex") : "missing");
-	}
-	return memo.get(file);
-}
 
 // Inputs inside the checkout are relative paths, so one cache serves every checkout; inputs outside it are absolute.
 // The memo shares file hashes across the entries of one lookup.
@@ -60,16 +48,12 @@ function entries(cacheDir) {
 		.map((e) => e.k);
 }
 
+
+
 async function build(checkout, cacheDir) {
 	const app = join(checkout, "apps/ampi");
 	const req = createRequire(join(app, "package.json"));
 	const vite = await import(pathToFileURL(req.resolve("vite")).href);
-	// The package.json that Node resolution finds for each build tool (plugin-react does not export ./package.json).
-	const tools = ["vite", "@vitejs/plugin-react"].map((name) => {
-		const dir = req.resolve.paths(name).find((d) => existsSync(join(d, name, "package.json")));
-		if (!dir) throw new Error(`cannot find ${name}/package.json`);
-		return realpathSync(join(dir, name, "package.json"));
-	});
 	const out = join(cacheDir, `build-${process.pid}`);
 	const ids = new Set();
 	await vite.build({
@@ -84,13 +68,7 @@ async function build(checkout, cacheDir) {
 			},
 		}],
 	});
-	const inputs = [...ids, ...tools]
-		.filter((id) => !id.startsWith("\0"))
-		.map((id) => id.replace(/[?#].*$/, ""))
-		.filter((file) => isAbsolute(file) && existsSync(file))
-		// Outside the checkout (a symlinked node_modules) a relative path would name another file from another checkout.
-		.map((file) => (relative(checkout, file).startsWith("..") ? file : relative(checkout, file)));
-	if (!inputs.includes("apps/ampi/web/src/main.tsx")) throw new Error(`the recorded inputs (${inputs.length}) lack web/src/main.tsx`);
+	const inputs = buildInputs(checkout, ids);
 	const key = inputKey(checkout, inputs);
 	rmSync(join(cacheDir, key), { recursive: true, force: true });
 	mkdirSync(join(cacheDir, key));

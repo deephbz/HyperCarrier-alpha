@@ -10,22 +10,38 @@ export function hubConfigPath(): string {
 }
 
 /**
- * One hub.json `models` key per helper purpose, the only way to configure it. `arcLabels` covers Arc chunk labels and
- * the two-tier context; `arcSynthesis` covers the headline and synthesis.
+ * One hub.json `models` key per helper purpose, the only way to configure it. `arcLabels` covers Arc chunk labels
+ * (step 1); `arcSynthesis` covers step 2: the headline, the synthesis and the two-tier context.
  */
 export type ModelPurpose = "arcLabels" | "arcSynthesis" | "rarebitRecap" | "rarebitAsk";
 export type HelperModels = Partial<Record<ModelPurpose, string>>;
 const PURPOSES: readonly ModelPurpose[] = ["arcLabels", "arcSynthesis", "rarebitRecap", "rarebitAsk"];
 
-let configFile: string | undefined, configModels: unknown;
+let configFile: string | undefined, configModels: unknown, configEvidence: unknown;
 /**
  * The running hub names its config file (`ampi hub --config`). A hub made in code without a file (demo, verify and
  * test hubs) passes its config's `models` block instead. With neither, every key is unset.
  */
-export function useHubConfig(path: string | undefined, models?: unknown): void {
-	configFile = path; configModels = path ? undefined : models;
+export function useHubConfig(path: string | undefined, models?: unknown, evidence?: unknown): void {
+	configFile = path; configModels = path ? undefined : models; configEvidence = path ? undefined : evidence;
 	// Name settings the hub does not read at start, not only at the first helper call.
 	try { namedModel("arcLabels", undefined, path); } catch { /* the first helper call reports a malformed file */ }
+}
+
+/**
+ * What Arc step 2 reads per chunk: `full` (the default) sends the chunk's Rarebit messages; `labels` sends only its
+ * owner turns, with the labels and ask candidates, for a cheaper step 2. hub.json `arcEvidence` is read per Build, so
+ * an edit applies to the next Build. An invalid value throws with its path.
+ */
+export type ArcEvidence = "full" | "labels";
+export function arcEvidence(): ArcEvidence {
+	let value: unknown = configFile ? undefined : configEvidence;
+	if (configFile && existsSync(configFile)) {
+		try { value = (JSON.parse(readFileSync(configFile, "utf8")) as { arcEvidence?: unknown }).arcEvidence; }
+		catch (e) { throw new Error(`${configFile} is not valid JSON: ${(e as Error).message}`); }
+	}
+	if (value === undefined || value === "full" || value === "labels") return value ?? "full";
+	throw new Error(`${configFile ?? "the hub's config"}: arcEvidence must be "full" or "labels"`);
 }
 
 /** Where a helper model name came from, so an error can say where to change it. `unset`: no key names a model. */

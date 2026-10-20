@@ -1,4 +1,5 @@
 import type { ThreadSummary } from "../../src/shared/protocol.ts";
+import { navigate } from "./nav.ts";
 import { perfMark } from "./perf.ts";
 
 /** The shortcut modifier as the platform shows it: ⌘ on a Mac, Ctrl+ elsewhere. */
@@ -72,7 +73,11 @@ export function attentionOf(t: ThreadSummary): { source: string; reason: string 
 export type Route = { host?: string; thread?: string; term?: string; entry?: string; panel?: string; page?: string; rest: string[]; query: URLSearchParams };
 
 export function hashRoute(): Route {
-	const [path = "", search = ""] = location.hash.replace(/^#/, "").split("?");
+	return parseRoute(location.hash);
+}
+
+export function parseRoute(hash: string): Route {
+	const [path = "", search = ""] = hash.replace(/^#/, "").split("?");
 	const query = new URLSearchParams(search);
 	const parts = path.split("/").filter(Boolean).map(decodeURIComponent);
 	if (parts[0] === "v" && parts[1]) return { page: parts[1], rest: parts.slice(2), query };
@@ -110,10 +115,10 @@ export function parseRef(ref: string): { host: string; thread: string; entry?: s
 }
 
 export function goTerm(host: string, termId: string): void {
-	location.hash = `#/h/${encodeURIComponent(host)}/x/${encodeURIComponent(termId)}`;
+	navigate(`#/h/${encodeURIComponent(host)}/x/${encodeURIComponent(termId)}`);
 }
 
 export function go(host?: string, thread?: string, opts: { entry?: string; panel?: string } = {}): void {
 	if (thread) perfMark("switch-start");
-	location.hash = host ? (thread ? href.thread(host, thread, opts) : `#/h/${encodeURIComponent(host)}`) : "#/";
+	navigate(host ? (thread ? href.thread(host, thread, opts) : `#/h/${encodeURIComponent(host)}`) : "#/");
 }

@@ -21,6 +21,7 @@ import { ask } from "./ask.ts";
 import { resolveHelperModel } from "../hub/helper-models.ts";
 import { piModelRegistry } from "./model-registry.ts";
 import { complete, instant, nowUs, span, spanAsync, tracing } from "../trace.ts";
+import { watched } from "../loop-watch.ts";
 import { PI_VIEWS, viewOps } from "./views/index.ts";
 import type { HostedView, PiTeamMember, PiTeamsFrame, PiViewContext, PiViewSession } from "./views/types.ts";
 import type { WorkingSet } from "./working-set.ts";
@@ -115,6 +116,8 @@ type Copy = {
 	cacheHit?: number; preview?: string; lastKnownLive?: boolean; generation: number;
 	refreshing?: Promise<void>; deriving?: boolean; refreshAgain?: boolean; urgent?: boolean; leases: number;
 	/** Copy file mtime at load; orders the cold backlog newest first. */ copiedAt?: number; eviction?: Promise<void>; evictionCancelled?: boolean; readError?: string; sourceMissing?: boolean;
+	/** The copy's host inputs (#hostInputs) at its last publish; a frame that leaves them equal marks nothing. */ hostKey?: string;
+	/** Liveness last given to the working set's transcript window. */ windowLive?: boolean;
 };
 
 export const THREAD_WINDOW = 400;
@@ -193,6 +196,7 @@ export class PiHost extends EventEmitter {
 	#livenessKnown = false;
 	#byThread = new Map<string, Copy>();
 	#agents: RemoteAgent[] = [];
+	#agentsByPath = new Map<string, RemoteAgent>();
 	/** True once the Host sent a full agents list on this connection: only then does absence from it mean "missing". */
 	#listed = false;
 	#layout: Layout = { workspaces: [] };
@@ -217,6 +221,17 @@ export class PiHost extends EventEmitter {
 	#saveTimer?: ReturnType<typeof setTimeout>;
 	#publishScheduled = false;
 	#dirty = new Set<string>();
+	/** Host-wide inputs (layout, panes, Teams, unfiled Sessions) changed: the threads topic and Host-wide views recompute. */
+	#hostChanged = false;
+	#hostWideKey?: string;
+	/** The threads topic recomputes at least this often; a difference found then is a host input #hostInputs missed. */
+	static AUDIT_MS = 60_000;
+	#audit?: ReturnType<typeof setInterval>;
+	#auditDue = false;
+	/** The clock that #hostInputs' `recent` reads, set when #markHostChanges runs, so a publish never sees a later edge. */
+	#inputsAt = 0;
+	/** Audit differences found since start: inputs that change marking missed (reported in /api/health). */
+	missedInputs = 0;
 	/** Queued submissions by ID, until delivered or dismissed; the full text when this hub sent it. */
 	#queued = new Map<string, QueuedInput>();
 	#panes?: RemotePane[];
@@ -247,6 +262,8 @@ export class PiHost extends EventEmitter {
 		model: (purpose, override) => resolveHelperModel(purpose, override, this.config.askCommand?.length ? undefined : piModelRegistry),
 		invalidate: (view) => {
 			this.#forcedViews.add(view);
+			// The threads rows carry each view's summarize fields.
+			if (this.#views.get(view)?.summarize) this.#hostChanged = true;
 			this.#schedulePublish();
 		},
 	};
@@ -284,6 +301,10 @@ export class PiHost extends EventEmitter {
 			if (this.#stopped) return;
 			this.#sweep = setInterval(() => void this.#evictExpired(), 60_000);
 			this.#sweep.unref();
+			// The audit first re-reads host inputs at a new #inputsAt: a retention edge crossed since the last frame is a
+			// change, not a missed input.
+			this.#audit = setInterval(() => { this.#auditDue = true; this.#markHostChanges(); this.#schedulePublish(); }, PiHost.AUDIT_MS);
+			this.#audit.unref();
 			this.#connect();
 			span("refresh-all", "startup", () => {
 				const backlog = [...this.#copies.values()].sort((a, b) => (b.copiedAt ?? 0) - (a.copiedAt ?? 0));
@@ -296,6 +317,7 @@ export class PiHost extends EventEmitter {
 		if (this.#stopping) return this.#stopping;
 		this.#stopped = true;
 		clearInterval(this.#sweep);
+		clearInterval(this.#audit);
 		clearTimeout(this.#anyTimer);
 		clearTimeout(this.#saveTimer);
 		clearTimeout(this.#timer);
@@ -437,6 +459,8 @@ export class PiHost extends EventEmitter {
   const data = this.#store.load(copy.path);
   if (data && data.version !== copy.data?.version) {
    this.#applyDerived(copy, data); copy.revision++; this.#store.invalidate(this.#source(copy));
+   // Adoption can happen inside any computation, an audit included, before the worker message arrives: mark it here.
+   this.#dirty.add(copy.path); this.#schedulePublish();
   }
  }
 
@@ -523,7 +547,8 @@ export class PiHost extends EventEmitter {
     for (const view of this.#views.values()) view.evict?.(this.#viewContext, copy.session.id);
    }
    for (const suffix of ["", ".index.sqlite", ".index.sqlite-wal", ".index.sqlite-shm"]) rmSync(copy.file + suffix, { force: true });
-   this.#dirty.add(copy.path); await this.#writeIndex(); this.#markAll();
+   // The threads list and Host-wide views lose the copy; no other Session changed.
+   this.#hostChanged = true; await this.#writeIndex(); this.#schedulePublish();
   } catch (error) {
    if (this.#stopped) return;
    if (removed) await this.#refresh(copy);
@@ -604,7 +629,8 @@ export class PiHost extends EventEmitter {
 				if (!line) continue;
 				frames++;
 				try {
-					this.#fromAgent(JSON.parse(line));
+					const msg = JSON.parse(line);
+					watched(() => `agent frame ${msg.t} on ${this.config.id}`, () => this.#fromAgent(msg));
 				} catch {}
 			}
 			if (tracing) complete("agent-frames", "ipc", start, { bytes: data.length, frames });
@@ -625,6 +651,7 @@ export class PiHost extends EventEmitter {
 		// Retain last-known-live pins without presenting them as current liveness.
 		for (const copy of this.#copies.values()) if (this.#isLive(copy)) copy.lastKnownLive = true;
 		this.#agents = [];
+		this.#agentsByPath = new Map();
 		this.#listed = false;
 		this.#saveIndex();
 		this.#markAll();
@@ -701,32 +728,38 @@ export class PiHost extends EventEmitter {
 				void this.#refresh(copy, true);
 				return;
 			}
-			case "agents":
+			case "agents": {
 				this.#agents = msg.agents ?? [];
+				// The first agent listed for a path wins, as a scan of the list would find it.
+				this.#agentsByPath = new Map();
+				for (const a of this.#agents) if (!this.#agentsByPath.has(a.session)) this.#agentsByPath.set(a.session, a);
 				this.#listed = true;
 				if (msg.layout) this.#layout = msg.layout;
 				// Without a pane list (Herdr unavailable) absence proves nothing.
 				this.#panes = Array.isArray(msg.panes) ? msg.panes : undefined;
 				this.#livenessKnown = Boolean(this.#panes);
+				let saved = false;
 				for (const copy of this.#copies.values()) {
-					if (this.#livenessKnown || this.#isLive(copy)) copy.lastKnownLive = this.#isLive(copy);
-					if (copy.refreshing && this.#isLive(copy)) this.#promote(copy);
-					this.#store.live(this.#source(copy), this.#isLive(copy));
+					const live = this.#isLive(copy);
+					if ((this.#livenessKnown || live) && copy.lastKnownLive !== live) { copy.lastKnownLive = live; saved = true; }
+					if (copy.refreshing && live) this.#promote(copy);
+					if (copy.windowLive !== live) { copy.windowLive = live; this.#store.live(this.#source(copy), live); }
 				}
-				this.#saveIndex();
+				if (saved) this.#saveIndex();
 				this.#reconcileStarting();
 				this.#reconcileQueued();
-				this.#markAll();
+				this.#markHostChanges();
 				void this.#evictExpired();
 				return;
+			}
 			case "teams":
 				this.#teams = new Map((msg.members ?? []).map((m) => [m.pane, m]));
 				this.#teamsFrame = msg;
-				this.#markAll();
+				this.#markHostChanges();
 				return;
 			case "limits":
 				this.#limits = { windows: msg.windows ?? {}, budget: msg.budget ?? null };
-				this.#markAll();
+				this.#markHostChanges();
 				return;
 			case "ack": {
 				const pending = this.#pending.get(msg.id);
@@ -801,13 +834,62 @@ export class PiHost extends EventEmitter {
 
 	#markAll(): void {
 		for (const path of this.#copies.keys()) this.#dirty.add(path);
+		this.#hostChanged = true;
 		this.#schedulePublish();
+	}
+
+	/**
+	 * After a host-level frame (agents, teams, limits): marks only the copies whose host inputs changed, and the
+	 * host-wide values when theirs changed. An identical frame publishes nothing.
+	 */
+	#markHostChanges(): void {
+		this.#inputsAt = Date.now();
+		for (const copy of this.#copies.values()) {
+			const key = JSON.stringify(this.#hostInputs(copy));
+			if (key === copy.hostKey) continue;
+			copy.hostKey = key;
+			this.#dirty.add(copy.path);
+		}
+		const unfiled = this.#agents.filter((a) => a.control?.live && a.sessionId).map(({ bytes: _, ...a }) => a);
+		// Pane placement only: a pane's status reaches the threads list through its copy's #hostInputs.
+		const panes = this.#panes?.map((p) => [p.pane, p.workspace, p.tab]) ?? null;
+		const wide = JSON.stringify([this.#layout, panes, this.#teamsFrame ?? null, [...this.#starting.values()], unfiled]);
+		if (wide !== this.#hostWideKey) {
+			this.#hostWideKey = wide;
+			this.#hostChanged = true;
+		}
+		if (this.#dirty.size || this.#hostChanged) this.#schedulePublish();
 	}
 
 	// ---- projections ----
 
 	#agentFor(path: string): RemoteAgent | undefined {
-		return this.#agents.find((a) => a.session === path);
+		return this.#agentsByPath.get(path);
+	}
+
+	/**
+	 * Everything a Session's projections read from host-level frames: its pane agent, control state, Team membership,
+	 * layout labels, model limits, liveness and queued submissions. #summary and #threadValue read host state only
+	 * through this, so equal inputs give equal Session values (views/types.ts PiViewSession).
+	 */
+	#hostInputs(copy: Copy) {
+		const agent = this.#agentFor(copy.path);
+		const control = agent?.control?.live ? agent.control : undefined;
+		const member = agent?.pane ? this.#teams.get(agent.pane) : undefined;
+		const workspace = this.#layout.workspaces.find((w) => w.id === agent?.workspace);
+		const tab = workspace?.tabs.find((t) => t.id === agent?.tab);
+		const threadId = copy.session?.id;
+		return {
+			// Closed Sessions remain recent for one retention window; crossing its edge hides an unlisted row.
+			recent: !copy.updatedAt || this.#inputsAt - Math.max(copy.updatedAt, copy.closedAt ?? 0) < this.#recentMs(),
+			agent: agent && { pane: agent.pane, workspace: agent.workspace, workspaceLabel: workspace?.label, tab: agent.tab, tabLabel: tab?.label, title: agent.title, name: agent.name, cwd: agent.cwd, status: agent.status, live: Boolean(agent.pane || agent.control?.live) },
+			control: control && { idle: control.idle, compacting: control.compacting, steer: control.pending?.steer ?? 0, followUp: control.pending?.followUp ?? 0 },
+			team: member && member.session === copy.path ? { team: member.team, role: member.role, member: member.member } : undefined,
+			limits: modelLimits(copy.model, this.#limits),
+			livenessKnown: this.#livenessKnown,
+			lastKnownLive: copy.lastKnownLive,
+			queued: threadId ? this.#queuedItems(threadId) : [],
+		};
 	}
 
 	#threadId(copy: Copy): string | undefined {
@@ -843,21 +925,15 @@ export class PiHost extends EventEmitter {
   this.#adoptHead(copy);
 		const session = copy.session;
 		if (!session) return undefined;
-		const agent = this.#agentFor(copy.path);
-		// Closed Sessions remain recent for one retention window. Unknown/source-loss copies stay visible.
-		const recent = !copy.updatedAt || Date.now() - Math.max(copy.updatedAt, copy.closedAt ?? 0) < this.#recentMs();
-		if (this.#livenessKnown && !copy.readError && !copy.data?.invalidLines && !agent && !recent && !this.#isOpen(copy) && !copy.lastKnownLive && !copy.sourceMissing) return undefined;
-		const member = agent?.pane ? this.#teams.get(agent.pane) : undefined;
-		const team = member && member.session === copy.path ? member : undefined;
-		const control = agent?.control?.live ? agent.control : undefined;
+		const { recent, agent, control, team, limits, livenessKnown, lastKnownLive } = this.#hostInputs(copy);
+		// Unknown/source-loss copies stay visible.
+		if (livenessKnown && !copy.readError && !copy.data?.invalidLines && !agent && !recent && !this.#isOpen(copy) && !lastKnownLive && !copy.sourceMissing) return undefined;
 		const busy = control ? !control.idle : agent?.status === "working" || agent?.status === "blocked";
 		// A blocked pane waits on its owner (a question or a permission): that is attention, not activity.
 		const blocked = agent?.status === "blocked";
 		// An open tool call at the tail while the Session runs means it is running tools, whatever the pane shows.
 		const activity: ThreadSummary["activity"] = control?.compacting ? "compacting" : blocked ? "idle" : busy ? (copy.data?.openCalls ? "tools" : "streaming") : "idle";
 		const title = session.title || agent?.title || agent?.name || basename(session.cwd ?? "") || session.session.slice(0, 8);
-		const workspace = this.#layout.workspaces.find((w) => w.id === agent?.workspace);
-		const tab = workspace?.tabs.find((t) => t.id === agent?.tab);
 		return {
 			id: session.id,
 			title,
@@ -868,18 +944,18 @@ export class PiHost extends EventEmitter {
 			...(team ? { team: { teamId: team.team, role: team.role === "lead" || team.role === "leader" ? "lead" : "worker", worker: team.member } } : {}),
 			...(copy.model ? { model: copy.model } : {}),
 			activity,
-			queued: (control?.pending?.steer ?? 0) + (control?.pending?.followUp ?? 0),
+			queued: (control?.steer ?? 0) + (control?.followUp ?? 0),
 			...(blocked ? { attention: [{ source: "Herdr", reason: "needs input" }] } : {}),
 			costUsd: copy.cost,
 			...(copy.readError ? { lastError: copy.readError } : {}),
 			...(copy.contextTokens ? { contextTokens: copy.contextTokens } : {}),
-			...modelLimits(copy.model, this.#limits),
+			...limits,
 			...(copy.cacheHit !== undefined ? { cacheHit: copy.cacheHit } : {}),
 			...(copy.preview ? { preview: copy.preview } : {}),
 			ref: session.ref,
-			...(agent?.pane ? { location: defined({ workspace: agent.workspace, workspaceLabel: workspace?.label, tab: agent.tab, tabLabel: tab?.label, pane: agent.pane }) } : {}),
+			...(agent?.pane ? { location: defined({ workspace: agent.workspace, workspaceLabel: agent.workspaceLabel, tab: agent.tab, tabLabel: agent.tabLabel, pane: agent.pane }) } : {}),
 			// Live means a pane or a control socket runs it; a recent file alone is not.
-			live: Boolean(agent?.pane || agent?.control?.live),
+			live: Boolean(agent?.live),
 			control: Boolean(control),
 		} as ThreadSummary;
 	}
@@ -1053,12 +1129,21 @@ export class PiHost extends EventEmitter {
 	#schedulePublish(): void {
 		if (this.#publishScheduled) return;
 		this.#publishScheduled = true;
-		setImmediate(() => {
+		setImmediate(() => watched(() => `publish on ${this.config.id} (${this.#subs.size} subscriptions)`, () => {
 			this.#publishScheduled = false;
 			if (this.#stopped || !this.#initialized) return;
 			const start = tracing ? nowUs() : 0;
 			const dirty = this.#dirty;
 			this.#dirty = new Set();
+			const changed = dirty.size > 0 || this.#hostChanged, audit = this.#auditDue && !changed;
+			this.#hostChanged = false;
+			// An audit due during a change waits for the next quiet publish.
+			if (this.#auditDue && changed) setImmediate(() => this.#schedulePublish());
+			else this.#auditDue = false;
+			// Copy data also feeds host inputs (`recent` reads updatedAt, `limits` the model). Record what this publish
+			// reads, so the next frame does not mark the copy again for a change already published. Only a publish
+			// records: views read #summary at other times, and a key recorded before a frame's marking would hide it.
+			for (const path of dirty) { const copy = this.#copies.get(path); if (copy) copy.hostKey = JSON.stringify(this.#hostInputs(copy)); }
 			const dirtyThreads = new Set([...dirty].map((path) => this.#copies.get(path)).filter(Boolean).map((c) => this.#threadId(c!)));
 			this.#notifyChanged(dirty);
 			const forced = this.#forcedViews;
@@ -1079,11 +1164,13 @@ export class PiHost extends EventEmitter {
 					this.#emitFrame({ t: "snap", sid, value });
 					continue;
 				}
-				if (sub.topic.kind === "thread" && !dirtyThreads.has(sub.topic.threadId)) continue;
+				// A quiet topic has no marked input; the audit recomputes it anyway to catch an input marking missed.
+				const quiet = sub.topic.kind === "threads" ? !changed : sub.topic.kind === "thread" ? !dirtyThreads.has(sub.topic.threadId) : false;
+				if (quiet && !audit) continue;
 				if (sub.topic.kind === "view" && !forced.has(sub.topic.view)) {
 					// "thread" without a threadId (e.g. every Team) recomputes like "any".
 					const scope = sub.topic.threadId ? (this.#views.get(sub.topic.view)?.scope ?? "thread") : "any";
-					if (scope === "any" ? dirty.size === 0 : !dirtyThreads.has(sub.topic.threadId as string)) continue;
+					if (scope === "any" ? !changed : !dirtyThreads.has(sub.topic.threadId as string)) continue;
 					// Host-wide values cover every Session; a live Session appending many times a second must not
 					// recompute and diff them each time. Defer to the end of the window instead.
 					if (scope === "any" && sub.at !== undefined && Date.now() - sub.at < PiHost.ANY_VIEW_MS) {
@@ -1099,16 +1186,23 @@ export class PiHost extends EventEmitter {
 					}
 					if (scope === "any") sub.at = Date.now();
 				}
-				const value = this.#value(sub.topic);
+				const value = watched(() => `topic ${sub.topic.kind === "view" ? sub.topic.view : sub.topic.kind}`, () => this.#value(sub.topic));
 				if (value === undefined) continue;
 				// No value sent yet: the first one goes as a snapshot.
 				if (sub.previous === undefined) { sub.previous = value; this.#emitFrame({ t: "snap", sid, value }); continue; }
 				const ops = diffRevisions(sub.previous, value);
 				sub.previous = value;
+				// A change marked during this publish (data adopted while computing) is explained; the next publish carries it.
+				const explained = sub.topic.kind === "thread" ? this.#dirty.has(this.#byThread.get(sub.topic.threadId)?.path ?? "") : this.#dirty.size > 0 || this.#hostChanged;
+				if (audit && quiet && ops.length && !explained) {
+					this.missedInputs++;
+					const what = sub.topic.kind === "thread" ? `thread ${sub.topic.threadId}` : "threads";
+					console.error(`pi host ${this.config.id}: ${what}: refresh found ${ops.length} changed values; hostKey missed an input (first: ${(ops[0]![1] as unknown[]).join(" ")})`);
+				}
 				if (ops.length > 0) this.#emitFrame({ t: "ops", sid, n: ++sub.n, ops });
 			}
 			if (tracing) complete("publish", "ws", start, { dirty: dirty.size, subs: this.#subs.size });
-		});
+		}));
 	}
 
 	// ---- operations ----

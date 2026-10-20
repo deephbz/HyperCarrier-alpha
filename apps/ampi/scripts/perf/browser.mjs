@@ -19,6 +19,10 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket from "ws";
 
+// The element a timed switch clicks in a sidebar row. A Team leader row's own click opens or closes its Team group
+// (web/src/components/Sidebar.tsx, ThreadRow); its title link navigates like every other row's.
+export const SWITCH_TARGET = "a.title";
+
 const CATEGORIES = [
 	"-*",
 	"devtools.timeline",
@@ -265,7 +269,7 @@ export async function runScenario(ctx) {
 				for (const id of list) {
 					const done = await evaluate(`performance.getEntriesByName("ampi:switch-done", "mark").length`);
 					// The click time is taken in the page, so the switch excludes the CDP round trip.
-					const clickAt = toRunner(await evaluate(`(() => { const row = [...document.querySelectorAll(".sidebar-slot .row[data-thread]")].find((r) => r.dataset.thread === ${JSON.stringify(id)}); if (!row) throw new Error("row gone"); performance.mark("ampi:switch-click"); const at = performance.timeOrigin + performance.now(); row.click(); return at; })()`));
+					const clickAt = toRunner(await evaluate(`(() => { const row = [...document.querySelectorAll(".sidebar-slot .row[data-thread]")].find((r) => r.dataset.thread === ${JSON.stringify(id)}); if (!row) throw new Error("row gone"); const target = row.querySelector(${JSON.stringify(SWITCH_TARGET)}); if (!target) throw new Error("row has no title link"); performance.mark("ampi:switch-click"); const at = performance.timeOrigin + performance.now(); target.click(); return at; })()`));
 					const end = toRunner(await waitMark("switch-done", done));
 					const visit = switches[round].length;
 					driver.push({ name: `switch-${round}`, ts: clickAt, dur: end - clickAt, args: { visit } });

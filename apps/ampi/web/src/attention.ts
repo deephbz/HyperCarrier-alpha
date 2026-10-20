@@ -4,12 +4,10 @@
 import { useEffect, useRef } from "react";
 import type { ThreadSummary } from "../../src/shared/protocol.ts";
 import type { HostThreads } from "./components/Sidebar.tsx";
+import { native } from "./native.ts";
+import { navigate } from "./nav.ts";
 import { go, isBusy, needsYou } from "./util.ts";
 
-type Native = { postMessage(message: unknown): void };
-function native(): Native | undefined {
-	return (window as unknown as { webkit?: { messageHandlers?: { ampi?: Native } } }).webkit?.messageHandlers?.ampi;
-}
 
 export function notify(title: string, body: string, host: string, threadId: string): void {
 	const shell = native();
@@ -39,7 +37,7 @@ function setBadge(count: number): void {
 
 /** Window navigation from the shell (notification click): `window.ampiOpen("#/h/…")`. */
 (window as unknown as { ampiOpen: (route: string) => void }).ampiOpen = (route) => {
-	location.hash = route;
+	navigate(route);
 };
 
 export function useAttention(data: HostThreads[], current?: { host?: string; thread?: string }): void {

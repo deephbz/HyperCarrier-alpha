@@ -69,15 +69,18 @@ function ContextTree({ context }: { context: ArcContext }) {
 	</section>;
 }
 
-type TreeValue = Pick<ArcValue, "context" | "contextStatus"> & Partial<Pick<ArcValue, "nextAutoAt" | "relabelChunks" | "floor">>;
+type TreeValue = Pick<ArcValue, "context" | "contextStatus"> & Partial<Pick<ArcValue, "nextAutoAt" | "relabelChunks" | "floor" | "queuedAhead" | "backoff" | "stuck">>;
 const clock = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
 /**
  * The stale line: what the tree covers, what is newer, and when it updates. One rule (Rarebit messages) for the tree
- * and the synthesis; a pending automatic Build replaces the Build arc prompt with its due time.
+ * and the synthesis; a pending automatic Build replaces the Build arc prompt with its due time. A queued Build says how
+ * many run first; a failure backoff says why the update waits, unless the stuck line already says it.
  */
-function coverText({ context, contextStatus: s, nextAutoAt }: TreeValue) {
-	const next = nextAutoAt ? `Next automatic update ≈${clock(nextAutoAt)}.` : "";
+function coverText({ context, contextStatus: s, nextAutoAt, queuedAhead, backoff, stuck }: TreeValue) {
+	const next = queuedAhead ? `Waiting for ${queuedAhead} automatic Build${queuedAhead === 1 ? "" : "s"} ahead · Build arc starts now.`
+		: backoff && !stuck && nextAutoAt ? `After ${backoff.failures} failure${backoff.failures === 1 ? "" : "s"}, next try ${clock(nextAutoAt)}.`
+		: nextAutoAt ? `Next automatic update ≈${clock(nextAutoAt)}.` : "";
 	if (s.branchChanged) return `The active Rarebit branch changed since this Build. ${next || "Build arc to cover it."}`;
 	const upTo = s.coveredAt ? when(new Date(s.coveredAt).toISOString()) : context?.asOfEntryId ? `#${context.asOfEntryId}` : "its start";
 	return `Covered up to ${upTo} · ${s.newMessages} newer message${s.newMessages === 1 ? "" : "s"}. ${next || "Build arc to cover them."}`;
@@ -92,7 +95,7 @@ export function ArcContextView({ value: v }: { value: TreeValue }) {
 		{v.floor && <p className="cos-meta" role="status">Nothing to summarize yet. Arcs build automatically after {v.floor.min} messages; this Session has {v.floor.messages}.</p>}
 		{(v.contextStatus.newMessages > 0 || v.contextStatus.branchChanged) && <p className="cos-notice" role="status">{coverText(v)}</p>}
 		{v.relabelChunks ? <p className="cos-notice" role="status">Chunk rules changed; one Build relabels {v.relabelChunks} chunk{v.relabelChunks === 1 ? "" : "s"}.{v.nextAutoAt ? ` Next automatic update ≈${clock(v.nextAutoAt)}.` : ""}</p>
-			: v.context && v.contextStatus.formatChanged && <p className="cos-notice">This tree uses the older long titles. The next Build arc rewrites them.</p>}
+			: v.context && v.contextStatus.formatChanged && <p className="cos-notice">This Arc uses an older Arc format. The next Build rewrites it.</p>}
 		{v.context ? <ContextTree context={v.context} /> : !v.floor && <section aria-label="Evergreen context"><h2>Needs you</h2><p className="cos-meta">{v.contextStatus.unknown ? "This Arc was built before the work tree existed, so what it covers is unknown. Build arc to create the cited work tree." : "Not built. Build arc to create the cited work tree from this Session’s Rarebit messages."}</p></section>}
 	</>;
 }

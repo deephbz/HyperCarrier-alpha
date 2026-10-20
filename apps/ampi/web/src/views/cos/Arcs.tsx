@@ -9,7 +9,7 @@ import { href, type Route } from "../../util.ts";
 import { ArcContextView } from "./ArcTree.tsx";
 import { GLYPHS, glyphTitle } from "./glyphs.ts";
 import { dateTime, FeedStatus, useFleet, type ViewError } from "./data.tsx";
-import { buildDetail, buildText, estimateText, failureHint, failurePrefix, failureText, gapText, lastFailure, progressText } from "./builds.ts";
+import { buildDetail, buildText, estimateText, failureHint, failurePrefix, failureText, labelRetry, lastFailure, progressText, stuckText } from "./builds.ts";
 import "./cos.css";
 
 export function Arcs({ route }: { route: Route }) {
@@ -78,13 +78,13 @@ export function ArcPageView({ host, threadId, value, stale, error, build }: { ho
 			{viewError && <p className="cos-error" role="alert">{viewError}. Reconnect, then reopen this Arc to refresh its cached evidence.</p>}
 			{stale && <p className="cos-notice" role="status">Connection unavailable; this is cached evidence. Builds need the hub, and use its local copy rather than newer Host entries.</p>}
 			{failure ? <p className="cos-error" role="alert">{failurePrefix(undefined)} {failure} Deterministic chunks remain below. {failureHint(undefined)}</p>
-				: failed && <><p className="cos-error" role={failed.role}>{failureText(failed.failure, v.keptAt)}{v.keptAt ? "" : " Deterministic chunks remain below."}</p><AvailableModels failure={failed.failure} /></>}
+				: failed && <><p className="cos-error" role={failed.role}>{failureText(failed.failure, v.keptAt, labelRetry(failed.failure, v))}{v.keptAt ? "" : " Deterministic chunks remain below."}</p><AvailableModels failure={failed.failure} /></>}
 			{v.job?.state === "running" && <p className="cos-notice" role="status">{progressText(v.job)}</p>}
-			{gapText(v.builds?.at(-1), v.coverage.unmappedChunks) && <p className="cos-notice" role="status">{gapText(v.builds.at(-1), v.coverage.unmappedChunks)}</p>}
+			{stuckText(v) && <p className="cos-notice" role="status">{stuckText(v)}</p>}
 			<div className="cos-scroll cos-arc-body">
 				<ArcContextView value={v} />
 				{v.synthesis && <p className="cos-headline">{v.synthesis.headline}<span className="cos-meta">{v.synthesis.model ? ` · ${v.synthesis.model}` : ""}{v.synthesis.builtAt ? ` · built ${dateTime(v.synthesis.builtAt)}` : ""}{v.coverage.synthesisCurrent ? " · current" : ""}</span></p>}
-				<section aria-label="Projects"><h2>Projects <span className="cos-meta">inferred</span></h2>{!v.cards.length ? <p className="cos-meta">No project labels yet. The chunks below are available without a model.</p> : v.cards.map((card, i) => <div className="cos-project" key={card.name}><span className={`cos-project-mark cos-color-${i % 6}`} /><div><a href={href.thread(host, threadId, { entry: card.resumeEntryId })}>{card.name}</a><span className="cos-meta"> · {card.chunks} chunks{card.inferred ? ` · ${card.inferred.status}` : ""}</span>{card.inferred && <p>{card.inferred.summary}</p>}</div></div>)}</section>
+				<section aria-label="Projects"><h2>Projects <span className="cos-meta">inferred</span></h2>{!v.cards.length ? <p className="cos-meta">No project labels yet. The chunks below are available without a model.</p> : v.cards.map((card, i) => <div className="cos-project" key={card.name}><span className={`cos-project-mark cos-color-${i % 6}`} /><div><a href={href.thread(host, threadId, { entry: card.resumeEntryId })}>{card.name}</a><span className="cos-meta"> · {card.chunks} chunks{card.inferred ? ` · ${card.inferred.status}` : ""}</span>{card.inferred && <p title={card.inferred.full?.summary}>{card.inferred.summary}</p>}</div></div>)}</section>
 				{v.transitions.length > 0 && <details aria-label="Transitions"><summary>Transitions <span className="cos-meta">{v.transitions.length} inferred · expand to inspect</span></summary>{v.transitions.map((t, i) => { const chunk = v.chunks[Number(t.chunk.slice(1))]; return <div className="cos-transition" key={i}><time>{dateTime(chunk?.startAt ?? null)}</time><div>{t.from} → {t.to}<span className="cos-meta"> · {t.kind.replace(/_/g, " ")} · {t.source}</span>{t.why && <p>{t.why}</p>}{chunk && <a href={href.thread(host, threadId, { entry: chunk.firstEntryId })}>Open transition’s entry</a>}</div></div>; })}</details>}
 				<section aria-label="Chunks over time"><h2>Chunks over time</h2><p className="cos-meta">{CHUNK_RULE} Start and end times open the first and last message.</p><p className="cos-meta cos-chunk-legend">A line marks where the label state changes: {CHUNK_STATES.map((k) => <span key={k} className="cos-chunk-key" data-state={k}>{CHUNK_STATE_TEXT[k]}</span>)}</p>
 				{v.chunks.slice(0, limit).map((chunk, i, shown) => <ChunkRow key={chunk.id} host={host} threadId={threadId} chunk={chunk} index={i} previous={shown[i - 1]} />)}
@@ -112,7 +112,7 @@ function ChunkRow({ host, threadId, chunk, index, previous }: { host: string; th
 			<a className="cos-chunk-start" title="Open the chunk’s first message" href={href.thread(host, threadId, { entry: chunk.firstEntryId })}><time>{dateTime(chunk.startAt)}</time></a>
 			<a className="cos-chunk-end" title="Open the chunk’s last message" href={href.thread(host, threadId, { entry: chunk.lastEntryId })}><time>{dateTime(chunk.endAt)}</time></a>
 			<span className="cos-chunk-project" title={chunk.label?.project}>{chunk.label ? chunk.label.project : "unlabelled"}{state === "stale" && <span className="cos-meta"> · stale label</span>}</span>
-			<div className="cos-chunk-content"><div className="cos-links"><a title="Open first message" href={href.thread(host, threadId, { entry: chunk.firstEntryId })}>{chunk.label?.topic ?? `Chunk ${index + 1}`}</a></div><p>{chunk.firstAsk ?? "Compaction or continuation; open the evidence."}</p><div className="cos-links cos-meta"><Count kind="ownerTurns" n={chunk.ownerTurns} /><Count kind="toolCalls" n={chunk.toolCalls} /><a href={href.page("timeline", [], { focus: `${host}/${threadId}`, ...(chunk.startAt ? { at: String(Date.parse(chunk.startAt)) } : {}) })}>Timeline</a></div></div>
+			<div className="cos-chunk-content"><div className="cos-links"><a title="Open first message" href={href.thread(host, threadId, { entry: chunk.firstEntryId })}><span title={chunk.label?.full?.topic}>{chunk.label?.topic ?? `Chunk ${index + 1}`}</span></a></div><p>{chunk.firstAsk ?? "Compaction or continuation; open the evidence."}</p><div className="cos-links cos-meta"><Count kind="ownerTurns" n={chunk.ownerTurns} /><Count kind="toolCalls" n={chunk.toolCalls} /><a href={href.page("timeline", [], { focus: `${host}/${threadId}`, ...(chunk.startAt ? { at: String(Date.parse(chunk.startAt)) } : {}) })}>Timeline</a></div></div>
 		</article>
 	</>;
 }

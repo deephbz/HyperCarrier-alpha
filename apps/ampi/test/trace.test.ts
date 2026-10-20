@@ -80,3 +80,51 @@ t.flushTrace();
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+test("loop watch: each event-loop block over 250 ms gets one line that names the watched sections in it", async () => {
+	const { LoopWatch } = await import("../src/loop-watch.ts");
+	// A fake clock: `spin` is synchronous work, `tick` a 50 ms timer tick that comes `late` ms late.
+	let now = 0;
+	const lines: string[] = [];
+	const watch = new LoopWatch(() => now, (line) => lines.push(line));
+	const spin = (ms: number) => void (now += ms);
+	const tick = (late = 0) => { spin(50 + late); watch.tick(); };
+	tick();
+	watch.watched(() => "agent frame agents on devbox", () => { spin(300); watch.watched(() => "topic threads", () => spin(100)); });
+	tick();
+	spin(320);
+	tick();
+	for (let i = 0; i < 30; i++) watch.watched(() => "short", () => spin(10));
+	tick();
+	watch.watched(() => "short", () => spin(5));
+	tick(200);
+	assert.deepEqual(lines, [
+		"event loop: blocked 400 ms; ran: agent frame agents on devbox 400 ms, topic threads 100 ms",
+		"event loop: blocked 320 ms; ran: no single section over 20 ms",
+		"event loop: blocked 300 ms; ran: no single section over 20 ms; 30 short sections, 300 ms",
+	]);
+	assert.deepEqual([watch.over50, watch.over250], [4, 3]);
+});
+
+test("loop watch: a window logs at most 10 block lines and counts the rest", async () => {
+	const { LoopWatch } = await import("../src/loop-watch.ts");
+	let now = 0;
+	const lines: string[] = [];
+	const watch = new LoopWatch(() => now, (line) => lines.push(line));
+	for (let i = 0; i < 12; i++) { now += 50 + 300; watch.tick(); }
+	assert.equal(lines.length, 10);
+	assert.equal(watch.suppressed, 2);
+	watch.endWindow();
+	now += 350;
+	watch.tick();
+	assert.equal(lines.length, 11);
+});
+
+test("loop watch: log times carry the machine's local zone offset", () => {
+	const module = new URL("../src/loop-watch.ts", import.meta.url).href;
+	const script = `import { localTime } from ${JSON.stringify(module)}; console.log(localTime(new Date("2026-10-19T03:45:00.123Z")));`;
+	const at = (TZ: string) => execFileSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", env: { ...process.env, TZ } }).trim();
+	assert.equal(at("Asia/Singapore"), "2026-10-19T11:45:00.123+08:00");
+	assert.equal(at("UTC"), "2026-10-19T03:45:00.123+00:00");
+	assert.equal(at("America/St_Johns"), "2026-10-19T01:15:00.123-02:30");
+});

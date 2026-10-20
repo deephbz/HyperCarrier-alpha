@@ -6,7 +6,7 @@ import type { ArcFailure, ArcValue } from "../../../../src/pi/views/cos-arc.ts";
 import { hub, useTopic } from "../../client.ts";
 import { href } from "../../util.ts";
 import { ArcContextView } from "./ArcTree.tsx";
-import { buildDetail, buildText, estimateText, failureHint, failurePrefix, failureText, gapText, lastFailure, MODEL_KEYS, progressText } from "./builds.ts";
+import { buildDetail, buildText, estimateText, failureHint, failurePrefix, failureText, labelRetry, lastFailure, MODEL_KEYS, progressText, stuckText } from "./builds.ts";
 import type { ViewError } from "./data.tsx";
 import "./cos.css";
 import { rememberArcShown } from "./arc-reopen.ts";
@@ -48,8 +48,8 @@ export function ArcPanelView({ host, threadId, value: v, error, notice, build }:
 		{v?.builds?.length ? <p className="cos-meta cos-arc-last-build" title={buildDetail(v.builds.at(-1)!)}>Last Build · {buildText(v.builds.at(-1)!)}</p> : null}
 		{v?.job?.state === "running" && <p className="cos-notice" role="status">{progressText(v.job)}</p>}
 		{build.failure ? <p className="cos-error" role="alert">{failurePrefix(undefined)} {build.failure} {failureHint(undefined)}</p>
-			: failed && <><p className="cos-error" role={failed.role}>{failureText(failed.failure, v!.keptAt)}</p><AvailableModels failure={failed.failure} /></>}
-		{v && gapText(v.builds?.at(-1), v.coverage.unmappedChunks) && <p className="cos-notice" role="status">{gapText(v.builds.at(-1), v.coverage.unmappedChunks)}</p>}
+			: failed && <><p className="cos-error" role={failed.role}>{failureText(failed.failure, v!.keptAt, labelRetry(failed.failure, v!))}</p><AvailableModels failure={failed.failure} /></>}
+		{v && stuckText(v) && <p className="cos-notice" role="status">{stuckText(v)}</p>}
 		{v ? <ArcContextView value={v} /> : <p className="cos-meta" role="status">{error ? `${error}. Reconnect the Host, then reopen this panel.` : notice ?? "Reading the saved Arc…"}</p>}
 	</div>;
 }

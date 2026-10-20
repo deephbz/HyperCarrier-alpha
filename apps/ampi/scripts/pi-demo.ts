@@ -12,9 +12,19 @@
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Hub } from "../src/hub/hub.ts";
 import { FAKE_HERDR } from "../test/pi-fixtures.ts";
 import { DEMO_EXTENSIONS } from "./demo/index.ts";
+// @ts-ignore: a plain ESM script without types
+import { webDistCurrent } from "./web-inputs.mjs";
+
+// The hub serves web/dist as it is, so a stale build would show old UI in screenshots and verify runs.
+const web = webDistCurrent(fileURLToPath(new URL("../../../", import.meta.url)));
+if (!web.ok) {
+	console.error(`pi-demo: ${web.detail}`);
+	process.exit(1);
+}
 
 const dir = process.env.DEMO_DIR ?? join(tmpdir(), "ampi-pi-demo");
 if (process.env.DEMO_KEEP !== "1") rmSync(dir, { recursive: true, force: true });
@@ -208,7 +218,8 @@ writeFileSync(
 	`import { readFileSync as readDemoObservation } from "node:fs";\nexport async function readObservationSnapshot() { return JSON.parse(readDemoObservation(${JSON.stringify(observationFile)}, "utf8")); }\n` + DEMO_EXTENSIONS.map((extend) => extend({ dir, agentDir, sessions })).join("\n"),
 );
 
-const token = "d".repeat(64);
+// DEMO_HUB_TOKEN lets a test restart the demo hub with another key (a stale login cookie).
+const token = process.env.DEMO_HUB_TOKEN ?? "d".repeat(64);
 const hub = new Hub(
 	{
 		hosts: [

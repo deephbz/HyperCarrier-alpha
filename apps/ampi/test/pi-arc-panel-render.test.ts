@@ -42,7 +42,7 @@ const build = { pending: false, failure: "", start() {} };
 const props = (v: ArcValue) => ({ host: "devbox", threadId: "pi:sess-a", value: v, stale: false, build });
 /** The stale line plus the Evergreen context section, as each surface renders them. */
 function tier2(html: string): string {
-	const stale = /<p class="cos-notice" role="status">[^<]*(?:Build arc to cover (?:them|it)\.|Next automatic update ≈[^<]*)<\/p>/.exec(html)?.[0] ?? "";
+	const stale = /<p class="cos-notice" role="status">[^<]*(?:Build arc to cover (?:them|it)\.|Next automatic update ≈[^<]*|Build arc starts now\.|next try [^<]*)<\/p>/.exec(html)?.[0] ?? "";
 	const tree = /<section aria-label="Evergreen context">[\s\S]*?<\/section>(?=<\/div>|<p class="cos-headline"|<section aria-label="Projects")/.exec(html)?.[0] ?? "";
 	return stale + tree;
 }
@@ -68,7 +68,7 @@ test("arc tree titles: an ask's kind and a thread's state are badges; the longer
 	assert.match(html, /<blockquote>Asked: “Should I cap it at 64 MB, or leave it unbounded for now\?”<\/blockquote>/, "the ask's sentence is one click away");
 	assert.match(html, /<h3>Reader cache <span class="badge cos-badge">active<\/span><\/h3>/);
 	assert.match(html, /<details class="cos-leaf"><summary[^>]*><span class="cos-leaf-title">Fixed the reader cache so it…<\/span>[\s\S]*?<\/summary><p>Fixed the reader cache so it evicts by size and age<\/p><blockquote>“Cap set to 64 MB\.”<\/blockquote><\/details>/);
-	assert.match(html, /This tree uses the older long titles\. The next Build arc rewrites them\./);
+	assert.match(html, /This Arc uses an older Arc format\. The next Build rewrites it\./);
 });
 
 test("arc tree fold: Unassigned and answered asks stay outside the folded threads (failure: Unassigned hid behind the fold)", () => {
@@ -129,6 +129,17 @@ test("arc chunk rows: start and end times open the first and last message, and a
 	assert.match(html, /cos-chunk-legend/);
 });
 
+test("arc hover: a cut chunk topic and a cut project summary keep the full text on hover (failure: the full text was stored but unreachable)", () => {
+	const topic = "Rebuilt the arc snapshot reader so that every chunk keeps its hash across compactions and the lane stays green";
+	const summary = "Owns the reader, the arc snapshot store and the verification lane that proves chunk hashes survive compactions";
+	const chunk = { id: "c0", index: 0, hash: "h0", startAt: "2026-10-19T00:00:00.000Z", endAt: "2026-10-19T00:30:00.000Z", firstEntryId: "u0", lastEntryId: "a0", firstAsk: "Step", lastOwnerEntryId: "u0", ownerTurns: 1, toolCalls: 0, labelCurrent: true,
+		label: { project: "Reader", topic: "Rebuilt the arc snapshot reader…", full: { topic }, ideas: [] } };
+	const cards = [{ name: "Reader", chunks: 1, resumeEntryId: "u0", inferred: { summary: "Owns the reader…", status: "active", full: { summary } } }];
+	const html = renderToStaticMarkup(createElement(page as never, props(value({ chunks: [chunk], cards } as never))));
+	assert.match(html, new RegExp(`<span title="${topic}">Rebuilt the arc snapshot reader…</span>`));
+	assert.match(html, new RegExp(`<p title="${summary}">Owns the reader…</p>`));
+});
+
 test("arc panel model: the panel's last Build line and the Arc page's Build history both name the Build's model (failure: the model showed only in a tooltip)", () => {
 	const run = { trigger: "manual", startedAt: "2026-10-19T00:00:00.000Z", endedAt: "2026-10-19T00:00:09.000Z", state: "done", calls: 4, model: "anthropic/claude-haiku-5-5",
 		usage: { input: 9000, output: 800, cacheRead: 0, cacheWrite: 0, cost: 0.012 }, retries: 0, reusedLabels: 0, unlabelledChunks: 0, afterEntryId: null, error: null, errorCode: null };
@@ -149,8 +160,17 @@ test("arc panel split models: a Build row names its label and synthesis models, 
 	assert.match(title, /labels: magpie\/claude\/claude-haiku-5-5 · 2 calls · \$0\.01/);
 	assert.match(title, /synthesis: anthropic\/claude-sonnet-5-5 · 1 call · \$0\.03/);
 	assert.match(title, /context: magpie\/claude\/claude-haiku-5-5 · 1 call/);
-	assert.match(title, /Labels and context use models\.arcLabels; synthesis uses models\.arcSynthesis\./);
-	assert.match(panelHtml, /title="[^"]*Labels and context use models\.arcLabels[^"]*">Build arc</);
+	// A two-step record names only its two steps.
+	const twoStep = { ...run, models: { labels: run.models.labels, synthesis: run.models.synthesis }, usageByPurpose: { labels: run.usageByPurpose.labels, synthesis: run.usageByPurpose.synthesis } };
+	const twoStepTitle = /cos-arc-last-build" title="([^"]*)"/.exec(renderToStaticMarkup(createElement(panel as never, props(value({ builds: [twoStep] as unknown as ArcValue["builds"] })))))![1]!;
+	assert.match(twoStepTitle, /synthesis: anthropic\/claude-sonnet-5-5 · 1 call/);
+	assert.doesNotMatch(twoStepTitle, /context:/);
+	assert.doesNotMatch(twoStepTitle, /evidence:/, "the full evidence is the default and goes unsaid");
+	// A Build that sent step 2 only owner turns says so in its tooltip.
+	const labelsTitle = /cos-arc-last-build" title="([^"]*)"/.exec(renderToStaticMarkup(createElement(panel as never, props(value({ builds: [{ ...twoStep, arcEvidence: "labels" }] as unknown as ArcValue["builds"] })))))![1]!;
+	assert.match(labelsTitle, /synthesis: anthropic\/claude-sonnet-5-5 · 1 call · \$0\.03 · evidence: owner turns only \(hub\.json arcEvidence\)/);
+	assert.match(title, /Labels use models\.arcLabels; the Arc \(synthesis and context\) uses models\.arcSynthesis\./);
+	assert.match(panelHtml, /title="[^"]*Labels use models\.arcLabels[^"]*">Build arc</);
 	// A per-Build name that names no model: one sentence, the time, one fix, the capped list; the row names the model,
 	// and every listed row is one click away.
 	const available = Array.from({ length: 14 }, (_, i) => `p/m-${i}`);
@@ -178,6 +198,16 @@ test("arc copy: a pending automatic Build names its time instead of asking for B
 	assert.equal(tier2(renderToStaticMarkup(createElement(panel as never, props(v)))), a);
 });
 
+test("arc copy: a queued automatic Build says how many run first; a backoff says why the next try waits, unless the stuck line says it (failure: an Arc read stale with no reason)", () => {
+	const at = new Date(2026, 9, 19, 14, 35).getTime();
+	const render = (over: Partial<ArcValue>) => tier2(renderToStaticMarkup(createElement(page as never, props(value({ nextAutoAt: at, ...over } as Partial<ArcValue>)))));
+	assert.match(render({ queuedAhead: 2 }), /2 newer messages\. Waiting for 2 automatic Builds ahead · Build arc starts now\./);
+	assert.match(render({ backoff: { failures: 3, code: "model" } }), /2 newer messages\. After 3 failures, next try [^<]*35( [AP]M)?\./);
+	const stuck = render({ backoff: { failures: 2, code: "model" }, stuck: { chunks: ["c1"], until: "messages" } });
+	assert.doesNotMatch(stuck, /After 2 failures/);
+	for (const over of [{ queuedAhead: 1 }, { backoff: { failures: 1, code: "model" as const } }]) assert.equal(tier2(renderToStaticMarkup(createElement(panel as never, props(value({ nextAutoAt: at, ...over } as Partial<ArcValue>))))), render(over), "the panel says the same");
+});
+
 test("arc copy: a receipt without a tree says its currency is unknown (failure: it read as never built)", () => {
 	const html = renderToStaticMarkup(createElement(page as never, props(value({ context: null, contextStatus: { newMessages: 0, branchChanged: false, unknown: true } }))));
 	assert.match(html, /what it covers is unknown/);
@@ -193,13 +223,27 @@ test("arc copy: the estimate shows the last Build's price, once (failure: no pri
 	assert.match(unreported, /synthesis rereads the whole Session · last Build: price unavailable\./, "a Build without reported usage still names its price state");
 });
 
-test("arc copy: a done Build with unlabelled chunks shows the cause and the next action on both surfaces (failure: the gap was silent)", () => {
-	const run = { startedAt: "2026-10-19T00:00:00.000Z", trigger: "manual", state: "done", calls: 4, retries: 1, usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: null }, model: null, unlabelledChunks: 2, labelErrorCode: "answer" };
-	const v = value({ builds: [run], coverage: { labelledChunks: 0, unmappedChunks: 2, excludedEntries: 0, synthesisCurrent: true }, contextStatus: { newMessages: 0, branchChanged: false } } as Partial<ArcValue>);
-	for (const view of [page, panel]) {
-		const html = renderToStaticMarkup(createElement(view as never, props(v)));
-		assert.match(html, /The last Build left 2 chunks unlabelled: the model’s answer omitted them\. Build arc labels only those chunks again\./);
+test("arc copy: a label failure states the gap, keeps the last complete Arc, and the retry names the chunks it labels, on both surfaces (failure: a gap read as a done Build)", () => {
+	const at = "2026-10-19T21:40:00.000Z", keptAt = "2026-10-19T20:00:00.000Z";
+	const job = { state: "error", done: 2, total: 3, chunks: 12, toLabel: 7, waitingFor: null, trigger: "manual",
+		lastError: { message: "6 of 12 chunks failed to label: model_error: synthetic failure", code: "model", purpose: "label", model: "anthropic/claude-haiku-5-5", at } };
+	const run = { startedAt: at, trigger: "manual", state: "error", calls: 3, retries: 1, usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: null }, model: null, unlabelledChunks: 6, labelErrorCode: "model", freshChunks: 7 };
+	const coverage = { labelledChunks: 5, unmappedChunks: 7, excludedEntries: 0, synthesisCurrent: false };
+	const kept = value({ synthesis: { headline: "Kept headline", model: "anthropic/claude-sonnet-5-5", builtAt: keptAt }, keptAt, job, builds: [run], coverage } as Partial<ArcValue>);
+	for (const surface of [page, panel]) {
+		const html = renderToStaticMarkup(createElement(surface as never, props(kept)));
+		const alert = /<p class="cos-error" role="alert">([^<]*)<\/p>/.exec(html)?.[1] ?? "";
+		assert.ok(alert.startsWith("6 of 12 chunks failed to label"), alert);
+		assert.ok(alert.includes(`Showing the Arc built at ${dateTime(keptAt)}.`), alert);
+		assert.ok(alert.endsWith("Build arc labels the 7 new or changed chunks."), alert);
+		assert.doesNotMatch(html, /The last Build left/, "no done-with-gap line");
+		assert.match(html, /Evergreen context/, "the kept tree still renders");
 	}
+	const none = value({ context: undefined, keptAt: null, job, builds: [run], coverage: { ...coverage, labelledChunks: 0, unmappedChunks: 12 } } as Partial<ArcValue>);
+	const html = renderToStaticMarkup(createElement(page as never, props(none)));
+	const alert = /<p class="cos-error" role="alert">([^<]*)<\/p>/.exec(html)?.[1] ?? "";
+	assert.ok(alert.includes("Build arc labels all 12 chunks."), alert);
+	assert.ok(alert.endsWith("Deterministic chunks remain below."), alert);
 });
 
 test("arc copy: chunk rules changed shows one relabel notice on both surfaces, the relabel chunk state and the live chunk rule (failure: old labels read as current or the legend lied)", async () => {
@@ -305,5 +349,24 @@ test("arc floor copy: below 4 messages both surfaces say there is nothing to sum
 		const html = renderToStaticMarkup(createElement(surface as never, props(kept)));
 		assert.match(html, /Nothing to summarize yet\. Arcs build automatically[\s\S]*<section aria-label="Evergreen context">[\s\S]*Cap set to 64 MB/);
 		assert.doesNotMatch(html, /role="alert"/);
+	}
+});
+
+test("arc copy: a running Build names its step, labels first, then the Arc, on both surfaces (failure: progress read as call counts only)", () => {
+	const job = { state: "running", done: 1, total: 5, chunks: 21, toLabel: 21, labelled: 6, step: "labels", waitingFor: null, lastError: null, trigger: "manual" };
+	for (const surface of [page, panel]) {
+		const labelling = renderToStaticMarkup(createElement(surface as never, props(value({ job } as unknown as Partial<ArcValue>))));
+		assert.match(labelling, /role="status">Labelling 6 of 21 chunks… · 1 \/ 5 calls</);
+		const writing = renderToStaticMarkup(createElement(surface as never, props(value({ job: { ...job, step: "arc", labelled: 21, done: 4 } } as unknown as Partial<ArcValue>))));
+		assert.match(writing, /role="status">Writing the Arc… · 4 \/ 5 calls</);
+	}
+});
+
+test("arc copy: stuck chunks name the chunks and what unlocks automatic Builds, on both surfaces (failure: one bad chunk failed silently every 10 min)", () => {
+	for (const surface of [page, panel]) {
+		const messages = renderToStaticMarkup(createElement(surface as never, props(value({ stuck: { chunks: ["c6", "c7"], until: "messages" } } as Partial<ArcValue>))));
+		assert.match(messages, /2 chunks c6, c7 failed to label in the last 2 Builds\. Automatic Builds wait for new messages; Build arc retries them now\./);
+		const build = renderToStaticMarkup(createElement(surface as never, props(value({ stuck: { chunks: ["c7"], until: "build" } } as Partial<ArcValue>))));
+		assert.match(build, /Chunk c7 failed to label in the last 2 Builds\. Automatic Builds stop until Build arc succeeds or AmPi updates; Build arc retries them now\./);
 	}
 });

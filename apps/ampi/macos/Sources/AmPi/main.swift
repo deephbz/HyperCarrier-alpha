@@ -2,6 +2,7 @@ import AppKit
 import CryptoKit
 import UserNotifications
 import WebKit
+import os
 
 // AmPi.app: one window onto the local AmPi hub (http://127.0.0.1:<port>/). The app starts the hub when none is
 // listening, stops only the hub it started, and never stops nodes: agents keep working after the window closes.
@@ -76,9 +77,13 @@ enum AppTrace {
 	/// Runs in the page at document start and reports first paint and the first painted Session row.
 	static let pageScript = """
 	(() => {
+		// Turns on the page's own perf marks (web/src/perf.ts); this script runs only in a traced launch.
+		window.__AMPI_PERF__ = true;
 		const post = (name, startTime) => window.webkit.messageHandlers.ampi.postMessage({ type: "trace", name, ts: Math.round((performance.timeOrigin + startTime) * 1000), url: location.pathname });
 		post("page-time-origin", 0);
 		try { new PerformanceObserver((list) => { for (const e of list.getEntries()) post(e.name, e.startTime); }).observe({ type: "paint", buffered: true }); } catch {}
+		// The page's own first-data mark (web/src/perf.ts): the first Session data reached the page.
+		try { new PerformanceObserver((list) => { for (const e of list.getEntries()) if (e.name === "ampi:first-data" || e.name === "ampi:ws-open") post(e.name.slice(5), e.startTime); }).observe({ type: "mark", buffered: true }); } catch {}
 		const seen = () => document.querySelector("[data-thread], .row:not(.group-row)");
 		const painted = () => requestAnimationFrame(() => setTimeout(() => post("first-session-row-painted", performance.now()), 0));
 		if (seen()) { painted(); return; }
@@ -169,6 +174,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 	private var webView: WKWebView!
 	private let hub = HubProcess()
 	private var connection: Task<Void, Never>?
+	/// The key-link fallback for this page load: armed by `loadHub`, used at most once.
+	private var keyLink: URL?
+	private var hubLoadStarted = false
+	/// When the page last reported a refused login (`auth-refused`): at most one key-link sign-in per 30 s, never a loop.
+	private var lastAuthFallback: Date?
 
 	func applicationDidFinishLaunching(_ notification: Notification) {
 		if AppTrace.enabled {
@@ -224,15 +234,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 		// Hand the key only to the hub that proves it holds the same key.
 		if case .hub(let proof) = health, !token.isEmpty, proof == hubProof(token) {
 			if AppTrace.enabled { AppTrace.instant("hub-page-load-start") }
-			webView.load(URLRequest(url: URL(string: "http://127.0.0.1:\(port)/?k=\(token)")!))
+			// The login cookie goes straight into the web view's store (the key stays in memory), so the first load is the
+			// page itself, not a `?k=` 303 round trip. Host-only (originURL, no domain attribute), Path=/, HttpOnly,
+			// SameSite=Strict and no expiry: a session cookie, so the app never adds a year-long cookie of its own, and the
+			// same name, host and path replace any earlier copy. Any failure takes the one fallback, `useKeyLink`.
+			keyLink = URL(string: "http://127.0.0.1:\(port)/?k=\(token)")
+			hubLoadStarted = false
+			var login = HTTPCookie(properties: [.name: "ampi_k_\(port)", .value: token, .originURL: hubURL, .path: "/", HTTPCookiePropertyKey("HttpOnly"): "TRUE", .sameSitePolicy: HTTPCookieStringPolicy.sameSiteStrict])
+			#if DEBUG
+			// Forced failures for the fallback test: nil cookie, setCookie that never completes, or a cookie the hub refuses.
+			switch ProcessInfo.processInfo.environment["AMPI_DEBUG_LOGIN_COOKIE"] {
+			case "nil": login = nil
+			case "stall": login.map { _ in DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in if self?.hubLoadStarted == false { self?.useKeyLink("setCookie did not complete in 2 s") } } }; return true
+			case "wrong": login = HTTPCookie(properties: [.name: "ampi_k_\(port)", .value: "wrong", .originURL: hubURL, .path: "/", HTTPCookiePropertyKey("HttpOnly"): "TRUE", .sameSitePolicy: HTTPCookieStringPolicy.sameSiteStrict])
+			default: break
+			}
+			#endif
+			guard let login else { useKeyLink("the login cookie could not be built"); return true }
+			webView.configuration.websiteDataStore.httpCookieStore.setCookie(login) { [weak self] in
+				guard let self, !self.hubLoadStarted else { return }
+				self.hubLoadStarted = true
+				self.webView.load(URLRequest(url: hubURL))
+			}
+			DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+				if self?.hubLoadStarted == false { self?.useKeyLink("setCookie did not complete in 2 s") }
+			}
 		} else {
 			showStatus("Port \(port) is not this AmPi hub", detail: "Another server answers on 127.0.0.1:\(port) without the key in \(ampiHome.appendingPathComponent("hub.token").path). Stop that server, or set AMPI_HUB_PORT, then choose View › Reload. Log: \(hubLogURL.path)")
 		}
 		return true
 	}
 
+	/// The one fallback when the preset login cookie fails: load the `?k=` link once, so the hub sets its own cookie.
+	@MainActor private func useKeyLink(_ reason: String) {
+		guard let url = keyLink else { return }
+		keyLink = nil
+		hubLoadStarted = true
+		Logger(subsystem: "dev.hypercarrier.ampi", category: "login").notice("login cookie not sent; used the key link (\(reason, privacy: .public))")
+		if AppTrace.enabled { AppTrace.instant("login-fallback", args: ["reason": reason]) }
+		webView.load(URLRequest(url: url))
+	}
+
 	@MainActor private func connect() async {
 		let initial = await HubProcess.health()
+		if AppTrace.enabled { AppTrace.instant("hub-health-answered") }
 		guard !Task.isCancelled else { return }
 		if loadHub(initial) { return }
 		hub.start()
@@ -284,9 +329,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 	func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
 		guard let body = message.body as? [String: Any], let type = body["type"] as? String else { return }
 		switch type {
+		case "auth-refused":
+			// The hub is up but refused this page's cookie (its key changed while the app ran): sign in once with the
+			// current key. A second refusal within 30 s keeps the page's normal disconnected state.
+			if let last = lastAuthFallback, Date().timeIntervalSince(last) < 30 { return }
+			let token = hubToken()
+			guard !token.isEmpty else { return }
+			lastAuthFallback = Date()
+			keyLink = URL(string: "http://127.0.0.1:\(port)/?k=\(token)")
+			useKeyLink("the hub refused the page's login cookie")
 		case "trace":
 			guard AppTrace.enabled, let name = body["name"] as? String, let ts = (body["ts"] as? NSNumber)?.int64Value else { return }
 			AppTrace.instant(name, ts: ts, args: ["url": body["url"] as? String ?? ""])
+			// With the first row on screen, record this hub's login cookies in the web view's store: exactly one, matching
+			// the hub's own login cookie, or a client collects duplicates that the hub's stale-cookie heal would count.
+			if name == "first-session-row-painted", body["url"] as? String == "/" {
+				webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
+					let mine = cookies.filter { $0.name == "ampi_k_\(port)" }.map { c -> [String: Any] in
+						["domain": c.domain, "path": c.path, "httpOnly": c.isHTTPOnly, "secure": c.isSecure, "sessionOnly": c.isSessionOnly,
+						 "sameSite": c.sameSitePolicy?.rawValue ?? "none", "expires": c.expiresDate.map { Int($0.timeIntervalSince1970) } ?? 0]
+					}
+					AppTrace.instant("login-cookies", args: ["count": mine.count, "cookies": mine])
+				}
+			}
 		case "notify":
 			let content = UNMutableNotificationContent()
 			content.title = body["title"] as? String ?? "AmPi"
@@ -319,6 +384,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 	}
 
 	// Links that leave the hub open in the default browser.
+	// The hub refused the page (403): its cookie did not reach it, so take the key link once.
+	func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+		// Every main-frame response of a traced launch, path only (never the query, which can carry the key).
+		if AppTrace.enabled, navigationResponse.isForMainFrame, let http = navigationResponse.response as? HTTPURLResponse {
+			AppTrace.instant("main-frame-response", args: ["status": http.statusCode, "path": http.url?.path ?? ""])
+		}
+		if navigationResponse.isForMainFrame, keyLink != nil, (navigationResponse.response as? HTTPURLResponse)?.statusCode == 403,
+			navigationResponse.response.url?.host == "127.0.0.1", navigationResponse.response.url?.port == port {
+			decisionHandler(.cancel)
+			useKeyLink("the hub answered 403 to the page")
+			return
+		}
+		// The page arrived: this load needs no fallback any more.
+		if navigationResponse.isForMainFrame, let status = (navigationResponse.response as? HTTPURLResponse)?.statusCode, (200..<300).contains(status),
+			navigationResponse.response.url?.port == port { keyLink = nil }
+		decisionHandler(.allow)
+	}
+
 	func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
 		if let url = navigationAction.request.url, navigationAction.navigationType == .linkActivated, url.host != "127.0.0.1" {
 			NSWorkspace.shared.open(url)

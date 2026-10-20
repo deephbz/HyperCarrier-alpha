@@ -190,7 +190,7 @@ export function Overview({ data, onNew, onAddHost, onHelp }: { data: HostThreads
 					{piOnly ? "+ New agent" : "+ New thread"}
 				</button>
 			</div>
-			<div className="scroll" ref={scroller} onScroll={keepPlace.onScroll}>
+			<div className="scroll" ref={scroller} onScroll={keepPlace.onScroll} data-page-scroller tabIndex={-1}>
 				<div className="overview">
 					{!piOnly && <Onboarding data={data} onNew={onNew} onAddHost={onAddHost} onHelp={onHelp} />}
 					<section className="attention-summary" aria-label="Activity since your last visit">

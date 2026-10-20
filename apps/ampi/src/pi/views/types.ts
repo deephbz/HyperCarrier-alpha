@@ -134,8 +134,11 @@ export type PiView<N extends ViewName> = {
 	/**
 	 * Which changes recompute a subscription: "thread" (default) changes to the topic's own `threadId`; "any" every
 	 * change on the Host (timeline-like views; memoize per Session and keep the value compact, since it is diffed whole).
-	 * A topic without `threadId` recomputes as "any". Herdr layout and teams frames count as a change to every Session.
-	 * State that changes outside these (a finished model call) calls `ctx.invalidate(view)`.
+	 * A topic without `threadId` recomputes as "any". A per-Session view reads host state only through its
+	 * PiViewSession and `ctx.teams()`. A Herdr, Teams or limits frame therefore marks only the Sessions whose host inputs
+	 * changed (host.ts #hostInputs), and recomputes "any" views only when a Session or a host-wide value changed; an
+	 * identical frame recomputes nothing. State that changes outside these (a finished model call) calls
+	 * `ctx.invalidate(view)`.
 	 */
 	scope?: "thread" | "any";
 	/**
@@ -143,7 +146,7 @@ export type PiView<N extends ViewName> = {
 	 * it reads only small persisted heads: no tree, transcript, or model call.
 	 */
 	summarize?(ctx: PiViewContext, session: PiViewSession): Partial<ThreadSummary> | undefined;
-	/** Sessions whose copy or liveness changed since the last publish. May start background work; must not block. */
+	/** Sessions whose copy or host inputs changed since the last publish. May start background work; must not block. */
 	changed?(ctx: PiViewContext, sessions: PiViewSession[]): void;
 };
 
