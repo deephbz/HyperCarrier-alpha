@@ -42,7 +42,7 @@ const build = { pending: false, failure: "", start() {} };
 const props = (v: ArcValue) => ({ host: "devbox", threadId: "pi:sess-a", value: v, stale: false, build });
 /** The stale line plus the Evergreen context section, as each surface renders them. */
 function tier2(html: string): string {
-	const stale = /<p class="cos-notice" role="status">[^<]*(?:Build arc to cover (?:them|it)\.|Next automatic update ≈[^<]*|Build arc starts now\.|next try [^<]*)<\/p>/.exec(html)?.[0] ?? "";
+	const stale = /<p class="cos-notice" role="status">[^<]*(?:Build arc to cover (?:them|it)\.|Next automatic update ≈[^<]*|Build arc starts now\.|next try [^<]*|click Build arc\.)<\/p>/.exec(html)?.[0] ?? "";
 	const tree = /<section aria-label="Evergreen context">[\s\S]*?<\/section>(?=<\/div>|<p class="cos-headline"|<section aria-label="Projects")/.exec(html)?.[0] ?? "";
 	return stale + tree;
 }
@@ -169,6 +169,12 @@ test("arc panel split models: a Build row names its label and synthesis models, 
 	// A Build that sent step 2 only owner turns says so in its tooltip.
 	const labelsTitle = /cos-arc-last-build" title="([^"]*)"/.exec(renderToStaticMarkup(createElement(panel as never, props(value({ builds: [{ ...twoStep, arcEvidence: "labels" }] as unknown as ArcValue["builds"] })))))![1]!;
 	assert.match(labelsTitle, /synthesis: anthropic\/claude-sonnet-5-5 · 1 call · \$0\.03 · evidence: owner turns only \(hub\.json arcEvidence\)/);
+	// The synthesis line names the prompt cache: the read share on a hit, the written size and lifetime on a write.
+	const cached = (synthesis: object) => /cos-arc-last-build" title="([^"]*)"/.exec(renderToStaticMarkup(createElement(panel as never, props(value({ builds: [{ ...twoStep, usageByPurpose: { ...twoStep.usageByPurpose, synthesis: { calls: 1, cost: 0.03, ...synthesis } } }] as unknown as ArcValue["builds"] })))))![1]!;
+	assert.match(cached({ input: 3_000, cacheRead: 197_000, cacheWrite: 3_000, cacheWrite1h: 3_000 }), /synthesis: anthropic\/claude-sonnet-5-5 · 1 call · \$0\.03 · cached 97%\n/);
+	assert.match(cached({ input: 10, cacheRead: 0, cacheWrite: 197_000, cacheWrite1h: 197_000 }), /\$0\.03 · cache written 197k \(1 h\)\n/);
+	assert.match(cached({ input: 10, cacheRead: 0, cacheWrite: 124_000 }), /\$0\.03 · cache written 124k \(5 min\)\n/, "a miss without a 1 h write");
+	assert.doesNotMatch(twoStepTitle, /cached|cache written/, "a record without cache counts says nothing");
 	assert.match(title, /Labels use models\.arcLabels; the Arc \(synthesis and context\) uses models\.arcSynthesis\./);
 	assert.match(panelHtml, /title="[^"]*Labels use models\.arcLabels[^"]*">Build arc</);
 	// A per-Build name that names no model: one sentence, the time, one fix, the capped list; the row names the model,
@@ -368,5 +374,20 @@ test("arc copy: stuck chunks name the chunks and what unlocks automatic Builds, 
 		assert.match(messages, /2 chunks c6, c7 failed to label in the last 2 Builds\. Automatic Builds wait for new messages; Build arc retries them now\./);
 		const build = renderToStaticMarkup(createElement(surface as never, props(value({ stuck: { chunks: ["c7"], until: "build" } } as Partial<ArcValue>))));
 		assert.match(build, /Chunk c7 failed to label in the last 2 Builds\. Automatic Builds stop until Build arc succeeds or AmPi updates; Build arc retries them now\./);
+	}
+});
+
+test("arc copy: a Worker Session says its Arcs update only on Build arc, on both surfaces, stale and below the floor (failure: a Worker Arc read as waiting for an update that never comes)", () => {
+	const worker = { autoOff: "worker" } as Partial<ArcValue>;
+	const stale = value(worker);
+	const a = tier2(renderToStaticMarkup(createElement(page as never, props(stale))));
+	assert.match(a, /Covered up to .+ · 2 newer messages\. Worker Session: Arcs update only when you click Build arc\./);
+	assert.doesNotMatch(a, /Next automatic update|Build arc to cover/);
+	assert.equal(tier2(renderToStaticMarkup(createElement(panel as never, props(stale)))), a);
+	const low = value({ ...worker, context: null, synthesis: null, keptAt: null, job: null, floor: { min: 4, messages: 2 }, contextStatus: { newMessages: 0, branchChanged: false } } as unknown as Partial<ArcValue>);
+	for (const surface of [page, panel]) {
+		const html = renderToStaticMarkup(createElement(surface as never, props(low)));
+		assert.match(html, /Nothing to summarize yet\. Worker Session: Arcs update only when you click Build arc\./);
+		assert.doesNotMatch(html, /build automatically/);
 	}
 });

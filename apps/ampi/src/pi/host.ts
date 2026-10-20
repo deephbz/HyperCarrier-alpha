@@ -114,6 +114,7 @@ type Copy = {
 	contextTokens?: number;
 	/** Percent of the latest assistant prompt read from cache, as hc-hud and Pi's footer compute it. */
 	cacheHit?: number; preview?: string; lastKnownLive?: boolean; generation: number;
+	/** When its last open thread or view closed. Memory only: after a hub restart the browser's resubscribe marks the row. */ lastOpenAt?: number;
 	refreshing?: Promise<void>; deriving?: boolean; refreshAgain?: boolean; urgent?: boolean; leases: number;
 	/** Copy file mtime at load; orders the cold backlog newest first. */ copiedAt?: number; eviction?: Promise<void>; evictionCancelled?: boolean; readError?: string; sourceMissing?: boolean;
 	/** The copy's host inputs (#hostInputs) at its last publish; a frame that leaves them equal marks nothing. */ hostKey?: string;
@@ -189,6 +190,13 @@ export class PiHost extends EventEmitter {
 	#store!: WorkingSet;
 	#loaded?: Promise<void>;
 	#initialized = false;
+	/** Saved heads and the index are loaded; the derive Worker may still be starting. */
+	#indexed?: Promise<void>;
+	#listable = false;
+	/** The startup refresh of every saved copy has not settled, and UPDATING_MAX_MS has not passed. */
+	#refreshing = true;
+	/** Set when working-set init failed: the end reason for every list, served or later. */
+	#failure?: string;
 	#stopping?: Promise<void>;
 	#writes: Promise<void> = Promise.resolve();
 	#preparing = new Map<number, object>();
@@ -214,8 +222,14 @@ export class PiHost extends EventEmitter {
 	#pending = new Map<number, { resolve: (value: AgentAck) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
 	/** Live subscriptions by sid: the topic, its last value, and how many ops frames were sent. */
 	#subs = new Map<number, { topic: Topic; previous: PiTopicValue | undefined; n: number; at?: number; pending?: string }>();
+	/** Open thread and view subscriptions per threadId; they keep a cold Session listed (#held). */
+	#openCount = new Map<string, number>();
+	/** A cold Session stays listed this long after its last view closes, so leaving it does not pull its row from under the pointer. */
+	static OPEN_GRACE_MS = 5 * 60_000;
 	/** A Host-wide view recomputes at most this often; changes in between coalesce into one publish. */
 	static ANY_VIEW_MS = 500;
+	/** The longest `updating` lasts after init; a slow backlog refresh must not leave the header "Updating…" forever. */
+	static UPDATING_MAX_MS = 60_000;
 	#anyTimer?: ReturnType<typeof setTimeout>;
 	#anyDeferred = new Set<string>();
 	#saveTimer?: ReturnType<typeof setTimeout>;
@@ -230,6 +244,9 @@ export class PiHost extends EventEmitter {
 	#auditDue = false;
 	/** The clock that #hostInputs' `recent` reads, set when #markHostChanges runs, so a publish never sees a later edge. */
 	#inputsAt = 0;
+	/** The retention window and open grace that rows and eviction read, taken with #inputsAt; a change after a mark reaches rows at the next mark. */
+	#inputsWindow = 0;
+	#inputsGrace = 0;
 	/** Audit differences found since start: inputs that change marking missed (reported in /api/health). */
 	missedInputs = 0;
 	/** Queued submissions by ID, until delivered or dismissed; the full text when this hub sent it. */
@@ -257,6 +274,7 @@ export class PiHost extends EventEmitter {
 		lease: (threadId) => { const c = this.#copyByThread(threadId); if (!c) return () => {}; c.leases++; return () => { c.leases--; }; },
 		teams: () => [...this.#teams.values()],
 		teamsFrame: () => this.#teamsFrame,
+		rolesKnown: () => Boolean(this.#teamsFrame) || this.config.agentConfig?.teams === false,
 		command: (cmd, timeoutMs) => this.#command(cmd, timeoutMs),
 		ask: (req) => ask(req, this.config.askCommand),
 		model: (purpose, override) => resolveHelperModel(purpose, override, this.config.askCommand?.length ? undefined : piModelRegistry),
@@ -283,16 +301,22 @@ export class PiHost extends EventEmitter {
 	start(): void {
 		if (this.#loaded || this.#stopping) return;
 		this.#stopped = false;
-		this.#loaded = (async () => {
+		let ready!: Promise<void>;
+		this.#indexed = (async () => {
 			await yieldLoop();
 			const { WorkingSet } = await spanAsync("import-working-set", "startup", () => import("./working-set.ts"));
 			await mkdir(this.cacheDir, { recursive: true, mode: 0o700 });
 			this.#store = new WorkingSet(this.config.id, this.cacheDir);
-			// The index loads from saved heads while the derive Worker starts; every later step waits for both.
-			const ready = spanAsync("working-set-ready", "startup", () => this.#store.ready);
+			// The index loads from saved heads while the derive Worker starts. The threads and node snapshots need only
+			// the index; every other step waits for both.
+			ready = spanAsync("working-set-ready", "startup", () => this.#store.ready);
 			void ready.catch(() => {});
 			await this.#store.readable;
 			await spanAsync("load-index", "startup", () => this.#loadIndex());
+			this.#listable = true;
+		})();
+		this.#loaded = (async () => {
+			await this.#indexed;
 			await ready;
 			this.#initialized = true;
 			instant("host-loaded", { copies: this.#copies.size });
@@ -306,11 +330,39 @@ export class PiHost extends EventEmitter {
 			this.#audit = setInterval(() => { this.#auditDue = true; this.#markHostChanges(); this.#schedulePublish(); }, PiHost.AUDIT_MS);
 			this.#audit.unref();
 			this.#connect();
+			const started = Date.now();
 			span("refresh-all", "startup", () => {
 				const backlog = [...this.#copies.values()].sort((a, b) => (b.copiedAt ?? 0) - (a.copiedAt ?? 0));
-				for (const copy of backlog) void this.#refresh(copy, this.#isLive(copy));
+				void Promise.allSettled(backlog.map((copy) => this.#refresh(copy, this.#isLive(copy)))).then(() => this.#updated("refresh", started));
 			}, { copies: this.#copies.size });
-		}).catch((error) => { if (!this.#stopped) this.#set({ status: "disconnected", error: (error as Error).message }); });
+			setTimeout(() => this.#updated("bound", started), PiHost.UPDATING_MAX_MS).unref();
+		}).catch((error) => {
+			if (this.#stopped) return;
+			// A list served from the index, or one still preparing, would never update after a failed init: end it, and
+			// every later one, with the reason and the next step.
+			if (!this.#initialized) {
+				console.error(`pi host ${this.config.id}: working-set init failed:`, error);
+				this.#failure = this.#unavailable((error as Error).message);
+				for (const sid of [...this.#subs.keys(), ...this.#preparing.keys()]) this.#emitFrame({ t: "end", sid, reason: this.#failure });
+				this.#subs.clear();
+				this.#preparing.clear();
+			}
+			this.#set({ status: "disconnected", error: this.#failure ?? (error as Error).message, ...(this.#failure ? { cacheFailed: true } : {}) });
+		});
+	}
+
+	/** Clears `updating` once: when the startup refresh settles, or at the bound while it still runs. */
+	#updated(by: "refresh" | "bound", started: number): void {
+		if (this.#stopped || !this.#refreshing) return;
+		this.#refreshing = false;
+		const what = by === "refresh" ? "the startup refresh settled" : "the bound passed while the startup refresh still runs";
+		console.log(`pi host ${this.config.id}: Updating cleared after ${Date.now() - started} ms: ${what}`);
+		instant("host-updated", { by });
+		this.#markAll();
+	}
+
+	#unavailable(message: string): string {
+		return `Host cache unavailable: ${message}. Restart the hub; if it repeats, check the hub log and the cache at ${this.cacheDir}.`;
 	}
 
 	stop(): Promise<void> {
@@ -322,7 +374,7 @@ export class PiHost extends EventEmitter {
 		clearTimeout(this.#saveTimer);
 		clearTimeout(this.#timer);
 		this.#preparing.clear();
-		this.#subs.clear();
+		for (const sid of [...this.#subs.keys()]) this.#dropSub(sid);
 		for (const pending of this.#pending.values()) {
 			clearTimeout(pending.timer);
 			pending.reject(new Error("Host stopped"));
@@ -334,7 +386,7 @@ export class PiHost extends EventEmitter {
 			try {
 				await this.#loaded;
 				if (this.#initialized) await this.#writeIndex();
-			} finally { this.#store?.close(); }
+			} finally { await this.#store?.close(); }
 		})();
 	}
 
@@ -342,7 +394,7 @@ export class PiHost extends EventEmitter {
 		clearTimeout(this.#timer);
 		this.#attempts = 0;
 		this.#child?.kill();
-		if (this.state.status !== "connected") void this.#loaded?.then(() => this.#connect()).catch((error) => { if (!this.#stopped) this.#set({ error: (error as Error).message }); });
+		if (this.state.status !== "connected") void this.#loaded?.then(() => this.#connect()).catch((error) => { if (!this.#stopped) this.#set({ error: this.#failure ?? (error as Error).message }); });
 	}
 
 	/** Frames from the hub, as a node would receive them. Answers are emitted as `frame` events. */
@@ -356,7 +408,7 @@ export class PiHost extends EventEmitter {
 				return true;
 			case "unsub":
 				this.#preparing.delete(frame.sid);
-				this.#subs.delete(frame.sid);
+				this.#dropSub(frame.sid);
 				void this.#evictExpired();
 				return true;
 			case "req":
@@ -510,17 +562,51 @@ export class PiHost extends EventEmitter {
   return Boolean(a?.pane || a?.control?.live);
  }
 
- #isOpen(copy: Copy): boolean {
-  return [...this.#subs.values()].some(({ topic }) => (topic.kind === "thread" || topic.kind === "view") && topic.threadId === copy.session?.id);
+ #openThread(topic: Topic): string | undefined {
+  return (topic.kind === "thread" || topic.kind === "view") && topic.threadId ? String(topic.threadId) : undefined;
  }
 
+ /** Adds a subscription; opening a view marks its Session's copy only when that changes whether the copy is held. */
+ #addSub(sid: number, sub: { topic: Topic; previous: PiTopicValue | undefined; n: number; pending?: string }): void {
+  const id = this.#openThread(sub.topic), copy = id ? this.#byThread.get(id) : undefined, held = copy && this.#held(copy);
+  this.#subs.set(sid, sub);
+  if (id) this.#openCount.set(id, (this.#openCount.get(id) ?? 0) + 1);
+  if (copy && this.#held(copy) !== held) { this.#dirty.add(copy.path); this.#schedulePublish(); }
+ }
+
+ /** The one way a subscription ends. Closing a Session's last view starts its grace (OPEN_GRACE_MS). */
+ #dropSub(sid: number): void {
+  const sub = this.#subs.get(sid);
+  if (!sub) return;
+  const id = this.#openThread(sub.topic), copy = id ? this.#byThread.get(id) : undefined, held = copy && this.#held(copy);
+  this.#subs.delete(sid);
+  if (!id) return;
+  const left = (this.#openCount.get(id) ?? 1) - 1;
+  if (left > 0) this.#openCount.set(id, left);
+  else this.#openCount.delete(id);
+  if (!copy) return;
+  if (!left) copy.lastOpenAt = Date.now();
+  if (this.#held(copy) !== held) { this.#dirty.add(copy.path); this.#schedulePublish(); }
+ }
+
+ /**
+  * An open view, or one closed within OPEN_GRACE_MS, holds a Session: its row stays listed and its copy is not evicted.
+  * The grace is measured on the marking clock (#inputsAt), so it ends at the first mark (a discovery frame or the audit)
+  * after Date.now() passes it; that frame also runs #evictExpired. Before the next mark the difference can be negative, which reads as held.
+  */
+ #held(copy: Copy): boolean {
+  const id = copy.session?.id;
+  return Boolean(id && this.#openCount.get(id)) || (copy.lastOpenAt !== undefined && this.#inputsAt - copy.lastOpenAt < this.#inputsGrace);
+ }
+
+ /** Expiry reads the marking clock (#inputsAt, #inputsWindow), so a copy is evictable exactly when its row is no longer recent. */
  async #evictExpired(): Promise<void> {
   if (this.#stopped) return;
   for (const copy of this.#copies.values()) {
    const activity = Math.max(copy.updatedAt, copy.closedAt ?? 0);
    if (!activity || !copy.data || copy.readError || copy.data.invalidLines || copy.data.bytes !== copy.offset || !this.#livenessKnown || this.state.status !== "connected" && copy.lastKnownLive ||
-       this.#isLive(copy) || this.#isOpen(copy) || copy.leases || copy.refreshing || copy.eviction ||
-       Date.now() - activity < this.#recentMs()) continue;
+       this.#isLive(copy) || this.#held(copy) || copy.leases || copy.refreshing || copy.eviction ||
+       this.#inputsAt - activity < this.#inputsWindow) continue;
    if (this.state.status !== "connected") continue;
    copy.evictionCancelled = false;
    copy.eviction = this.#evict(copy).finally(() => { copy.eviction = undefined; });
@@ -532,7 +618,7 @@ export class PiHost extends EventEmitter {
   let removed = false;
   try {
    const bytes = copy.offset, generation = copy.generation;
-   const changed = () => copy.offset !== bytes || copy.generation !== generation || this.#isOpen(copy) || this.#isLive(copy) || copy.leases || copy.refreshing;
+   const changed = () => copy.offset !== bytes || copy.generation !== generation || this.#held(copy) || this.#isLive(copy) || copy.leases || copy.refreshing;
    const ack = await this.#command({ t: "forget", path: copy.path, bytes }, 10_000);
    if (this.#stopped || copy.evictionCancelled || changed()) return;
    removed = await this.#store.forget(this.#source(copy), ack.watermark);
@@ -841,9 +927,12 @@ export class PiHost extends EventEmitter {
 	/**
 	 * After a host-level frame (agents, teams, limits): marks only the copies whose host inputs changed, and the
 	 * host-wide values when theirs changed. An identical frame publishes nothing.
+	 * Rule: every clock or config value a row reads comes from a value this mark wrote, so a publish never sees a later one.
 	 */
 	#markHostChanges(): void {
 		this.#inputsAt = Date.now();
+		this.#inputsWindow = this.#recentMs();
+		this.#inputsGrace = PiHost.OPEN_GRACE_MS;
 		for (const copy of this.#copies.values()) {
 			const key = JSON.stringify(this.#hostInputs(copy));
 			if (key === copy.hostKey) continue;
@@ -881,7 +970,7 @@ export class PiHost extends EventEmitter {
 		const threadId = copy.session?.id;
 		return {
 			// Closed Sessions remain recent for one retention window; crossing its edge hides an unlisted row.
-			recent: !copy.updatedAt || this.#inputsAt - Math.max(copy.updatedAt, copy.closedAt ?? 0) < this.#recentMs(),
+			recent: !copy.updatedAt || this.#inputsAt - Math.max(copy.updatedAt, copy.closedAt ?? 0) < this.#inputsWindow,
 			agent: agent && { pane: agent.pane, workspace: agent.workspace, workspaceLabel: workspace?.label, tab: agent.tab, tabLabel: tab?.label, title: agent.title, name: agent.name, cwd: agent.cwd, status: agent.status, live: Boolean(agent.pane || agent.control?.live) },
 			control: control && { idle: control.idle, compacting: control.compacting, steer: control.pending?.steer ?? 0, followUp: control.pending?.followUp ?? 0 },
 			team: member && member.session === copy.path ? { team: member.team, role: member.role, member: member.member } : undefined,
@@ -889,6 +978,7 @@ export class PiHost extends EventEmitter {
 			livenessKnown: this.#livenessKnown,
 			lastKnownLive: copy.lastKnownLive,
 			queued: threadId ? this.#queuedItems(threadId) : [],
+			open: this.#held(copy),
 		};
 	}
 
@@ -925,9 +1015,9 @@ export class PiHost extends EventEmitter {
   this.#adoptHead(copy);
 		const session = copy.session;
 		if (!session) return undefined;
-		const { recent, agent, control, team, limits, livenessKnown, lastKnownLive } = this.#hostInputs(copy);
+		const { recent, agent, control, team, limits, livenessKnown, lastKnownLive, open } = this.#hostInputs(copy);
 		// Unknown/source-loss copies stay visible.
-		if (livenessKnown && !copy.readError && !copy.data?.invalidLines && !agent && !recent && !this.#isOpen(copy) && !lastKnownLive && !copy.sourceMissing) return undefined;
+		if (livenessKnown && !copy.readError && !copy.data?.invalidLines && !agent && !recent && !open && !lastKnownLive && !copy.sourceMissing) return undefined;
 		const busy = control ? !control.idle : agent?.status === "working" || agent?.status === "blocked";
 		// A blocked pane waits on its owner (a question or a permission): that is attention, not activity.
 		const blocked = agent?.status === "blocked";
@@ -981,7 +1071,12 @@ export class PiHost extends EventEmitter {
 			// Herdr's layout lists only panes with a Session file; place the new pane in its tab.
 			if (pane && where?.workspace && where.tab) layout = withPane(layout, where.workspace, where.tab, pane);
 		}
-		return { threads, layout, backend: "pi" };
+		// What this list does not know yet (ThreadsState): saved state only, no liveness, an unfinished refresh.
+		const state: ThreadsState = { threads, layout, backend: "pi" };
+		if (!this.#initialized) state.indexing = true;
+		if (!this.#listed) state.listing = true;
+		if (this.#refreshing) state.updating = true;
+		return state;
 	}
 
 	/** A Session listed before Pi writes its file: from this hub's spawn ledger, a live control descriptor, or both. */
@@ -1077,18 +1172,27 @@ export class PiHost extends EventEmitter {
 
 	async #subscribe(sid: number, topic: Topic): Promise<void> {
 		const token = {};
-		this.#subs.delete(sid);
+		this.#dropSub(sid);
 		this.#preparing.set(sid, token);
+		const indexOnly = topic.kind === "threads" || topic.kind === "node";
 		try {
-			await this.#loaded;
+			await (indexOnly ? this.#indexed : this.#loaded);
 			if ((topic.kind === "thread" || topic.kind === "view") && topic.threadId) await this.#waitForEviction(topic.threadId);
 		}
 		catch (error) {
-			if (!this.#stopped && this.#preparing.get(sid) === token) this.#emitFrame({ t: "end", sid, reason: "Host cache unavailable: " + (error as Error).message });
+			if (!this.#stopped && this.#preparing.get(sid) === token) {
+				this.#preparing.delete(sid);
+				this.#emitFrame({ t: "end", sid, reason: this.#failure ?? this.#unavailable((error as Error).message) });
+			}
+			return;
 		}
 		if (this.#stopped || this.#preparing.get(sid) !== token) return;
 		this.#preparing.delete(sid);
-		if (!this.#initialized) return;
+		// Never a silent return: a subscription that cannot be served ends with the reason.
+		if (this.#failure || !(indexOnly ? this.#listable : this.#initialized)) {
+			this.#emitFrame({ t: "end", sid, reason: this.#failure ?? this.state.error ?? "Host cache unavailable" });
+			return;
+		}
 		if (!["threads", "thread", "node", "view"].includes(topic.kind) || (topic.kind === "view" && !this.#views.has(topic.view))) {
 			this.#emitFrame({ t: "end", sid, reason: `${topic.kind} is not available for Pi Sessions yet` });
 			return;
@@ -1099,11 +1203,11 @@ export class PiHost extends EventEmitter {
 		// A Session the Host does not list yet keeps its subscription: the publish that lists it sends the snapshot.
 		if (value === undefined) {
 			const pending = this.#pendingReason(topic);
-			this.#subs.set(sid, { topic, previous: undefined, n: 0, pending });
+			this.#addSub(sid, { topic, previous: undefined, n: 0, pending });
 			this.#emitFrame({ t: "pending", sid, reason: pending });
 			return;
 		}
-		this.#subs.set(sid, { topic, previous: value, n: 0 });
+		this.#addSub(sid, { topic, previous: value, n: 0 });
 		this.#emitFrame({ t: "snap", sid, value });
 	}
 

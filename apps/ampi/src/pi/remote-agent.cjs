@@ -1,5 +1,5 @@
 // AmPi Pi remote agent (v2; contract: apps/ampi/docs/pi-backend.md section 2).
-// Evolved from tools/session-mirror/remote-agent.cjs, which stays until Session Mirror retires.
+// Evolved from the retired Session Mirror's remote agent.
 // Sent inline over `ssh -T <alias> node -` (or run locally); nothing is installed. Zero dependencies.
 // Config: HCM_CFG = base64 JSON. Stdout: one JSON frame per line. Stdin: one JSON command per line.
 //
@@ -23,7 +23,7 @@
 //   host            Host ID reported in hello (default os.hostname(); the hub knows the SSH alias)
 //   offsets         { path: byteOffset } already copied by the hub
 //   tailBytes       0 = ship whole Sessions
-//   pollMs, discoverMs, teamsMs, teams, ptbObservation, herdrSession  (as in Session Mirror)
+//   pollMs, discoverMs, teamsMs, teams, ptbObservation, herdrSession
 //   agentDir        Pi agent dir (default $PI_CODING_AGENT_DIR or ~/.pi/agent)
 //   controlStatusMs status query timeout per socket (default 500)
 //   controlSubmitMs submit/abort reply timeout (default 130000; the extension waits up to 120 s on compaction)
@@ -227,7 +227,7 @@ async function herdrCall(argv, timeout = 15000) {
   return { value };
 }
 
-// ---- Session byte shipping (unchanged from Session Mirror) ----
+// ---- Session byte shipping ----
 function track(p, live = false) {
   if (tracked.has(p)) return;
   let size = 0;
@@ -433,10 +433,11 @@ function blankAgent(session, extra) {
 }
 
 // Herdr's own order: workspaces and tabs in list order; panes in agent-list order within a tab.
-function buildLayout(workspaces, tabs, agents) {
+// keptLabels: workspace labels from the last listed pass, used only when `workspace list` failed this pass.
+function buildLayout(workspaces, tabs, agents, keptLabels) {
   const wsById = new Map();
   const layout = { workspaces: [] };
-  const ws = (id, label = null) => {
+  const ws = (id, label = keptLabels?.get(id) ?? null) => {
     if (!wsById.has(id)) { const w = { id, label, tabs: [], tabById: new Map() }; wsById.set(id, w); layout.workspaces.push(w); }
     return wsById.get(id);
   };
@@ -460,6 +461,8 @@ function buildLayout(workspaces, tabs, agents) {
 }
 
 let lastAgents = [];
+// A failed `workspace list` keeps these labels, so one slow call does not publish null labels.
+let workspaceLabels = new Map();
 let discovering = false, discoverAgain = false;
 // After a spawn or close: list again now (or right after the running pass) so the hub sees the change quickly.
 function rediscover() { if (discovering) discoverAgain = true; else discover(); }
@@ -485,7 +488,9 @@ async function discover() {
           source: 'herdr', pi: a.agent === 'pi' && a.agent_session.agent === 'pi',
         }));
       }
-      layout = buildLayout(workspaces, tabs, agents);
+      const listed = Array.isArray(workspaces);
+      if (listed) workspaceLabels = new Map(workspaces.filter((w) => w?.workspace_id).map((w) => [w.workspace_id, w.label ?? null]));
+      layout = buildLayout(workspaces, tabs, agents, listed ? undefined : workspaceLabels);
     }
     // Control: attach live state; a live Session Herdr does not list still counts (pane null).
     const controls = await liveControls();

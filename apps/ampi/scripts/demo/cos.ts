@@ -1,5 +1,6 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { CLOSED_CHUNKS_HEADER } from "../../src/pi/views/cos-arc-prompts.ts";
 import type { DemoContext } from "./index.ts";
 
 /** DEMO_STRESS=200 adds real synthetic Session files, through the real reader and hub. */
@@ -70,8 +71,14 @@ export function cosDemo({ dir, agentDir, sessions }: DemoContext) {
 	writeFileSync(join(dir, "cos-model.cjs"), `const fs = require('node:fs');
 if (fs.existsSync(${JSON.stringify(join(dir, "cos-no-model"))})) { console.error('No model available in this synthetic demo. Remove cos-no-model to enable the offline model.'); process.exit(2); }
 let input = ''; process.stdin.on('data', d => input += d).on('end', () => {
+  // A retry appends its note to the message; the demo answers the data before it.
+  input = input.split('\\n\\nYour previous reply was invalid')[0];
   fs.appendFileSync(${JSON.stringify(join(dir, "ask-calls.jsonl"))}, JSON.stringify({ kind: input.includes('Write the re-entry recap.') ? 'recap' : 'other' }) + '\\n');
   let p; try { p = JSON.parse(input); } catch { setTimeout(() => { if (/Question: "fail/i.test(input)) process.exit(3); console.log(input.includes('Write the re-entry recap.') ? 'The reader work has progressed; review the reported tests and decide the next step.' : 'The agent reports tests passing and changes to reader.ts. This is selected prose, not independent verification.'); }, 600); return; }
+  // Step 2 sends the closed chunks in the system text (AMPI_ASK_SYSTEM_FILE); the message holds the open chunk.
+  const sys = process.env.AMPI_ASK_SYSTEM_FILE && fs.existsSync(process.env.AMPI_ASK_SYSTEM_FILE) ? fs.readFileSync(process.env.AMPI_ASK_SYSTEM_FILE, 'utf8') : '';
+  const closedAt = sys.indexOf(${JSON.stringify(CLOSED_CHUNKS_HEADER)});
+  if (p && p.arcs && closedAt >= 0) p.arcs = [...JSON.parse(sys.slice(closedAt + ${JSON.stringify(CLOSED_CHUNKS_HEADER)}.length)), ...p.arcs];
   const names = ['Session reader', 'One GUI', 'Verification'];
   // Step 2 answers tier 1 from the chunk labels and tier 2 from the evidence, in one object.
   const project = (c) => c.label?.project ?? 'Unlabelled';

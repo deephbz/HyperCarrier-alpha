@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { HerdrLayout, ThreadSummary } from "../../../src/shared/protocol.ts";
+import type { HerdrLayout, ThreadSummary, ThreadsState } from "../../../src/shared/protocol.ts";
 import { PiHostSection } from "./PiSidebar.tsx";
 import { type HostState, hub, useTopic } from "../client.ts";
 import { hasRealModel, useModels } from "../models.ts";
@@ -11,7 +11,8 @@ import { dispatchKeyAction } from "../keymap.ts";
 import { handleSidebarKeyDown } from "./sidebar-keys.ts";
 import { setThemeChoice, useThemeChoice, type ThemeChoice } from "../theme.ts";
 
-export type HostThreads = { host: HostState; threads: ThreadSummary[]; stale: boolean; layout?: HerdrLayout };
+/** `error`: why the Host ended or holds this list (pending or end frame); an ended list never loads further. */
+export type HostThreads = { host: HostState; threads: ThreadSummary[]; stale: boolean; layout?: HerdrLayout; error?: string } & Pick<ThreadsState, "indexing" | "listing" | "updating">;
 
 export function ActivityIcon({ t }: { t: ThreadSummary }) {
 	if (isBusy(t)) return <span className="spinner" title={ACTIVITY_LABEL[t.activity]} />;

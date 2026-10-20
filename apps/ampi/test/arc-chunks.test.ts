@@ -129,3 +129,14 @@ test("arc excerpt: harness USER lines are sampled with the runs, so each run kee
 	assert.ok(kept.some((i) => i >= 10 && i < 19), `the run after u1 keeps a stop besides s19: ${kept}`);
 	assert.ok(kept.includes(9) && kept.includes(19), "the stop before u1 and the final stop stay");
 });
+
+test("arc chunks: a closed chunk keeps its hash and evidence bytes while the Session grows, so step 2's cached system text holds (failure: one budget shared across chunks re-trimmed closed evidence)", () => {
+	clock = 0;
+	const turns = (from: number, to: number) => Array.from({ length: to - from }, (_, k) => [owner(`u${from + k}`, `owner ask ${from + k} ${"y".repeat(900)}`), stop(`s${from + k}`, `done ${from + k} ${"z".repeat(1500)}`)]).flat();
+	const early = turns(0, 13), later = [...early, ...turns(13, 20)];
+	const a = chunk(early), b = chunk(later);
+	assert.equal(a.chunks.length, 2, "the thirteenth owner turn opens a second chunk");
+	assert.ok(a.shortenedChunks > 0, "the closed chunk is long enough to be trimmed");
+	assert.equal(b.chunks[0]!.hash, a.chunks[0]!.hash);
+	assert.equal(b.evidence.get("c0"), a.evidence.get("c0"), "byte-identical closed evidence");
+});

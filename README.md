@@ -111,10 +111,7 @@ Run the recovery CLI:
 uv run --locked --project tools/herdr-pi-recovery herdr-pi-recovery doctor
 ```
 
-See each tool README for its trust boundary and removal steps. The
-[`tools/session-mirror`](tools/session-mirror/README.md)
-web IDE provides local Session reading and steering. Remote SSH use remains
-experimental.
+See each tool README for its trust boundary and removal steps.
 
 Validate copied configuration without changing your defaults:
 

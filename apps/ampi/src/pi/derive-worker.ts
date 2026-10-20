@@ -256,12 +256,19 @@ if (parentPort) {
  const rank = (job: Job) => job.op === "init" ? 0 : job.op === "find" ? 1 : job.op === "derive" ? job.urgent ? 2 : 4 : 3;
  // Each cache's prose_path backfill runs one bounded step between jobs, so jobs
  // keep moving and no write transaction outlasts one step.
- const backfills = new Set<string>(), seen = new Set<string>();
- let stepNext = false;
+ const backfills = new Set<string>(), seen = new Set<string>(), retries = new Map<string, NodeJS.Timeout>();
+ // A closed cache takes no new job or backfill step until a later init reopens it. Its close
+ // answers once the active job for that cache has closed its database.
+ const closed = new Set<string>(), waiting = new Map<string, number[]>();
+ const dirOf = (job: Job) => job.op === "init" ? job.cacheDir : job.source.cacheDir;
+ let stepNext = false, activeDir: string | undefined;
  const step = (cacheDir: string) => {
   try { const db = openWorkingSet(cacheDir); try { if (backfillSearch(db)) backfills.delete(cacheDir); } finally { db.close(); } }
   // forgetSearch keeps the scan path while the cursor remains, so a failed step only waits.
-  catch { backfills.delete(cacheDir); setTimeout(() => { backfills.add(cacheDir); void pump(); }, 5000).unref(); }
+  catch {
+   backfills.delete(cacheDir);
+   retries.set(cacheDir, setTimeout(() => { retries.delete(cacheDir); backfills.add(cacheDir); void pump(); }, 5000).unref());
+  }
  };
  const pump = async () => {
   if (active || !queue.length && !backfills.size) return;
@@ -280,6 +287,7 @@ if (parentPort) {
   for (let i = 1; i < queue.length; i++) if (rank(queue[i]) < rank(queue[at])) at = i;
   const [message] = queue.splice(at, 1);
   const start = tracing ? nowUs() : 0;
+  const dir = activeDir = dirOf(message);
   try {
    parentPort!.postMessage({ id: message.id, started: true });
    let data: unknown;
@@ -292,12 +300,23 @@ if (parentPort) {
    parentPort!.postMessage({ id: message.id, data });
   } catch (error) { parentPort!.postMessage({ id: message.id, error: (error as Error).message }); }
   finally {
-   active = false; setImmediate(() => void pump());
+   const answers = waiting.get(dir); waiting.delete(dir);
+   for (const id of answers ?? []) parentPort!.postMessage({ id, data: message.op });
+   active = false; activeDir = undefined; setImmediate(() => void pump());
    // The hub terminates this Worker without notice, so each job's events leave at once.
    if (tracing) { complete(message.op, "derive", start, { job: message.id, queued: queue.length }); flushTrace(); }
   }
  };
- parentPort.on("message", (message: Job | { op: "cancel"; id: number } | { op: "urgent"; cacheDir: string; path: string }) => {
+ parentPort.on("message", (message: Job | { op: "cancel"; id: number } | { op: "urgent"; cacheDir: string; path: string } | { op: "close"; id: number; cacheDir: string }) => {
+  if (message.op === "close") {
+   const dir = message.cacheDir;
+   closed.add(dir); seen.delete(dir); backfills.delete(dir);
+   clearTimeout(retries.get(dir)); retries.delete(dir);
+   for (let i = queue.length; i--;) if (dirOf(queue[i]!) === dir) { parentPort!.postMessage({ id: queue[i]!.id, error: "Working set stopped" }); queue.splice(i, 1); }
+   if (activeDir === dir) waiting.set(dir, [...waiting.get(dir) ?? [], message.id]);
+   else parentPort!.postMessage({ id: message.id, data: null });
+   return;
+  }
   if (message.op === "urgent") {
    for (const job of queue) if (job.op === "derive" && job.source.cacheDir === message.cacheDir && job.source.path === message.path) job.urgent = true;
    return;
@@ -307,7 +326,9 @@ if (parentPort) {
    if (at >= 0) { queue.splice(at, 1); parentPort!.postMessage({ id: message.id, data: false }); }
    return;
   }
-  const cacheDir = message.op === "init" ? message.cacheDir : message.source.cacheDir;
+  const cacheDir = dirOf(message);
+  if (message.op === "init") closed.delete(cacheDir);
+  else if (closed.has(cacheDir)) { parentPort!.postMessage({ id: message.id, error: "Working set stopped" }); return; }
   if (!seen.has(cacheDir)) { seen.add(cacheDir); backfills.add(cacheDir); }
   queue.push(message);
   setImmediate(() => void pump());

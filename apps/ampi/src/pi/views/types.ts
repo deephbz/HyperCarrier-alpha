@@ -102,6 +102,8 @@ export type PiViewContext = {
 	/** The latest raw teams frame from the remote agent (`status`, `codes`, and any published Team read it carries), or
 	 * undefined before the first one. Distinguishes "Pi Team Bright unavailable" from "no Teams". */
 	teamsFrame(): PiTeamsFrame | undefined;
+	/** Whether Session team roles are read: after the first teams frame, or always when Teams are off. Absent: read. */
+	rolesKnown?(): boolean;
 	/** Send one command to the Host's remote agent (pi-backend.md §2); resolves with its ack, rejects with `code`. */
 	command(cmd: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown>>;
 	/**

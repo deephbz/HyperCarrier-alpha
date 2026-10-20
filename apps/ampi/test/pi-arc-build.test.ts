@@ -14,7 +14,7 @@ import { ask } from "../src/pi/ask.ts";
 import { piModelRegistry } from "../src/pi/model-registry.ts";
 import type { Chunk } from "../src/pi/views/cos-arc-chunks.ts";
 import { normalizeLabel, normalizeProjects } from "../src/pi/views/cos-arc-format.ts";
-import { LABEL_SYSTEM, STEP2_SYSTEM } from "../src/pi/views/cos-arc-prompts.ts";
+import { CLOSED_CHUNKS_HEADER, LABEL_SYSTEM, STEP2_SYSTEM } from "../src/pi/views/cos-arc-prompts.ts";
 import { ARC_ASK_CONCURRENCY, EMPTY_ANSWER, LABEL_VERSION, arcClock, bounded, buildArc, buildLog, cosArc, json, type ArcFailure, type ArcValue } from "../src/pi/views/cos-arc.ts";
 import * as arcModule from "../src/pi/views/cos-arc.ts";
 import { rarebitView } from "../src/pi/views/rarebit.ts";
@@ -286,7 +286,7 @@ test("arc step 2: one arcSynthesis call reads labels, Rarebit evidence and ask c
 	assert.equal(step2.length, 1, "one step-2 call");
 	assert.equal(step2[0]!.purpose, "arcSynthesis");
 	assert.ok(!("shape" in JSON.parse(step2[0]!.prompt)), "the user prompt carries data only; the answer shape is in the system prompt");
-	assert.match(step2[0]!.prompt, /\[u3\] USER: Run step 3\./, "Rarebit evidence");
+	assert.match(step2[0]!.system + step2[0]!.prompt, /\[u3\] USER: Run step 3\./, "Rarebit evidence");
 	assert.match(step2[0]!.prompt, /keep step 3 behind a flag/, "ask candidates");
 	assert.ok(v.synthesis?.headline, "tier 1");
 	assert.ok(v.context?.threads.length, "tier 2");
@@ -905,7 +905,10 @@ test("arc copy: the empty-answer error says what happened in plain words (failur
 test("arc evidence option: hub.json arcEvidence \"labels\" sends step 2 the labels, ask candidates and owner turns only; the default sends the full Rarebit evidence; a bad value fails the Build before any call and names the file (failure: no cheaper step-2 input to measure)", async () => {
 	const builtWith = async (name: string) => {
 		const r = context(name, () => 1), shown: string[] = [], inner = r.ctx.ask;
-		Object.assign(r.ctx, { ask: (req: Req) => { if (req.system === STEP2_SYSTEM) shown.push(...(JSON.parse(req.prompt) as { arcs: { rarebitEvidence: string }[] }).arcs.map((a) => a.rarebitEvidence)); return inner(req); } });
+		Object.assign(r.ctx, { ask: (req: Req) => { if (req.system.startsWith(STEP2_SYSTEM)) {
+			const closed = JSON.parse(req.system.slice(req.system.indexOf(CLOSED_CHUNKS_HEADER) + CLOSED_CHUNKS_HEADER.length)) as { rarebitEvidence: string }[];
+			shown.push(...[...closed, ...(JSON.parse(req.prompt) as { arcs: { rarebitEvidence: string }[] }).arcs].map((a) => a.rarebitEvidence));
+		} return inner(req); } });
 		const v = await build(r.ctx);
 		return { v, shown, log: buildLog(r.ctx, session.threadId).at(-1)! };
 	};

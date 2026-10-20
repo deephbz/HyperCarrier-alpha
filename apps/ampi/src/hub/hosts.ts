@@ -37,6 +37,8 @@ export type HostState = {
 	latencyMs?: number;
 	/** The node runs a different AmPi build than this hub (it predates an update); restart it to pick up the new one. */
 	buildMismatch?: boolean;
+	/** A Pi Host's working-set init failed: the Host serves no copies until the hub restarts; `error` says why. */
+	cacheFailed?: true;
 };
 
 type Pipe = { write(text: string): void; close(): void };

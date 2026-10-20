@@ -77,10 +77,10 @@ function ResizeEdge({ side, width, onChange }: { side: "sidebar" | "panel"; widt
 
 /** Subscribes to one host's thread index and reports it upward (hooks cannot loop over a dynamic host list). */
 function HostFeed({ host, onData }: { host: HostState; onData: (id: string, data: HostThreads) => void }) {
-	const { value, stale } = useTopic(host.id, { kind: "threads" });
+	const { value, stale, error } = useTopic(host.id, { kind: "threads" });
 	useEffect(() => {
-		onData(host.id, { host, threads: Object.values(value?.threads ?? {}) as ThreadSummary[], stale, ...(value?.layout ? { layout: value.layout } : {}) });
-	}, [host, value, stale, onData]);
+		onData(host.id, { host, threads: Object.values(value?.threads ?? {}) as ThreadSummary[], stale, ...(value?.layout ? { layout: value.layout } : {}), indexing: value?.indexing, listing: value?.listing, updating: value?.updating, error });
+	}, [host, value, stale, error, onData]);
 	return null;
 }
 

@@ -29,6 +29,18 @@ test("pi remote agent: layout in Herdr order, agents carry ids, sessionId from h
 	]);
 });
 
+test("pi remote agent: a failed workspace list keeps the last listed workspace labels (failure: a loaded host published workspaceLabel null)", async (t) => {
+	const f = fixture();
+	const agent = Agent.start(f);
+	t.after(() => agent.stop());
+	await agent.wait((x) => x.t === "agents" && x.layout.workspaces.some((w: Frame) => w.label === "alpha"), "labelled layout");
+	// `workspace list` answers without workspaces, as a failed or timed-out call does; the idle status marks a later pass.
+	const { workspaces, ...rest } = f.state;
+	f.setState({ ...rest, agents: f.state.agents.map((a: Frame) => ({ ...a, agent_status: "idle" })) });
+	const frame = await agent.wait((x) => x.t === "agents" && x.agents.length > 0 && x.agents.every((a: Frame) => a.status === "idle"), "pass without workspaces");
+	assert.deepEqual(frame.layout.workspaces.map((w: Frame) => [w.id, w.label]), [["w1", "alpha"], ["w2", "beta"]]);
+});
+
 test("pi remote agent: ships appended bytes and holds a partial line until it ends", async (t) => {
 	const f = fixture();
 	const agent = Agent.start(f, { pollMs: 30 });

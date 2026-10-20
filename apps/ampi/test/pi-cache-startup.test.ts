@@ -1,16 +1,20 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { once } from "node:events";
 import { test } from "node:test";
+import { DatabaseSync } from "node:sqlite";
+import { applyImmutable } from "@earendil-works/chord/delta";
 import { Hub } from "../src/hub/hub.ts";
 import { PiHost } from "../src/pi/host.ts";
 import { repairReplicaTail } from "../src/pi/replica-file.ts";
 import { WorkingSet, workingSetUsage } from "../src/pi/working-set.ts";
+import { fixture as herdrFixture } from "./pi-fixtures.ts";
+import { openWorkingSet } from "../src/pi/working-set-db.ts";
 
 function fixture(t: { after(fn: () => unknown): void }) {
  const dir = mkdtempSync(join(tmpdir(), "ampi-startup-"));
@@ -99,6 +103,38 @@ test("startup: invalid metadata ends pending reads and stop preserves the eviden
  assert.equal(readFileSync(index, "utf8"), "{");
 });
 
+test("startup: stop after invalid metadata resolves only when the derive Worker can no longer write the Host cache", async (t) => {
+ const { dir, config } = fixture(t);
+ // Another owner's derive waits on a held write lock, so the Host's init stays queued behind it.
+ const ownerDir = join(dir, "owner"), file = join(ownerDir, "copy.jsonl");
+ mkdirSync(ownerDir);
+ writeFileSync(file, JSON.stringify({ type: "session", id: "owner", timestamp: new Date().toISOString(), cwd: "/synthetic" }) + "\n");
+ const source = { host: "owner", cacheDir: ownerDir, path: "/synthetic/owner", file };
+ const owner = new WorkingSet("owner", ownerDir);
+ try {
+  // The store's first backfill step also writes, so it runs before the lock.
+  await owner.refresh({ ...source, path: "/synthetic/warm" });
+  const held = openWorkingSet(ownerDir); held.exec("BEGIN IMMEDIATE");
+  let started!: () => void;
+  const running = new Promise<void>((resolve) => { started = resolve; });
+  const derived = owner.refresh(source, started).catch(() => null);
+  await running;
+  const host = new PiHost(config);
+  // Saved heads make the store readable without the Worker, so stop can begin while init waits.
+  openWorkingSet(host.cacheDir).close();
+  writeFileSync(join(host.cacheDir, "index.json"), "{");
+  host.start();
+  const stopping = assert.rejects(host.stop(), SyntaxError);
+  setTimeout(() => { held.exec("ROLLBACK"); held.close(); }, 300);
+  await stopping;
+  rmSync(host.cacheDir, { recursive: true });
+  await derived;
+  // Jobs run in rank order, so this derive passes every init queued before it.
+  await owner.refresh(source);
+  assert.equal(existsSync(host.cacheDir), false, "the Worker wrote the Host cache after stop resolved");
+ } finally { await owner.close(); }
+});
+
 test("startup: tail repair crosses chunk boundaries and handles empty or incomplete replicas", async (t) => {
  const { dir } = fixture(t); const file = join(dir, "copy.jsonl");
  for (const [input, expected] of [["{}\n" + "x".repeat(150000), "{}\n"], ["x".repeat(150000), ""], ["", ""], ["{}\n", "{}\n"]]) {
@@ -183,4 +219,153 @@ test("startup: warm Timeline and Overview read committed heads without transcrip
  }
  assert.deepEqual(workingSetUsage(), before);
  await host.stop();
+});
+
+test("startup: the first threads snapshot reads saved heads while the derive Worker still initializes", async (t) => {
+ const { config } = fixture(t); const host = new PiHost(config);
+ mkdirSync(host.cacheDir, { recursive: true });
+ const file = join(host.cacheDir, "copy.jsonl"), path = "/synthetic/session";
+ writeFileSync(file, JSON.stringify({ type: "session", id: "cold", timestamp: new Date().toISOString(), cwd: "/synthetic" }) + "\n" + JSON.stringify({ type: "message", id: "u1", parentId: null, timestamp: new Date().toISOString(), message: { role: "user", content: [{ type: "text", text: "cold restart" }], timestamp: Date.now() } }) + "\n");
+ const store = new WorkingSet(config.id, host.cacheDir);
+ await store.refresh({ host: config.id, cacheDir: host.cacheDir, path, file }); store.close();
+ writeFileSync(join(host.cacheDir, "index.json"), JSON.stringify({ [path]: { file: "copy.jsonl", offset: 0 } }));
+ // A held write lock keeps Worker init (openWorkingSet) waiting, as a slow Worker start does under load; reads pass.
+ const lock = new DatabaseSync(join(host.cacheDir, "working-set.sqlite")); lock.exec("BEGIN IMMEDIATE");
+ const frames: any[] = []; host.on("frame", f => frames.push(f));
+ try {
+  host.start(); host.send({ t: "sub", sid: 1, topic: { kind: "threads" } });
+  const until = Date.now() + 2000;
+  while (!frames.some(f => f.sid === 1) && Date.now() < until) await new Promise(r => setTimeout(r, 10));
+  const snap = frames.find(f => f.sid === 1);
+  assert.equal(snap?.t, "snap", "no threads snapshot while the derive Worker initializes");
+  assert.ok(JSON.stringify(snap.value).includes("pi:cold"));
+  assert.equal(snap.value.indexing, true, "a list from saved heads says the working set has not initialized");
+  assert.equal(snap.value.updating, true, "a warm restart says the startup refresh still runs");
+ } finally { lock.exec("ROLLBACK"); lock.close(); }
+ const value = await until(frames, 1, (v) => !v.indexing && !v.updating);
+ assert.ok(value.threads["pi:cold"], "the refreshed list keeps the saved row");
+ await host.stop();
+});
+
+test("startup: a working set without a saved database answers index reads before the derive Worker", async (t) => {
+ const { config } = fixture(t);
+ mkdirSync(config.cacheDir, { recursive: true });
+ const store = new WorkingSet(config.id, config.cacheDir);
+ t.after(() => store.close());
+ // Worker init needs a Worker message, which cannot arrive before this immediate; `readable` must not wait for it.
+ assert.equal(await Promise.race([store.readable.then(() => "readable"), new Promise(r => setImmediate(() => r("waited")))]), "readable");
+ assert.equal(store.load("/synthetic/none"), undefined);
+ assert.equal(store.snapshot(() => 7), 7);
+ await store.ready;
+ assert.equal(store.load("/synthetic/none"), undefined);
+});
+
+/** Folds one subscription's snap and ops frames; resolves with the first value that satisfies `done`. */
+async function until(frames: any[], sid: number, done: (value: any) => boolean, ms = 10_000): Promise<any> {
+ const end = Date.now() + ms;
+ for (;;) {
+  let value: any;
+  for (const f of frames.filter(f => f.sid === sid)) {
+   if (f.t === "snap") value = f.value; else if (f.t === "ops") value = applyImmutable(value, f.ops);
+   else if (f.t === "end") throw new Error(`subscription ended: ${f.reason}`);
+   if (value !== undefined && done(value)) return value;
+  }
+  if (Date.now() > end) throw new Error(`timed out; last value ${JSON.stringify(value)}`);
+  await new Promise(r => setTimeout(r, 10));
+ }
+}
+
+test("startup: saved rows say listing until the first agents list, which places them in the same update", async (t) => {
+ const f = herdrFixture();
+ // Every Herdr call but the probe waits for the gate, so the agents list arrives only when the test opens it. The
+ // probe answers at once: a probe timeout (3 s) would make the agent fall back to a real Herdr on PATH.
+ const gate = join(f.dir, "gate"), herdr = join(f.dir, "gated-herdr");
+ writeFileSync(herdr, `#!/bin/sh\n[ "$1" = --version ] || while [ ! -e '${gate}' ]; do sleep 0.02; done\nexec '${join(f.dir, "herdr")}' "$@"\n`); chmodSync(herdr, 0o755);
+ const config = { id: "fixture", label: "fixture", kind: "pi-local" as const, cacheDir: join(f.dir, "cache"),
+  agentConfig: { agentDir: f.agentDir, pollMs: 30, discoverMs: 300, teamsMs: 0 },
+  env: { HOME: f.dir, HERDR_BIN: herdr, FAKE_HERDR_STATE: join(f.dir, "state.json"), FAKE_HERDR_LOG: join(f.dir, "calls.jsonl") } };
+ const host = new PiHost(config);
+ mkdirSync(host.cacheDir, { recursive: true });
+ const copy = join(host.cacheDir, "a.jsonl");
+ writeFileSync(copy, readFileSync(f.sessionA));
+ const store = new WorkingSet(config.id, host.cacheDir);
+ await store.refresh({ host: config.id, cacheDir: host.cacheDir, path: f.sessionA, file: copy }); store.close();
+ writeFileSync(join(host.cacheDir, "index.json"), JSON.stringify({ [f.sessionA]: { file: "a.jsonl", offset: statSync(copy).size } }));
+ const frames: any[] = []; host.on("frame", fr => frames.push(fr));
+ host.start(); t.after(async () => { await host.stop(); rmSync(f.dir, { recursive: true, force: true }); });
+ host.send({ t: "sub", sid: 1, topic: { kind: "threads" } });
+ const first = await until(frames, 1, () => true);
+ assert.equal(first.listing, true, "no agents list yet");
+ assert.equal(first.threads["pi:sess-a"]?.location, undefined);
+ await new Promise(r => setTimeout(r, 300));
+ assert.ok(!frames.some(fr => fr.sid === 1 && fr.t === "ops" && JSON.stringify(fr.ops).includes("listing")), "listing holds while the agents list waits");
+ writeFileSync(gate, "");
+ const listed = await until(frames, 1, (v) => !v.listing);
+ assert.equal(listed.threads["pi:sess-a"]?.location?.pane, "w1:p2", "the update that ends listing places the row");
+ assert.equal(listed.threads["pi:sess-a"]?.live, true);
+ // A reconnect: listing returns, and the saved row stays listed (not live) until the next agents list.
+ const seen = frames.length;
+ // -P scopes pgrep to this test process's own children: the Host agent it spawned, never another process's agent.
+ for (const pid of execFileSync("pgrep", ["-P", String(process.pid), "-f", "Buffer.from"], { encoding: "utf8" }).trim().split("\n")) process.kill(Number(pid), "SIGKILL");
+ const relisting = await until(frames, 1, (v) => v.listing && frames.length > seen);
+ assert.ok(relisting.threads["pi:sess-a"], "a reconnect keeps saved rows listed");
+ assert.notEqual(relisting.threads["pi:sess-a"].live, true);
+ const back = await until(frames, 1, (v) => !v.listing && v.threads["pi:sess-a"]?.live === true);
+ assert.equal(back.threads["pi:sess-a"].location?.pane, "w1:p2");
+});
+
+test("startup: a fresh cache lists nothing with indexing while init waits, and a failed init ends served and later lists", async (t) => {
+ const { config } = fixture(t); const host = new PiHost(config);
+ mkdirSync(host.cacheDir, { recursive: true });
+ // A WAL database with no tables has nothing saved to read. The held write lock keeps Worker init waiting until
+ // BUSY_MS (5 s) fails it.
+ const lock = new DatabaseSync(join(host.cacheDir, "working-set.sqlite")); lock.exec("PRAGMA journal_mode=WAL; BEGIN IMMEDIATE");
+ t.after(() => { try { lock.exec("ROLLBACK"); } catch {} lock.close(); });
+ const frames: any[] = []; host.on("frame", f => frames.push(f));
+ // A threads subscription sent in the same tick the Host reports the failure.
+ host.on("state", (s) => { if (s.status === "disconnected") host.send({ t: "sub", sid: 4, topic: { kind: "threads" } }); });
+ host.start(); t.after(() => host.stop().catch(() => {}));
+ host.send({ t: "sub", sid: 1, topic: { kind: "threads" } });
+ // A view waits for init, so it is still preparing when init fails.
+ host.send({ t: "sub", sid: 3, topic: { kind: "view", view: "cos.timeline" } });
+ const first = await until(frames, 1, () => true, 2000).catch((error) => assert.fail(`no list before init failed: ${error.message}`));
+ assert.deepEqual(first.threads, {});
+ assert.equal(first.indexing, true, "an empty list before init proves no absence");
+ const ended = async (sid: number) => {
+  const end = Date.now() + 15_000;
+  while (!frames.some(f => f.sid === sid && f.t === "end") && Date.now() < end) await new Promise(r => setTimeout(r, 20));
+  assert.match(frames.find(f => f.sid === sid && f.t === "end")?.reason ?? "", /^Host cache unavailable: .+\. Restart the hub; if it repeats, check the hub log/, `sid ${sid} ends with the next step`);
+ };
+ await ended(1);
+ host.send({ t: "sub", sid: 2, topic: { kind: "threads" } });
+ for (const sid of [2, 3, 4]) await ended(sid);
+ await new Promise(r => setTimeout(r, 100));
+ for (const sid of [1, 2, 3, 4]) assert.equal(frames.filter(f => f.sid === sid && f.t === "end").length, 1, `sid ${sid} ends once`);
+ for (const sid of [2, 3, 4]) assert.equal(frames.some(f => f.sid === sid && f.t === "snap"), false, `no value for sid ${sid} after a failed init`);
+ assert.match(host.state.error ?? "", /Restart the hub/);
+ assert.equal(host.state.cacheFailed, true);
+});
+
+test("startup: updating clears at UPDATING_MAX_MS when the startup refresh does not settle, and the log says which", async (t) => {
+ const { config } = fixture(t); const host = new PiHost(config);
+ mkdirSync(host.cacheDir, { recursive: true });
+ const file = join(host.cacheDir, "copy.jsonl"), path = "/synthetic/session";
+ writeFileSync(file, JSON.stringify({ type: "session", id: "slow", timestamp: new Date().toISOString(), cwd: "/synthetic" }) + "\n");
+ const store = new WorkingSet(config.id, host.cacheDir);
+ await store.refresh({ host: config.id, cacheDir: host.cacheDir, path, file }); store.close();
+ writeFileSync(join(host.cacheDir, "index.json"), JSON.stringify({ [path]: { file: "copy.jsonl", offset: 0 } }));
+ t.mock.method(WorkingSet.prototype, "refresh", () => new Promise(() => {}));
+ const log = t.mock.method(console, "log", () => {});
+ const bound = PiHost.UPDATING_MAX_MS; PiHost.UPDATING_MAX_MS = 300; t.after(() => { PiHost.UPDATING_MAX_MS = bound; });
+ const frames: any[] = []; host.on("frame", f => frames.push(f));
+ host.start();
+ try {
+  host.send({ t: "sub", sid: 1, topic: { kind: "threads" } });
+  assert.equal((await until(frames, 1, () => true)).updating, true, "the first list says the refresh has not settled");
+  await until(frames, 1, (v) => !v.updating, 10_000);
+  // The log measures from init with the timer itself, so it holds under load too.
+  const line = log.mock.calls.map(c => String(c.arguments[0])).find(l => l.includes("Updating cleared"));
+  const [, ms] = line?.match(/Updating cleared after (\d+) ms: the bound passed while the startup refresh still runs/) ?? [];
+  assert.ok(Number(ms) >= 300, `updating holds until the bound: ${line}`);
+ } finally { await host.stop(); }
 });

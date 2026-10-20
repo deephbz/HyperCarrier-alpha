@@ -135,7 +135,12 @@ export type HerdrLayout = { workspaces: { id: string; label?: string; tabs: { id
 /** A Pi Session's thread id: `pi:` and the Session id. The threads map declares its keys with it. */
 export type PiThreadId = `pi:${string}`;
 export const isPiThreadId = (id: string): id is PiThreadId => id.startsWith("pi:");
-export type ThreadsState = { threads: { [id: PiThreadId]: ThreadSummary }; layout?: HerdrLayout; backend?: "pi" };
+/**
+ * What a Pi Host's list does not know yet. `indexing`: the working set has not initialized, so the list holds saved
+ * state only and an empty list proves no absence. `listing`: no agents list since the Host connected, so no row has
+ * liveness or a pane yet. `updating`: the startup refresh of saved copies still runs.
+ */
+export type ThreadsState = { threads: { [id: PiThreadId]: ThreadSummary }; layout?: HerdrLayout; backend?: "pi"; indexing?: true; listing?: true; updating?: true };
 
 // ---- Pi entry shapes (docs/wire-boundary.md, design 4 and 5) ----
 // The projection (src/pi/projection.ts) and the versioned index rows are their only constructors. They carry no

@@ -13,6 +13,7 @@ import type { HostsFrame, HubOps, NodeFrame, Topic } from "../shared/protocol.ts
 import { type HostConfig, HostLink, type HostState } from "./hosts.ts";
 import { PiHost, type PiHostConfig } from "../pi/host.ts";
 import { buildQueue, deriveQueue } from "../pi/derive-queue.ts";
+import { sweepAskScratch } from "../pi/ask.ts";
 import { complete, instant, nowUs, span, tracing } from "../trace.ts";
 import { loopWindow, watched } from "../loop-watch.ts";
 import { type ArcEvidence, type HelperModels, hubConfigPath, updateHubHosts, useHubConfig } from "./helper-models.ts";
@@ -427,6 +428,8 @@ export class Hub {
 			server.once("error", reject);
 			server.listen(port, host, () => resolve());
 		});
+		// Model-call prompt files an earlier hub left behind (a crash skips their cleanup).
+		sweepAskScratch();
 		this.server = server;
 		const address = server.address();
 		this.port = typeof address === "object" && address ? address.port : port;
@@ -532,8 +535,12 @@ export class Hub {
 	}
 
 	async close(): Promise<void> {
-		try { await Promise.all([...this.links.values()].map((link) => link.stop())); }
-		finally {
+		try {
+			// Every link finishes stopping before the hub reports the first failure.
+			const stops = await Promise.allSettled([...this.links.values()].map((link) => link.stop()));
+			const failed = stops.find((stop) => stop.status === "rejected");
+			if (failed) throw failed.reason;
+		} finally {
 			// Quit cannot wait for browser close handshakes or speculative TCP headers.
 			for (const client of this.clients) client.ws.terminate();
 			await new Promise<void>((resolve) => {

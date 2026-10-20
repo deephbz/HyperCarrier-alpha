@@ -27,3 +27,12 @@ test("hub quit: a browser preconnect and a stalled WebSocket cannot hold shutdow
   clearTimeout(deadline); preconnect.destroy(); ws.terminate(); await closing;
  }
 });
+
+test("hub quit: a failing Host stop does not end shutdown before the other Hosts stop", async () => {
+ const hub = new Hub({ hosts: [] }, { token: "d".repeat(64) });
+ let stopped = false;
+ hub.links.set("failing", { stop: () => Promise.reject(new Error("failing stop")) } as never);
+ hub.links.set("slow", { stop: () => new Promise<void>((resolve) => setTimeout(() => { stopped = true; resolve(); }, 100)) } as never);
+ await assert.rejects(hub.close(), /failing stop/);
+ assert.equal(stopped, true, "close settled while a Host still stopped");
+});

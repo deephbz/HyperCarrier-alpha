@@ -1,6 +1,6 @@
 // One wording for a recorded Arc Build, shared by the Arc page and the Rarebit view's row.
 
-import type { ArcBuildRun, ArcErrorCode, ArcFailure, ArcValue } from "../../../../src/pi/views/cos-arc.ts";
+import type { ArcBuildRun, ArcErrorCode, ArcFailure, ArcValue, PurposeUsage } from "../../../../src/pi/views/cos-arc.ts";
 import { money } from "../../util.ts";
 import { dateTime } from "./data.tsx";
 
@@ -22,6 +22,13 @@ export function buildText(b: ArcBuildRun): string {
 /** Where each Arc step's model is set; the Build button and the Build tooltip both say it. */
 export const MODEL_KEYS = "Labels use models.arcLabels; the Arc (synthesis and context) uses models.arcSynthesis.";
 
+/** Step 2's prompt cache: the share of the prompt read from it on a hit, or what was written and for how long. */
+function promptCache(n: PurposeUsage): string {
+	const read = n.cacheRead ?? 0, written = n.cacheWrite ?? 0, prompt = (n.input ?? 0) + read + written;
+	if (read) return ` · cached ${Math.round((read / prompt) * 100)}%`;
+	return written ? ` · cache written ${Math.round(written / 1000)}k (${n.cacheWrite1h ? "1 h" : "5 min"})` : "";
+}
+
 /** Tooltip detail: the model and price per call purpose, tokens, and the error when there is one. */
 export function buildDetail(b: ArcBuildRun): string {
 	// An ask command (demo, tests, other carriers) reports no usage; zero tokens over real calls means "not reported".
@@ -32,7 +39,7 @@ export function buildDetail(b: ArcBuildRun): string {
 		const n = b.usageByPurpose?.[p];
 		// Only the reduced step-2 input is named; the full evidence is the default.
 		const evidence = p === "synthesis" && b.arcEvidence === "labels" ? " · evidence: owner turns only (hub.json arcEvidence)" : "";
-		return `${p}: ${b.models![p]}${n ? ` · ${n.calls} call${n.calls === 1 ? "" : "s"} · ${n.cost === null ? "price unavailable" : money(n.cost)}` : ""}${evidence}`;
+		return `${p}: ${b.models![p]}${n ? ` · ${n.calls} call${n.calls === 1 ? "" : "s"} · ${n.cost === null ? "price unavailable" : money(n.cost)}` : ""}${p === "synthesis" && n ? promptCache(n) : ""}${evidence}`;
 	}).concat(MODEL_KEYS) : [];
 	// `models` names each purpose's provider/id; `model`, the last answering model, names only older records.
 	const head = b.models ? "models per purpose:" : b.missingModel ? `no model named ${b.missingModel}` : b.model ?? (b.calls ? "model unknown" : "no model calls");

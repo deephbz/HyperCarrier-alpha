@@ -13,3 +13,6 @@ export const CHUNK_RULE = `A chunk starts at an owner turn after ${OWNER_TURNS} 
 export const AUTO_BUILD_MIN_MESSAGES = 4;
 /** The automatic floor as the Arc value carries it; null at or above the floor. Build arc stays available below it. */
 export const arcFloor = (messages: number) => messages < AUTO_BUILD_MIN_MESSAGES ? { min: AUTO_BUILD_MIN_MESSAGES, messages } : null;
+/** An automatic Build that starts within this time of the last Build's end asks for the 1 h prompt cache: 5 min under
+ * the cache lifetime, so the next Build of a busy Session reads it (live gaps: 9-12 min; arc-synth-cost design). */
+export const WARM_CACHE_GAP_MS = 55 * 60_000;

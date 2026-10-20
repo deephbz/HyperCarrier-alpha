@@ -4,7 +4,7 @@
 import type { Chunk } from "./cos-arc-chunks.ts";
 import { emptyTree, normalizeContext, rawTreeCount, treeCount, type ArcContext, type ContextSupport, type TreeCount } from "./cos-arc-context.ts";
 import { normalizeTier1, type Label, type Tier1 } from "./cos-arc-format.ts";
-import { STEP2_SYSTEM, step2Prompt } from "./cos-arc-prompts.ts";
+import { step2Prompt, step2System } from "./cos-arc-prompts.ts";
 import { InvalidReply, type Call, type SynthesisReply } from "./cos-arc-reply.ts";
 
 /** The owner-facing failure of a step-2 answer whose tree kept nothing, even after its retry. */
@@ -27,7 +27,7 @@ export type Step2Result = { tier1: Tier1; context: Omit<ArcContext, "builtAt" | 
  * once more; below the floor it ends the Build quietly (NothingYet). `counted` sees every answer's tree counts.
  */
 export async function writeArc(input: Step2Input, { call, req, counted }: {
-	call: Call; req: { purpose: "arcSynthesis"; model: string; resolved: true }; counted: (c: { raw: TreeCount; kept: TreeCount }) => void;
+	call: Call; req: { purpose: "arcSynthesis"; model: string; resolved: true; cache?: "long" }; counted: (c: { raw: TreeCount; kept: TreeCount }) => void;
 }): Promise<Step2Result> {
 	const { chunks, labels, evidence, support } = input;
 	const ids = new Set(chunks.map((c) => c.id));
@@ -41,6 +41,6 @@ export async function writeArc(input: Step2Input, { call, req, counted }: {
 		const { builtAt: _b, model: _m, ...context } = tree;
 		return { tier1: normalizeTier1(raw, ids), context };
 	};
-	const { answer, reply } = await call<SynthesisReply, ReturnType<typeof accept>>("synthesis", { system: STEP2_SYSTEM, prompt: step2Prompt(chunks, shown, evidence, support, input.cwd, input.evidenceMode), ...req }, accept);
+	const { answer, reply } = await call<SynthesisReply, ReturnType<typeof accept>>("synthesis", { system: step2System(chunks, shown, evidence, support, input.evidenceMode), prompt: step2Prompt(chunks, shown, evidence, support, input.cwd, input.evidenceMode), ...req }, accept);
 	return { ...reply, model: answer.model ?? null };
 }

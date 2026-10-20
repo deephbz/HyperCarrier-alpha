@@ -571,3 +571,95 @@ test("arc auto build: a Build log from before error codes still gets the one ret
 		assert.equal((await settled(ctx, s.current)).job?.state, "done");
 	}
 });
+
+// Pi Team Bright Workers: the typed role from the Teams frame, never a pane or Session name.
+const worker = { team: { teamId: "t", role: "worker" as const, worker: "w1" } };
+
+test("arc auto build: a Worker Session never builds automatically; Build arc still does (failure: every Worker stop paid for an Arc nobody opened)", async () => {
+	const s = { current: session({ summary: worker, id: "pi:sess-worker" }) };
+	const { ctx, run } = context("worker-auto", s);
+	const c = fakeClock(T + 10_800_000);
+	try {
+		assert.equal(autoBuild(ctx, s.current), false, "a qualifying Worker stop does not build");
+		assert.equal(c.scheduled.length, 0, "and sets no timer");
+		const v = arcValue(ctx, s.current);
+		assert.equal(v.nextAutoAt, null, "no pending flag");
+		assert.equal(v.autoOff, "worker", "the panel can say why");
+		assert.equal(run.calls, 0);
+	} finally { c.restore(); }
+	buildArc(ctx, s.current);
+	assert.equal((await settled(ctx, s.current)).job?.state, "done", "Build arc runs for a Worker");
+	assert.equal(run.calls, CALLS);
+	assert.deepEqual(buildLog(ctx, s.current.threadId).map((b) => b.trigger), ["manual"]);
+	for (const [name, summary] of [["lead", { team: { teamId: "t", role: "lead" as const } }], ["no role", {}]] as const) {
+		const l = { current: session({ summary, id: `pi:sess-${name.replace(" ", "-")}` }) };
+		const r = context(`worker-other-${name.replace(" ", "-")}`, l);
+		assert.equal(autoBuild(r.ctx, l.current, Date.now()), true, `a ${name} Session still builds automatically`);
+		assert.equal((await settled(r.ctx, l.current)).autoOff, null);
+	}
+});
+
+test("arc auto build: opening a Worker's outdated Arc does not rebuild it (failure: the view upgrade bypassed the Worker rule)", async () => {
+	const s = { current: session({ summary: worker, id: "pi:sess-worker-format" }) };
+	const first = context("worker-format", s);
+	buildArc(first.ctx, s.current);
+	assert.equal((await settled(first.ctx, s.current)).job?.state, "done");
+	const dir = join(root, "worker-format"), file = join(dir, readdirSync(dir).find((f) => /^[0-9a-f]{64}\.json$/.test(f))!);
+	const raw = JSON.parse(readFileSync(file, "utf8"));
+	writeFileSync(file, JSON.stringify({ ...raw, step2Version: "older-step-2", context: { ...raw.context, format: "older-step-2" } }));
+	const again = context("worker-format", s), c = fakeClock(Date.now() + AUTO_BUILD_INTERVAL_MS + 1);
+	try {
+		const opened = arcValue(again.ctx, s.current);
+		assert.notEqual(opened.job?.state, "running", "no rebuild starts");
+		assert.equal(opened.contextStatus.formatChanged, true, "the format notice stays");
+		assert.equal(opened.nextAutoAt, null);
+		assert.equal(c.scheduled.length, 0);
+		assert.equal(again.run.calls, 0);
+		assert.equal(buildLog(again.ctx, s.current.threadId).length, 1);
+	} finally { c.restore(); }
+});
+
+test("arc auto build: before the first Teams frame a stop waits for the role, then builds when no Worker role arrives or after 30 s (failure: a Worker built before its role was read, or an unread role pended forever)", async () => {
+	for (const arrives of [true, false]) {
+		const s = { current: session({ id: `pi:sess-unknown-${arrives}` }) };
+		const { ctx, run } = context(`worker-unknown-${arrives}`, s);
+		const known = { v: false };
+		Object.assign(ctx, { rolesKnown: () => known.v });
+		const c = fakeClock(T + 14_400_000);
+		try {
+			const t0 = c.t;
+			assert.equal(autoBuild(ctx, s.current), false, "an unknown role does not build");
+			assert.equal(run.calls, 0);
+			assert.equal(c.scheduled.length, 1, "one re-check timer");
+			assert.ok(c.scheduled[0]!.ms <= 5_000, "the re-check comes within 5 s");
+			if (arrives) {
+				known.v = true;
+				c.t = t0 + c.scheduled[0]!.ms;
+				c.scheduled[0]!.run();
+			} else {
+				// Each re-check that still waits adds one timer; the first that adds none started the Build.
+				for (let seen = 0; seen < c.scheduled.length && seen < 20;) {
+					const next = c.scheduled[seen++]!; c.t += next.ms; next.run();
+				}
+				assert.ok(c.t - t0 >= 30_000 && c.t - t0 <= 35_000, `the bound is 30 s (${c.t - t0} ms)`);
+			}
+			assert.equal(arcValue(ctx, s.current).job?.state, "running", arrives ? "the role arrived and is not Worker" : "after 30 s the role counts as absent");
+		} finally { c.restore(); }
+		await settled(ctx, s.current);
+		assert.equal(run.calls, CALLS);
+	}
+	// A Worker role that arrives within the bound stops the Build.
+	const s = { current: session({ id: "pi:sess-unknown-worker" }) };
+	const { ctx, run } = context("worker-unknown-worker", s);
+	const known = { v: false };
+	Object.assign(ctx, { rolesKnown: () => known.v });
+	const c = fakeClock(T + 18_000_000);
+	try {
+		autoBuild(ctx, s.current);
+		known.v = true; s.current = session({ id: "pi:sess-unknown-worker", summary: worker });
+		const next = c.scheduled.at(-1)!; c.t += next.ms; next.run();
+		assert.equal(run.calls, 0);
+		assert.equal(arcValue(ctx, s.current).autoOff, "worker");
+		assert.equal(arcValue(ctx, s.current).nextAutoAt, null);
+	} finally { c.restore(); }
+});

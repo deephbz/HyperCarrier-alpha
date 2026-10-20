@@ -51,7 +51,7 @@ const threadsOf = state => threadsSnapshot({ port: state.port, host: 'devbox', a
 
 /**
  * Startup automatic Builds settled (D16): every Session autoBuild may build at hub start (live, idle, stopped: a
- * cos.timeline row that is waiting, not blocked, and at or above the Arc floor) has a current Arc head in the threads topic. Steps that assert
+ * cos.timeline row that is waiting, not blocked, at or above the Arc floor, and no Worker) has a current Arc head in the threads topic. Steps that assert
  * no model call wait for it, so the startup Builds' calls never fall inside them. One promise per run.
  */
 const settled = new WeakMap();
@@ -66,10 +66,12 @@ async function buildsCaughtUp(state, listed, ms = 30_000) {
   for (;;) {
     const timeline = await topicSnapshot({ port: state.port, host: 'devbox', auth, topic: { kind: 'view', view: 'cos.timeline' } });
     const threads = await threadsOf(state), arcs = new Map(threads.map(t => [t.id, t.arc])), derived = new Set(timeline.sessions.map(s => s.threadId));
+    // A Pi Team Bright Worker Session never builds automatically, so it waits for no Build.
+    const workers = new Set(threads.filter(t => t.team?.role === 'worker').map(t => t.id));
     // A live idle Session not derived yet may still become eligible; it is pending too.
     const pending = [...listed.filter(id => !arcs.has(id)),
-      ...threads.filter(t => t.live && t.activity === 'idle' && !derived.has(t.id)).map(t => t.id),
-      ...timeline.sessions.filter(s => s.waiting && !s.blocked && !arcFloor(s.messages)).map(s => s.threadId).filter(id => !arcs.get(id) || arcs.get(id).stale)];
+      ...threads.filter(t => t.live && t.activity === 'idle' && !derived.has(t.id) && !workers.has(t.id)).map(t => t.id),
+      ...timeline.sessions.filter(s => s.waiting && !s.blocked && !arcFloor(s.messages) && !workers.has(s.threadId)).map(s => s.threadId).filter(id => !arcs.get(id) || arcs.get(id).stale)];
     if (!pending.length) return;
     if (Date.now() > deadline) assert.fail(`automatic Builds did not settle within ${ms / 1000} s: ${pending.join(', ')}`);
     await new Promise(r => setTimeout(r, 250));

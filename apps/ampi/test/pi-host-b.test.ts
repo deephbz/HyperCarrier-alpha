@@ -8,10 +8,14 @@ import { Hub } from "../src/hub/hub.ts";
 import { Browser } from "./helpers.ts";
 import { control, fixture } from "./pi-fixtures.ts";
 import { PI_VIEWS } from "../src/pi/views/index.ts";
-import { modelLimits } from "../src/pi/host.ts";
+import { PiHost, modelLimits } from "../src/pi/host.ts";
 import { TOKEN, iso, line, user, assistant, toolResult, setup } from "./pi-host-fixtures.ts";
 
 test("pi host: 96-hour eviction respects open/live pins, removes copied payloads, preserves locators, and tracks a changed source again", async (t) => {
+ // A closed view holds its copy for OPEN_GRACE_MS; a short grace lets the eviction below follow the close.
+ const grace = PiHost.OPEN_GRACE_MS;
+ PiHost.OPEN_GRACE_MS = 300;
+ t.after(() => void (PiHost.OPEN_GRACE_MS = grace));
  // Discovery faster than the index write delay: the pending write must still land.
  const { f, browser, hub } = await setup(t, { agent: { discoverMs: 40 } });
  const threads = browser.sub("devbox", { kind: "threads" });

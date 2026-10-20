@@ -3,11 +3,11 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CHUNKER_VERSION, EXCERPT_VERSION, type Chunk } from "./cos-arc-chunks.ts";
 import { LABEL_FORMAT, STEP2_FORMAT, type Label, type Project, type Transition } from "./cos-arc-format.ts";
-import { LABEL_SYSTEM, STEP2_SYSTEM, labelPrompt, step2Prompt } from "./cos-arc-prompts.ts";
+import { LABEL_SYSTEM, STEP2_SYSTEM, labelPrompt, step2Prompt, step2System } from "./cos-arc-prompts.ts";
 import { timeline, type TimelineSession } from "./cos-timeline.ts";
 import { NEEDS_YOU_KINDS, emptyTree, type ArcContext, type ContextSupport, type NeedsYouKind, type TreeCount } from "./cos-arc-context.ts";
 import { askCandidates } from "./cos-arc-asks.ts";
-import { arcFloor } from "./cos-arc-rules.ts";
+import { WARM_CACHE_GAP_MS, arcFloor } from "./cos-arc-rules.ts";
 import { InvalidReply, errorCode, failure, reply, retryNote, type ArcErrorCode, type ArcPurpose, type Call } from "./cos-arc-reply.ts";
 import { LABEL_BATCH, labelChunks, type StoredLabel } from "./cos-arc-step1.ts";
 import { EMPTY_ANSWER, NothingYet, writeArc } from "./cos-arc-step2.ts";
@@ -49,6 +49,8 @@ export type ArcBuildRun = { trigger: ArcTrigger; startedAt: string; endedAt: str
 	empty?: true;
 	/** `labels` when hub.json arcEvidence sent step 2 only owner turns per chunk; absent for the full evidence. */
 	arcEvidence?: "labels";
+	/** `long` when step 2 asked for the 1 h prompt cache (synthesisCache); absent for Pi's 5-min default. */
+	cache?: "long";
 	/** Why an automatic Build rebuilt the stored Arc on view ("rebuilt: the stored Arc was empty"); absent otherwise. */
 	cause?: string;
 	/**
@@ -84,8 +86,10 @@ export type ArcBuildRun = { trigger: ArcTrigger; startedAt: string; endedAt: str
 	models?: BuildModels;
 	/** The model name the check found no model for; the Build made no call. */
 	missingModel?: string;
-	/** Calls and summed price per call purpose; absent in older records. Records before receipt v5 add `context`. */
-	usageByPurpose?: Record<keyof BuildModels, { calls: number; cost: number | null }> & { context?: { calls: number; cost: number | null } } };
+	/** Calls, summed price and prompt tokens per call purpose; absent in older records, tokens absent before the step-2
+	 * cache. Records before receipt v5 add `context`. */
+	usageByPurpose?: Record<keyof BuildModels, PurposeUsage> & { context?: PurposeUsage } };
+export type PurposeUsage = { calls: number; cost: number | null } & Partial<Pick<AskUsage, "input" | "cacheRead" | "cacheWrite" | "cacheWrite1h">>;
 /**
  * One key per Arc step, as in the receipt's `models`: step 1 uses arcLabels, step 2 arcSynthesis. Records before
  * receipt v5 add `context`, which ran on arcLabels.
@@ -126,6 +130,8 @@ export type ArcValue = {
 	 * them: new messages, or a label rule change or a successful Build arc. Null when not stuck.
 	 */
 	stuck?: { chunks: string[]; until: "messages" | "build" } | null;
+	/** Why automatic Builds are off for this Session: "worker" for a Pi Team Bright Worker, which builds only on Build arc. */
+	autoOff?: "worker" | null;
 	job: Job | null; builds: ArcBuildRun[]; notice: string;
 };
 /**
@@ -262,7 +268,7 @@ function allRarebits(s: PiViewSession): RarebitItem[] {
 /** Names what a label means: the label instructions, the label prompt shape, the chunking rules and the label format. */
 export const LABEL_VERSION = createHash("sha256").update(LABEL_SYSTEM).update(labelPrompt([], new Map())).update(CHUNKER_VERSION).update(LABEL_FORMAT).digest("hex").slice(0, 16);
 /** Names what step 2 writes: its instructions, its data shape and its format. An Arc of another version rebuilds once. */
-export const STEP2_VERSION = createHash("sha256").update(STEP2_SYSTEM).update(step2Prompt([], {}, new Map(), { candidates: [], owners: new Map() }, "")).update(STEP2_FORMAT).digest("hex").slice(0, 16);
+export const STEP2_VERSION = createHash("sha256").update(step2System([], {}, new Map(), { candidates: [], owners: new Map() })).update(step2Prompt([], {}, new Map(), { candidates: [], owners: new Map() }, "")).update(STEP2_FORMAT).digest("hex").slice(0, 16);
 
 /**
  * The previous receipt's reusable labels by chunk hash. The hash covers a chunk's entry IDs and excerpt, so a label
@@ -360,12 +366,13 @@ export function buildArc(ctx: PiViewContext, s: PiViewSession, args: { model?: u
 	const release = ctx.lease(s.threadId);
 	st.job = job; st.building = s.data.rarebit.count; ctx.invalidate("cos.arc");
 	const startedAt = new Date().toISOString();
+	const cache = synthesisCache(trigger, Boolean(s.summary?.live), cause, buildLog(ctx, s.threadId).at(-1), arcClock.now());
 	// autoBuild records its own start time.
 	if (trigger === "manual") started(ctx, s.threadId, arcClock.now());
 	let retries = 0, unlabelled = 0, reused = 0, fresh = 0, afterEntryId: string | null = null, labelErrorCode: ArcErrorCode | null = null, counted: ArcBuildRun["tree"], failedChunks: { id: string; hash: string }[] = [];
 	const ms: NonNullable<ArcBuildRun["ms"]> = {};
 	const spent = { calls: 0, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: null } as AskUsage, model: null as string | null,
-		byPurpose: { labels: { calls: 0, cost: null }, synthesis: { calls: 0, cost: null } } as NonNullable<ArcBuildRun["usageByPurpose"]> };
+		byPurpose: { labels: { calls: 0, cost: null, input: 0, cacheRead: 0, cacheWrite: 0 }, synthesis: { calls: 0, cost: null, input: 0, cacheRead: 0, cacheWrite: 0 } } as NonNullable<ArcBuildRun["usageByPurpose"]> };
 	let models: BuildModels | undefined, evidenceMode: ArcEvidence = "full";
 	// Every model call of this Build goes through `asked`, so the Build log carries its usage.
 	const asked = async (purpose: ArcPurpose, req: Parameters<PiViewContext["ask"]>[0]) => {
@@ -375,6 +382,8 @@ export function buildArc(ctx: PiViewContext, s: PiViewSession, args: { model?: u
 		const u = answer.usage, total = spent.usage;
 		if (u) {
 			total.input += u.input; total.output += u.output; total.cacheRead += u.cacheRead; total.cacheWrite += u.cacheWrite;
+			mine.input = (mine.input ?? 0) + u.input; mine.cacheRead = (mine.cacheRead ?? 0) + u.cacheRead; mine.cacheWrite = (mine.cacheWrite ?? 0) + u.cacheWrite;
+			if (u.cacheWrite1h) { total.cacheWrite1h = (total.cacheWrite1h ?? 0) + u.cacheWrite1h; mine.cacheWrite1h = (mine.cacheWrite1h ?? 0) + u.cacheWrite1h; }
 			if (u.cost !== null) { total.cost = (total.cost ?? 0) + u.cost; mine.cost = (mine.cost ?? 0) + u.cost; }
 		}
 		return answer;
@@ -388,7 +397,8 @@ export function buildArc(ctx: PiViewContext, s: PiViewSession, args: { model?: u
 		catch (e) {
 			if (!(e instanceof InvalidReply)) throw e;
 			retries++; job.total++; ctx.invalidate("cos.arc");
-			answer = await asked(purpose, { ...req, system: req.system + retryNote(e) });
+			// The note goes in the message: the system text stays the one the prompt cache holds.
+			answer = await asked(purpose, { ...req, prompt: req.prompt + retryNote(e) });
 			try { return { answer, reply: parsed(answer.text) }; }
 			catch (again) { if (again instanceof InvalidReply) again.model = answer.model ?? null; throw again; }
 		}
@@ -433,7 +443,7 @@ export function buildArc(ctx: PiViewContext, s: PiViewSession, args: { model?: u
 			const [labelModel, synthModel] = resolved.map((r) => (r as PromiseFulfilledResult<string>).value) as [string, string];
 			job.waitingFor = null;
 			models = { labels: labelModel, synthesis: synthModel };
-			const labelReq = { purpose: "arcLabels" as const, model: labelModel, resolved: true as const }, synthReq = { purpose: "arcSynthesis" as const, model: synthModel, resolved: true as const };
+			const labelReq = { purpose: "arcLabels" as const, model: labelModel, resolved: true as const }, synthReq = { purpose: "arcSynthesis" as const, model: synthModel, resolved: true as const, ...(cache ? { cache } : {}) };
 			const prior = labelsByHash(st.receipt), labels: Receipt["labels"] = {}, toLabel: Chunk[] = [];
 			for (const c of chunks) { const l = prior.get(c.hash); if (l) labels[c.id] = l; else toLabel.push(c); }
 			reused = chunks.length - toLabel.length; fresh = toLabel.length;
@@ -488,7 +498,7 @@ export function buildArc(ctx: PiViewContext, s: PiViewSession, args: { model?: u
 					...(job.lastError?.purpose ? { errorPurpose: job.lastError.purpose, errorModel: job.lastError.model ?? null } : {}), ...(counted ? { tree: counted } : {}),
 					...(retries ? { retries } : {}), ...(unlabelled ? { unlabelledChunks: unlabelled, ...(labelErrorCode ? { labelErrorCode } : {}) } : {}), ...(failedChunks.length ? { failedChunks } : {}), ...(reused ? { reusedLabels: reused } : {}),
 					...(models ? { freshChunks: fresh, labelVersion: LABEL_VERSION } : {}), ...(Object.keys(ms).length ? { ms } : {}),
-					...(models ? { models } : {}), ...(evidenceMode === "labels" ? { arcEvidence: evidenceMode } : {}), usageByPurpose: spent.byPurpose });
+					...(models ? { models } : {}), ...(evidenceMode === "labels" ? { arcEvidence: evidenceMode } : {}), ...(cache ? { cache } : {}), usageByPurpose: spent.byPurpose });
 			} catch {}
 			ctx.invalidate("cos.arc"); if (trigger === "auto") ctx.invalidate("rarebit");
 			if (pendings.get(ctx)?.has(s.threadId)) schedule(ctx, s.threadId);
@@ -500,6 +510,18 @@ export function buildArc(ctx: PiViewContext, s: PiViewSession, args: { model?: u
 
 /** Minimum time between automatic Builds of one Session (D16). */
 export const AUTO_BUILD_INTERVAL_MS = 10 * 60_000;
+/**
+ * The prompt cache step 2 asks for. An automatic Build of a live Session that starts within WARM_CACHE_GAP_MS of the
+ * last Build's end is likely followed by another within the hour, so it asks for the 1 h cache: the write costs 2x
+ * input, and each read 0.05x. Every other Build keeps Pi's 5-min default, because no next Build is in sight: a manual
+ * Build, an upgrade, a Session that is not live, the first Build, or one after a longer gap. Pi 1.3.0 offers the CLI
+ * no way to send no cache mark at all.
+ */
+export function synthesisCache(trigger: ArcTrigger, live: boolean, cause: string | undefined, last: ArcBuildRun | undefined, now: number): "long" | undefined {
+	const ended = Date.parse(last?.endedAt ?? "");
+	return trigger === "auto" && live && !cause && now - ended <= WARM_CACHE_GAP_MS ? "long" : undefined;
+}
+
 /** Time and the follow-up timer of the automatic trigger; tests replace them. */
 /** How long a Build waits for the hub to finish loading its Session, and how often it checks. */
 export const INGEST = { waitMs: 120_000, pollMs: 250 };
@@ -636,12 +658,14 @@ function answerFailure(ctx: PiViewContext, threadId: string): ArcBuildRun | unde
  * per AUTO_BUILD_INTERVAL_MS per Session, whatever its trigger or result. A stop the bound or a running Build refuses
  * sets one pending flag per Session and one timer at the due time. The flag clears only when a Build starts here, or
  * when a Build already covers every message. A Session no pane or control socket runs never builds automatically.
+ * A Pi Team Bright Worker Session never builds automatically; before the first teams frame a stop waits for its role.
  * Failures back off (autoDue), and one automatic Build runs hub-wide at a time (autoQueue).
  * Returns whether a Build started.
  */
 export function autoBuild(ctx: PiViewContext, s: PiViewSession, now = arcClock.now()): boolean {
 	const why = autoStart(ctx, s, now);
 	if (why === true) return true;
+	if (why === WORKER) return false;
 	// The safety net: a live Session with messages past its head and no Build start for over 4 h logs why, once per
 	// last Build start. A successful Build or an evict clears its entry, so `quiet` holds at most one per Session.
 	const last = lastBuild(ctx, s.threadId), hours = Math.floor((now - last) / 3600_000);
@@ -656,7 +680,9 @@ const quiet = new Map<string, number>();
 /** One automatic trigger decision: true when a Build started or a reason why not. */
 function autoStart(ctx: PiViewContext, s: PiViewSession, now: number): true | string {
 	const t = s.summary;
+	if (t?.team?.role === "worker") { pendings.get(ctx)?.delete(s.threadId); unqueue(ctx, s.threadId); roleWaits.get(ctx)?.delete(s.threadId); return WORKER; }
 	if (!s.data.arc.chunks.length) return "no chunks";
+	if (roleWait(ctx, s.threadId, now)) return "waiting for the Session's team role";
 	// Below the floor nothing builds automatically, an upgrade included; Build arc still can.
 	if (arcFloor(s.data.rarebit.count)) { pendings.get(ctx)?.delete(s.threadId); return "below the message floor"; }
 	// The same chunks failed twice: another automatic Build would fail on them again.
@@ -749,9 +775,39 @@ function upgradeOnView(ctx: PiViewContext, s: PiViewSession) {
 	autoBuild(ctx, s);
 }
 
+/** Pi Team Bright Worker Sessions build only on Build arc (owner rule, 2026-10-20); leaders and other Sessions keep automatic Builds. */
+const WORKER = "a Worker Session builds only on Build arc";
+/** How long a stop waits for the first teams frame before its Session counts as having no team role. */
+const ROLE_WAIT_MS = 30_000;
+const ROLE_RECHECK_MS = 5_000;
+const roleWaits = new WeakMap<PiViewContext, Map<string, { since: number; timer: boolean }>>();
+
+/**
+ * Before the first teams frame a Session's role is unknown, so a Worker could look like a normal Session. A stop then
+ * waits and re-checks every 5 s. After 30 s the role counts as absent and automatic Builds proceed, so a Host whose
+ * Teams read never answers keeps them. Returns whether the stop waits.
+ */
+function roleWait(ctx: PiViewContext, threadId: string, now: number): boolean {
+	let map = roleWaits.get(ctx);
+	if (ctx.rolesKnown?.() !== false) { map?.delete(threadId); return false; }
+	if (!map) roleWaits.set(ctx, map = new Map());
+	const w = map.get(threadId) ?? { since: now, timer: false };
+	map.set(threadId, w);
+	if (now - w.since >= ROLE_WAIT_MS) return false;
+	if (!w.timer) {
+		w.timer = true;
+		arcClock.later(() => {
+			w.timer = false;
+			const s = ctx.session(threadId);
+			if (s) try { autoBuild(ctx, s); } catch (error) { console.error(`cos.arc: automatic Build of ${s.ref} failed to start:`, error); }
+		}, Math.min(ROLE_RECHECK_MS, w.since + ROLE_WAIT_MS - now));
+	}
+	return true;
+}
+
 export const cosArc: PiView<"cos.arc"> = {
 	name: "cos.arc",
-	evict(ctx, id) { states.get(ctx)?.delete(id); pendings.get(ctx)?.delete(id); unqueue(ctx, id); quiet.delete(id); heads.get(ctx)?.delete(id); logs.get(ctx)?.delete(id); },
+	evict(ctx, id) { states.get(ctx)?.delete(id); pendings.get(ctx)?.delete(id); unqueue(ctx, id); roleWaits.get(ctx)?.delete(id); quiet.delete(id); heads.get(ctx)?.delete(id); logs.get(ctx)?.delete(id); },
 	changed(ctx, sessions) {
 		for (const s of sessions) try { autoBuild(ctx, s); } catch (error) { console.error(`cos.arc: automatic Build of ${s.ref} failed to start:`, error); }
 	},
@@ -801,7 +857,7 @@ export const cosArc: PiView<"cos.arc"> = {
 			coverage: { labelledChunks: labelled, unmappedChunks: chunks.length - labelled, synthesisCurrent: Boolean(context) && status.newMessages === 0 && !status.branchChanged, excludedEntries: s.data.arc.excludedEntries },
 			buildEstimate: { calls: chunks.length ? Math.ceil((chunks.length - labelled) / LABEL_BATCH) + 1 : 0, inputTokens: Math.ceil(inputChars / 4), truncatedChunks: s.data.arc.shortenedChunks,
 				lastInputTokens: lastDone ? lastDone.usage.input + lastDone.usage.cacheRead + lastDone.usage.cacheWrite : null, lastCost: lastDone?.usage.cost ?? null },
-			context: floor && context && !context.threads.length ? null : context ?? null, floor, contextStatus: status, relabelChunks: receipt && !sameRules ? chunks.length - labelled : null, nextAutoAt: pendings.get(ctx)?.get(s.threadId)?.due ?? null, queuedAhead: queuedAt(ctx, s.threadId) >= 0 ? queuedAt(ctx, s.threadId) + (autoQueue.current ? 1 : 0) : null, backoff: autoDue(ctx, s.threadId).backoff, stuck: stuckOn(ctx, s), job: st.job ? { ...st.job } : null, builds: buildLog(ctx, s.threadId).slice(-10),
+			context: floor && context && !context.threads.length ? null : context ?? null, floor, contextStatus: status, relabelChunks: receipt && !sameRules ? chunks.length - labelled : null, nextAutoAt: pendings.get(ctx)?.get(s.threadId)?.due ?? null, queuedAhead: queuedAt(ctx, s.threadId) >= 0 ? queuedAt(ctx, s.threadId) + (autoQueue.current ? 1 : 0) : null, backoff: autoDue(ctx, s.threadId).backoff, stuck: stuckOn(ctx, s), autoOff: s.summary?.team?.role === "worker" ? "worker" : null, job: st.job ? { ...st.job } : null, builds: buildLog(ctx, s.threadId).slice(-10),
 			notice: receipt ? "Arc labels and context are assessments, not Task or Project authority. Build arc updates this Session from the hub's local copy."
 				: "Deterministic chunks only; model labels and context appear only after Build arc. No tools or Session writes." } satisfies ArcValue;
 	},

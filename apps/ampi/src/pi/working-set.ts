@@ -18,7 +18,10 @@ import { projectEntry, wireEntry } from "./projection.ts";
 import type { RarebitItem, RarebitValue } from "./views/rarebit.ts";
 
 let worker: Worker | undefined, owners = 0, serial = 0, ingestions = 0;
-const pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void; onStart?: () => void }>();
+const pending = new Map<number, { job: WorkerJob | { op: "close"; cacheDir: string }; started?: boolean; resolve: (value: any) => void; reject: (error: Error) => void; onStart?: () => void }>();
+// Open stores per cache directory. The last one to close tells the Worker to stop writing there.
+const opened = new Map<string, number>();
+const jobDir = (job: WorkerJob | { op: "close"; cacheDir: string }) => "cacheDir" in job ? job.cacheDir : job.source.cacheDir;
 function ensureWorker() {
  if (worker) return;
  // A worker does not inherit the main thread's compile cache (bin/ampi.mjs); the variable gives it the same directory.
@@ -28,7 +31,7 @@ function ensureWorker() {
  current.on("message", (m: { id: number; data?: unknown; error?: string; started?: boolean }) => {
   if (worker !== current) return;
   const p = pending.get(m.id); if (!p) return;
-  if (m.started) { p.onStart?.(); return; }
+  if (m.started) { p.started = true; p.onStart?.(); return; }
   pending.delete(m.id);
   if (tracing) counter("derive-queue", { pending: pending.size });
   if (!pending.size) current.unref();
@@ -44,19 +47,20 @@ function ensureWorker() {
  current.on("exit", (code) => failed(new Error(`Ingestion worker exited (${code}); retry the read`)));
  current.unref();
 }
-function request<T>(job: WorkerJob, capture?: (id: number) => void, onStart?: () => void): Promise<T> {
+function request<T>(job: WorkerJob | { op: "close"; cacheDir: string }, capture?: (id: number) => void, onStart?: () => void): Promise<T> {
  ensureWorker(); worker!.ref();
  const id = ++serial; capture?.(id);
  return new Promise((resolve, reject) => {
-  pending.set(id, { resolve, reject, onStart }); worker!.postMessage({ id, ...job });
+  pending.set(id, { job, resolve, reject, onStart }); worker!.postMessage({ id, ...job });
   if (tracing) counter("derive-queue", { pending: pending.size });
  });
 }
 function acquire() { owners++; ensureWorker(); }
-function release() {
+async function release() {
  if (--owners > 0) return;
- void worker?.terminate(); worker = undefined;
+ const current = worker; worker = undefined;
  for (const p of pending.values()) p.reject(new Error("Working set stopped")); pending.clear();
+ await current?.terminate();
 }
 
 type Window = { value: { entries: PiEntry[]; more: boolean; version: string }; bytes: number; live: boolean };
@@ -84,15 +88,16 @@ export function workingSetUsage() {
 export class WorkingSet {
  db!: ReturnType<typeof readWorkingSet>;
  readonly ready: Promise<void>;
- /** Resolves once saved heads are readable. A saved database opens at once, while the Worker initializes. */
+ /** Resolves once saved heads are readable, while the Worker initializes: a saved database opens at once, and with none, `load` and `snapshot` answer empty. */
  readonly readable: Promise<void>;
  readonly host: string;
  readonly cacheDir: string;
  #closed = false;
+ #closing?: Promise<void>;
  #head?: StatementSync;
  #forgetIds = new Map<string, number>();
  constructor(host: string, cacheDir: string) {
-  this.host = host; this.cacheDir = cacheDir; acquire();
+  this.host = host; this.cacheDir = cacheDir; acquire(); opened.set(cacheDir, (opened.get(cacheDir) ?? 0) + 1);
   // Init only creates missing tables, so a saved sessions table needs no Worker before the first read.
   if (existsSync(join(cacheDir, "working-set.sqlite"))) {
    try { this.db = readWorkingSet(cacheDir); this.#head = this.db.prepare('SELECT data FROM sessions WHERE path=?'); }
@@ -102,7 +107,8 @@ export class WorkingSet {
    if (this.#closed) throw new Error("Working set stopped");
    this.db ??= readWorkingSet(cacheDir);
   });
-  this.readable = this.db ? Promise.resolve() : this.ready;
+  // Without a saved database nothing is derived yet: reads before init answer empty instead of waiting for the Worker.
+  this.readable = Promise.resolve();
   // close() may cancel initialization before a caller waits for readiness.
   void this.ready.catch(() => {});
  }
@@ -110,11 +116,11 @@ export class WorkingSet {
  // Publication can compose several reads under one WAL snapshot. Nested pages
  // share it, so a worker commit cannot pair a new page with an old derived head.
  snapshot<T>(run: () => T): T {
-  if (this.#reading) return run();
+  if (this.#reading || !this.db) return run();
   this.db.exec("BEGIN"); this.#reading = true;
   try { return run(); } finally { this.#reading = false; this.db.exec("ROLLBACK"); }
  }
- load(path: string): Derived | undefined { const row = (this.#head ??= this.db.prepare('SELECT data FROM sessions WHERE path=?')).get(path); return row ? JSON.parse(String(row.data)) : undefined; }
+ load(path: string): Derived | undefined { if (!this.db) return undefined; const row = (this.#head ??= this.db.prepare('SELECT data FROM sessions WHERE path=?')).get(path); return row ? JSON.parse(String(row.data)) : undefined; }
  refresh(source: Source, onStart?: () => void, urgent = false): Promise<Derived | null> {
   return trackDerive(async () => {
    await this.ready;
@@ -215,6 +221,8 @@ export class WorkingSet {
  // index and leaves the hub only as its projected, allow-listed view: JSON text in UTF-8
  // pages of ENTRY_PAGE_BYTES. The caller joins the pages of one version and parses them.
  entry(source: Source, id: string, offset = 0, version?: string): { text: string; next: number; more: boolean; version: string } {
+  // The reader below writes the copy's index file in this cache, so a closed store must not reach it.
+  if (this.#closed) throw new Error("Working set stopped");
   const data = this.load(source.path); if (!data) throw new Error("Session unavailable");
   if (version && version !== data.version) throw new Error("Entry changed; refresh this Session");
   const row = this.db.prepare('SELECT id FROM entries WHERE path=? AND id=?').get(source.path, id);
@@ -248,5 +256,42 @@ export class WorkingSet {
   const id = this.#forgetIds.get(source.path);
   if (id !== undefined) worker?.postMessage({ op: "cancel", id });
  }
- close() { if (this.#closed) return; this.#closed = true; for (const key of windows.keys()) if (key.startsWith(`${this.host}\0`)) windows.delete(key); this.db?.close(); release(); }
+ /**
+  * How long a close waits for the Worker's active job on this cache before it stops waiting.
+  * terminate() cannot cut a native SQLite call, so a last close can take CLOSE_MS plus the
+  * busy timeout (8 s), under the deploy script's 10 s stop check.
+  */
+ static CLOSE_MS = 3000;
+ /** A close that waits longer than this logs one line. */
+ static SLOW_CLOSE_MS = 1000;
+ /**
+  * Resolves when no thread in this process writes this cache: the Worker has dropped the
+  * cache's queued jobs and backfill, and its active job there has closed its database.
+  * The read handle closes first, so the Worker's last close can remove the WAL files.
+  * After CLOSE_MS the last owner terminates the Worker. A store that shares the Worker
+  * stops waiting instead; the Worker takes no new job for the cache, but a job that is
+  * still running can write to its open database until it ends.
+  */
+ close(): Promise<void> { return this.#closing ??= this.#close(); }
+ async #close() {
+  this.#closed = true;
+  for (const key of windows.keys()) if (key.startsWith(`${this.host}\0`)) windows.delete(key);
+  this.db?.close();
+  const left = opened.get(this.cacheDir)! - 1, started = performance.now();
+  if (left) opened.set(this.cacheDir, left); else opened.delete(this.cacheDir);
+  let timer: NodeJS.Timeout | undefined, expired = false, job: string | null = null;
+  try {
+   // The answer names the job the Worker waited for.
+   if (!left && worker) job = await Promise.race([
+    request<string | null>({ op: "close", cacheDir: this.cacheDir }).catch(() => null),
+    new Promise<string | null>((resolve) => { timer = setTimeout(() => { expired = true; resolve(null); }, WorkingSet.CLOSE_MS); }),
+   ]);
+  } finally {
+   clearTimeout(timer);
+   if (expired) job = [...pending.values()].find((p) => p.started && jobDir(p.job) === this.cacheDir)?.job.op ?? null;
+   await release();
+   const waited = performance.now() - started;
+   if (waited > WorkingSet.SLOW_CLOSE_MS) console.error(`working set: close waited ${Math.round(waited)} ms for ${this.cacheDir}, ${job ?? "no"} job${expired ? ", stopped waiting" : ""}`);
+  }
+ }
 }

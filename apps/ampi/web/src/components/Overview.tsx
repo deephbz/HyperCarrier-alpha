@@ -5,7 +5,9 @@ import { useKeepPlace } from "../keep-place.ts";
 import { hasRealModel, useModels } from "../models.ts";
 import { openAccounts } from "./Accounts.tsx";
 import { ONBOARDING_KEY } from "./Dialogs.tsx";
+import { awayLine } from "./host-fold.ts";
 import { ActivityIcon, type HostThreads, ThreadBadges, isPiHost } from "./Sidebar.tsx";
+import { emptyNote, reading, unavailable } from "../host-lists.ts";
 import { KIND_LABEL, arcCoverage, arcFinished, asksByKind, coverageNote } from "../views/cos/needs.ts";
 
 function Step({ done, title, children, action }: { done: boolean | undefined; title: string; children?: React.ReactNode; action?: React.ReactNode }) {
@@ -177,14 +179,17 @@ export function Overview({ data, onNew, onAddHost, onHelp }: { data: HostThreads
 	const piOnly = data.length > 0 && data.every((d) => isPiHost(d.host));
 	const spend = rows.filter((r) => r.t.updatedAt > dayAgo).reduce((sum, r) => sum + r.t.costUsd, 0);
 	const changed = rows.filter((r) => r.t.updatedAt > (since ?? dayAgo)).length;
-	const loading = data.some((d) => d.stale && d.threads.length === 0);
+	const loading = data.some(reading);
+	const ended = unavailable(data);
+	const updating = !loading && data.some((d) => d.updating);
 	return (
 		<div className="main">
 			<div className="topbar">
 				<b>Overview</b>
 				<span className="crumbs">
-					{loading ? "Reading Sessions…" : <>{rows.length.toLocaleString()} Session{rows.length === 1 ? "" : "s"} · {data.length} Host{data.length === 1 ? "" : "s"} · {money(spend)} in Sessions active today</>}
+					{loading ? "Reading Sessions…" : rows.length === 0 && ended ? ended : <>{rows.length.toLocaleString()} Session{rows.length === 1 ? "" : "s"} · {data.length} Host{data.length === 1 ? "" : "s"} · {money(spend)} in Sessions active today</>}
 				</span>
+				{updating && <span className="hint" role="status">Updating…</span>}
 				<span className="spacer" />
 				<button className="btn primary small" onClick={onNew}>
 					{piOnly ? "+ New agent" : "+ New thread"}
@@ -200,21 +205,21 @@ export function Overview({ data, onNew, onAddHost, onHelp }: { data: HostThreads
 						<a href={href.page("timeline")}>See changes in Timeline <span aria-hidden="true">↗</span></a>
 					</section>
 					<div className="ov-hosts">
-						{data.map(({ host, threads, stale }) => (
+						{data.map((d) => { const { host, threads } = d; return (
 							<div className="ov-host" key={host.id} data-host={host.id}>
 								<span className={`dot ${host.status}`} />
 								<b>{host.label}</b>
 								<span className="hint">
 									{host.status === "connected"
-										? stale && threads.length === 0 ? "Reading Sessions…" : `${host.node?.hostname ? `${host.node.hostname} · ` : ""}${rows.filter((r) => r.host === host.id && isBusyT(r.t)).length} running · ${rows.filter((r) => r.host === host.id).length.toLocaleString()} Sessions in scope`
+										? reading(d) ? "Reading Sessions…" : d.error ? d.error : `${host.node?.hostname ? `${host.node.hostname} · ` : ""}${rows.filter((r) => r.host === host.id && isBusyT(r.t)).length} running · ${rows.filter((r) => r.host === host.id).length.toLocaleString()} Sessions in scope`
 										: host.status === "connecting"
 											? "connecting…"
-											: `disconnected${host.lastSeen ? `, last seen ${ago(host.lastSeen)} ago` : ""}${host.error ? ` — ${host.error}` : ""}`}
+											: awayLine(host)}
 								</span>
 							</div>
-						))}
+						); })}
 					</div>
-					{rows.length === 0 ? <div className="empty">{loading ? "Reading Sessions…" : "No Sessions yet. Start an agent or add a Host to begin."}</div> : <div className="ov-grid">
+					{rows.length === 0 ? <div className="empty">{emptyNote(data)}</div> : <div className="ov-grid">
 						<div className="ov-card" data-card="needs">
 							<h2>
 								Needs you <span className="hint">{needs.length.toLocaleString()}</span>

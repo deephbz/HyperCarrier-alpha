@@ -1,9 +1,10 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import { Hub } from "../src/hub/hub.ts";
 import { Browser } from "./helpers.ts";
 import { control, fixture } from "./pi-fixtures.ts";
@@ -208,6 +209,76 @@ test("pi host: a Session leaves the threads list when it crosses the retention e
 	assert.deepEqual(missed, []);
 });
 
+/** The Host's audit interval as a seam: the test runs each tick, so it can change an input after the tick marks and before it publishes. */
+function auditTicks(t: TestContext): () => void {
+	const audit = PiHost.AUDIT_MS, realSetInterval = globalThis.setInterval;
+	PiHost.AUDIT_MS = 987_654;
+	t.after(() => void (PiHost.AUDIT_MS = audit));
+	let tick: (() => void) | undefined;
+	t.mock.method(globalThis, "setInterval", ((fn: () => void, ms?: number) => {
+		if (ms !== PiHost.AUDIT_MS) return realSetInterval(fn, ms);
+		tick = fn;
+		return realSetInterval(() => {}, 2 ** 30);
+	}) as typeof setInterval);
+	return () => { assert.ok(tick, "the Host started its audit"); tick!(); };
+}
+
+test("pi host: a retention window change between an audit's mark and its publish reaches the row with a mark", async (t) => {
+	const tick = auditTicks(t);
+	const missed: string[] = [];
+	t.mock.method(console, "error", (...args: unknown[]) => { if (String(args[0]).includes("hostKey missed")) missed.push(String(args[0])); });
+	const { WorkingSet } = await import("../src/pi/working-set.ts");
+	t.mock.method(WorkingSet.prototype, "forget", async () => false);
+	const { f, hub, browser } = await setup(t, { recentMs: 3650 * 86_400_000, agent: { recentMs: 1000 } });
+	const threads = browser.sub("devbox", { kind: "threads" });
+	await browser.until<any>(threads, (v) => v.threads["pi:sess-a"] && v.threads["pi:sess-b"]?.live);
+	f.setState({ ...f.state, agents: f.state.agents.filter((a: any) => a.pane_id !== "w1:p1") });
+	await browser.until<any>(threads, (v) => v.threads["pi:sess-a"] && v.threads["pi:sess-b"] && !v.threads["pi:sess-b"].live);
+	const host = [...hub.links.values()].find((l) => l instanceof PiHost)!;
+	// The agent stops listing sess-b 1 s after its last write; from then on only the window keeps its row.
+	await new Promise((r) => setTimeout(r, 1500));
+	tick();
+	host.config.recentMs = 60_000;
+	await new Promise((r) => setTimeout(r, 300));
+	assert.deepEqual(missed, [], "the audit's publish reads the window its mark used");
+	tick();
+	await browser.until<any>(threads, (v) => v.threads["pi:sess-a"] && !v.threads["pi:sess-b"], 8000);
+	await new Promise((r) => setTimeout(r, 300));
+	assert.deepEqual(missed, []);
+});
+
+test("pi host: an open grace change between an audit's mark and its publish reaches the row with a mark", async (t) => {
+	const tick = auditTicks(t);
+	const grace = PiHost.OPEN_GRACE_MS;
+	PiHost.OPEN_GRACE_MS = 60_000;
+	t.after(() => void (PiHost.OPEN_GRACE_MS = grace));
+	const missed: string[] = [];
+	t.mock.method(console, "error", (...args: unknown[]) => { if (String(args[0]).includes("hostKey missed")) missed.push(String(args[0])); });
+	const { WorkingSet } = await import("../src/pi/working-set.ts");
+	t.mock.method(WorkingSet.prototype, "forget", async () => false);
+	const { f, hub, browser } = await setup(t, { recentMs: 3650 * 86_400_000, agent: { recentMs: 1000 } });
+	const threads = browser.sub("devbox", { kind: "threads" });
+	await browser.until<any>(threads, (v) => v.threads["pi:sess-a"] && v.threads["pi:sess-b"]?.live);
+	f.setState({ ...f.state, agents: f.state.agents.filter((a: any) => a.pane_id !== "w1:p1") });
+	await browser.until<any>(threads, (v) => v.threads["pi:sess-b"] && !v.threads["pi:sess-b"].live);
+	// sess-b goes cold; a closed view's grace is all that keeps its row.
+	const host = [...hub.links.values()].find((l) => l instanceof PiHost)!;
+	const view = browser.sub("devbox", { kind: "thread", threadId: "pi:sess-b" });
+	await browser.until<any>(view, (v) => v.entries.length > 0);
+	browser.ws.send(JSON.stringify({ t: "unsub", sid: view }));
+	host.config.recentMs = 60_000;
+	await new Promise((r) => setTimeout(r, 1500));
+	assert.ok((browser.values.get(threads) as any).threads["pi:sess-b"], "the grace keeps the cold row");
+	tick();
+	PiHost.OPEN_GRACE_MS = 0;
+	await new Promise((r) => setTimeout(r, 300));
+	assert.deepEqual(missed, [], "the audit's publish reads the grace its mark used");
+	tick();
+	await browser.until<any>(threads, (v) => v.threads["pi:sess-a"] && !v.threads["pi:sess-b"], 8000);
+	await new Promise((r) => setTimeout(r, 300));
+	assert.deepEqual(missed, []);
+});
+
 test("pi host: data the worker committed before its refresh resolves is marked when a quiet audit adopts it", async (t) => {
 	const audit = PiHost.AUDIT_MS;
 	PiHost.AUDIT_MS = 120;
@@ -243,6 +314,48 @@ test("pi host: data the worker committed before its refresh resolves is marked w
 	assert.deepEqual([...new Set(changed)], ["pi:sess-b"]);
 });
 
+test("pi host: a cold Session's row shows while its thread is open and for a grace after it closes, then leaves with a mark", async (t) => {
+	const audit = PiHost.AUDIT_MS, grace = PiHost.OPEN_GRACE_MS;
+	PiHost.AUDIT_MS = 150;
+	PiHost.OPEN_GRACE_MS = 3000;
+	t.after(() => void Object.assign(PiHost, { AUDIT_MS: audit, OPEN_GRACE_MS: grace }));
+	const missed: string[] = [];
+	t.mock.method(console, "error", (...args: unknown[]) => { if (String(args[0]).includes("hostKey missed")) missed.push(String(args[0])); });
+	// Eviction keeps the copy, so only an open or recently closed view keeps the cold row listed.
+	const { WorkingSet } = await import("../src/pi/working-set.ts");
+	const forget = t.mock.method(WorkingSet.prototype, "forget", async () => false);
+	const { f, hub, browser } = await setup(t, { recentMs: 3650 * 86_400_000, agent: { recentMs: 1000 } });
+	const threads = browser.sub("devbox", { kind: "threads" });
+	await browser.until<any>(threads, (v) => v.threads["pi:sess-a"] && v.threads["pi:sess-b"]?.live);
+	f.setState({ ...f.state, agents: f.state.agents.filter((a: any) => a.pane_id !== "w1:p1") });
+	await browser.until<any>(threads, (v) => v.threads["pi:sess-b"] && !v.threads["pi:sess-b"].live);
+	// sess-b goes cold: past the retention edge, with no pane.
+	const host = [...hub.links.values()].find((l) => l instanceof PiHost)!;
+	host.config.recentMs = 60_000;
+	await browser.until<any>(threads, (v) => v.threads["pi:sess-a"] && !v.threads["pi:sess-b"]);
+	const open = () => browser.sub("devbox", { kind: "thread", threadId: "pi:sess-b" });
+	const close = (sid: number) => browser.ws.send(JSON.stringify({ t: "unsub", sid }));
+	const first = open();
+	await browser.until<any>(threads, (v) => v.threads["pi:sess-b"]);
+	// Leaving the Session keeps its row under the pointer; reopening it inside the grace changes nothing.
+	close(first);
+	await new Promise((r) => setTimeout(r, 400));
+	const n = browser.seq.get(threads);
+	assert.ok((browser.values.get(threads) as any).threads["pi:sess-b"], "the row stays after its view closes");
+	const again = open();
+	await new Promise((r) => setTimeout(r, 400));
+	assert.equal(browser.seq.get(threads), n, "a reopen inside the grace publishes nothing");
+	close(again);
+	forget.mock.resetCalls();
+	await new Promise((r) => setTimeout(r, 1000));
+	assert.equal(forget.mock.callCount(), 0, "a copy inside the grace is not evicted");
+	assert.ok((browser.values.get(threads) as any).threads["pi:sess-b"]);
+	// The grace ends at a marking tick (a frame or the audit), so the row leaves with a mark.
+	await browser.until<any>(threads, (v) => v.threads["pi:sess-a"] && !v.threads["pi:sess-b"]);
+	await new Promise((r) => setTimeout(r, 400));
+	assert.deepEqual(missed, []);
+});
+
 test("pi host: the first agent listed for a Session file places it, as before the path index", async (t) => {
 	const { f, browser } = await setup(t);
 	const second = { ...f.state.agents.find((a: any) => a.pane_id === "w1:p1"), pane_id: "w2:p9", workspace_id: "w2", tab_id: "w2:tC" };
@@ -263,4 +376,24 @@ test("pi host: Session projections read host state only through #hostInputs", ()
 	// Host-level frame state; #isLive is #hostInputs' agent.live and #queuedItems its queued rows.
 	const frameState = /this\.#(agents|agentsByPath|agentFor|teams|teamsFrame|layout|limits|livenessKnown|panes|queued)\b/g;
 	for (const name of ["#summary", "#viewSession", "#threadValue"]) assert.deepEqual(body(name).match(frameState), null, `${name} reads host state outside #hostInputs`);
+});
+
+test("pi host: Session roles count as read after the first teams frame, and at once when Teams are off (failure: Worker Sessions auto-built before their role arrived, or waited when no frame can come)", async (t) => {
+	PI_VIEWS.push(testView("roles", (ctx, topic) => ({ known: ctx.rolesKnown?.() ?? null, frame: Boolean(ctx.teamsFrame()), count: ctx.session(String(topic.threadId))?.data.count ?? 0 })));
+	t.after(() => void PI_VIEWS.splice(PI_VIEWS.findIndex((v) => v.name === "roles"), 1));
+	// A Pi Team Bright read that answers only when the test opens its gate, so "before the first frame" is not a race.
+	const dir = mkdtempSync(join(tmpdir(), "ampi-roles-")), gate = join(dir, "open"), ptb = join(dir, "ptb.mjs");
+	writeFileSync(ptb, `import { existsSync } from "node:fs";\nexport async function readObservationSnapshot() { while (!existsSync(${JSON.stringify(gate)})) await new Promise((r) => setTimeout(r, 20)); return { schema: "none" }; }\n`);
+	const { f, browser } = await setup(t, { agent: { teams: true, ptbObservation: ptb } });
+	await browser.until<any>(browser.sub("devbox", { kind: "threads" }), (v) => v.threads["pi:sess-a"]);
+	const roles = browser.sub("devbox", { kind: "view", view: "roles", threadId: "pi:sess-a" });
+	assert.deepEqual(await browser.until<any>(roles, (v) => v.count === 3), { known: false, frame: false, count: 3 }, "no frame yet: roles unknown");
+	writeFileSync(gate, "");
+	await new Promise((r) => setTimeout(r, 2500));
+	appendFileSync(f.sessionA, user("u2", "r1", 4, "more"));
+	assert.deepEqual(await browser.until<any>(roles, (v) => v.count === 4), { known: true, frame: true, count: 4 }, "a teams frame, here a failed read, makes roles known");
+
+	const off = await setup(t);
+	await off.browser.until<any>(off.browser.sub("devbox", { kind: "threads" }), (v) => v.threads["pi:sess-a"]);
+	assert.deepEqual(await off.browser.until<any>(off.browser.sub("devbox", { kind: "view", view: "roles", threadId: "pi:sess-a" }), (v) => v.count === 3), { known: true, frame: false, count: 3 }, "Teams off: roles known with no frame");
 });

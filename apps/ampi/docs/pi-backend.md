@@ -78,9 +78,8 @@ socket and writes a descriptor; on shutdown it removes both.
 
 ## 2. Remote agent v2 (`apps/ampi/src/pi/remote-agent.cjs`)
 
-Evolved from Session Mirror's agent (which stays until Session Mirror
-retires). Launched as `ssh -T <alias> node -e "<fixed bootstrap>"` (or run
-locally). The first stdin line is `{ cfg, code }`: the base64 config (set as
+Evolved from the retired Session Mirror's agent. Launched as
+`ssh -T <alias> node -e "<fixed bootstrap>"` (or run locally). The first stdin line is `{ cfg, code }`: the base64 config (set as
 `HCM_CFG`) and the base64 agent source. The rest of stdin carries commands.
 The command line stays small and fixed, whatever the number of copied
 Sessions. Stdout carries one JSON frame per line. Errors in
@@ -112,7 +111,7 @@ Out (agent → hub):
 
 - `hello { host, pid, herdr, herdrSession, control: boolean, at }`
 - `reset { path, offset, truncatedHead }`, `chunk { path, offset, data }`: bytes
-  of Session files, exactly as Session Mirror sends them.
+  of Session files, unchanged.
   Copied: every Session file Herdr lists or a control descriptor names, and
   every file under `<agentDir>/sessions/` modified within `recentMs`
   (default four days), so Sessions run outside Herdr appear too.
@@ -126,7 +125,6 @@ Out (agent → hub):
   `layout`: `{ workspaces: [{ id, label, tabs: [{ id, label, panes: [paneId…] }] }] }`
   in Herdr's order.
 - `teams { status, codes, members: [{ pane, session, team, member, role }] }`
-  (unchanged from Session Mirror).
 - `limits { windows: { "provider/model": tokens }, budget: { tokens?, models?: { "provider/model": tokens } } | null, at }`:
   context windows layered as Pi's model registry layers them (`models-store.json`, then `models.json` `models`,
   then `modelOverrides`), and hc-auto-compact's global `auto_compact.budget_tokens` and per-model overrides from

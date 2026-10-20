@@ -26,4 +26,4 @@ try {
  }
  const usage = workingSetUsage(); store.close(); (globalThis as any).gc();
  console.log(JSON.stringify({ samples, usage, closed: workingSetUsage() }));
-} finally { store?.close(); rmSync(dir, { recursive: true, force: true }); }
+} finally { await store?.close(); rmSync(dir, { recursive: true, force: true }); }

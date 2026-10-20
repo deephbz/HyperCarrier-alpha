@@ -69,16 +69,21 @@ function ContextTree({ context }: { context: ArcContext }) {
 	</section>;
 }
 
-type TreeValue = Pick<ArcValue, "context" | "contextStatus"> & Partial<Pick<ArcValue, "nextAutoAt" | "relabelChunks" | "floor" | "queuedAhead" | "backoff" | "stuck">>;
+type TreeValue = Pick<ArcValue, "context" | "contextStatus"> & Partial<Pick<ArcValue, "nextAutoAt" | "relabelChunks" | "floor" | "queuedAhead" | "backoff" | "stuck" | "autoOff">>;
 const clock = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+/** A Pi Team Bright Worker Session builds only on Build arc. */
+const WORKER_LINE = "Worker Session: Arcs update only when you click Build arc.";
 
 /**
  * The stale line: what the tree covers, what is newer, and when it updates. One rule (Rarebit messages) for the tree
  * and the synthesis; a pending automatic Build replaces the Build arc prompt with its due time. A queued Build says how
- * many run first; a failure backoff says why the update waits, unless the stuck line already says it.
+ * many run first; a failure backoff says why the update waits, unless the stuck line already says it. A Worker Session
+ * names its manual-only rule instead.
  */
-function coverText({ context, contextStatus: s, nextAutoAt, queuedAhead, backoff, stuck }: TreeValue) {
-	const next = queuedAhead ? `Waiting for ${queuedAhead} automatic Build${queuedAhead === 1 ? "" : "s"} ahead · Build arc starts now.`
+function coverText({ context, contextStatus: s, nextAutoAt, queuedAhead, backoff, stuck, autoOff }: TreeValue) {
+	const next = autoOff === "worker" ? WORKER_LINE
+		: queuedAhead ? `Waiting for ${queuedAhead} automatic Build${queuedAhead === 1 ? "" : "s"} ahead · Build arc starts now.`
 		: backoff && !stuck && nextAutoAt ? `After ${backoff.failures} failure${backoff.failures === 1 ? "" : "s"}, next try ${clock(nextAutoAt)}.`
 		: nextAutoAt ? `Next automatic update ≈${clock(nextAutoAt)}.` : "";
 	if (s.branchChanged) return `The active Rarebit branch changed since this Build. ${next || "Build arc to cover it."}`;
@@ -92,7 +97,7 @@ function coverText({ context, contextStatus: s, nextAutoAt, queuedAhead, backoff
  */
 export function ArcContextView({ value: v }: { value: TreeValue }) {
 	return <>
-		{v.floor && <p className="cos-meta" role="status">Nothing to summarize yet. Arcs build automatically after {v.floor.min} messages; this Session has {v.floor.messages}.</p>}
+		{v.floor && <p className="cos-meta" role="status">Nothing to summarize yet. {v.autoOff === "worker" ? WORKER_LINE : `Arcs build automatically after ${v.floor.min} messages; this Session has ${v.floor.messages}.`}</p>}
 		{(v.contextStatus.newMessages > 0 || v.contextStatus.branchChanged) && <p className="cos-notice" role="status">{coverText(v)}</p>}
 		{v.relabelChunks ? <p className="cos-notice" role="status">Chunk rules changed; one Build relabels {v.relabelChunks} chunk{v.relabelChunks === 1 ? "" : "s"}.{v.nextAutoAt ? ` Next automatic update ≈${clock(v.nextAutoAt)}.` : ""}</p>
 			: v.context && v.contextStatus.formatChanged && <p className="cos-notice">This Arc uses an older Arc format. The next Build rewrites it.</p>}

@@ -10,7 +10,7 @@ import { Hub } from "../src/hub/hub.ts";
 import { Browser } from "./helpers.ts";
 import { control, fixture } from "./pi-fixtures.ts";
 import { PI_VIEWS } from "../src/pi/views/index.ts";
-import { modelLimits } from "../src/pi/host.ts";
+import { PiHost, modelLimits } from "../src/pi/host.ts";
 import { TOKEN, iso, line, user, assistant, toolResult, setup } from "./pi-host-fixtures.ts";
 
 test("pi host: unreadable latest activity cannot expire an old copy", async (t) => {
@@ -31,6 +31,10 @@ test("pi host: unreadable latest activity cannot expire an old copy", async (t) 
 });
 
 test("pi host: known source loss keeps the only copy and exposes recovery instead of expiring it", async (t) => {
+ // A closed view holds its copy for OPEN_GRACE_MS; a short grace lets the eviction below follow the close.
+ const grace = PiHost.OPEN_GRACE_MS;
+ PiHost.OPEN_GRACE_MS = 300;
+ t.after(() => void (PiHost.OPEN_GRACE_MS = grace));
  const { f, browser } = await setup(t);
  const threads = browser.sub("devbox", { kind: "threads" });
  await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.live);
@@ -43,6 +47,26 @@ test("pi host: known source loss keeps the only copy and exposes recovery instea
  const retained = browser.sub("devbox", { kind: "thread", threadId: "pi:sess-a" });
  const view = await browser.until<any>(retained, (v) => /retained for recovery/.test(v.agent.readError ?? ""));
  assert.equal(view.entries.length, 3);
+});
+
+test("pi host: a source lost just after its view closes shows recovery only after the open grace", async (t) => {
+ const grace = PiHost.OPEN_GRACE_MS;
+ PiHost.OPEN_GRACE_MS = 3000;
+ t.after(() => void (PiHost.OPEN_GRACE_MS = grace));
+ const { f, browser } = await setup(t);
+ const threads = browser.sub("devbox", { kind: "threads" });
+ await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.live);
+ const thread = browser.sub("devbox", { kind: "thread", threadId: "pi:sess-a" });
+ await browser.until<any>(thread, (v) => v.entries.length === 3);
+ rmSync(f.sessionA);
+ f.setState({ ...f.state, agents: f.state.agents.filter((a: any) => a.agent_session?.value !== f.sessionA) });
+ browser.ws.send(JSON.stringify({ t: "unsub", sid: thread }));
+ await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.live === false);
+ await new Promise((resolve) => setTimeout(resolve, 600));
+ const inside = browser.values.get(threads) as any;
+ assert.ok(inside.threads["pi:sess-a"], "the row stays inside the grace");
+ assert.doesNotMatch(inside.threads["pi:sess-a"].lastError ?? "", /retained for recovery/, "no forget probe inside the grace");
+ await browser.until<any>(threads, (v) => /retained for recovery/.test(v.threads["pi:sess-a"]?.lastError ?? ""));
 });
 
 test("pi host: while the Host is away, the last copy stays readable and actions fail instead of going elsewhere", async (t) => {

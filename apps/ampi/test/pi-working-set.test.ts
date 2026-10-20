@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -21,7 +21,7 @@ function setup(t: { after(fn: () => void): void }, records: any[]) {
  mkdirSync(source.cacheDir);
  writeFileSync(source.file, line({ type: "session", id: "fixture-session", cwd: "/synthetic", timestamp: "2026-01-01T00:00:00Z" }) + records.map(line).join(""));
  const store = new WorkingSet(source.host, source.cacheDir), owned = [store];
- t.after(() => { for (const set of owned) set.close(); rmSync(dir, { recursive: true, force: true }); });
+ t.after(async () => { for (const set of owned) await set.close(); rmSync(dir, { recursive: true, force: true }); });
  return { source, store, own: (set: WorkingSet) => (owned.push(set), set) };
 }
 
@@ -104,7 +104,7 @@ test("working set: fork/reset invalidates old pages, prose hits and body referen
  assert.equal(store.search("samelengthA").hits.length, 0); assert.equal(store.search("samelengthB").hits.length, 1);
 });
 
-test("search: fleet CJK bigrams find two characters and exclude thinking/tools; Session find streams every Mirror text kind", async (t) => {
+test("search: fleet CJK bigrams find two characters and exclude thinking/tools; Session find streams every entry kind", async (t) => {
  const records: any[] = [msg("e0", null, "你好世界 alpha"), msg("e1", "e0", "reply alpha", "assistant")];
  records[1].message.content.push({ type: "thinking", thinking: "thoughtneedle" }, { type: "toolCall", name: "bash", id: "call", arguments: { command: "argumentneedle" } });
  records.push(msg("e2", "e1", "resultneedle", "toolResult"));
@@ -275,4 +275,96 @@ test("working set: a database without a sessions table waits for the Worker's sc
  t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
  await store.readable;
  assert.equal(store.load("/synthetic/none.jsonl"), undefined);
+});
+
+/** A cache directory with one Session copy, outside `setup`'s Worker owner. */
+function cache(t: { after(fn: () => void): void }, name: string) {
+ const root = mkdtempSync(join(tmpdir(), `ampi-working-set-${name}-`));
+ t.after(() => rmSync(root, { recursive: true, force: true }));
+ const cacheDir = join(root, "cache"); mkdirSync(cacheDir);
+ const source: Source = { host: name, cacheDir, path: "/synthetic/session.jsonl", file: join(cacheDir, "copy.jsonl") };
+ writeFileSync(source.file, line({ type: "session", id: `${name}-session`, cwd: "/synthetic", timestamp: "2026-01-01T00:00:00Z" }) + line(msg("e1", null, "prose")));
+ return source;
+}
+/**
+ * Holds the cache's write lock, so a Worker job there waits in SQLite's busy handler.
+ * Take it after one derive round trip: the store's first backfill step also writes.
+ */
+function lock(cacheDir: string) {
+ const db = openWorkingSet(cacheDir); db.exec("BEGIN IMMEDIATE");
+ return () => { db.exec("ROLLBACK"); db.close(); };
+}
+const files = (dir: string, pattern: RegExp) => readdirSync(dir).filter((name) => pattern.test(name));
+
+test("working set: a closed store's queued init never recreates its cache while the Worker serves another store", async (t) => {
+ const { source, store } = setup(t, [msg("e1", null, "prose")]);
+ await store.ready;
+ const closed = cache(t, "closed");
+ const closing = new WorkingSet(closed.host, closed.cacheDir);
+ await closing.close();
+ assert.deepEqual(files(closed.cacheDir, /-(wal|shm)$/), [], "no WAL file outlives a resolved close");
+ rmSync(closed.cacheDir, { recursive: true });
+ // Jobs run in rank order, so this init or derive round trip passes every job queued before it.
+ assert.ok(await store.refresh(source));
+ assert.equal(existsSync(closed.cacheDir), false, "the Worker wrote the closed cache after close resolved");
+});
+
+test("working set: close during an active derive answers after the job closes its database and refuses queued work", async (t) => {
+ const { store } = setup(t, []);
+ await store.ready;
+ const source = cache(t, "active"), second = { ...source, path: "/synthetic/second.jsonl" };
+ const closing = new WorkingSet(source.host, source.cacheDir);
+ await closing.refresh(second);
+ const unlock = lock(source.cacheDir), order: string[] = [];
+ let started!: () => void;
+ const running = new Promise<void>((resolve) => { started = resolve; });
+ const derived = closing.refresh(source, started).then((data) => { order.push("derive"); return data; });
+ await running;
+ const queued = assert.rejects(closing.refresh(second), /Working set stopped/);
+ await new Promise((resolve) => setImmediate(resolve));
+ const closed = Promise.resolve(closing.close()).then(() => { order.push("close"); });
+ setTimeout(unlock, 300);
+ await closed;
+ assert.deepEqual(order, ["derive", "close"]);
+ assert.ok((await derived)?.version);
+ await queued;
+ assert.deepEqual(files(source.cacheDir, /-(wal|shm)$/), []);
+});
+
+test("working set: a close that outlives its deadline logs once and the shared Worker takes no later write for the cache", async (t) => {
+ const { source: owner, store } = setup(t, [msg("e1", null, "prose")]);
+ await store.ready;
+ const { CLOSE_MS, SLOW_CLOSE_MS } = WorkingSet;
+ WorkingSet.CLOSE_MS = 200; WorkingSet.SLOW_CLOSE_MS = 100;
+ t.after(() => { WorkingSet.CLOSE_MS = CLOSE_MS; WorkingSet.SLOW_CLOSE_MS = SLOW_CLOSE_MS; });
+ const errors = t.mock.method(console, "error", () => {});
+ const source = cache(t, "slow");
+ const closing = new WorkingSet(source.host, source.cacheDir);
+ await closing.refresh({ ...source, path: "/synthetic/warm.jsonl" });
+ const unlock = lock(source.cacheDir);
+ let started!: () => void;
+ const running = new Promise<void>((resolve) => { started = resolve; });
+ const derived = closing.refresh(source, started).catch(() => null);
+ await running;
+ const begun = performance.now();
+ await closing.close();
+ assert.ok(performance.now() - begun < 2000, "close waits for the deadline, not for the job");
+ assert.equal(errors.mock.callCount(), 1);
+ assert.match(String(errors.mock.calls[0]!.arguments[0]), /^working set: close waited \d+ ms for .+, derive job, stopped waiting$/);
+ rmSync(source.cacheDir, { recursive: true });
+ unlock(); await derived;
+ assert.ok(await store.refresh(owner));
+ assert.equal(existsSync(source.cacheDir), false, "the Worker wrote the closed cache after close resolved");
+ assert.equal(errors.mock.callCount(), 1);
+});
+
+test("working set: a new store on a closed cache reopens it in the shared Worker", async (t) => {
+ const { store } = setup(t, []);
+ await store.ready;
+ const source = cache(t, "reopened");
+ await new WorkingSet(source.host, source.cacheDir).close();
+ const reopened = new WorkingSet(source.host, source.cacheDir);
+ t.after(() => reopened.close());
+ await reopened.ready;
+ assert.ok((await reopened.refresh(source))?.version);
 });
