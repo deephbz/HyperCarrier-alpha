@@ -36,7 +36,7 @@ export function NewAgentDialog({ hosts, defaultHost, beside, onClose }: { hosts:
 		setBusy(true);
 		setError(undefined);
 		try {
-			const res = await hub.request<{ threadId: string; pane?: string; evidence?: string; submitted?: { error?: { message: string } } }>(host, "thread.create", {
+			const res = await hub.request(host, "thread.create", {
 				cwd: cwd.trim(),
 				place: place === "workspace" ? { workspace: "new", ...(label.trim() ? { label: label.trim() } : {}) } : { beside: besidePane!.id, direction: place },
 				...(name.trim() ? { name: name.trim() } : {}),

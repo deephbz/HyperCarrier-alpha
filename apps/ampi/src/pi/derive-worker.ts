@@ -8,8 +8,10 @@ import { getImportedRarebitEntryIds } from "@hypercarrier/rarebit/fork-lineage";
 import { openPiSessionRange } from "../../../trace-analytics/src/sources/transcript-range.mjs";
 import { indexProse, forgetSearch, forgetSearchBatch, findInSession, backfillSearch } from "./search.ts";
 import { openWorkingSet } from "./working-set-db.ts";
-import { DERIVATION_VERSION, SUMMARY_VERSION, PROSE_CHARS, MESSAGE_CHARS, TOOL_CHARS, TOOL_ARGS_CHARS, indexFile, type Source, type Derived, type WorkerJob } from "./working-set-types.ts";
+import { derivedVersion, sameIndex, SUMMARY_VERSION, PROSE_CHARS, MESSAGE_CHARS, TOOL_CHARS, TOOL_ARGS_CHARS, indexFile, type Source, type Derived, type WorkerJob } from "./working-set-types.ts";
 import { projectEntry } from "./projection.ts";
+import { boundToolArgs, clipInjected } from "../shared/entry-shapes.ts";
+import type { ToolArgsPreview } from "../shared/protocol.ts";
 import { OpenCalls } from "../shared/tool-state.ts";
 import { chunkSession } from "./views/cos-arc-chunks.ts";
 import type { PiReaderEntry } from "./views/types.ts";
@@ -45,13 +47,17 @@ function compact(e: PiReaderEntry): PiReaderEntry {
 }
 
 // A tool result, custom entry or compaction summary is one card with its own bound.
-const OWN_BOUND: Record<string, [key: string, limit: number]> = { "tool-result": ["text", TOOL_CHARS], custom: ["text", PROSE_CHARS], compaction: ["summary", PROSE_CHARS] };
+const OWN_BOUND: Record<string, [key: string, limit: number]> = { "tool-result": ["text", TOOL_CHARS], compaction: ["summary", PROSE_CHARS] };
 
 // The entry disclosure means visible prose was cut. Tool arguments, thinking and
 // own-bound cards shorten in place and mark themselves, so the UI offers the source there.
 function preview(e: PiReaderEntry) {
  const p = projectEntry(e as never);
  if (!p) return null;
+ if (p.kind === "custom") {
+  const { message, clipped } = clipInjected(p.message, PROSE_CHARS);
+  return clipped ? { ...p, message, clipped: true, clippedBytes: Buffer.byteLength(e.text ?? body(e)) } : p;
+ }
  const own = OWN_BOUND[p.kind];
  if (own) {
   const [key, limit] = own, out = { ...p } as Record<string, any>;
@@ -67,7 +73,10 @@ function preview(e: PiReaderEntry) {
  if (Array.isArray(out.blocks)) {
   shortened ||= out.blocks.length > 16;
   out.blocks = out.blocks.slice(0, 16).map((b: Record<string, any>) => {
-   if (b.type === "tool") return JSON.stringify(b.args ?? null).length <= TOOL_ARGS_CHARS ? b : { ...b, args: targetArgs((b.args ?? {}) as Record<string, unknown>), argsClipped: true };
+   if (b.type === "tool") {
+    const { args, clipped } = boundToolArgs(b.args as ToolArgsPreview, TOOL_ARGS_CHARS);
+    return clipped ? { ...b, args, argsClipped: true } : b;
+   }
    if (b.type === "thinking") return b.text.length <= PROSE_CHARS ? b : { ...b, text: b.text.slice(0, PROSE_CHARS), clipped: true };
    return typeof b.text === "string" ? { ...b, text: clip(b.text) } : b;
   });
@@ -89,7 +98,10 @@ function derive(source: Source, reader: any, db: ReturnType<typeof openWorkingSe
  const counts = { user: 0, continuation: 0, stop: 0, compactions: 0 };
  for (const row of db.prepare('SELECT * FROM entries WHERE path=? ORDER BY position').iterate(source.path)) {
   const e = parse<PiReaderEntry>(row.feature), occurrence = row.occurrence ? parse<any>(row.occurrence) : null;
-  records.push(e); nativeMeta.push(parse(row.native_meta)); count++;
+  const meta = parse<{ type?: string; model?: string }>(row.native_meta);
+  records.push(e); nativeMeta.push(meta); count++;
+  // Pi's setModel (`/model`) writes model_change before any turn uses it; the latest of either names the model.
+  if (meta.type === "model_change" && meta.model) model = meta.model;
   if (occurrence) {
    occurrences.push(occurrence);
    if (occurrence.outcome === "user") lastUser = count;
@@ -166,9 +178,9 @@ export async function materialize(source: Source): Promise<Derived | null> {
   const previous = previousRow ? parse<Derived>(previousRow.data) : null;
   const change = await reader.refresh();
   if (!reader.session()) return null;
-  const version = `${DERIVATION_VERSION}:${change.version}`;
+  const version = derivedVersion(change.version);
   if (previous?.version === version && previous.summaryVersion === SUMMARY_VERSION) return previous;
-  const rebuild = change.reset || !previous || !previous.version.startsWith(`${DERIVATION_VERSION}:`);
+  const rebuild = change.reset || !previous || !sameIndex(previous.version);
   db.exec('BEGIN IMMEDIATE');
   try {
    if (rebuild) { db.prepare('DELETE FROM entries WHERE path=?').run(source.path); forgetSearch(db, source.path); }
@@ -192,6 +204,7 @@ export async function materialize(source: Source): Promise<Derived | null> {
      else if (b.type === "text") chars[m.role === "toolResult" ? "toolResults" : chosen?.outcome as keyof Kinds ?? "other"] += String(b.text ?? "").length;
     }
     const metadata = { id: native.id, type: native.type,
+     ...(native.type === "model_change" && native.modelId ? { model: native.provider ? `${native.provider}/${native.modelId}` : String(native.modelId) } : {}),
      ...(native.rarebitFork ? { rarebitFork: { version: native.rarebitFork.version, kind: native.rarebitFork.kind } } : {}),
      ...(native.type === "custom" ? { customType: native.customType, data: { schemaVersion: native.data?.schemaVersion,
       opening: { seedEntryId: native.data?.opening?.seedEntryId }, importedEntryIds: native.data?.importedEntryIds } } : {}) };

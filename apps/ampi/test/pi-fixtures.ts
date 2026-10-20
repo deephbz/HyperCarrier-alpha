@@ -13,7 +13,12 @@ export const FAKE_HERDR = `#!${process.execPath}
 const fs = require("fs");
 const path = require("path");
 let argv = process.argv.slice(2);
-if (argv[0] === "--version") { console.log("herdr 0.0.0-fake"); process.exit(0); }
+if (argv[0] === "--version") {
+  // FAKE_HERDR_SLOW_ONCE names a file: while it exists, the next probe removes it and answers after 4 s.
+  const once = process.env.FAKE_HERDR_SLOW_ONCE;
+  if (once && fs.existsSync(once)) { fs.rmSync(once); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 4000); }
+  console.log("herdr 0.0.0-fake"); process.exit(0);
+}
 if (argv[0] === "--session") argv = argv.slice(2);
 const state = JSON.parse(fs.readFileSync(process.env.FAKE_HERDR_STATE, "utf8"));
 const save = () => fs.writeFileSync(process.env.FAKE_HERDR_STATE, JSON.stringify(state));
@@ -26,10 +31,10 @@ const paneView = (p) => ({ pane_id: p.pane_id, workspace_id: p.workspace_id, tab
 const next = () => (state.seq = (state.seq || 0) + 1);
 const [a, b, c] = argv;
 const KEY_NAMES = ["alt+enter", "esc", "enter"];
-if (a === "session" && b === "list") console.log(JSON.stringify({ sessions: [{ name: "default", running: true }] }));
+if (a === "session" && b === "list") { if (state.sessionDelayMs) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, state.sessionDelayMs); console.log(JSON.stringify({ sessions: [{ name: "default", running: true }] })); }
 else if (a === "workspace" && b === "list") reply({ workspaces: state.workspaces });
 else if (a === "tab" && b === "list") reply({ tabs: state.tabs });
-else if (a === "agent" && b === "list") reply({ agents: state.agents });
+else if (a === "agent" && b === "list") { if (state.listError) refuse("fake_list_error", "fake list error"); reply({ agents: state.agents }); }
 else if (a === "agent" && b === "get") {
   const agent = paneOf(c);
   if (!agent) { console.error("pane not found"); process.exit(1); }
@@ -90,12 +95,15 @@ else if (a === "agent" && b === "get") {
   if (!paneOf(c)) refuse("pane_not_found", "no pane");
   state.agents = state.agents.filter((p) => p.pane_id !== c);
   save();
+  // The pane is gone before Herdr replies: a discovery pass can report it first.
+  if (state.closeDelayMs) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, state.closeDelayMs);
   reply({ closed: c });
 } else if (a === "agent" && b === "start") {
   log();
   const p = paneOf(opt("--pane"));
   if (!p) refuse("pane_not_found", "no pane");
   if (state.startError) refuse(state.startError, "fake start error");
+  if (state.startDelayMs) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, state.startDelayMs);
   const rest = argv.slice(argv.indexOf("--") + 1);
   const at = (flag) => (rest.includes(flag) ? rest[rest.indexOf(flag) + 1] : undefined);
   // --session <path> resumes an existing file; --session-id <id> starts a Session that has no file until a message.
@@ -221,7 +229,7 @@ export class Agent {
 
 // A tiny hc-control server (contract section 1) plus its descriptor.
 // With `queue`, it tracks submissions as pi-hc-control does: submit queues one, abort returns all to the editor.
-export async function control(f: Fixture, session: string, opts: { nonce?: string; descriptorNonce?: string; idle?: boolean; queue?: boolean } = {}) {
+export async function control(f: Fixture, session: string, opts: { nonce?: string; descriptorNonce?: string; idle?: boolean; queue?: boolean; commands?: boolean } = {}) {
 	const dir = join(f.agentDir, "hc-control");
 	mkdirSync(dir, { recursive: true, mode: 0o700 });
 	const nonce = opts.nonce ?? "n-live";
@@ -240,7 +248,10 @@ export async function control(f: Fixture, session: string, opts: { nonce?: strin
 				buf = buf.slice(i + 1);
 				requests.push(req);
 				const reply =
-					req.op === "status" ? { id: req.id, ok: true, value: { sessionId, sessionFile: session, nonce, idle: opts.idle ?? false, compacting: false, pending: { steer: 0, followUp: 1 }, ...(opts.queue ? { submissions } : {}) } }
+					req.op === "status" ? { id: req.id, ok: true, value: { sessionId, sessionFile: session, nonce, idle: opts.idle ?? false, compacting: false, pending: { steer: 0, followUp: 1 }, ...(opts.queue ? { submissions } : {}), ...(opts.commands ? { commands: 1 } : {}) } }
+					: req.op === "commands" && opts.commands ? { id: req.id, ok: true, value: { commands: [{ name: "model", source: "builtin", supported: true }, { name: "reload", source: "builtin", supported: false }], models: [{ ref: "p/m2" }], model: "p/m1", thinkingLevels: ["off"], thinking: "off" } }
+					: req.op === "command" && opts.commands && req.name === "model" && req.args === "m2" ? { id: req.id, ok: true, disposition: "handled", notice: "Model: p/m2", effect: { model: "p/m2" } }
+					: req.op === "command" && opts.commands && req.name === "model" ? { id: req.id, ok: false, error: { code: "bad_args", message: "ambiguous", matches: ["p/x", "q/x"] } }
 					: req.op === "submit" && opts.queue ? (() => {
 						const record = { submission: `sub-${submissions.length + 1}`, deliverAs: req.deliverAs, state: "queued", at: Date.now(), text: req.text };
 						submissions.push(record);

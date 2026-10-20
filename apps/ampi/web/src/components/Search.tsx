@@ -3,7 +3,7 @@ import type { SearchResult } from "../../../src/pi/search.ts";
 import { hub, type HostState } from "../client.ts";
 import { href } from "../util.ts";
 
-export function SessionFind({ host, threadId, onClose }: { host: string; threadId: string; onClose: () => void }) {
+export function SessionFind({ host, threadId, onClose, onGo }: { host: string; threadId: string; onClose: () => void; onGo?: () => void }) {
  const [query, setQuery] = useState("");
  const [result, setResult] = useState<SearchResult>();
  const [error, setError] = useState("");
@@ -12,16 +12,17 @@ export function SessionFind({ host, threadId, onClose }: { host: string; threadI
  useEffect(() => { generation.current++; setResult(undefined); setError(""); setBusy(false); }, [host, threadId]);
  const run = async () => {
   const token = ++generation.current; setBusy(true); setError(""); setResult(undefined);
-  try { const result = await hub.request<SearchResult>(host, "thread.find", { threadId, query }); if (generation.current === token) setResult(result); }
+  try { const result = await hub.request(host, "thread.find", { threadId, query }); if (generation.current === token) setResult(result); }
   catch (e) { if (generation.current === token) setError(String(e)); }
   finally { if (generation.current === token) setBusy(false); }
  };
- return <section className="session-find" aria-label="Find in this Session" style={{ padding: 8, maxHeight: "35vh", overflowY: "auto" }}>
-  <form onSubmit={(e) => { e.preventDefault(); void run(); }}><input autoFocus aria-label="Find in Session" placeholder="Find in this Session, including tools…" value={query} maxLength={500} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Escape") onClose(); }} /><button className="btn small" disabled={busy || !query.trim()}>{busy ? "Scanning…" : "Find"}</button><button type="button" className="btn small" onClick={onClose}>Close</button></form>
+ // Esc anywhere in the bar (input or a result link) closes it (focus R18).
+ return <section className="session-find" aria-label="Find in this Session" onKeyDown={(e) => { if (e.key === "Escape") onClose(); }} style={{ padding: 8, maxHeight: "35vh", overflowY: "auto" }}>
+  <form onSubmit={(e) => { e.preventDefault(); void run(); }}><input autoFocus aria-label="Find in Session" placeholder="Find in this Session, including tools…" value={query} maxLength={500} onChange={(e) => setQuery(e.target.value)} /><button className="btn small" disabled={busy || !query.trim()}>{busy ? "Scanning…" : "Find"}</button><button type="button" className="btn small" onClick={onClose}>Close</button></form>
   <p className="hint">Copied active branch · text, thinking and tools · case-insensitive substring · no images or inactive branches</p>
   {error && <p role="alert">{error}</p>}
   {result && <><p role="status">{result.total} matching entries · {result.scanned} scanned{result.more ? " · first 200 shown" : ""}{result.invalidLines ? ` · ${result.invalidLines} invalid lines excluded` : ""}</p>
-   {result.hits.map((hit) => <p key={hit.entry}><a href={href.thread(host, threadId, { entry: hit.entry })}>{hit.snippet || hit.entry}</a><small className="hint"> · {hit.kind} · this copied branch</small></p>)}
+   {result.hits.map((hit) => <p key={hit.entry}><a href={href.thread(host, threadId, { entry: hit.entry })} onClick={onGo}>{hit.snippet || hit.entry}</a><small className="hint"> · {hit.kind} · this copied branch</small></p>)}
    <p className="hint">{result.scope}</p></>}
  </section>;
 }
@@ -33,7 +34,7 @@ export function FleetSearch({ hosts }: { hosts: HostState[] }) {
  const run = async () => {
   setBusy(true); setResults([]);
   const rows = await Promise.all(hosts.map(async (host) => {
-   try { return { host, value: await hub.request<SearchResult>(host.id, "sessions.search", { query }) }; }
+   try { return { host, value: await hub.request(host.id, "sessions.search", { query }) }; }
    catch (e) { return { host, error: String(e) }; }
   }));
   setResults(rows); setBusy(false);

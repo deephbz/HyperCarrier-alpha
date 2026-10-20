@@ -15,11 +15,12 @@ import { type ModelChoice, ThreadView } from "./components/ThreadView.tsx";
 const TerminalView = lazy(() => import("./components/TerminalView.tsx").then((m) => ({ default: m.TerminalView })));
 import { openTerminal } from "./components/Sidebar.tsx";
 import { hashRoute, href, MOD } from "./util.ts";
-import { FeedsContext } from "./context.ts";
+import { FeedsContext, FocusIntentContext } from "./context.ts";
 import { requestNotificationPermission, useAttention } from "./attention.ts";
 import { perfMarkPainted } from "./perf.ts";
-import { focusRegion, handleRegionScrollKey, installKeymapDispatcher, regionToggle, useKeyAction } from "./keymap.ts";
-import { toggleArcPanel } from "./views/cos/ArcPanel.tsx";
+import { focusRegion, handleRegionScrollKey, installKeymapDispatcher, openOverlay, useKeyAction } from "./keymap.ts";
+import { remember, transition, type KeyIntent, type Region, type SessionRegion, type Target, type View } from "./focus.ts";
+import { PANEL_DEFAULT_KEY, panelClosed } from "./views/cos/arc-reopen.ts";
 
 function savedWidth(key: string, fallback: number, min: number, max: number) {
 	const value = Number(localStorage.getItem(key) ?? fallback);
@@ -75,7 +76,7 @@ function ResizeEdge({ side, width, onChange }: { side: "sidebar" | "panel"; widt
 
 /** Subscribes to one host's thread index and reports it upward (hooks cannot loop over a dynamic host list). */
 function HostFeed({ host, onData }: { host: HostState; onData: (id: string, data: HostThreads) => void }) {
-	const { value, stale } = useTopic<ThreadsState>(host.id, { kind: "threads" });
+	const { value, stale } = useTopic(host.id, { kind: "threads" });
 	useEffect(() => {
 		onData(host.id, { host, threads: Object.values(value?.threads ?? {}) as ThreadSummary[], stale, ...(value?.layout ? { layout: value.layout } : {}) });
 	}, [host, value, stale, onData]);
@@ -107,50 +108,48 @@ export function App() {
 	const [panelWidth, setPanelWidth] = useState(() => savedWidth("ampi.panel.width", 380, 320, 720));
 	const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
 	const [zoomToast, setZoomToast] = useState("");
-	const previousRegion = useRef<"sidebar" | "transcript" | "composer" | "panel">("transcript");
-	const focusAfterRender = useRef<"sidebar" | "transcript" | "composer" | "panel" | null>(null);
-	useKeyAction("sidebar.toggle", () => {
-		const active = document.activeElement?.closest<HTMLElement>("[data-region]")?.dataset.region;
-		const hidden = sidebarHidden || (squeezedRef.current && !sidebarPeek);
-		const action = regionToggle(hidden, active === "sidebar");
-		if (action === "show-and-focus") {
-			if (squeezedRef.current) setSidebarPeek(true); else setSidebarHidden(false);
-			focusAfterRender.current = "sidebar";
-		} else if (action === "focus") requestAnimationFrame(() => focusRegion("sidebar"));
-		else {
-			if (squeezedRef.current) setSidebarPeek(false); else setSidebarHidden(true);
-			focusAfterRender.current = previousRegion.current === "sidebar" ? "transcript" : previousRegion.current;
-		}
+	// Focus model adapter (focus.ts). `transition` decides; this adapter snapshots focus at dispatch, applies the view
+	// change, and walks the target chain once per request after commit. `recentRegions` is a ref: focus changes never re-render.
+	const recentRegions = useRef<SessionRegion[]>(["transcript"]);
+	const lastFocused = useRef<Element | null>(null);
+	const viewRef = useRef<View>({ session: false, sidebarHidden: false, panelShown: false, modal: false });
+	const focusSeq = useRef(0);
+	const pendingFocus = useRef<{ seq: number; chain: Target[]; ifLost?: true } | undefined>(undefined);
+	const [focusRequest, setFocusRequest] = useState<{ seq: number; chain: Target[]; ifLost?: true }>();
+	const applyView = useRef({ sidebar: (_show: boolean) => {}, panel: (_open: boolean) => {} });
+	const focusIntent = useRef((intent: KeyIntent): boolean => {
+		const region = (document.activeElement?.closest<HTMLElement>("[data-region]")?.dataset.region ?? null) as Region | null;
+		const next = transition({ ...viewRef.current, modal: openOverlay() !== undefined }, { region, recent: recentRegions.current }, intent);
+		if (next.kind === "unavailable") return false;
+		// A view-change request never displaces a pending key request; both resolve from `last`.
+		if (next.ifLost && pendingFocus.current && !pendingFocus.current.ifLost) return true;
+		recentRegions.current = next.recent;
+		if (next.change.sidebar) applyView.current.sidebar(next.change.sidebar === "show");
+		if (next.change.panel) applyView.current.panel(next.change.panel === "open");
+		pendingFocus.current = { seq: ++focusSeq.current, chain: next.chain, ifLost: next.ifLost };
+		setFocusRequest(pendingFocus.current);
+		return true;
+	}).current;
+	const sessionView = Boolean(route.host && route.thread && !route.term && !route.page);
+	useKeyAction("sidebar.toggle", () => { focusIntent("sidebar.toggle"); });
+	useKeyAction("panel.toggle", sessionView ? () => { focusIntent("panel.toggle"); } : undefined);
+	useKeyAction("focus.composer", sessionView ? () => { focusIntent("composer.toggle"); } : undefined);
+	// A palette's own chord closes it; ⌘K and ⌘⇧K switch palettes and keep the typed query (the dispatcher gates the rest).
+	const paletteQuery = useRef("");
+	const openPalette = (which: "palette" | "commands") => setDialog((open) => {
+		if (open === which) return undefined;
+		if (open !== "palette" && open !== "commands") paletteQuery.current = "";
+		return which;
 	});
-	useKeyAction("panel.toggle", () => {
-		if (!route.thread) return;
-		if (document.activeElement?.closest('[data-region="panel"]')) {
-			toggleArcPanel(panel, setPanel, true);
-			focusAfterRender.current = "transcript";
-		} else if (!panel) {
-			toggleArcPanel(panel, setPanel);
-			focusAfterRender.current = "panel";
-		} else requestAnimationFrame(() => focusRegion("panel"));
-	});
-	useKeyAction("focus.composer", () => {
-		const region = document.activeElement?.closest<HTMLElement>("[data-region]")?.dataset.region;
-		if (region === "transcript") focusRegion("composer");
-		else if (region === "composer") focusRegion("transcript");
-	});
-	useKeyAction("session.palette", () => setDialog("palette"));
-	useKeyAction("command.palette", () => setDialog("commands"));
+	useKeyAction("session.palette", () => openPalette("palette"));
+	useKeyAction("command.palette", () => openPalette("commands"));
 	useKeyAction("display", () => setDialog("display"));
-	useKeyAction("help", () => setDialog("help"));
+	useKeyAction("help", () => setDialog((open) => (open === "help" ? undefined : "help")));
 	useKeyAction("zoom.in", () => changeOverallZoom(0.05));
 	useKeyAction("zoom.out", () => changeOverallZoom(-0.05));
 	useKeyAction("zoom.reset", () => changeOverallZoom(0));
-	useKeyAction("overview", () => { location.hash = href.page("overview"); });
+	useKeyAction("overview", () => { location.hash = href.page("overview"); focusIntent("overview"); });
 	useKeyAction("new", () => setDialog("new"));
-	useKeyAction("shell", () => {
-		const r = hashRoute();
-		if (r.host && r.thread) setPanel((p) => (p === "shell" ? undefined : "shell"));
-		else if (r.host) void openTerminal(r.host).catch(() => {});
-	});
 	useEffect(() => installKeymapDispatcher(), []);
 	const changeOverallZoom = (delta: number) => {
 		const settings = JSON.parse(localStorage.getItem("ampi.display") ?? "{}") as { overall?: number };
@@ -176,20 +175,41 @@ export function App() {
 	}, [route.host, route.thread, panel]);
 	useEffect(() => { if (zoomToast) { const timer = setTimeout(() => setZoomToast(""), 1800); return () => clearTimeout(timer); } }, [zoomToast]);
 	useEffect(() => {
-		const region = document.activeElement?.closest<HTMLElement>("[data-region]")?.dataset.region;
-		if (region === "sidebar" || region === "transcript" || region === "composer" || region === "panel") previousRegion.current = region;
-	}, [route.host, route.thread, panel, sidebarHidden, sidebarPeek, windowWidth]);
-	useEffect(() => {
-		const pending = focusAfterRender.current;
-		if (!pending) return;
-		focusAfterRender.current = null;
-		requestAnimationFrame(() => {
-			if (pending === "sidebar") {
-				const target = document.querySelector<HTMLElement>('[data-region="sidebar"] [data-nav-row][aria-current], [data-region="sidebar"] [data-nav-row]') ?? document.querySelector<HTMLElement>('[data-region="sidebar"]');
-				target?.focus();
-			} else focusRegion(pending);
+		const record = (event: FocusEvent) => {
+			lastFocused.current = event.target as Element;
+			const region = (event.target as Element | null)?.closest?.<HTMLElement>("[data-region]")?.dataset.region;
+			if (region === "transcript" || region === "composer" || region === "panel") recentRegions.current = remember(recentRegions.current, region);
+		};
+		document.addEventListener("focusin", record);
+		// A click on empty space leaves focus on body on purpose: forget the element, so a later removal steals nothing (R11).
+		// A removed or inerted element stays remembered; the observer below handles it first.
+		const leave = (event: FocusEvent) => {
+			const was = event.target as Element;
+			setTimeout(() => {
+				if (lastFocused.current === was && document.activeElement === document.body && was.isConnected && !was.closest("[inert]")) lastFocused.current = null;
+			});
+		};
+		document.addEventListener("focusout", leave);
+		// Any other writer that removes or inerts the focused element (resize, squeeze, auto-collapse) is a layout change.
+		const lost = new MutationObserver(() => {
+			const was = lastFocused.current;
+			if (document.activeElement !== document.body || !was || (was.isConnected && !was.closest("[inert]"))) return;
+			lastFocused.current = null;
+			focusIntent("layout.change");
 		});
-	}, [sidebarHidden, sidebarPeek, panel]);
+		lost.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["inert"] });
+		return () => { document.removeEventListener("focusin", record); document.removeEventListener("focusout", leave); lost.disconnect(); };
+	}, []);
+	useEffect(() => {
+		if (!focusRequest) return;
+		const frame = requestAnimationFrame(() => {
+			if (pendingFocus.current?.seq === focusRequest.seq) pendingFocus.current = undefined;
+			if (focusRequest.ifLost && document.activeElement && document.activeElement !== document.body) return;
+			for (const target of focusRequest.chain) if (focusRegion(target)) return;
+		});
+		return () => cancelAnimationFrame(frame);
+	}, [focusRequest]);
+	useEffect(() => { if (route.thread) focusIntent("session.switch"); }, [route.host, route.thread]);
 	useEffect(() => {
 		const pointer = () => { document.documentElement.dataset.input = "pointer"; };
 		const keyboard = () => { document.documentElement.dataset.input = "keyboard"; };
@@ -247,11 +267,8 @@ export function App() {
 		const key = (e: KeyboardEvent) => {
 			const mod = e.metaKey || e.ctrlKey;
 			if (e.key === "Escape" && overlayRef.current && (e.target as HTMLElement)?.closest?.(".panel-slot") && !e.defaultPrevented) {
-				// An overlaid panel closes on Escape and hands focus back to the composer, as a sheet should.
-				setPanel(undefined);
-				const r = hashRoute();
-				if (r.panel && r.host && r.thread) history.replaceState(history.state, "", href.thread(r.host, r.thread, r.entry ? { entry: r.entry } : {}));
-				requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus());
+				// An overlaid panel closes on Escape, as a sheet should; focus returns to `last`.
+				focusIntent("panel.close");
 			} else if (e.altKey && !mod && (e.key === "ArrowUp" || e.key === "ArrowDown") && !(e.target as HTMLElement)?.closest?.("select, [contenteditable], .xterm") && !((e.target as HTMLInputElement)?.value ?? "")) {
 				// Works from an empty composer (it autofocuses); never while a draft or another field has text.
 				// Alt+↑/↓: the previous or next Session in the sidebar's order.
@@ -259,7 +276,9 @@ export function App() {
 				if (!rows.length) return;
 				e.preventDefault();
 				const at = rows.findIndex((row) => row.classList.contains("active"));
-				rows[at < 0 ? 0 : Math.min(rows.length - 1, Math.max(0, at + (e.key === "ArrowDown" ? 1 : -1)))]!.click();
+				const next = rows[at < 0 ? 0 : Math.min(rows.length - 1, Math.max(0, at + (e.key === "ArrowDown" ? 1 : -1)))]!;
+				// Open the row's Session link: a click on a Team leader's row toggles its Workers instead.
+				(next.querySelector<HTMLElement>("a.title") ?? next).click();
 			}
 		};
 		window.addEventListener("keydown", key);
@@ -267,7 +286,29 @@ export function App() {
 	}, []);
 	const summary = route.host && route.thread ? feeds[route.host]?.threads.find((t) => t.id === route.thread) : undefined;
 	// Pi Sessions get the registered panel views (views/registry.ts); node threads keep the node's panels.
-	const showPanel = Boolean(route.thread && panel && (piHere ? piPanels(summary).some((p) => p.name === panel) : true));
+	const panelAvailable = (name: string) => !piHere || piPanels(summary).some((p) => p.name === name);
+	const showPanel = Boolean(route.thread && panel && panelAvailable(panel));
+	// Every panel writer (✕, tabs, ⌘J, links, the Arc toggle) reports a view change; focus moves only if it was lost (R11).
+	const setPanelTracked = useCallback((next?: string) => { setPanel(next); focusIntent("panel.set"); }, []);
+	const defaultPanel = () => {
+		const saved = localStorage.getItem(PANEL_DEFAULT_KEY) || "arc";
+		return panelAvailable(saved) ? saved : panelAvailable("arc") ? "arc" : piHere ? piPanels(summary)[0]?.name : "arc";
+	};
+	applyView.current = {
+		sidebar: (show) => (squeezedRef.current ? setSidebarPeek(show) : setSidebarHidden(!show)),
+		panel: (open) => {
+			if (!open && panel) panelClosed(panel);
+			setPanel(open ? defaultPanel() : undefined);
+			const r = hashRoute();
+			if (!open && r.panel && r.host && r.thread) history.replaceState(history.state, "", href.thread(r.host, r.thread, r.entry ? { entry: r.entry } : {}));
+		},
+	};
+	// Where no shell panel exists (a Pi Session), ⌘J is unavailable: it does nothing and help names its context.
+	useKeyAction("shell", route.host && (!route.thread || panelAvailable("shell")) ? () => {
+		const r = hashRoute();
+		if (r.host && r.thread) setPanelTracked(panel === "shell" ? undefined : "shell");
+		else if (r.host) void openTerminal(r.host).catch(() => {});
+	} : undefined);
 	const page = PAGES.find((p) => p.name === (route.page ?? (!route.host ? "timeline" : undefined)));
 	// When a panel would squeeze the main below a usable width, the sidebar gives way first (not saved; ☰ peeks it back),
 	// and only then does the panel overlay the main.
@@ -276,9 +317,11 @@ export function App() {
 	squeezedRef.current = squeezed;
 	const overlayPanel = windowWidth - (sideHidden ? 0 : sidebarWidth) - panelWidth < 480;
 	overlayRef.current = overlayPanel && showPanel;
+	viewRef.current = { session: sessionView, sidebarHidden: sideHidden, panelShown: showPanel, modal: false };
 	void hash;
 	return (
 		<FeedsContext.Provider value={feeds}>
+		<FocusIntentContext.Provider value={focusIntent}>
 		<div className={`app ${sideHidden ? "sidebar-hidden" : ""} ${showPanel ? "has-panel" : ""} ${overlayPanel ? "panel-overlay" : ""}`} style={{ "--side-w": `${sidebarWidth}px`, "--side-visible": sideHidden ? "0px" : "var(--side-w)", "--panel-w": `${panelWidth}px` } as CSSProperties}>
 			{zoomToast && <div className="toast" role="status" aria-live="polite">{zoomToast}</div>}
 			{hosts.map((host) => (
@@ -289,7 +332,7 @@ export function App() {
 				<ResizeEdge side="sidebar" width={sidebarWidth} onChange={setSidebarWidth} />
 			</div>
 			{sideHidden && <button className="btn ghost sidebar-reveal" aria-label="Show sidebar" title={`Show sidebar (${MOD}B)`} onClick={() => (sidebarHidden ? setSidebarHidden(false) : setSidebarPeek(true))}>☰</button>}
-			<div className="main-slot">
+			<div className="main-slot" data-page-root tabIndex={-1}>
 			{page ? (
 				<page.component route={route} />
 			) : route.page && route.page !== "overview" ? (
@@ -301,7 +344,7 @@ export function App() {
 					<TerminalView key={`${route.host}|${route.term}`} host={route.host} termId={route.term} />
 				</Suspense>
 			) : route.host && route.thread ? (
-				<ThreadView key={`${route.host}|${route.thread}`} host={route.host} threadId={route.thread} summary={summary} models={models} panel={panel} setPanel={setPanel} entry={route.entry} />
+				<ThreadView key={`${route.host}|${route.thread}`} host={route.host} threadId={route.thread} summary={summary} models={models} panel={panel} setPanel={setPanelTracked} entry={route.entry} />
 			) : (
 				<Overview data={data} onNew={() => setDialog("new")} onAddHost={() => setDialog("host")} onHelp={() => setDialog("help")} />
 			)}
@@ -309,9 +352,9 @@ export function App() {
 			{!page && route.host && route.thread && panel && showPanel && <div className="panel-slot" data-region="panel" tabIndex={-1} onKeyDown={handleRegionScrollKey}>
 				<ResizeEdge side="panel" width={panelWidth} onChange={setPanelWidth} />
 				{(piHere ? (
-					<PiPanel name={panel} host={route.host} threadId={route.thread} summary={summary} entry={route.entry} setPanel={setPanel} />
+					<PiPanel name={panel} host={route.host} threadId={route.thread} summary={summary} entry={route.entry} setPanel={setPanelTracked} />
 				) : (
-					<Panel name={panel} host={route.host} threadId={route.thread} summary={summary} setPanel={setPanel} />
+					<Panel name={panel} host={route.host} threadId={route.thread} summary={summary} setPanel={setPanelTracked} />
 				))}
 			</div>}
 			{dialog === "new" &&
@@ -322,12 +365,13 @@ export function App() {
 					<NewThreadDialog hosts={hosts} defaultHost={route.host} onClose={closeDialog} />
 				))}
 			{dialog === "host" && <AddHostDialog onClose={() => setDialog(undefined)} />}
-			{dialog === "palette" && <Palette data={data} onClose={() => setDialog(undefined)} />}
-			{dialog === "commands" && <CommandPalette onClose={() => setDialog(undefined)} />}
+			{dialog === "palette" && <Palette data={data} query={paletteQuery.current} onQuery={(query) => { paletteQuery.current = query; }} onClose={() => setDialog(undefined)} />}
+			{dialog === "commands" && <CommandPalette query={paletteQuery.current} onQuery={(query) => { paletteQuery.current = query; }} onClose={() => setDialog(undefined)} />}
 			{dialog === "display" && <DisplayDialog onClose={() => setDialog(undefined)} />}
 			{dialog === "help" && <HelpDialog onClose={() => setDialog(undefined)} />}
 			{accounts && <AccountsDialog host={accounts} hostLabel={hosts.find((h) => h.id === accounts)?.label ?? accounts} onClose={() => setAccounts(undefined)} />}
 		</div>
+		</FocusIntentContext.Provider>
 		</FeedsContext.Provider>
 	);
 }

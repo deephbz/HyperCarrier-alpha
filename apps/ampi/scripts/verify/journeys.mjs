@@ -4,15 +4,27 @@
 // j.gap(incident, ...) marks a known product gap: it must still fail. If it passes, the journey fails so the
 // map gets updated.
 import assert from 'node:assert/strict';
-import { appendFileSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { join } from 'node:path';
+import { createServer } from 'node:net';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { thread, timeline, arc } from '../ux/recipes.mjs';
 import { threadsSnapshot, topicSnapshot, paneCoverage, agentWatch } from './live-rows.mjs';
-import { app } from './hub.mjs';
+import { app, checkout } from './hub.mjs';
+import { arcFloor } from '../../src/pi/views/cos-arc-rules.ts';
 
 const num = text => Number(String(text).replace(/[^\d]/g, ''));
 const sideScroll = p => p.locator('.side-scroll');
+// Each sidebar row in order, with its kind and its open or folded state; failure evidence for sidebar layout steps.
+const sidebarRows = side => side.evaluate(e => [...e.querySelectorAll('.row')].map(r => ({
+  kind: r.matches('.group-row') ? 'group' : r.hasAttribute('data-leader-row') ? 'leader' : r.hasAttribute('data-parent-leader') ? 'worker' : 'row',
+  thread: r.getAttribute('data-thread') ?? r.getAttribute('data-sidebar-toggle') ?? undefined,
+  label: (r.querySelector('.title') ?? r).textContent.trim().slice(0, 60),
+  expanded: (r.querySelector('[data-collapse-toggle]') ?? r).getAttribute('aria-expanded') ?? undefined,
+  y: Math.round(r.getBoundingClientRect().top + e.scrollTop - e.getBoundingClientRect().top),
+})));
 const rbScroll = p => p.locator('.rb-scroll');
 
 /** 20 extra quiet Sessions so Overview cards need a second page. Written only inside the disposable demo dir. */
@@ -39,26 +51,38 @@ const threadsOf = state => threadsSnapshot({ port: state.port, host: 'devbox', a
 
 /**
  * Startup automatic Builds settled (D16): every Session autoBuild may build at hub start (live, idle, stopped: a
- * cos.timeline row that is waiting and not blocked) has a current Arc head in the threads topic. Steps that assert
+ * cos.timeline row that is waiting, not blocked, and at or above the Arc floor) has a current Arc head in the threads topic. Steps that assert
  * no model call wait for it, so the startup Builds' calls never fall inside them. One promise per run.
  */
 const settled = new WeakMap();
 function autoBuildsSettled(state, ms = 30_000) {
-  if (!settled.has(state)) settled.set(state, (async () => {
-    const auth = { bearer: readFileSync(join(state.run, 'hub.key'), 'utf8').trim() }, deadline = Date.now() + ms;
-    for (;;) {
-      const timeline = await topicSnapshot({ port: state.port, host: 'devbox', auth, topic: { kind: 'view', view: 'cos.timeline' } });
-      const threads = await threadsOf(state), arcs = new Map(threads.map(t => [t.id, t.arc])), derived = new Set(timeline.sessions.map(s => s.threadId));
-      // A live idle Session not derived yet may still become eligible; it is pending too.
-      const pending = [...threads.filter(t => t.live && t.activity === 'idle' && !derived.has(t.id)).map(t => t.id),
-        ...timeline.sessions.filter(s => s.waiting && !s.blocked).map(s => s.threadId).filter(id => !arcs.get(id) || arcs.get(id).stale)];
-      if (!pending.length) return;
-      if (Date.now() > deadline) assert.fail(`automatic Builds did not settle within ${ms / 1000} s: ${pending.join(', ')}`);
-      await new Promise(r => setTimeout(r, 250));
-    }
-  })());
+  if (!settled.has(state)) settled.set(state, buildsCaughtUp(state, [], ms));
   return settled.get(state);
 }
+
+/** Waits until the hub lists every thread in `listed` and no Session waits for an automatic Build. */
+async function buildsCaughtUp(state, listed, ms = 30_000) {
+  const auth = { bearer: readFileSync(join(state.run, 'hub.key'), 'utf8').trim() }, deadline = Date.now() + ms;
+  for (;;) {
+    const timeline = await topicSnapshot({ port: state.port, host: 'devbox', auth, topic: { kind: 'view', view: 'cos.timeline' } });
+    const threads = await threadsOf(state), arcs = new Map(threads.map(t => [t.id, t.arc])), derived = new Set(timeline.sessions.map(s => s.threadId));
+    // A live idle Session not derived yet may still become eligible; it is pending too.
+    const pending = [...listed.filter(id => !arcs.has(id)),
+      ...threads.filter(t => t.live && t.activity === 'idle' && !derived.has(t.id)).map(t => t.id),
+      ...timeline.sessions.filter(s => s.waiting && !s.blocked && !arcFloor(s.messages)).map(s => s.threadId).filter(id => !arcs.get(id) || arcs.get(id).stale)];
+    if (!pending.length) return;
+    if (Date.now() > deadline) assert.fail(`automatic Builds did not settle within ${ms / 1000} s: ${pending.join(', ')}`);
+    await new Promise(r => setTimeout(r, 250));
+  }
+}
+
+/**
+ * Adds fixture Sessions under the side-effect gate (run.mjs `j.fixture`). A live idle stopped Session gets an
+ * automatic Build (D16) and every new Session a derive; both call the model, so the gate opens only after the hub
+ * lists `ids(result)` and those jobs finish. Sessions without a pane or control socket are not live and never build;
+ * their helpers (addPreviewSession and the like) skip this gate.
+ */
+const addFixture = (j, add, ids) => j.fixture(async () => { const r = await add(); await buildsCaughtUp(j.state, ids(r)); return r; });
 
 /** Pi agents in the fake Herdr: what `herdr agent list` returns on the demo Host. */
 const herdrPiAgents = state => JSON.parse(readFileSync(join(state.demo, 'state.json'), 'utf8')).agents.filter(a => a.agent === 'pi');
@@ -89,6 +113,56 @@ function seedScript(name) {
   if (!existsSync(join(app, 'scripts/verify', name))) return Promise.resolve({ ok: false, reason: `scripts/verify/${name} is missing at the revision under test` });
   return new Promise(done => execFile(process.execPath, ['--no-warnings', `scripts/verify/${name}`], { cwd: app, timeout: 90_000 }, (error, stdout) => {
     try { done(JSON.parse(stdout.trim().split('\n').at(-1))); } catch { done({ ok: false, reason: error?.message ?? 'no verdict' }); }
+  }));
+}
+
+/**
+ * Start a third Team after the page has loaded: a leader and a Worker Session, their Herdr panes in a new tab, and
+ * their memberships in the demo's Team observation (scripts/pi-demo.ts observation.json).
+ */
+function addLateTeam(state) {
+  const t = new Date().toISOString(), dir = join(state.demo, 'agent/sessions/--work-late-team--');
+  mkdirSync(dir, { recursive: true });
+  const observationPath = join(state.demo, 'observation.json');
+  if (!existsSync(observationPath)) throw new Error('the demo at the revision under test has no editable Team observation');
+  const member = (name, role, pane) => {
+    const id = `sess-late-${name}`, file = join(dir, `late-${name}.jsonl`);
+    writeFileSync(file, [
+      { type: 'session', version: 3, id, timestamp: t, cwd: '/work/late-team' },
+      { type: 'message', id: `${id}-u`, parentId: null, timestamp: t, message: { role: 'user', content: [{ type: 'text', text: `Late Team ${name}: start after the page loads` }], timestamp: Date.parse(t) } },
+    ].map(r => JSON.stringify(r)).join('\n') + '\n');
+    return { id, file, pane, name, role };
+  };
+  const members = [member('lead', 'lead', 'w1:p11'), member('worker', 'teammate', 'w1:p12')];
+  // Journey H rewrites the fake Herdr state concurrently (orphan-pane-red restores its own copy), so `ensure` re-adds
+  // whatever is missing; callers run it while they wait.
+  const ensure = () => {
+    const herdrPath = join(state.demo, 'state.json'), herdr = JSON.parse(readFileSync(herdrPath, 'utf8'));
+    let changed = false;
+    if (!herdr.tabs.some(t => t.tab_id === 'w1:t9')) { herdr.tabs.push({ tab_id: 'w1:t9', workspace_id: 'w1', label: 'late team' }); changed = true; }
+    for (const m of members) if (!herdr.agents.some(a => a.pane_id === m.pane)) { herdr.agents.push({ pane_id: m.pane, workspace_id: 'w1', tab_id: 'w1:t9', name: m.pane, terminal_title_stripped: `π late ${m.name}`, cwd: '/work/late-team', agent_status: 'idle', focused: false, agent: 'pi', agent_session: { kind: 'path', agent: 'pi', value: m.file } }); changed = true; }
+    if (changed) writeFileSync(herdrPath, JSON.stringify(herdr));
+    const observation = JSON.parse(readFileSync(observationPath, 'utf8'));
+    if (!observation.teams.some(t => t.teamName === 'late')) {
+      observation.teams.push({ teamName: 'late', issues: [], memberships: members.map(m => ({
+        membershipId: `m-late-${m.name}`, teamName: 'late', memberName: m.name, coordinationRole: m.role, lifecycle: { state: 'current' },
+        terminalTarget: { backend: 'herdr', kind: 'pane', targetId: m.pane }, session: { kind: 'pi-jsonl-path', locator: m.file }, issues: [],
+      })) });
+      writeFileSync(observationPath, JSON.stringify(observation));
+    }
+  };
+  ensure();
+  return { lead: `pi:${members[0].id}`, worker: `pi:${members[1].id}`, ensure };
+}
+
+/**
+ * Run this harness's seed against the revision under test: the script loads its code from the target app (argv[2]).
+ * A parent commit that lacks the checked behaviour then fails on its own code, not on a missing script.
+ */
+function harnessSeed(name) {
+  return new Promise(done => execFile(process.execPath, ['--no-warnings', join(checkout, 'apps/ampi/scripts/verify', name), app], { cwd: app, timeout: 90_000, maxBuffer: 16 << 20 }, (error, stdout, stderr) => {
+    try { done(JSON.parse(stdout.trim().split('\n').at(-1))); }
+    catch { done({ ok: false, reason: `${error?.signal ?? error?.code ?? 'no verdict'}: ${stderr.trim().split('\n').slice(-4).join(' | ').slice(0, 600)}` }); }
   }));
 }
 
@@ -262,6 +336,20 @@ async function disclosureRows(p) {
   return rows;
 }
 
+/** A one-exchange Session written only inside the disposable demo dir; returns its thread id. */
+function addLateSession(state, id, reply) {
+  const dir = join(state.demo, 'agent/sessions/--work-verify-late--');
+  mkdirSync(dir, { recursive: true });
+  const t = new Date().toISOString(), ms = Date.parse(t);
+  const rows = [
+    { type: 'session', version: 3, id, timestamp: t, cwd: '/work/verify-late' },
+    { type: 'message', id: `${id}-u`, parentId: null, timestamp: t, message: { role: 'user', content: [{ type: 'text', text: 'Synthetic late Session' }], timestamp: ms } },
+    { type: 'message', id: `${id}-a`, parentId: `${id}-u`, timestamp: t, message: { role: 'assistant', model: 'claude-sonnet-5-5', provider: 'anthropic', stopReason: 'stop', usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.001 } }, content: [{ type: 'text', text: reply }], timestamp: ms } },
+  ];
+  writeFileSync(join(dir, `${id}.jsonl`), rows.map(r => JSON.stringify(r)).join('\n') + '\n');
+  return `pi:${id}`;
+}
+
 /**
  * A25 and A26: one Session with a thinking block, a bash call and four extension messages in their real native shapes:
  * an intercom message, a PTB direct message, a PTB alert and an Auto Compact pickup. Each message names its sender,
@@ -381,6 +469,36 @@ function jsonParts(value, keys = new Set(), strings = []) {
 }
 
 /**
+ * An Arc stored by an older chunker for unchanged Session input: `sess-big` copied under a new Session ID, with the
+ * receipt of big's last Build copied in front of it and stamped as `ampi-arc-chunker/2` wrote it: no chunker or
+ * excerpt version, and a label version and chunk hashes that differ from the current build's, and every old topic starts with OLD_CHUNKER_TOPIC. The
+ * receipt is written first, so the hub reads it on the Session's first Arc access. Only inside the disposable demo dir.
+ */
+const OLD_CHUNKER_TOPIC = 'A-chunker2-topic';
+function addOldChunkerArc(state) {
+  const id = 'sess-verify-chunker2', threadId = `pi:${id}`, sha = s => createHash('sha256').update(s).digest('hex');
+  // The Host keeps its view state under a per-Host directory inside the demo cache.
+  const cache = join(state.demo, 'cache'), big = `${sha('pi:sess-big')}.json`;
+  const found = readdirSync(cache, { recursive: true }).map(String).find(f => f.endsWith(`cos.arc/${big}`));
+  assert(found, `no stored Arc for sess-big under ${cache}`);
+  const views = join(cache, found.slice(0, -big.length - 1));
+  const receipt = JSON.parse(readFileSync(join(views, big), 'utf8'));
+  // Receipts before ampi-arc-chunker/4 carry no chunk or excerpt rule version.
+  delete receipt.chunkerVersion; delete receipt.excerptVersion;
+  receipt.labelVersion = `chunker2-${receipt.labelVersion}`;
+  for (const label of Object.values(receipt.labels)) { label.hash = `chunker2-${label.hash}`; label.topic = `${OLD_CHUNKER_TOPIC} ${label.topic}`; }
+  writeFileSync(join(views, `${sha(threadId)}.json`), JSON.stringify(receipt));
+  const sessions = join(state.demo, 'agent/sessions');
+  const file = readdirSync(sessions, { recursive: true }).map(f => join(sessions, String(f))).find(f => f.endsWith('.jsonl') && readFileSync(f, 'utf8').slice(0, 400).includes('"id":"sess-big"'));
+  assert(file, 'no sess-big Session file in the demo');
+  const [header, ...rest] = readFileSync(file, 'utf8').split('\n');
+  const dir = join(sessions, '--work-verify-chunker2--');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'verify-chunker2.jsonl'), [JSON.stringify({ ...JSON.parse(header), id }), ...rest].join('\n'));
+  return threadId;
+}
+
+/**
  * A21: two Sessions, written only inside the disposable demo dir. The running Session has a working Herdr pane and a
  * bash call without a result at its tail. The ended Session has no pane: one call followed by stop=aborted, and one
  * call followed by a later turn, neither with a result.
@@ -424,7 +542,96 @@ function a21Rows(state) {
   };
 }
 
+/**
+ * A27: one live Session with a synthetic hc-control socket that serves typed slash commands. `/model <ref>` appends
+ * a model_change entry, as Pi's setModel does, and no user entry; a submit appends a user entry, as Pi does. The
+ * Session file, descriptor and pane sit in the disposable demo dir; the socket sits under /tmp for the short path a
+ * Unix socket needs. Nothing reaches a real agent.
+ */
+// `old` serves a control from before A27: status has no commands capability and the command ops are unknown.
+async function addCommandSession(state, { id = 'sess-verify-a27', pane = 'w1:p27', old = false } = {}) {
+  const t = new Date().toISOString(), ms = Date.parse(t);
+  const dir = join(state.demo, `agent/sessions/--work-${id}--`);
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, `${id}.jsonl`);
+  let last = `${id}-a`;
+  writeFileSync(file, [
+    { type: 'session', version: 3, id, timestamp: t, cwd: '/work/verify-a27' },
+    { type: 'message', id: `${id}-u`, parentId: null, timestamp: t, message: { role: 'user', content: [{ type: 'text', text: 'Synthetic A27 Session' }], timestamp: ms } },
+    { type: 'message', id: last, parentId: `${id}-u`, timestamp: t, message: { role: 'assistant', model: 'claude-sonnet-5-5', provider: 'anthropic', stopReason: 'stop', usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.001 } }, content: [{ type: 'text', text: 'A27 ready.' }], timestamp: ms } },
+  ].map(r => JSON.stringify(r)).join('\n') + '\n');
+  const append = row => { appendFileSync(file, JSON.stringify({ ...row, parentId: last, timestamp: new Date().toISOString() }) + '\n'); last = row.id; };
+  const models = [{ ref: 'anthropic/claude-sonnet-5-5', name: 'Claude Sonnet 5.5' }, { ref: 'anthropic/claude-opus-5-5', name: 'Claude Opus 5.5' }];
+  let model = models[0].ref, n = 0;
+  const nonce = `n-a27-${process.pid}`, socket = `/tmp/ampi-a27-${process.pid}-${Date.now() % 1e6}.sock`, requests = [];
+  const reply = req => {
+    if (req.op === 'status') return { ok: true, value: { sessionId: id, sessionFile: file, nonce, idle: true, compacting: false, pending: { steer: 0, followUp: 0 }, ...(old ? {} : { commands: 1 }) } };
+    if (old && (req.op === 'commands' || req.op === 'command')) return { ok: false, error: { code: 'unknown_op', message: `unknown op ${req.op}` } };
+    if (req.op === 'commands') return { ok: true, value: {
+      commands: [
+        { name: 'model', description: 'Select model', argsHint: '<provider/id>', source: 'builtin', supported: true },
+        { name: 'thinking', description: 'Set the thinking level', argsHint: '<level>', source: 'builtin', supported: true },
+        { name: 'reload', source: 'builtin', supported: false },
+      ], models, model, thinkingLevels: ['off', 'high'], thinking: 'off' } };
+    if (req.op === 'command' && req.name === 'model') {
+      const match = models.find(m => m.ref === req.args);
+      if (!match) return { ok: false, error: { code: 'bad_args', message: `No available model matches "${req.args ?? ''}".` } };
+      const [provider, ...rest] = match.ref.split('/');
+      append({ type: 'model_change', id: `${id}-mc${++n}`, provider, modelId: rest.join('/') });
+      model = match.ref;
+      return { ok: true, disposition: 'handled', notice: `Model: ${match.ref}`, effect: { model: match.ref } };
+    }
+    if (req.op === 'submit') {
+      const entry = `${id}-u${++n}`;
+      append({ type: 'message', id: entry, message: { role: 'user', content: [{ type: 'text', text: req.text }], timestamp: Date.now() } });
+      return { ok: true, evidence: 'started', entryId: entry };
+    }
+    return { ok: false, error: { code: 'unknown_op', message: `unknown op ${req.op}` } };
+  };
+  const server = createServer(c => {
+    let buf = '';
+    c.setEncoding('utf8');
+    // A probe that times out closes first; as in the real control, a late reply must not crash the run.
+    c.on('error', () => {});
+    c.on('data', d => {
+      buf += d;
+      for (let i; (i = buf.indexOf('\n')) >= 0;) {
+        const req = JSON.parse(buf.slice(0, i));
+        buf = buf.slice(i + 1);
+        requests.push(req);
+        if (!c.destroyed && c.writable) c.write(JSON.stringify({ id: req.id, ...reply(req) }) + '\n');
+      }
+    });
+  });
+  await new Promise(resolve => server.listen(socket, resolve));
+  const controlDir = join(state.demo, 'agent/hc-control');
+  mkdirSync(controlDir, { recursive: true, mode: 0o700 });
+  writeFileSync(join(controlDir, `${id}.json`), JSON.stringify({ schema: 'hc-control/1', sessionId: id, sessionFile: file, socket, pid: process.pid, nonce, startedAt: Date.now(), version: 'verify' }));
+  const path = join(state.demo, 'state.json'), herdr = JSON.parse(readFileSync(path, 'utf8'));
+  herdr.agents.push({ pane_id: pane, workspace_id: 'w1', tab_id: 'w1:t1', name: pane, terminal_title_stripped: `π ${id}`, cwd: '/work/verify-a27', agent_status: 'idle', focused: false, agent: 'pi', agent_session: { kind: 'path', agent: 'pi', value: file } });
+  writeFileSync(path, JSON.stringify(herdr));
+  const userTexts = () => readFileSync(file, 'utf8').trim().split('\n').map(l => JSON.parse(l)).filter(r => r.type === 'message' && r.message.role === 'user').map(r => r.message.content[0].text);
+  const close = () => { server.close(); rmSync(socket, { force: true }); };
+  // `upgrade` stands for the owner updating pi-hc-control and running /reload: the same socket now serves commands.
+  return { thread: `pi:${id}`, file, requests, userTexts, model: () => model, close, upgrade: () => { old = false; } };
+}
+
 export const journeys = [
+  {
+    // Opt-in: spends real model calls, so it runs only on request (--only R1) and never in the gate.
+    id: 'R1', feature: 't3a-arcs.md', title: 'Build one Arc with the real default model', optIn: true, budgetMs: 300_000,
+    async run(j) {
+      await j.step('real-build', 'On a separate hub with the real model, Build arc over a small fixed Session', () => new Promise((done, fail) => {
+        // The script comes from this harness; the Hub it starts comes from the app under test.
+        execFile(process.execPath, ['--no-warnings', join(dirname(fileURLToPath(import.meta.url)), 'real-arc-build.mjs'), app], { cwd: app, timeout: 330_000 }, (error, stdout) => {
+          let verdict;
+          try { verdict = JSON.parse(stdout.trim().split('\n').at(-1)); } catch { return fail(new Error(`no verdict: ${error?.message ?? 'empty output'}`)); }
+          if (!verdict.ok) return fail(new Error(`${verdict.reason} · ${JSON.stringify({ state: verdict.state, model: verdict.model, labelled: verdict.labelled, chunks: verdict.chunks, cost: verdict.cost })}`));
+          done(verdict);
+        });
+      }));
+    },
+  },
   {
     id: 'H', feature: 'h-live-sessions.md', title: 'Smoke: every live Herdr Pi agent is a live Session',
     async run(j) {
@@ -440,7 +647,7 @@ export const journeys = [
           return { ...report, msAfterStart: Date.now() - started };
         }, { expectSide: s => assert.equal(s.herdrTotal, 0, 'the smoke check sent a Herdr action'), alone: false });
         await j.step('worker-joins', 'Start a third reader-team Worker pane; its Session must join live and busy', async () => {
-          const added = addWorker(j.state), at = Date.now();
+          const at = Date.now(), added = await addFixture(j, () => addWorker(j.state), r => [r.thread]);
           const report = await liveSessionsMatch(j.state, at + LIVE_MS);
           return { ...added, ...report, msToJoin: Date.now() - at };
         });
@@ -450,7 +657,10 @@ export const journeys = [
           writeFileSync(path, JSON.stringify({ ...herdr, agents: [...herdr.agents, orphan] }));
           let error;
           try { await liveSessionsMatch(j.state, Date.now() + 4000, 2000); } catch (e) { error = e.message; }
-          writeFileSync(path, JSON.stringify(herdr));
+          // Remove only the orphan from the current file: journeys share this Herdr state, and restoring the old
+          // snapshot would drop panes that other journeys added meanwhile.
+          const now = JSON.parse(readFileSync(path, 'utf8'));
+          writeFileSync(path, JSON.stringify({ ...now, agents: now.agents.filter(a => a.pane_id !== orphan.pane_id) }));
           assert(error, 'the smoke check passed with an orphan pane');
           assert.match(error, /"pane":"w1:p10".*"problem":"missing"/);
           return { red: error.slice(0, 160) };
@@ -490,7 +700,43 @@ export const journeys = [
         assert.match(hint, /\d+ running · \d+ Sessions in scope/);
         return { host: 'devbox', hint };
       });
+      // One Host rule decides the listed set; the heading, the host hint and the sidebar must all read it. Three
+      // Sessions test the edges, written only inside the disposable demo dir as recent files with old entries.
+      const scopeSession = (key, ageMs, malformed) => {
+        const dir = join(j.state.demo, `agent/sessions/--work-verify-${key}--`), file = join(dir, `${key}.jsonl`);
+        mkdirSync(dir, { recursive: true });
+        const t = new Date(Date.now() - ageMs).toISOString(), ms = Date.parse(t);
+        writeFileSync(file, [
+          JSON.stringify({ type: 'session', version: 3, id: `sess-verify-${key}`, timestamp: t, cwd: `/work/verify-${key}` }),
+          JSON.stringify({ type: 'message', id: `${key}-u`, parentId: null, timestamp: t, message: { role: 'user', content: [{ type: 'text', text: `Synthetic ${key} Session` }], timestamp: ms } }),
+          ...(malformed ? [`{"type":"message","id":"${key}-bad",`] : []),
+        ].join('\n') + '\n');
+        return { thread: `pi:sess-verify-${key}`, file };
+      };
+      const listed = thread => assertEventually(async () => (await threadsOf(j.state)).some(t => t.id === thread), `the Host does not list ${thread}`, 20_000);
+      await j.step('kept-old-session', 'Add a Session the Host keeps listed: 10-day-old entries and one unreadable line', async () => {
+        const { thread } = scopeSession('kept', 10 * 86_400_000, true);
+        await listed(thread);
+        return { thread };
+      });
+      await j.step('old-but-live', 'Add a Session with 10-day-old entries that runs in a working Herdr pane now', async () => {
+        const { thread, file } = scopeSession('oldlive', 10 * 86_400_000, false);
+        const path = join(j.state.demo, 'state.json'), herdr = JSON.parse(readFileSync(path, 'utf8'));
+        herdr.agents.push({ pane_id: 'w1:p31', workspace_id: 'w1', tab_id: 'w1:t1', name: 'w1:p31', terminal_title_stripped: 'π old live', cwd: '/work/verify-oldlive', agent_status: 'working', focused: false, agent: 'pi', agent_session: { kind: 'path', agent: 'pi', value: file } });
+        writeFileSync(path, JSON.stringify(herdr));
+        await assertEventually(async () => (await threadsOf(j.state)).some(t => t.id === thread && t.live), `the Host does not list ${thread} as live`, 20_000);
+        return { thread };
+      });
+      await j.step('clock-skew', 'Add a Session with 94-hour-old entries; set the browser clock 5 h ahead of the hub', async () => {
+        const { thread } = scopeSession('nearscope', 94 * 3_600_000, false);
+        await listed(thread);
+        await p.clock.setSystemTime(new Date(Date.now() + 5 * 3_600_000));
+        const skew = await p.evaluate(() => Date.now()) - Date.now();
+        assert(skew > 4 * 3_600_000, `the browser clock is not ahead: ${skew} ms`);
+        return { thread, skewHours: Math.round(skew / 360_000) / 10 };
+      });
       await j.step('sessions-listed', 'Read the sidebar', async () => {
+        // Other journeys add Sessions at any time, so every comparison uses counts from one read of the page.
         // Every Session the top bar counts appears in the sidebar: visible rows, Workers folded under a collapsed
         // leader ([data-worker-count]), and the rows of a closed "Not in a pane (N)" group.
         await p.locator('.side-scroll .row[data-thread]').first().waitFor();
@@ -503,21 +749,30 @@ export const journeys = [
             folded: [...side.querySelectorAll('[data-worker-count]')].reduce((n, b) => n + Number(b.textContent.replace(/[^\d]/g, '')), 0),
             unplacedClosed: unplaced && !unplacedOpen ? Number((/\((\d[\d,]*)\)/.exec(unplaced.querySelector('.group-label').textContent) ?? [0, '0'])[1].replace(/,/g, '')) : 0,
             total: Number((/([\d,]+) Sessions/.exec(document.querySelector('.topbar .crumbs').textContent) ?? [0, '-1'])[1].replace(/,/g, '')),
+            inScope: Number((/([\d,]+) Sessions in scope/.exec(document.querySelector('.ov-host[data-host="devbox"] .hint')?.textContent ?? '') ?? [0, '-1'])[1].replace(/,/g, '')),
           };
         });
         const counted = s => s.rows + s.folded + s.unplacedClosed;
         let seen;
-        await assertEventually(async () => { seen = await read(); return seen.rows > 0 && counted(seen) === seen.total; }, 'sidebar does not list every counted Session').catch(() => {});
+        await assertEventually(async () => { seen = await read(); return seen.rows > 0 && counted(seen) === seen.total && seen.inScope === seen.total; }, 'sidebar does not list every counted Session').catch(() => {});
         assert.equal(counted(seen), seen.total, `sidebar ${seen.rows} rows + ${seen.folded} folded Workers + ${seen.unplacedClosed} in a closed "Not in a pane" ≠ ${seen.total} Sessions`);
-        // Expand all Teams: the folded Workers become rows. One click expands only when every Team is collapsed.
+        assert.equal(seen.inScope, seen.total, `the host hint says ${seen.inScope} Sessions in scope; the heading says ${seen.total}`);
+        // Expand all Teams: the folded Workers become rows. One click expands only when every Team is collapsed, and a
+        // Team that starts later (journey S) arrives collapsed, so click until nothing is folded.
         const all = p.locator('[data-host-collapse-all]').first();
-        for (let i = 0; i < 2 && await p.locator('[data-collapse-toggle][aria-expanded="false"]').count(); i++) await all.click();
         let open;
-        await assertEventually(async () => { open = await read(); return open.folded === 0 && open.rows + open.unplacedClosed === seen.total; }, 'expanded sidebar does not list every counted Session').catch(() => {});
+        await assertEventually(async () => {
+          open = await read();
+          if (open.folded === 0 && open.rows + open.unplacedClosed === open.total) return true;
+          if (open.folded) await all.click();
+          return false;
+        }, 'expanded sidebar does not list every counted Session').catch(() => {});
         assert.equal(open.folded, 0, `${open.folded} Workers still folded after Expand all`);
-        assert.equal(open.rows + open.unplacedClosed, seen.total, `expanded sidebar ${open.rows} rows + ${open.unplacedClosed} in a closed "Not in a pane" ≠ ${seen.total} Sessions`);
+        // Journeys S and H add Sessions to the shared demo hub meanwhile; compare with the total read at the same time.
+        assert.equal(open.rows + open.unplacedClosed, open.total, `expanded sidebar ${open.rows} rows + ${open.unplacedClosed} in a closed "Not in a pane" ≠ ${open.total} Sessions`);
         return { ...seen, expandedRows: open.rows };
       }, { expectSide: s => assert.equal(s.herdrTotal, 0, 'reading AmPi sent a Herdr action'), alone: false });
+      await p.clock.setSystemTime(new Date());
       await j.step('timeline-data', 'Choose Timeline', async () => {
         await j.goto(timeline);
         await p.locator('.cos-band-label').first().waitFor();
@@ -583,35 +838,63 @@ export const journeys = [
         const side = sideScroll(p);
         const box = await side.boundingBox();
         await p.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-        const measure = () => side.evaluate(e => ({ top: Math.round(e.scrollTop), max: e.scrollHeight - e.clientHeight }));
+        // Every sample is kept, so a failure shows whether the sidebar grew after the last wheel tick.
+        const t0 = Date.now(), samples = [];
+        const measure = async phase => {
+          const m = await side.evaluate(e => ({ top: Math.round(e.scrollTop), max: e.scrollHeight - e.clientHeight, scrollHeight: e.scrollHeight, clientHeight: e.clientHeight, rows: e.querySelectorAll('.row').length }));
+          samples.push({ ms: Date.now() - t0, phase, ...m });
+          return m;
+        };
+        await measure('before');
         for (let i = 0; i < 20; i++) await p.mouse.wheel(0, 400);
-        await assertEventually(async () => { const m = await measure(); return m.max > 0 && m.top >= m.max - 1; }, 'sidebar did not reach its end', 3000).catch(() => {});
-        const m = await measure();
-        assert(m.max > 0, 'sidebar does not overflow at 540 px');
-        assert(m.top >= m.max - 1, `sidebar stopped at ${m.top} of ${m.max}`);
+        await measure('wheeled');
+        // Other journeys add Sessions to the shared hub, so a row can land after the last tick and raise the end.
+        // Keep wheeling until the sidebar is at its end and its height held since the previous poll.
+        let lastMax = -1;
+        await assertEventually(async () => {
+          const m = await measure('wait'), held = m.max === lastMax;
+          lastMax = m.max;
+          if (m.max > 0 && m.top >= m.max - 1 && held) return true;
+          await p.mouse.wheel(0, 400);
+          return false;
+        }, 'sidebar did not reach its end', 10_000).catch(() => {});
+        const m = await measure('final');
+        const fail = async message => Object.assign(new Error(message), { detail: { samples, rows: await sidebarRows(side) } });
+        if (!(m.max > 0)) throw await fail('sidebar does not overflow at 540 px');
+        if (!(m.top >= m.max - 1)) throw await fail(`sidebar stopped at ${m.top} of ${m.max}`);
         await p.setViewportSize({ width: 1440, height: 960 });
-        return m;
+        return { ...m, samples };
       });
       await j.step('page-keeps-place', 'Add 20 quiet Sessions, then page the Quiet card with Next and Previous', async () => {
-        addQuietSessions(j.state);
+        await addFixture(j, () => addQuietSessions(j.state), () => Array.from({ length: 20 }, (_, i) => `pi:sess-verify-quiet-${i}`));
         // The pager label counts all quiet Sessions; read it only after the hub lists all 20 new ones.
         await assertEventually(async () => (await threadsOf(j.state)).filter(t => t.id.startsWith('pi:sess-verify-quiet-')).length === 20, 'the hub does not list all 20 quiet Sessions', 20_000);
         const card = p.locator('[data-card="quiet"]');
         await card.locator('.list-page').waitFor({ timeout: 20_000 });
         const pager = card.locator('.list-page');
         await pager.scrollIntoViewIfNeeded();
-        const place = async () => ({ y: Math.round((await pager.boundingBox()).y), top: Math.round(await p.locator('.main .scroll').evaluate(e => e.scrollTop)), label: await pager.locator('.hint').innerText() });
+        // Other journeys add Sessions while this one pages, so a page is its range ("1–12", not the total), and the card
+        // may move by as much as the content above it grows. Paging itself must move neither the card nor the pager.
+        const place = () => card.evaluate(c => {
+          const scroller = document.querySelector('.main .scroll'), pg = c.querySelector('.list-page'), cy = c.getBoundingClientRect().top;
+          const label = pg.querySelector('.hint').textContent;
+          return { y: Math.round(pg.getBoundingClientRect().top), cardY: Math.round(cy), offset: Math.round(cy - scroller.getBoundingClientRect().top + scroller.scrollTop), label, range: label.split(' of ')[0].trim() };
+        });
         const before = await place();
         await pager.getByRole('button', { name: 'Next', exact: true }).click();
-        await assertEventually(async () => (await pager.locator('.hint').innerText()) !== before.label, 'Next did not change the page');
+        await assertEventually(async () => (await place()).range !== before.range, 'Next did not change the page');
         await j.settle();
         const next = await place();
         await pager.getByRole('button', { name: 'Previous', exact: true }).click();
-        await assertEventually(async () => (await pager.locator('.hint').innerText()) === before.label, 'Previous did not return');
+        await assertEventually(async () => (await place()).range === before.range, 'Previous did not return');
         await j.settle();
         const back = await place();
-        assert.notEqual(next.label, before.label, 'Next did not change the page');
-        for (const s of [next, back]) { assert(Math.abs(s.y - before.y) <= 1, `pager moved ${before.y} → ${s.y}`); assert.equal(s.top, before.top); }
+        assert.notEqual(next.range, before.range, 'Next did not change the page');
+        for (const s of [next, back]) {
+          const inCard = (s.y - s.cardY) - (before.y - before.cardY), moved = s.cardY - before.cardY, grown = s.offset - before.offset;
+          assert(Math.abs(inCard) <= 1, `the pager moved ${inCard} px inside its card (${s.range})`);
+          assert(Math.abs(moved) <= 1 || Math.abs(moved - grown) <= 1, `the card moved ${moved} px on screen while the content above it grew ${grown} px (${s.range})`);
+        }
         return { before, next, back };
       });
     },
@@ -684,11 +967,23 @@ export const journeys = [
       await j.step('from-sidebar', 'Choose the big Session in the sidebar', async () => {
         const title = p.locator('.side-scroll .row[data-thread="pi:sess-big"] a.title');
         const name = await title.innerText();
+        // Sample every painted frame after the click: the view may lag the URL by a frame, but the title must never
+        // name the previous Session while the transcript already shows the new one.
+        await p.evaluate(() => { const t0 = performance.now(); window.__t3Frames = []; const tick = () => {
+          window.__t3Frames.push({ ms: Math.round(performance.now() - t0), title: document.querySelector('[aria-label="Thread title"]')?.value ?? null, entry: document.querySelector('.transcript [data-entry]')?.getAttribute('data-entry') ?? null });
+          if (performance.now() - t0 < 2000) requestAnimationFrame(tick); }; requestAnimationFrame(tick); });
+        const before = await p.evaluate(() => ({ title: document.querySelector('[aria-label="Thread title"]')?.value ?? null, entry: document.querySelector('.transcript [data-entry]')?.getAttribute('data-entry') ?? null }));
         await title.click();
         await p.waitForURL(/\/t\/pi%3Asess-big/);
-        const shown = await p.getByRole('textbox', { name: 'Thread title' }).inputValue();
+        const box = p.getByRole('textbox', { name: 'Thread title' });
+        let shown;
+        await assertEventually(async () => (shown = await box.inputValue()).includes(name.slice(0, 20)), `title ${shown} does not match ${name}`, 8000).catch(() => {});
         assert(shown.includes(name.slice(0, 20)), `title ${shown} does not match ${name}`);
-        return { name, shown };
+        await assertEventually(() => p.evaluate(() => window.__t3Frames.at(-1)?.ms >= 1900), 'the frame sampler did not finish', 8000);
+        const frames = await p.evaluate(() => window.__t3Frames);
+        const mixed = frames.filter(f => f.title === before.title && f.entry && f.entry !== before.entry);
+        assert.equal(mixed.length, 0, `${mixed.length} frames show the previous title "${before.title}" over the new transcript (first at ${mixed[0]?.ms} ms)`);
+        return { name, shown, frames: frames.length, staleViewFrames: frames.filter(f => f.title === before.title).length };
       });
       await j.step('metadata-hover', 'Hover the Session title', async () => {
         await p.locator('.session-title-line').first().hover();
@@ -843,6 +1138,25 @@ export const journeys = [
         await p.locator('.transcript .tool-body').first().waitFor({ timeout: 3000 });
         return { thread };
       });
+      // A scroll event arrives a frame after the scroll. A render in between must not pull a reader who left the bottom back
+      // to it. The Find button renders the Session view in the same task as the scroll, so this check is deterministic.
+      await j.step('scroll-survives-render', 'Scroll from the bottom to the top; a render before the scroll event keeps the top', async () => {
+        const scroller = p.locator('[data-region="transcript"]');
+        const frames = () => p.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
+        await scroller.evaluate(el => { el.scrollTop = el.scrollHeight; });
+        await frames();
+        const find = p.locator('button', { hasText: /^Find$/ }).first();
+        const after = await scroller.evaluate(async (el, button) => {
+          el.scrollTop = 0;
+          button.click();
+          await new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)));
+          return { top: el.scrollTop, bottom: el.scrollHeight - el.clientHeight };
+        }, await find.elementHandle());
+        await find.click();
+        await frames();
+        assert(after.top < 50, `the render pulled the reader back toward the bottom: scrollTop ${after.top} of ${after.bottom}`);
+        return after;
+      });
       await j.step('one-geometry', 'Measure the marker and label of every disclosure row', async () => {
         const rows = await disclosureRows(p);
         await p.locator('.transcript').evaluate(el => el.querySelector(':is(summary, .tool-head)')?.scrollIntoView({ block: 'start' }));
@@ -863,6 +1177,62 @@ export const journeys = [
         if (spread(rows.map(r => r.fontSize)) > 0) problems.push(`label font-size spreads ${spread(rows.map(r => r.fontSize))} px`);
         assert.equal(problems.length, 0, `${problems.join('; ')} · rows (depth, marker, label font): ${table}`);
         return { rows };
+      });
+      // The reading place under streamed output, the owner's case. These run after one-geometry, which needs the rows open.
+      const file = join(j.state.demo, 'agent/sessions/--work-verify-a20--/verify-a20.jsonl');
+      let last = 'sess-verify-a20-a2', n = 0;
+      const reply = text => {
+        const id = `sess-verify-a20-s${++n}`;
+        appendFileSync(file, JSON.stringify({ type: 'message', id, parentId: last, timestamp: new Date().toISOString(), message: { role: 'assistant', model: 'claude-sonnet-5-5', provider: 'anthropic', stopReason: 'stop', usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.001 } }, timestamp: Date.now(), content: [{ type: 'text', text: `${text}. ${'Synthetic streamed prose. '.repeat(20)}` }] } }) + '\n');
+        last = id;
+      };
+      const scroller = p.locator('[data-region="transcript"]');
+      const shown = text => p.locator('.transcript').getByText(text, { exact: false }).first().waitFor({ timeout: 20_000 });
+      const where = () => scroller.evaluate(el => ({ top: Math.round(el.scrollTop), gap: Math.round(el.scrollHeight - el.scrollTop - el.clientHeight) }));
+      await j.step('follow-through-collapse', 'At the bottom, collapse the tool call above, then a reply streams in; the view follows it', async () => {
+        await scroller.evaluate(el => { el.scrollTop = el.scrollHeight; });
+        await j.settle();
+        // Scroll anchoring off is what keeps a collapse above from reading as a scroll-up (keep-place leftBottom).
+        assert.equal(await scroller.evaluate(el => getComputedStyle(el).overflowAnchor), 'none');
+        // A DOM click does not scroll the row into view, so the reader stays at the bottom.
+        await p.locator('.transcript .tool-head', { hasText: 'A20-args' }).first().evaluate(head => head.click());
+        reply('A20-follow');
+        await shown('A20-follow');
+        await j.settle();
+        const at = await where();
+        assert(at.gap <= 2, `the view stopped following: ${at.gap} px above the bottom`);
+        return at;
+      });
+      await j.step('append-while-up', 'Scroll up one screen, then three replies stream in; the reading place stays', async () => {
+        await scroller.evaluate(el => { el.scrollTop = el.scrollHeight - 2 * el.clientHeight; });
+        await j.settle();
+        const before = await where();
+        for (const k of [1, 2, 3]) reply(`A20-stream-${k}`);
+        await shown('A20-stream-3');
+        await j.settle();
+        const after = await where();
+        assert(Math.abs(after.top - before.top) <= 2, `the reader moved ${before.top} → ${after.top} (${after.gap} px above the bottom)`);
+        return { before, after };
+      });
+      await j.step('back-keeps-place', 'From that place open the Overview, go Back, then a reply streams in; the restored place stays', async () => {
+        const mark = () => scroller.evaluate(el => {
+          const box = el.getBoundingClientRect();
+          const first = [...el.querySelectorAll('[data-entry]')].find(e => e.getBoundingClientRect().bottom > box.top);
+          return first && { entry: first.dataset.entry, y: Math.round(first.getBoundingClientRect().top - box.top) };
+        });
+        const before = await mark();
+        await j.goto('#/v/overview');
+        await p.locator('.overview').waitFor();
+        await p.goBack();
+        await shown('A20-stream-3');
+        const at = () => scroller.evaluate((el, id) => { const e = el.querySelector(`[data-entry="${CSS.escape(id)}"]`); return e && Math.round(e.getBoundingClientRect().top - el.getBoundingClientRect().top); }, before.entry);
+        await assertEventually(async () => { const y = await at(); return y !== null && Math.abs(y - before.y) <= 4; }, `Back did not restore entry ${before.entry} at ${before.y}`);
+        reply('A20-after-back');
+        await shown('A20-after-back');
+        await j.settle();
+        const after = await at();
+        assert(after !== null && Math.abs(after - before.y) <= 4, `entry ${before.entry} moved ${before.y} → ${after} after a reply`);
+        return { entry: before.entry, before: before.y, after };
       });
     },
   },
@@ -932,6 +1302,127 @@ export const journeys = [
         assert.deepEqual(missing, [], `the open row does not show the full text: ${missing.join(', ')}`);
         return {};
       });
+    },
+  },
+  {
+    id: 'T3r', feature: 't3-open-session.md', title: 'Open a direct Session route before the Host lists the Session',
+    async run(j) {
+      const p = j.page;
+      const empty = p.locator('.transcript .empty');
+      await j.step('missing', 'Open a direct route to a Session id the Host does not have; read the not-found text', async () => {
+        await j.goto('#/v/overview');
+        await assertEventually(async () => (await threadsOf(j.state)).length > 0, 'the Host lists no Sessions', 20_000);
+        await j.goto(`#/h/devbox/t/${encodeURIComponent('pi:sess-verify-never')}`);
+        await assertEventually(async () => (await empty.innerText().catch(() => '')).includes('Unknown Session on this Host'),
+          `the transcript does not say the Session is unknown: "${await empty.innerText().catch(() => '')}"`, 10_000);
+        return { text: await empty.innerText() };
+      });
+      await j.step('late', 'Open a direct route before its Session exists, then create the Session; read the transcript within 5 s with no reload', async () => {
+        const id = 'sess-verify-late', reply = 'T3r-late-reply';
+        await j.goto(`#/h/devbox/t/${encodeURIComponent(`pi:${id}`)}`);
+        await assertEventually(async () => (await empty.innerText().catch(() => '')).includes('Unknown Session on this Host'), 'the route to the absent Session shows no not-found text', 10_000);
+        await p.evaluate(() => { window.__t3rLoad = true; });
+        addLateSession(j.state, id, reply);
+        const created = Date.now();
+        // In the transcript: the sidebar row of a newly listed Session can carry the same text.
+        await p.locator('.transcript').getByText(reply, { exact: false }).first().waitFor({ timeout: 5000 })
+          .catch(async () => assert.fail(`no transcript 5 s after the Session was created; the page shows "${await empty.innerText().catch(() => '')}"`));
+        const ms = Date.now() - created;
+        assert.equal(await p.evaluate(() => window.__t3rLoad === true), true, 'the page reloaded');
+        return { ms };
+      });
+      await j.step('still-missing', 'Return to the never-created Session; it still reads not found', async () => {
+        await j.goto(`#/h/devbox/t/${encodeURIComponent('pi:sess-verify-never')}`);
+        await assertEventually(async () => (await empty.innerText().catch(() => '')).includes('Unknown Session on this Host'), 'the never-created Session no longer reads not found', 10_000);
+        return { text: await empty.innerText() };
+      });
+    },
+  },
+  {
+    id: 'T3c', feature: 't3-open-session.md', title: 'Run Pi slash commands from the composer as typed commands (A27)',
+    async run(j) {
+      const p = j.page, box = p.getByRole('textbox', { name: 'Message the agent' });
+      const s = await addFixture(j, () => addCommandSession(j.state), r => [r.thread]);
+      let old;
+      try {
+        await j.step('open', 'Open the live A27 Session; its composer shows the control and the model card shows Sonnet', async () => {
+          await j.goto(`#/h/devbox/t/${encodeURIComponent(s.thread)}`);
+          await assertEventually(async () => (await threadsOf(j.state)).some(t => t.id === s.thread && t.control === true), 'the Host never lists the A27 Session with a live control', 20_000);
+          await assertEventually(async () => /claude-sonnet-5-5/.test(await p.locator('.model-hud-trigger').innerText().catch(() => '')), 'the model card does not show Sonnet', 10_000);
+          return { model: await p.locator('.model-hud-trigger').innerText() };
+        });
+        await j.step('model', 'Type /model anthropic/claude-opus-5-5 and press Enter; the model card shows Opus, the transcript has no /model message, and Pi got a command op and no submit', async () => {
+          await box.fill('/model anthropic/claude-opus-5-5');
+          await box.press('Enter');
+          await assertEventually(async () => s.model() === 'anthropic/claude-opus-5-5' || s.userTexts().some(t => t.startsWith('/model')), 'the composer sent nothing to Pi', 10_000);
+          assert.deepEqual(s.userTexts().filter(t => t.startsWith('/model')), [], 'the /model command became a user message in the Session file');
+          assert.equal(s.requests.filter(r => r.op === 'submit').length, 0, 'the /model command reached Pi as text');
+          await assertEventually(async () => /claude-opus-5-5/.test(await p.locator('.model-hud-trigger').innerText().catch(() => '')), 'the model card does not show Opus after /model', 10_000);
+          assert.equal(await p.locator('.transcript').getByText('/model anthropic', { exact: false }).count(), 0, 'the transcript shows a /model message');
+          assert.equal(await box.inputValue(), '', 'the draft was not cleared after a handled command');
+          return { model: await p.locator('.model-hud-trigger').innerText(), commandOps: s.requests.filter(r => r.op === 'command').map(r => `${r.name} ${r.args}`) };
+        });
+        await j.step('complete', 'Type /mo, then /model ; the menu lists /model, then both models with Opus marked current', async () => {
+          await box.fill('/mo');
+          await p.locator('[data-slash-menu]').getByText('/model', { exact: true }).waitFor({ timeout: 10_000 });
+          await box.fill('/model ');
+          const menu = p.locator('[data-slash-menu]');
+          await menu.getByText('/model anthropic/claude-sonnet-5-5', { exact: true }).waitFor({ timeout: 10_000 });
+          const opus = menu.locator('.slash-item', { hasText: 'claude-opus-5-5' });
+          assert.match(await opus.innerText(), /current/, 'the current model is not marked');
+          await box.fill('');
+          return { items: await menu.locator('.slash-item').allInnerTexts().catch(() => []) };
+        });
+        await j.step('unknown', 'Type /nosuch x and press Enter; nothing is sent, the draft stays, and the composer offers Send as text', async () => {
+          const sent = () => s.requests.filter(r => r.op === 'command' || r.op === 'submit').length, before = sent();
+          await box.fill('/nosuch x');
+          await box.press('Enter');
+          const choice = p.locator('[data-command-choice]');
+          await choice.waitFor({ timeout: 10_000 });
+          const text = await choice.innerText();
+          assert.match(text, /Pi has no \/nosuch command\. Nothing was sent\./);
+          assert.equal(await box.inputValue(), '/nosuch x', 'the draft was not kept');
+          assert.equal(sent(), before, 'an unknown command reached Pi');
+          await box.fill('');
+          return { choice: text };
+        });
+        await j.step('escape', 'Type //model is a word and press Enter; Pi gets the message /model is a word as text', async () => {
+          await box.fill('//model is a word');
+          await box.press('Enter');
+          await assertEventually(async () => s.userTexts().includes('/model is a word'), 'the escaped message did not reach Pi as text', 10_000);
+          return { users: s.userTexts() };
+        });
+        await j.step('old-control', 'Open a Session whose control predates A27, type /model anthropic/claude-opus-5-5 and press Enter; AmPi says the control is too old, nothing reaches Pi, and the draft stays', async () => {
+          old ??= await addFixture(j, () => addCommandSession(j.state, { id: 'sess-verify-a27-old', pane: 'w1:p28', old: true }), r => [r.thread]);
+          await j.goto(`#/h/devbox/t/${encodeURIComponent(old.thread)}`);
+          await assertEventually(async () => (await threadsOf(j.state)).some(t => t.id === old.thread && t.control === true), 'the Host never lists the old-control Session with a live control', 20_000);
+          await box.fill('/model anthropic/claude-opus-5-5');
+          await box.press('Enter');
+          const choice = p.locator('[data-command-choice]');
+          await choice.waitFor({ timeout: 10_000 }).catch(() => {});
+          const text = await choice.innerText().catch(() => '');
+          assert.deepEqual(old.userTexts().filter(t => t.startsWith('/model')), [], 'the /model command became a user message in the old-control Session');
+          assert.equal(old.requests.filter(r => r.op === 'submit').length, 0, 'the /model command reached the old control as text');
+          assert.match(text, /too old for slash commands.*Nothing was sent\./s, `the composer shows no too-old notice: "${text}"`);
+          assert.equal(await box.inputValue(), '/model anthropic/claude-opus-5-5', 'the draft was not kept');
+          return { choice: text, ops: old.requests.map(r => r.op) };
+        });
+        await j.step('old-control-updated', 'Update the old control in place, then press Enter on the kept draft; the command runs, the model card shows Opus, and nothing reaches Pi as text', async () => {
+          old.upgrade();
+          // Two status probes after the update: the Host has listed the new capability at least once.
+          const probes = old.requests.filter(r => r.op === 'status').length;
+          await assertEventually(async () => old.requests.filter(r => r.op === 'status').length >= probes + 2, 'the Host never probed the updated control', 20_000);
+          await box.press('Enter');
+          await assertEventually(async () => old.model() === 'anthropic/claude-opus-5-5', `Enter on the kept draft did not run /model; the composer shows "${await p.locator('[data-command-choice]').innerText().catch(() => '')}"`, 10_000);
+          await assertEventually(async () => /claude-opus-5-5/.test(await p.locator('.model-hud-trigger').innerText().catch(() => '')), 'the model card does not show Opus after the update', 10_000);
+          assert.deepEqual(old.userTexts().filter(t => t.startsWith('/model')), [], 'the /model command became a user message');
+          assert.equal(old.requests.filter(r => r.op === 'submit').length, 0, 'the /model command reached Pi as text');
+          return { model: await p.locator('.model-hud-trigger').innerText(), ops: old.requests.filter(r => r.op !== 'status').map(r => r.op) };
+        });
+      } finally {
+        s.close();
+        old?.close();
+      }
     },
   },
   {
@@ -1048,11 +1539,26 @@ export const journeys = [
         await j.goto(timeline);
         // A band title comes from its pane title or cwd, so find each band by its Session link.
         const band = id => p.locator('.cos-band-label', { has: p.locator(`a[href*="${encodeURIComponent(`pi:${id}`)}"]`) }).first();
-        await band(A21.run).waitFor({ timeout: 20_000 });
-        await band(A21.ended).waitFor({ timeout: 5000 });
-        const running = await band(A21.run).innerText(), ended = await band(A21.ended).innerText();
-        assert(await band(A21.run).locator('.cos-live').count(), `the running band shows no live mark: ${JSON.stringify(running)}`);
+        // The Timeline renders only the bands near its scroll position, and Sessions from other journeys can sort
+        // above A21's. Scroll down a screen at a time until the band renders.
+        const reach = async (id, ms) => {
+          await p.locator('.cos-scroll').waitFor({ timeout: ms });
+          const end = Date.now() + ms;
+          await p.locator('.cos-scroll').evaluate(e => { e.scrollTop = 0; });
+          while (!(await band(id).count())) {
+            assert(Date.now() < end, `no Timeline band links ${id}`);
+            const moved = await p.locator('.cos-scroll').evaluate(e => { const top = e.scrollTop; e.scrollTop += e.clientHeight * 0.8; return e.scrollTop !== top; });
+            if (!moved) await p.locator('.cos-scroll').evaluate(e => { e.scrollTop = 0; });
+            await j.settle();
+          }
+        };
+        await reach(A21.run, 20_000);
+        await reach(A21.ended, 10_000);
+        const ended = await band(A21.ended).innerText();
         assert.equal(await band(A21.ended).locator('.cos-live').count(), 0, 'the ended band shows a live mark');
+        await reach(A21.run, 10_000);
+        const running = await band(A21.run).innerText();
+        assert(await band(A21.run).locator('.cos-live').count(), `the running band shows no live mark: ${JSON.stringify(running)}`);
         assert.doesNotMatch(ended, /running/i, `the ended band claims running: ${JSON.stringify(ended)}`);
         return { running, ended };
       });
@@ -1107,7 +1613,13 @@ export const journeys = [
         estimateCalls = num(/· ([\d,]+) calls/.exec(caption)[1]);
         // The estimate names its main cost: synthesis rereads the whole Session on every Build.
         assert.match(caption, /calls · synthesis rereads the whole Session/, `estimate: ${caption}`);
-        await p.getByRole('region', { name: 'Chunks over time' }).waitFor();
+        // The automatic Build's price sits beside the estimate.
+        assert.match(caption, / · last Build: (?:[\d,]+ input tokens, )?(?:\$[\d.,]+|price unavailable)\.$/, `estimate: ${caption}`);
+        const chunksRegion = p.getByRole('region', { name: 'Chunks over time' });
+        await chunksRegion.waitFor();
+        // The legend states the live chunk rule; harness wakes and directory moves never cut a chunk.
+        const rule = await chunksRegion.locator('.cos-meta').first().innerText();
+        assert.match(rule, /^A chunk starts at an owner turn after 12 owner turns, 40k Rarebit characters, or more than 2 h without owner-driven activity\. Compactions, harness wakes and directory moves stay inside a chunk\./, `legend: ${rule}`);
         return { toolbar, builds, estimateCalls };
       }, { expectSide: s => assert.equal(s.askCalls, 0, 'opening an Arc called the model') });
       await j.step('tier-two-context', 'Read Needs you and the Work tree', async () => {
@@ -1139,7 +1651,88 @@ export const journeys = [
         const headline = await p.locator('.cos-headline .cos-meta').innerText();
         assert.match(headline, / · current$/, `headline meta: ${headline}`);
         return { last, calls, estimateCalls, projects, headline };
-      }, { expectSide: s => assert(s.askCalls >= 1, 'Build arc made no model call') });
+      }, { expectSide: s => assert(s.askCalls >= 1, 'Build arc made no model call'), startsBuild: true });
+      // A28 and M2: the demo hub's config names Haiku for Arc labels and Sonnet for synthesis. The newest Build row names both.
+      await j.step('build-model', 'Open the Build log; the newest Build names claude-haiku-5-5 and claude-sonnet-5-5', async () => {
+        const log = p.locator('.cos-builds');
+        if (!(await log.evaluate(d => d.open))) await log.locator('summary').click();
+        const row = log.locator('li').first();
+        await row.waitFor({ timeout: 5000 });
+        const seen = { text: await row.innerText(), title: (await row.getAttribute('title')) ?? '' };
+        assert.match(seen.text, /claude-haiku-5-5 \+ claude-sonnet-5-5/, `newest Build row: ${JSON.stringify(seen)}`);
+        return seen;
+      });
+      // Arc chunk invalidation: labels from an older chunker never show as labels; the page says a relabel is pending.
+      // Owner decision: a cut ask title keeps its start, shows a mark that more text exists, and opens the full text on
+      // one click. The mark is ink left of the title inside its row, as for every disclosure row (T3d).
+      await j.gap('arc-titles-2', 'cut-ask-title', 'In the Arc tree, read a cut ask before and after one click', async () => {
+        const leaf = p.locator('details.cos-leaf').filter({ has: p.locator(':scope > p') }).filter({ has: p.locator('.cos-badge') }).first();
+        await leaf.waitFor({ timeout: 10_000 });
+        await leaf.scrollIntoViewIfNeeded();
+        const before = await leaf.evaluate(d => {
+          const s = d.querySelector(':scope > summary'), t = s.querySelector('.cos-leaf-title');
+          const sr = s.getBoundingClientRect(), tr = t.getBoundingClientRect();
+          return { open: d.open, title: t.textContent, full: d.querySelector(':scope > p').textContent, fullVisible: d.querySelector(':scope > p').checkVisibility(),
+            region: { x: Math.round(sr.left), y: Math.round(sr.top), width: Math.floor(tr.left - sr.left), height: Math.round(sr.height) } };
+        });
+        const problems = [];
+        const start = before.title.replace(/…$/, '').trim();
+        if (!before.title.endsWith('…')) problems.push(`the cut title has no ellipsis: "${before.title}"`);
+        if (!before.full.replace(/\s+/g, ' ').startsWith(start)) problems.push(`the cut title is not the start of the ask: "${before.title}" vs "${before.full.slice(0, 80)}"`);
+        if (before.open || before.fullVisible) problems.push('the full text shows before any click');
+        let ink = 0;
+        if (before.region.width >= 2) {
+          const png = (await p.screenshot()).toString('base64');
+          ink = await p.evaluate(async ({ png, region }) => {
+            const img = new Image(); img.src = `data:image/png;base64,${png}`; await img.decode();
+            const c = document.createElement('canvas'); c.width = region.width; c.height = region.height;
+            const g = c.getContext('2d'); g.drawImage(img, region.x, region.y, region.width, region.height, 0, 0, region.width, region.height);
+            const d = g.getImageData(0, 0, c.width, c.height).data, bg = [d[0], d[1], d[2]];
+            let n = 0; for (let i = 0; i < d.length; i += 4) if (Math.max(Math.abs(d[i] - bg[0]), Math.abs(d[i + 1] - bg[1]), Math.abs(d[i + 2] - bg[2])) > 48) n++;
+            return n;
+          }, { png, region: before.region });
+        }
+        if (ink < 4) problems.push(`no disclosure mark left of the cut title (${before.region.width} px, ${ink} inked px)`);
+        await leaf.locator(':scope > summary').click();
+        const after = await leaf.evaluate(d => ({ open: d.open, fullVisible: d.querySelector(':scope > p').checkVisibility() }));
+        if (!after.open || !after.fullVisible) problems.push('one click did not show the full ask');
+        await leaf.locator(':scope > summary').click();
+        assert.equal(problems.length, 0, problems.join('; '));
+        return { title: before.title, ink };
+      });
+      await j.step('old-chunker-arc', 'Open an Arc stored under ampi-arc-chunker/2 for unchanged Session input', async () => {
+        // Opening an outdated Arc starts an upgrade Build. Block the demo model while the page is read, so the Build
+        // can neither relabel before the read nor spend model calls inside the next step.
+        const block = join(j.state.demo, 'cos-no-model');
+        writeFileSync(block, '');
+        try {
+          const threadId = addOldChunkerArc(j.state);
+          await assertEventually(async () => (await threadsOf(j.state)).some(t => t.id === threadId), `the hub does not list ${threadId}`, 20_000);
+          await j.goto(`#/v/arcs/devbox/${encodeURIComponent(threadId)}`);
+          await p.getByRole('heading', { level: 1, name: /^Arc · / }).waitFor();
+          await p.locator('.cos-chunk').first().waitFor({ timeout: 20_000 });
+          const text = await p.locator('main, .app').first().innerText();
+          const rows = await p.locator('.cos-chunk').evaluateAll(cs => cs.map(c => c.dataset.state));
+          const problems = [];
+          if (text.includes(OLD_CHUNKER_TOPIC)) problems.push(`${text.split(OLD_CHUNKER_TOPIC).length - 1} old-chunker topics show`);
+          // The legend names every state; only chunk rows and their dividers may not read "stale label".
+          const stale = await p.locator('.cos-chunk[data-state="stale"], .cos-chunk-divider[data-state="stale"]').count();
+          const staleText = await p.locator('.cos-chunk, .cos-chunk-divider').filter({ hasText: /stale label/i }).count();
+          if (stale || staleText) problems.push(`${stale} stale chunk rows or dividers, ${staleText} reading "stale label"`);
+          // Each row's state colour pairs with one legend key; the relabel key carries the copy.
+          const pending = rows.filter(state => state === 'relabel').length;
+          if (pending !== rows.length) problems.push(`${pending} of ${rows.length} chunk rows are in state relabel`);
+          const key = await p.locator('.cos-chunk-legend [data-state="relabel"]').allInnerTexts();
+          if (!key.some(k => /relabel pending/i.test(k))) problems.push('the legend has no "relabel pending" key');
+          const toolbar = await p.locator('.cos-toolbar span').first().innerText();
+          assert.equal(problems.length, 0, `${problems.join('; ')} · toolbar: ${toolbar}`);
+          // Let the blocked upgrade Build fail before the model returns.
+          await assertEventually(async () => /failed/i.test(await p.locator('.cos-builds summary').innerText().catch(() => '')), '', 15_000).catch(() => {});
+          return { toolbar, rows: rows.length, pending };
+        } finally {
+          rmSync(block, { force: true });
+        }
+      });
       await j.step('arc-panel', 'Open the Session, then choose Arc in its toolbar', async () => {
         await j.goto(thread('big'));
         await p.locator('.composer').waitFor();
@@ -1149,6 +1742,8 @@ export const journeys = [
         await panel.getByRole('link', { name: 'Full Arc page' }).waitFor();
         await panel.getByRole('heading', { level: 2, name: /^Needs you/ }).waitFor();
         assert.equal(await toggle.getAttribute('aria-pressed'), 'true');
+        const lastBuild = await panel.locator('.cos-arc-last-build').innerText({ timeout: 5_000 }).catch(() => '');
+        assert.match(lastBuild, /^Last Build · Arc built on request · .* · claude-haiku-5-5 \+ claude-sonnet-5-5$/, `panel last Build: ${lastBuild}`);
         // Short titles: an ask carries its kind and a thread its state as badges; titles keep their limits.
         const titles = await panel.evaluate(el => ({
           asks: [...el.querySelectorAll('.cos-leaf-title')].filter(t => t.parentElement.querySelector('.cos-badge')).map(t => t.textContent),
@@ -1163,7 +1758,7 @@ export const journeys = [
         for (const t of titles.leaves) assert(t.length <= 90, `leaf title over 90: ${t}`);
         await toggle.click();
         await panel.waitFor({ state: 'detached' });
-        return { pressed: true, asks: titles.asks.slice(0, 3), threads: titles.threads.slice(0, 3), leaves: titles.leaves.length };
+        return { pressed: true, lastBuild, asks: titles.asks.slice(0, 3), threads: titles.threads.slice(0, 3), leaves: titles.leaves.length };
       }, { expectSide: s => assert.equal(s.askCalls, 0, 'the Arc panel called the model') });
       await j.step('cite-jump-lands', 'From another Session, follow a citation to one of the last asks in a long Session', async () => {
         // The target Session was read before, so its cached view arrives at once; the jump must stay in view while
@@ -1175,6 +1770,8 @@ export const journeys = [
           await j.goto(thread('big'));
           await p.locator('.composer').waitFor();
           await j.goto(`${thread('asks')}?e=${want}`);
+          // Under host load the first paint can take seconds; sample only once the entry exists.
+          await p.locator(`[data-entry="${want}"]`).first().waitFor({ state: 'attached', timeout: 10_000 });
           const tops = [];
           for (let i = 0; i < 3; i++) {
             await p.waitForTimeout(250);
@@ -1291,6 +1888,29 @@ export const journeys = [
         assert(Math.abs(after.y - before.y) <= 2, `first visible message moved ${before.y} → ${after.y}`);
         return { before, after };
       });
+      // As T3d scroll-survives-render, for the Rarebit view: a click before the scroll event must not pull the reader back.
+      await j.step('scroll-survives-click', 'Scroll from the bottom to the top and toggle continuations before the scroll event; the top stays', async () => {
+        await p.getByRole('button', { name: '↓ Bottom', exact: true }).click();
+        await assertEventually(async () => (await anchor())?.atBottom === true, '↓ Bottom did not reach the bottom');
+        await j.settle();
+        const toggle = p.getByRole('button', { name: /^(Hide|Show) continuations$/ });
+        // The toggle keeps the first visible message at its screen height (hide-continuations), so measure that message.
+        const after = await rbScroll(p).evaluate(async (el, button) => {
+          el.scrollTop = 0;
+          const box = el.getBoundingClientRect();
+          const first = [...el.querySelectorAll('.rb-message.rb-stop[data-rarebit], .rb-message.rb-user[data-rarebit]')].find(i => i.getBoundingClientRect().top >= box.top);
+          const y = node => node && Math.round(node.getBoundingClientRect().top - el.getBoundingClientRect().top);
+          const before = y(first);
+          button.click();
+          await new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)));
+          const now = first && el.querySelector(`[data-rarebit="${CSS.escape(first.dataset.rarebit)}"]`);
+          return { id: first?.dataset.rarebit, before, after: y(now), top: Math.round(el.scrollTop), gap: Math.round(el.scrollHeight - el.scrollTop - el.clientHeight) };
+        }, await toggle.elementHandle());
+        await toggle.click();
+        await j.settle();
+        assert(after.id && after.gap > 2 && after.after !== null && Math.abs(after.after - after.before) <= 2, `the click moved the reader: message ${after.id} ${after.before} → ${after.after}, scrollTop ${after.top}, ${after.gap} px above the bottom`);
+        return after;
+      });
       await j.step('lens-keeps-place', 'In the transcript middle, toggle the conversation lens on and off', async () => {
         const scroll = p.locator('.scroll').first();
         await scroll.evaluate(e => { e.scrollTop = e.scrollHeight / 2; });
@@ -1367,6 +1987,545 @@ export const journeys = [
         assert.equal(await p.locator('.rb-tools .compaction').count(), 1);
         assert.deepEqual(await loose(), []);
         return { notices: 4, compactions: 1 };
+      });
+    },
+  },
+  {
+    id: 'S', feature: 's-sidebar.md', title: 'Read Teams in the sidebar: leaders fold their Workers (L15)',
+    async run(j) {
+      const p = j.page, leaders = p.locator('.side-scroll .row[data-leader-row]');
+      const workers = () => p.locator('.side-scroll .row[data-row-level="2"]').count();
+      await j.goto('#/v/overview');
+      await j.step('collapsed', 'Open AmPi; every Team leader starts collapsed with its Worker count', async () => {
+        await assertEventually(async () => (await leaders.count()) >= 2, 'the demo hub shows fewer than 2 Team leader rows', 20_000);
+        const counts = await leaders.evaluateAll(rows => rows.map(r => Number(r.querySelector('[data-worker-count]')?.textContent.replace(/[^\d]/g, '') ?? -1)));
+        assert(counts.every(n => n > 0), `leader Worker counts: ${JSON.stringify(counts)}`);
+        assert.equal(await workers(), 0, 'Worker rows show before any leader is expanded');
+        return { leaders: counts.length, counts };
+      });
+      // The owner's hub starts Teams while AmPi is open; a leader that appears later starts collapsed too.
+      await j.step('late-team', 'Start a third Team after the page loads; its leader starts collapsed with its Worker count', async () => {
+        // No agent stop, so no automatic Build; each new Session still gets a derive, which calls the model.
+        const { ensure, ...late } = await j.fixture(async () => {
+          const r = addLateTeam(j.state);
+          await assertEventually(async () => { r.ensure(); const ids = new Set((await threadsOf(j.state)).map(t => t.id)); return ids.has(r.lead) && ids.has(r.worker); }, 'the hub does not list the late Team', 30_000);
+          return r;
+        });
+        const row = p.locator(`.side-scroll .row[data-leader-row][data-thread="${late.lead}"]`);
+        await assertEventually(async () => { ensure(); return (await row.count()) === 1; }, 'the late Team leader row never appeared', 30_000);
+        await assertEventually(async () => { ensure(); return (await row.count()) === 1 && (await p.locator(`.side-scroll .row[data-parent-leader][data-thread="${late.worker}"]`).count()) === 0
+          && (await row.locator('[data-worker-count]').count()) === 1; }, 'the late Team leader shows its Workers or no Worker count', 15_000);
+        return { ...late, count: Number((await row.locator('[data-worker-count]').innerText()).replace(/[^\d]/g, '')) };
+      });
+      await j.step('expand-one', 'Open one leader; its Workers show one level in, under their own names', async () => {
+        const toggle = leaders.first().locator('[data-collapse-toggle]');
+        const expected = Number((await leaders.first().locator('[data-worker-count]').innerText()).replace(/[^\d]/g, ''));
+        await toggle.click();
+        await assertEventually(async () => (await workers()) === expected, `expected ${expected} Worker rows after opening the leader`);
+        const shape = await p.evaluate(() => {
+          const rows = [...document.querySelectorAll('.side-scroll .row[data-row-level="2"] .title')];
+          const team = rows[0].closest('.row').getAttribute('data-parent-leader');
+          const lead = document.querySelector(`.side-scroll .row[data-leader-row="${team}"] .title`);
+          const name = lead.textContent.trim().toLowerCase();
+          return { indent: Math.round(rows[0].getBoundingClientRect().x - lead.getBoundingClientRect().x), labels: rows.map(r => r.textContent.trim()), repeat: rows.some(r => r.textContent.trim().toLowerCase().includes(name)), idleMarkers: document.querySelectorAll('.side-scroll .idle-dot').length };
+        });
+        assert(shape.indent >= 12, `Worker indent ${shape.indent}px; expected at least 12px`);
+        assert(!shape.repeat, `a Worker label repeats its leader label: ${JSON.stringify(shape.labels)}`);
+        assert.equal(shape.idleMarkers, 0, 'an idle row renders a constant marker');
+        return { expected, ...shape };
+      });
+      await j.step('collapse-all', 'Use the Host control to collapse all Teams, then expand all', async () => {
+        const all = p.locator('[data-host-collapse-all]').first();
+        for (let i = 0; i < 2 && await workers(); i++) await all.click();
+        await assertEventually(async () => (await workers()) === 0, 'Worker rows remain after Collapse all');
+        await all.click();
+        const folded = await leaders.evaluateAll(rows => rows.reduce((n, r) => n + Number(r.querySelector('[data-worker-count]')?.textContent.replace(/[^\d]/g, '') ?? 0), 0));
+        await assertEventually(async () => (await workers()) > 0 && (await p.locator('.side-scroll [data-worker-count]').count()) === 0, 'Expand all left Teams folded');
+        return { label: await all.innerText(), workers: await workers(), foldedBefore: folded };
+      }, { expectSide: s => assert.equal(s.herdrTotal, 0, 'folding Teams sent a Herdr action'), alone: false });
+    },
+  },
+  {
+    id: 'C', feature: 'c-control.md', title: 'Pi control at the hub wire: presence, abort, ack (L14)',
+    async run(j) {
+      // One disposable hub with a real remote agent and two fake hc-control endpoints; no browser page is needed.
+      // Steps follow merge order (ctlabort, ctlpresence, ctllatency), so each parent commit fails on its own step.
+      const verdict = await harnessSeed('control-seed.ts');
+      const part = (key, why) => { const v = verdict[key]; assert(v?.ok, `${why}: ${v?.reason ?? verdict.reason ?? 'no verdict'}`); return v; };
+      await j.step('abort-returned', 'Abort a busy Session with a queued follow-up; the reply and the inbox name it as returned', async () =>
+        part('abort', 'abort (ctlabort)'), { alone: false });
+      await j.step('presence', 'A live control descriptor without a Session file lists a live row; its first words go to the control socket', async () =>
+        part('presence', 'presence (ctlpresence)'), { alone: false });
+      await j.step('ack-overtakes', 'Submit while a 160 MB Session streams; the hub parses the ack before 3 MiB more Session bytes', async () =>
+        part('ack', 'ack lane (ctllatency)'), { alone: false });
+    },
+  },
+  {
+    id: 'K1', feature: 'k1-keys.md', title: 'Move through AmPi with the keyboard (keymap items 1, 2, 3, 4, 6, 7)',
+    async run(j) {
+      const p = j.page;
+      // In-page key events only: they prove the app's keymap, not what the OS or a native shell passes through.
+      // Waits return when their check holds; 10 s covers a hub under parallel journey load.
+      const region = () => p.evaluate(() => document.activeElement?.closest('[data-region]')?.getAttribute('data-region') ?? null);
+      const regionIs = async (name, message) => assertEventually(async () => (await region()) === name, `${message}; focus is in ${await region()}`, 10_000);
+      const sidebarHidden = () => p.evaluate(() => Boolean(document.querySelector('[data-region="sidebar"]')?.closest('[inert]')));
+      const scrollOf = selector => p.evaluate(s => Math.round(document.querySelector(s)?.scrollTop ?? -1), selector);
+      const zoom = () => p.evaluate(() => ({ html: getComputedStyle(document.documentElement).zoom, stored: JSON.parse(localStorage.getItem('ampi.display') ?? '{}').overall ?? null }));
+      const transcript = '[data-region="transcript"]';
+      const focusTranscript = async () => { await p.locator(transcript).click({ position: { x: 20, y: 20 } }); await regionIs('transcript', 'a click did not focus the transcript'); };
+      await j.step('sidebar', 'In a long Session, press ⌘B three times: focus the sidebar, hide it and return, show and focus it', async () => {
+        // Open the Session from its sidebar row: a direct route before the Host lists it can stay "Unknown Session".
+        await j.goto('#/v/overview');
+        await p.locator('.side-scroll .row[data-thread="pi:sess-big"] a.title').click({ timeout: 15_000 });
+        await p.waitForURL(/\/t\/pi%3Asess-big/);
+        await p.locator(transcript).waitFor({ timeout: 15_000 });
+        // The composer renders once the Session view arrives; ⌘I and the focus return need it.
+        await p.getByRole('textbox', { name: 'Message the agent' }).waitFor({ timeout: 15_000 });
+        await focusTranscript();
+        await p.keyboard.press('ControlOrMeta+b');
+        await regionIs('sidebar', '⌘B did not focus the visible sidebar');
+        await p.keyboard.press('ControlOrMeta+b');
+        await assertEventually(sidebarHidden, 'the second ⌘B did not hide the sidebar', 10_000);
+        await regionIs('transcript', 'hiding the sidebar did not return focus to the transcript');
+        await p.keyboard.press('ControlOrMeta+b');
+        await regionIs('sidebar', 'the third ⌘B did not show and focus the sidebar');
+        assert.equal(await sidebarHidden(), false);
+        return { back: 'transcript' };
+      });
+      await j.step('sidebar-return', 'Twenty rounds, starting in the transcript or the composer in turn: ⌘B twice returns focus to where it was', async () => {
+        for (let round = 1; round <= 20; round++) {
+          const start = round % 2 ? 'transcript' : 'composer';
+          await focusTranscript();
+          if (start === 'composer') { await p.keyboard.press('ControlOrMeta+i'); await regionIs('composer', `round ${round}: ⌘I did not focus the composer`); }
+          await p.keyboard.press('ControlOrMeta+b');
+          await regionIs('sidebar', `round ${round}: ⌘B did not focus the sidebar`);
+          await p.keyboard.press('ControlOrMeta+b');
+          await assertEventually(sidebarHidden, `round ${round}: ⌘B did not hide the sidebar`, 10_000);
+          await regionIs(start, `round ${round}: hiding the sidebar did not return focus to the ${start}`);
+          await p.keyboard.press('ControlOrMeta+b');
+          await regionIs('sidebar', `round ${round}: ⌘B did not show the sidebar`);
+        }
+        return { rounds: 20 };
+      });
+      await j.step('shell-unavailable', 'In a Pi Session (no shell panel), help names where Toggle shell works, the command palette omits it, and ⌘J opens nothing', async () => {
+        await focusTranscript();
+        await p.keyboard.press('Shift+Slash');
+        const help = p.getByRole('dialog', { name: 'Keys and help' });
+        await help.waitFor({ timeout: 10_000 });
+        assert.match(await help.innerText(), /Toggle shell · on a Host page/, 'help does not name the context of Toggle shell in a Pi Session');
+        await p.keyboard.press('Escape');
+        await help.waitFor({ state: 'detached', timeout: 10_000 });
+        await p.keyboard.press('ControlOrMeta+Shift+k');
+        const palette = p.getByRole('dialog', { name: 'Go to or run' });
+        await palette.waitFor({ timeout: 10_000 });
+        assert.equal(await palette.locator('.palette-item', { hasText: 'Toggle shell' }).count(), 0, 'the command palette lists Toggle shell in a Pi Session');
+        await p.keyboard.press('Escape');
+        await palette.waitFor({ state: 'detached', timeout: 10_000 });
+        await focusTranscript();
+        await p.keyboard.press('ControlOrMeta+j');
+        await p.waitForTimeout(300);
+        assert.equal(await p.locator('[data-region="panel"]').count(), 0, '⌘J opened a panel in a Pi Session');
+        await regionIs('transcript', '⌘J moved focus');
+        return { help: 'Toggle shell with context', palette: 'no Toggle shell' };
+      });
+      await j.step('panel', 'From the transcript press ⌘L twice: open and focus the Arc panel, then close it and return', async () => {
+        await focusTranscript();
+        await p.keyboard.press('ControlOrMeta+l');
+        await regionIs('panel', '⌘L did not open and focus the side panel');
+        const tabs = await p.locator('[data-region="panel"]').innerText();
+        assert.match(tabs, /Arc/, 'the panel did not open on its default Arc view');
+        await p.keyboard.press('ControlOrMeta+l');
+        await assertEventually(async () => (await p.locator('[data-region="panel"]').count()) === 0, 'the second ⌘L did not close the panel', 10_000);
+        await regionIs('transcript', 'closing the panel did not return focus to the transcript');
+        return { opened: 'arc' };
+      });
+      await j.step('focus-toggle', 'Press ⌘I twice: transcript to composer, composer to transcript', async () => {
+        await focusTranscript();
+        await p.keyboard.press('ControlOrMeta+i');
+        await regionIs('composer', '⌘I did not move focus to the composer');
+        assert.equal(await p.evaluate(() => document.activeElement?.tagName), 'TEXTAREA');
+        await p.keyboard.press('ControlOrMeta+i');
+        await regionIs('transcript', '⌘I did not return focus to the transcript');
+        return { cycle: ['composer', 'transcript'] };
+      });
+      await j.step('insert-key', 'In the transcript press i; focus moves to the composer textbox and no i is typed', async () => {
+        await focusTranscript();
+        await p.keyboard.press('i');
+        await regionIs('composer', 'i did not move focus to the composer');
+        assert.equal(await p.getByRole('textbox', { name: 'Message the agent' }).inputValue(), '', 'the i reached the composer text');
+        return { region: 'composer' };
+      });
+      await j.step('panel-alias', 'Press ⌘\\ twice from the transcript: the same panel toggle as ⌘L', async () => {
+        await focusTranscript();
+        await p.keyboard.press('ControlOrMeta+Backslash');
+        await regionIs('panel', '⌘\\ did not open and focus the side panel');
+        await p.keyboard.press('ControlOrMeta+Backslash');
+        await assertEventually(async () => (await p.locator('[data-region="panel"]').count()) === 0, 'the second ⌘\\ did not close the panel', 10_000);
+        await regionIs('transcript', 'closing the panel did not return focus to the transcript');
+        return { toggled: true };
+      });
+      await j.step('top-bottom', 'In the transcript press g, then G', async () => {
+        await focusTranscript();
+        const max = () => p.evaluate(s => { const e = document.querySelector(s); return e.scrollHeight - e.clientHeight; }, transcript);
+        // Reaching the top loads older entries, and keep-place then moves scrollTop back to the old first entry,
+        // so the proof is the lowest scrollTop seen.
+        await p.evaluate(s => { const e = document.querySelector(s); window.__k1Min = e.scrollTop; e.addEventListener('scroll', () => { window.__k1Min = Math.min(window.__k1Min, e.scrollTop); }); }, transcript);
+        // Start away from the top, so the lowest scrollTop proves g moved it.
+        assert((await scrollOf(transcript)) > 200, `the transcript starts at scrollTop ${await scrollOf(transcript)}, too near the top to prove g`);
+        await p.keyboard.press('g');
+        await assertEventually(() => p.evaluate(() => window.__k1Min < 50), 'g did not scroll the transcript to the top', 5000);
+        await p.keyboard.press('Shift+G');
+        await assertEventually(async () => (await max()) - (await scrollOf(transcript)) < 50, 'G did not scroll the transcript to the bottom', 5000);
+        return { bottom: await scrollOf(transcript) };
+      });
+      await j.step('find', 'Press ⌘F; Find in this Session opens with its textbox focused; Escape closes it', async () => {
+        await focusTranscript();
+        await p.keyboard.press('ControlOrMeta+f');
+        const find = p.getByRole('region', { name: 'Find in this Session' });
+        await find.waitFor({ timeout: 10_000 });
+        assert.equal(await p.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Find in Session');
+        await p.keyboard.press('Escape');
+        await find.waitFor({ state: 'detached', timeout: 10_000 });
+        return { opened: true };
+      });
+      await j.step('help', 'In the transcript press ?; the help lists the keymap by region; Escape closes it', async () => {
+        await focusTranscript();
+        await p.keyboard.press('Shift+Slash');
+        const help = p.getByRole('dialog', { name: 'Keys and help' });
+        await help.waitFor({ timeout: 10_000 });
+        const text = await help.innerText();
+        for (const label of ['Toggle sidebar', 'Toggle side panel', 'Scroll half page down', 'Increase display size']) assert(text.includes(label), `${label} missing from help`);
+        await p.keyboard.press('Escape');
+        await help.waitFor({ state: 'detached', timeout: 10_000 });
+        return { listed: true };
+      });
+      await j.step('vim-scroll', 'Press k and u in the transcript, then open the panel and press j and d in it', async () => {
+        await focusTranscript();
+        const start = await scrollOf(transcript);
+        await p.keyboard.press('k');
+        await assertEventually(async () => (await scrollOf(transcript)) < start, 'k did not scroll the transcript up', 10_000);
+        const afterK = await scrollOf(transcript);
+        await p.keyboard.press('u');
+        await assertEventually(async () => (await scrollOf(transcript)) < afterK - 100, 'u did not scroll the transcript half a page up', 10_000);
+        const afterU = await scrollOf(transcript);
+        await p.keyboard.press('ControlOrMeta+l');
+        await regionIs('panel', '⌘L did not focus the panel');
+        const body = '[data-region="panel"] .panel-body';
+        await assertEventually(() => p.evaluate(s => { const e = document.querySelector(s); return Boolean(e && e.scrollHeight > e.clientHeight); }, body), 'the Arc panel has nothing to scroll', 10_000);
+        const top = await scrollOf(body);
+        await p.keyboard.press('j');
+        await assertEventually(async () => (await scrollOf(body)) > top, 'j did not scroll the panel down', 10_000);
+        const afterJ = await scrollOf(body);
+        await p.keyboard.press('d');
+        await assertEventually(async () => (await scrollOf(body)) > afterJ, 'd did not scroll the panel down', 10_000);
+        return { transcript: [start, afterK, afterU], panel: [top, afterJ, await scrollOf(body)] };
+      });
+      await j.step('zoom', 'Press ⌘⇧= twice, ⌘⇧- once, then ⌘⇧0', async () => {
+        const seen = [];
+        for (const [key, want] of [['ControlOrMeta+Shift+Equal', '1.05'], ['ControlOrMeta+Shift+Equal', '1.1'], ['ControlOrMeta+Shift+Minus', '1.05'], ['ControlOrMeta+Shift+Digit0', '1']]) {
+          await p.keyboard.press(key);
+          await assertEventually(async () => (await zoom()).html === want, `${key} did not set the display size to ${want}`, 10_000);
+          const z = await zoom();
+          assert.equal(String(z.stored), want, `${key} did not store the display size`);
+          seen.push(z.html);
+        }
+        return { seen };
+      });
+      await j.step('command-palette', 'Press ⌘⇧K; the command palette lists the keymap; Escape closes it', async () => {
+        await p.keyboard.press('ControlOrMeta+Shift+k');
+        const dialog = p.getByRole('dialog', { name: 'Go to or run' });
+        await dialog.waitFor({ timeout: 10_000 });
+        assert.equal(await p.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Find a command');
+        const text = await dialog.innerText();
+        for (const label of ['Toggle sidebar', 'Focus composer', 'Jump to a Session']) assert(text.includes(label), `${label} missing from the command palette`);
+        await p.keyboard.press('Escape');
+        await dialog.waitFor({ state: 'detached', timeout: 10_000 });
+        return { listed: true };
+      });
+      await j.step('session-palette', 'Press ⌘K, type a Team name, and press Enter to open its first Session', async () => {
+        const before = p.url();
+        await p.keyboard.press('ControlOrMeta+k');
+        const input = p.getByRole('textbox', { name: 'Find a Session' });
+        await input.waitFor({ timeout: 10_000 });
+        assert.equal(await p.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Find a Session');
+        await input.fill('reader');
+        const first = p.locator('.palette-item').first();
+        await first.waitFor({ timeout: 10_000 });
+        const label = (await first.innerText()).trim();
+        assert.match(label, /reader/i, `the first match ${label} does not name the reader Team`);
+        await p.keyboard.press('Enter');
+        await assertEventually(async () => p.url() !== before && /\/t\//.test(p.url()), 'Enter did not open the matching Session', 5000);
+        await input.waitFor({ state: 'detached', timeout: 10_000 });
+        return { label, url: p.url().split('#')[1] };
+      });
+      await j.step('region-zoom', 'Open Display settings from the command palette; raise the transcript size only', async () => {
+        await p.keyboard.press('ControlOrMeta+Shift+k');
+        await p.getByRole('dialog', { name: 'Go to or run' }).locator('.palette-item', { hasText: 'Display settings' }).click();
+        const slider = p.getByRole('slider', { name: 'transcript display size' });
+        await slider.waitFor({ timeout: 10_000 });
+        await slider.fill('1.2');
+        const zooms = () => p.evaluate(() => Object.fromEntries([...document.querySelectorAll('[data-region]')].map(e => [e.getAttribute('data-region'), e.style.zoom || '1'])));
+        await assertEventually(async () => (await zooms()).transcript === '1.2', 'the transcript slider did not zoom the transcript', 10_000);
+        const z = await zooms();
+        assert.equal(z.sidebar, '1', 'the transcript size changed the sidebar');
+        assert.equal((await zoom()).html, '1', 'the transcript size changed the overall size');
+        await p.keyboard.press('Escape');
+        return z;
+      });
+      await j.step('overview-key', 'Press ⌘0; the Overview opens', async () => {
+        await p.locator(transcript).click({ position: { x: 20, y: 20 } });
+        await p.keyboard.press('ControlOrMeta+Digit0');
+        await p.waitForURL(/#\/v\/overview/, { timeout: 10_000 });
+        await assertEventually(() => p.evaluate(() => document.activeElement !== document.body), '⌘0 left focus on BODY', 10_000);
+        return { url: p.url().split('#')[1] };
+      });
+    },
+  },
+  {
+    id: 'K1F', feature: 'k1f-focus.md', title: 'Focus follows the focus model from every region (keymap focus rulings R6–R12)',
+    async run(j) {
+      const p = j.page;
+      // In-page key events only, as in K1. Each step asserts the Region that holds document.activeElement.
+      const region = () => p.evaluate(() => document.activeElement?.closest('[data-region]')?.getAttribute('data-region') ?? null);
+      const regionIs = async (name, message) => assertEventually(async () => (await region()) === name, `${message}; focus is in ${await region()}`, 10_000);
+      const sidebarHidden = () => p.evaluate(() => Boolean(document.querySelector('[data-region="sidebar"]')?.closest('[inert]')));
+      const transcript = '[data-region="transcript"]';
+      const focusTranscript = async () => { await p.locator(transcript).click({ position: { x: 20, y: 20 } }); await regionIs('transcript', 'a click did not focus the transcript'); };
+      await j.step('open', 'Open a long Session from its sidebar row; the transcript and the composer render', async () => {
+        await j.goto('#/v/overview');
+        await p.locator('.side-scroll .row[data-thread="pi:sess-big"] a.title').click({ timeout: 15_000 });
+        await p.waitForURL(/\/t\/pi%3Asess-big/);
+        await p.locator(transcript).waitFor({ timeout: 15_000 });
+        await p.getByRole('textbox', { name: 'Message the agent' }).waitFor({ timeout: 15_000 });
+        await focusTranscript();
+        return { session: 'pi:sess-big' };
+      });
+      // Focus model (focusmodel, TABLE.md §3): every close returns to the region that had focus; focus never rests on BODY.
+      const panelCount = () => p.locator('[data-region="panel"]').count();
+      const closePanel = async () => {
+        if (!(await panelCount())) return;
+        if ((await region()) !== 'panel') { await p.keyboard.press('ControlOrMeta+l'); await regionIs('panel', '⌘L did not focus the open panel'); }
+        await p.keyboard.press('ControlOrMeta+l');
+        await assertEventually(async () => (await panelCount()) === 0, '⌘L did not close the panel', 10_000);
+      };
+      const startIn = async name => {
+        await closePanel();
+        if (await sidebarHidden()) await p.keyboard.press('ControlOrMeta+b');
+        await focusTranscript();
+        if (name === 'composer') await p.keyboard.press('ControlOrMeta+i');
+        if (name === 'sidebar') await p.keyboard.press('ControlOrMeta+b');
+        if (name === 'panel') await p.keyboard.press('ControlOrMeta+l');
+        await regionIs(name, `could not start in the ${name}`);
+      };
+      await j.step('close-returns', 'From the transcript and the composer: ⌘L twice, then ⌘L and the panel ✕, each return focus to where it was', async () => {
+        const seen = [];
+        for (const start of ['transcript', 'composer']) {
+          await startIn(start);
+          await p.keyboard.press('ControlOrMeta+l');
+          await regionIs('panel', `from the ${start}, ⌘L did not open and focus the panel`);
+          await p.keyboard.press('ControlOrMeta+l');
+          await assertEventually(async () => (await panelCount()) === 0, `from the ${start}, the second ⌘L did not close the panel`, 10_000);
+          await regionIs(start, `closing the panel with ⌘L did not return focus to the ${start}`);
+          await p.keyboard.press('ControlOrMeta+l');
+          await regionIs('panel', `from the ${start}, ⌘L did not reopen the panel`);
+          await p.locator('[data-region="panel"]').getByTitle('Close panel').click();
+          await assertEventually(async () => (await panelCount()) === 0, 'the panel ✕ did not close the panel', 10_000);
+          await regionIs(start, `the panel ✕ did not return focus to the ${start}`);
+          seen.push(start);
+        }
+        return { returned: seen };
+      });
+      await j.step('composer-from-anywhere', 'Press ⌘I from the sidebar and from the panel: focus moves to the composer', async () => {
+        for (const start of ['sidebar', 'panel']) {
+          await startIn(start);
+          await p.keyboard.press('ControlOrMeta+i');
+          await regionIs('composer', `⌘I from the ${start} did not focus the composer`);
+        }
+        await closePanel();
+        return { from: ['sidebar', 'panel'] };
+      });
+      await j.step('find-cancel', 'From the transcript and the composer: ⌘F then Escape returns focus to where it was', async () => {
+        const find = p.getByRole('region', { name: 'Find in this Session' });
+        for (const start of ['transcript', 'composer']) {
+          await startIn(start);
+          await p.keyboard.press('ControlOrMeta+f');
+          await find.waitFor({ timeout: 10_000 });
+          await p.keyboard.press('Escape');
+          await find.waitFor({ state: 'detached', timeout: 10_000 });
+          await regionIs(start, `cancelling find did not return focus to the ${start}`);
+        }
+        // R18: Esc on a result link, not only in the input, closes the bar and returns focus.
+        await startIn('composer');
+        await p.keyboard.press('ControlOrMeta+f');
+        await find.getByRole('textbox', { name: 'Find in Session' }).fill('step 570');
+        await find.getByRole('textbox', { name: 'Find in Session' }).press('Enter');
+        await find.locator('a').first().focus({ timeout: 15_000 });
+        await p.keyboard.press('Escape');
+        await find.waitFor({ state: 'detached', timeout: 10_000 });
+        await regionIs('composer', 'Escape on a find result did not return focus to the composer');
+        return { returned: true, fromLink: true };
+      });
+      await j.step('modal-blocks', 'With the Session palette open: ⌘B does nothing, ⌘⇧K switches palettes and keeps the query, ⌘⇧K again closes', async () => {
+        await startIn('transcript');
+        const hidden = await sidebarHidden();
+        await p.keyboard.press('ControlOrMeta+k');
+        const sessions = p.getByRole('textbox', { name: 'Find a Session' });
+        await sessions.waitFor({ timeout: 10_000 });
+        await sessions.fill('rea');
+        await p.keyboard.press('ControlOrMeta+b');
+        await p.waitForTimeout(300);
+        assert.equal(await sidebarHidden(), hidden, '⌘B changed the sidebar behind the open palette');
+        assert.equal(await p.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Find a Session', '⌘B moved focus out of the open palette');
+        await p.keyboard.press('ControlOrMeta+Shift+k');
+        const commands = p.getByRole('textbox', { name: 'Find a command' });
+        await commands.waitFor({ timeout: 10_000 });
+        assert.equal(await commands.inputValue(), 'rea', 'switching palettes dropped the typed query');
+        await p.keyboard.press('ControlOrMeta+Shift+k');
+        await commands.waitFor({ state: 'detached', timeout: 10_000 });
+        await regionIs('transcript', 'closing the palette did not return focus to the transcript');
+        return { switched: true };
+      });
+      await j.step('focus-matrix', 'From each start region (sidebar, transcript, composer, panel) press ⌘B, ⌘L and ⌘I; focus lands where TABLE.md says', async () => {
+        const expected = {
+          'ControlOrMeta+b': { sidebar: 'transcript', transcript: 'sidebar', composer: 'sidebar', panel: 'sidebar' },
+          'ControlOrMeta+l': { sidebar: 'panel', transcript: 'panel', composer: 'panel', panel: 'transcript' },
+          'ControlOrMeta+i': { sidebar: 'composer', transcript: 'composer', composer: 'transcript', panel: 'composer' },
+        };
+        const cells = [];
+        for (const [key, row] of Object.entries(expected)) for (const [start, want] of Object.entries(row)) {
+          await startIn(start);
+          await p.keyboard.press(key);
+          await regionIs(want, `${key} from the ${start} did not focus the ${want}`);
+          cells.push(`${start}+${key.split('+')[1]}=${want}`);
+        }
+        await closePanel();
+        if (await sidebarHidden()) await p.keyboard.press('ControlOrMeta+b');
+        return { cells: cells.length };
+      });
+      await j.step('intent-latency', 'Measure only (no limit): time from a ⌘I keydown to the focusin it causes, 10 presses', async () => {
+        await startIn('transcript');
+        await p.evaluate(() => {
+          window.__lat = [];
+          let start = 0;
+          document.addEventListener('keydown', () => { start = performance.now(); }, true);
+          document.addEventListener('focusin', () => { if (start) { window.__lat.push(performance.now() - start); start = 0; } }, true);
+        });
+        for (let n = 0; n < 10; n++) {
+          await p.keyboard.press('ControlOrMeta+i');
+          await regionIs(n % 2 ? 'transcript' : 'composer', `⌘I press ${n + 1} did not toggle`);
+        }
+        const ms = (await p.evaluate(() => window.__lat)).map(Math.round).sort((x, y) => x - y);
+        return { presses: ms.length, medianMs: ms[Math.floor(ms.length / 2)], maxMs: ms.at(-1) };
+      });
+      await j.step('palette-run', 'With the sidebar focused, run Toggle sidebar from the command palette: the sidebar hides and focus returns to the transcript', async () => {
+        await startIn('sidebar');
+        await p.keyboard.press('ControlOrMeta+Shift+k');
+        const palette = p.getByRole('dialog', { name: 'Go to or run' });
+        await palette.waitFor({ timeout: 10_000 });
+        await palette.locator('.palette-item', { hasText: 'Toggle sidebar' }).click();
+        await assertEventually(sidebarHidden, 'Toggle sidebar from the palette did not hide the focused sidebar', 10_000);
+        await regionIs('transcript', 'Toggle sidebar from the palette did not return focus to the transcript');
+        await p.keyboard.press('ControlOrMeta+b');
+        return { hidden: true };
+      });
+      await j.step('panel-default', 'Star another panel as the default: ⌘L opens it; a tab switch keeps focus in the panel', async () => {
+        await startIn('panel');
+        const other = p.locator('[data-region="panel"] .panel-tab-choice > button:first-child:not(.on)').first();
+        const name = (await other.innerText()).trim();
+        const star = p.locator('[data-region="panel"]').getByRole('button', { name: `Open ${name} by default` });
+        await star.click();
+        // R17: the star fills at once.
+        await assertEventually(async () => (await star.innerText()).trim() === '★', `the ${name} star did not fill after a click`, 10_000);
+        await closePanel();
+        // R16: the topbar Arc button shows Arc now and never writes the ⌘L default.
+        const arcButton = p.locator('.rb-controls > button', { hasText: /^Arc$/ });
+        await arcButton.click();
+        await assertEventually(async () => (await panelCount()) === 1, 'the Arc button did not show the panel', 10_000);
+        await arcButton.click();
+        await assertEventually(async () => (await panelCount()) === 0, 'the Arc button did not hide the panel', 10_000);
+        // R20: the panel ✕ on Arc counts as the Arc button off, so a wide Session does not reopen Arc.
+        await arcButton.click();
+        await assertEventually(async () => (await panelCount()) === 1, 'the Arc button did not show the panel', 10_000);
+        await p.locator('[data-region="panel"]').getByTitle('Close panel').click();
+        await assertEventually(async () => (await panelCount()) === 0, 'the panel ✕ did not close Arc', 10_000);
+        assert.equal(await p.evaluate(() => localStorage.getItem('ampi.arc.reopen')), '0', 'the panel ✕ on Arc left Arc set to reopen');
+        // R21: ⌘L hide is an explicit close too.
+        await arcButton.click();
+        await assertEventually(async () => (await panelCount()) === 1, 'the Arc button did not show the panel', 10_000);
+        await closePanel();
+        assert.equal(await p.evaluate(() => localStorage.getItem('ampi.arc.reopen')), '0', '⌘L hide of Arc left Arc set to reopen');
+        await focusTranscript();
+        await p.keyboard.press('ControlOrMeta+l');
+        await regionIs('panel', '⌘L did not open and focus the panel');
+        assert.match(await p.locator('[data-region="panel"] .panel-tab-choice > button.on').innerText(), new RegExp(name), `⌘L did not open the configured default ${name}`);
+        await p.locator('[data-region="panel"] .panel-tab-choice > button:first-child', { hasText: 'Arc' }).click();
+        await regionIs('panel', 'switching the panel tab dropped focus');
+        await p.locator('[data-region="panel"]').getByRole('button', { name: 'Open Arc by default' }).click();
+        await closePanel();
+        return { defaultOpened: name };
+      });
+      await j.step('arc-reopen', 'Arc shown last: a wide Session opens with Arc; with Arc open, a narrow pane opens the Session with Arc collapsed (R16)', async () => {
+        const reopenSession = async () => {
+          await j.goto('#/v/overview');
+          await p.locator('.side-scroll .row[data-thread="pi:sess-big"] a.title').click({ timeout: 15_000 });
+          await p.waitForURL(/\/t\/pi%3Asess-big/);
+          await p.locator(transcript).waitFor({ timeout: 15_000 });
+        };
+        const shown = () => p.locator('[data-region="panel"] .panel-tab-choice > button.on').innerText().catch(() => '');
+        await closePanel();
+        await p.evaluate(() => localStorage.setItem('ampi.arc.reopen', '1'));
+        await reopenSession();
+        await assertEventually(async () => (await panelCount()) === 1 && /Arc/.test(await shown()), 'a wide Session did not reopen Arc after the owner showed it', 10_000);
+        // I20: the reopen shows Arc and keeps focus where the Session open put it.
+        const afterReopen = await region();
+        assert.notEqual(afterReopen, 'panel', 'reopening Arc moved focus into the panel');
+        await p.setViewportSize({ width: 1000, height: 960 });
+        try {
+          await reopenSession();
+          // The collapse happens when the Session opens; give a late reopen time to show before reading the panel.
+          await p.waitForTimeout(500);
+          assert.equal(await panelCount(), 0, 'a narrow pane opened the Session with the saved Arc panel shown');
+        } finally {
+          await p.setViewportSize({ width: 1440, height: 960 });
+          await p.evaluate(() => localStorage.setItem('ampi.arc.reopen', '0'));
+        }
+        return { wideReopened: true, focusAfterReopen: afterReopen, narrowCollapsed: true };
+      });
+      await j.step('session-switch', 'Press Alt+↓ in the transcript: the next Session opens with focus in its composer', async () => {
+        await startIn('transcript');
+        const before = p.url();
+        await p.keyboard.press('Alt+ArrowDown');
+        await assertEventually(async () => p.url() !== before, 'Alt+↓ did not open another Session', 5000);
+        await regionIs('composer', 'the Session switch did not focus the composer');
+        await p.keyboard.press('Alt+ArrowUp');
+        await assertEventually(async () => p.url() === before, 'Alt+↑ did not return to the Session', 5000);
+        await p.locator(transcript).waitFor({ timeout: 15_000 });
+        return { switched: true };
+      });
+      await j.step('overview', 'Press ⌘0 from the transcript: the Overview opens and the lost focus goes to the visible sidebar (R9)', async () => {
+        await focusTranscript();
+        await p.keyboard.press('ControlOrMeta+Digit0');
+        await p.waitForURL(/#\/v\/overview/, { timeout: 10_000 });
+        await regionIs('sidebar', '⌘0 from the transcript did not move the lost focus to the sidebar');
+        return { url: p.url().split('#')[1] };
+      });
+      await j.step('page-sidebar', 'On the Overview with the sidebar focused, ⌘B hides it and the page scroller takes focus with a ring and scrolls with ↓; ⌘B again shows and focuses the sidebar', async () => {
+        if (await sidebarHidden()) await p.keyboard.press('ControlOrMeta+b');
+        if ((await region()) !== 'sidebar') await p.keyboard.press('ControlOrMeta+b');
+        await regionIs('sidebar', '⌘B on the Overview did not focus the sidebar');
+        await p.keyboard.press('ControlOrMeta+b');
+        await assertEventually(sidebarHidden, '⌘B on the Overview did not hide the sidebar', 10_000);
+        await assertEventually(() => p.evaluate(() => Boolean(document.activeElement?.closest('[data-page-root]'))), 'hiding the sidebar on the Overview did not focus the page', 10_000);
+        // R9: the page target shows a ring in keyboard mode and scrolls with ↓.
+        const page = await p.evaluate(() => { const a = document.activeElement; return { ring: getComputedStyle(a).outlineStyle, scrollable: a.scrollHeight > a.clientHeight, top: a.scrollTop }; });
+        assert.notEqual(page.ring, 'none', 'the focused page target shows no focus ring');
+        if (page.scrollable) {
+          await p.keyboard.press('ArrowDown');
+          await assertEventually(() => p.evaluate(top => document.activeElement.scrollTop > top, page.top), '↓ did not scroll the focused page', 10_000);
+        }
+        await p.keyboard.press('ControlOrMeta+b');
+        await regionIs('sidebar', '⌘B on the Overview did not show and focus the sidebar');
+        return { ring: page.ring, scrollable: page.scrollable };
       });
     },
   },

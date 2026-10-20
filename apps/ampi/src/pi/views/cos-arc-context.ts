@@ -1,5 +1,5 @@
 import type { Chunk } from "./cos-arc-chunks.ts";
-import type { Label } from "./cos-arc-model.ts";
+import { fields, list, oneOf, type Label } from "./cos-arc-model.ts";
 import { normalizeText, type AskCandidate } from "./cos-arc-asks.ts";
 
 /** One cited Rarebit entry. `session` is the host-qualified Session ref (K5.I3), so a citation never resolves in another Session. */
@@ -45,6 +45,26 @@ export type ArcContext = {
 	/** CONTEXT_VERSION (cos-arc.ts) of the prompt that built this tree; absent in trees built before short titles. */
 	format?: string;
 };
+
+/**
+ * A tree with no work thread, no open ask and no unassigned leaf. Every Build has chunks, so a Build never stores
+ * such a tree, and a stored one is not a valid Arc. The one rule for the Build, the receipt head and the view.
+ */
+export const emptyTree = (c: Pick<ArcContext, "threads" | "needsYou" | "unassigned">) =>
+	!c.threads.length && !c.needsYou.length && !Object.values(c.unassigned).some((l) => l.length);
+
+/** Threads, leaves (under threads and unassigned) and asks: of a raw context answer, or of a normalized tree. */
+export type TreeCount = { threads: number; leaves: number; asks: number };
+const LEAF_KINDS = ["progress", "decisions", "blockers"] as const;
+export function rawTreeCount(answer: unknown): TreeCount {
+	const raw = fields(answer), threads = list(raw.threads).map(fields), loose = fields(raw.unassigned);
+	return { threads: threads.length, asks: list(raw.asks).length,
+		leaves: [...threads, loose].reduce((n, t) => n + LEAF_KINDS.reduce((m, k) => m + list(t[k]).length, 0), 0) };
+}
+export function treeCount(c: ArcContext): TreeCount {
+	return { threads: c.threads.length, asks: c.needsYou.length,
+		leaves: [...c.threads, c.unassigned].reduce((n, t) => n + LEAF_KINDS.reduce((m, k) => m + t[k].length, 0), 0) };
+}
 
 /** Title lengths in characters: an ask is an imperative, a thread label names the work, a leaf is one line. */
 export const TITLE_LIMITS = { ask: 60, thread: 40, leaf: 90 } as const;
@@ -109,7 +129,8 @@ export function contextPrompt(chunks: Chunk[], labels: Record<string, Label>, ev
  * groups them and may cite an answering owner turn after the latest statement; every other candidate stays open.
  * Needs you is never truncated.
  */
-export function normalizeContext(raw: any, chunks: Chunk[], evidence: Map<string, string>, session: string, times: Map<string, number | null>, builtAt: string, model: string | null, asOfRarebitCount: number, rarebitFingerprint: string, asOfEntryId: string | null, support: ContextSupport): ArcContext {
+export function normalizeContext(answer: unknown, chunks: Chunk[], evidence: Map<string, string>, session: string, times: Map<string, number | null>, builtAt: string, model: string | null, asOfRarebitCount: number, rarebitFingerprint: string, asOfEntryId: string | null, support: ContextSupport): ArcContext {
+	const raw = fields(answer);
 	const refs = new Map<string, string>(), lines = new Map<string, string>();
 	for (const chunk of chunks) {
 		const source = evidence.get(chunk.id) ?? "";
@@ -123,21 +144,23 @@ export function normalizeContext(raw: any, chunks: Chunk[], evidence: Map<string
 		const q = normalizeText(quote.replace(/…$/, ""));
 		return q.length >= 3 && citations.some((c) => normalizeText(support.texts.get(c.entryId) ?? lines.get(c.entryId) ?? "").includes(q));
 	};
-	const leaf = (value: any, decision: boolean): ContextLeaf | null => {
-		const raw = typeof value?.text === "string" ? value.text.trim() : "";
-		const quote = typeof value?.quote === "string" ? value.quote.trim().slice(0, 300) : "";
-		const citations = cite(value?.citations, 4);
+	const leaf = (value: unknown, decision: boolean): ContextLeaf | null => {
+		const f = fields(value);
+		const raw = typeof f.text === "string" ? f.text.trim() : "";
+		const quote = typeof f.quote === "string" ? f.quote.trim().slice(0, 300) : "";
+		const citations = cite(f.citations, 4);
 		if (!raw || !citations.length || !supported(quote, citations)) return null;
 		return { ...title(decision ? decided(raw) : raw, TITLE_LIMITS.leaf), citations, quote, ask: false, kind: null, resolvedBy: [] };
 	};
-	const leaves = (value: unknown, max: number, decision = false) => (Array.isArray(value) ? value : []).map((v) => leaf(v, decision)).filter((v): v is ContextLeaf => Boolean(v)).slice(0, max);
-	const { needsYou, answered, overtaken } = asks(raw?.asks, support, refs, cite);
-	const threads: ContextThread[] = (Array.isArray(raw?.threads) ? raw.threads : []).slice(0, 8).flatMap((thread: any) => {
-		const named = title(typeof thread?.label === "string" ? threadLabel(thread.label) : "", TITLE_LIMITS.thread);
+	const leaves = (value: unknown, max: number, decision = false) => list(value).map((v) => leaf(v, decision)).filter((v): v is ContextLeaf => Boolean(v)).slice(0, max);
+	const { needsYou, answered, overtaken } = asks(raw.asks, support, refs, cite);
+	const threads: ContextThread[] = list(raw.threads).slice(0, 8).map(fields).flatMap((thread) => {
+		const named = title(typeof thread.label === "string" ? threadLabel(thread.label) : "", TITLE_LIMITS.thread);
 		if (!named.text) return [];
-		return [{ label: named.text, ...(named.full ? { full: named.full } : {}), state: THREAD_STATES.includes(thread.state) ? thread.state : "unclear", progress: leaves(thread.progress, 3), decisions: leaves(thread.decisions, 3, true), blockers: leaves(thread.blockers, 3) }];
+		return [{ label: named.text, ...(named.full ? { full: named.full } : {}), state: oneOf(THREAD_STATES, thread.state, "unclear"), progress: leaves(thread.progress, 3), decisions: leaves(thread.decisions, 3, true), blockers: leaves(thread.blockers, 3) }];
 	});
-	const unassigned = { progress: leaves(raw?.unassigned?.progress, 8), decisions: leaves(raw?.unassigned?.decisions, 8, true), blockers: leaves(raw?.unassigned?.blockers, 8) };
+	const loose = fields(raw.unassigned);
+	const unassigned = { progress: leaves(loose.progress, 8), decisions: leaves(loose.decisions, 8, true), blockers: leaves(loose.blockers, 8) };
 	// Keep owner decisions ahead of newer progress when the display folds overflow.
 	threads.sort((a, b) => Number(b.decisions.length > 0) - Number(a.decisions.length > 0));
 	const all = [...needsYou, ...answered, ...overtaken, ...threads.flatMap((t) => [...t.decisions, ...t.blockers, ...t.progress]), ...unassigned.progress, ...unassigned.decisions, ...unassigned.blockers];
@@ -158,8 +181,8 @@ function asks(value: unknown, support: ContextSupport, refs: Map<string, string>
 	const known = new Map(support.candidates.filter((c) => refs.has(c.entryId)).map((c) => [c.id, c]));
 	const claimed = new Set<string>();
 	const groups: { members: AskCandidate[]; text: string; kind: unknown; answeredBy: unknown }[] = [];
-	for (const g of Array.isArray(value) ? value : []) {
-		const members = (Array.isArray(g?.candidates) ? g.candidates : []).filter((id: unknown): id is string => typeof id === "string" && known.has(id) && !claimed.has(id)).map((id: string) => known.get(id)!);
+	for (const g of list(value).map(fields)) {
+		const members = list(g.candidates).filter((id): id is string => typeof id === "string" && known.has(id) && !claimed.has(id)).map((id) => known.get(id)!);
 		if (!members.length) continue;
 		for (const m of members) claimed.add(m.id);
 		groups.push({ members, text: typeof g.text === "string" ? g.text.trim() : "", kind: g.kind, answeredBy: g.answeredBy });

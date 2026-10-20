@@ -1,3 +1,4 @@
+import "./bound.ts";
 import assert from "node:assert/strict";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -54,7 +55,7 @@ test("Rarebit recap reuses exact evidence and model, shares in-flight calls, and
 	let reject!: (error: Error) => void;
 	const ctx: PiViewContext = {
 		host: "synthetic-host", stateDir: () => f.dir, sessions: () => [session], session: () => session,
-		teams: () => [], teamsFrame: () => undefined, command: async () => ({}), invalidate: () => {}, lease: () => () => {}, snapshot: (read) => store.snapshot(read),
+		teams: () => [], teamsFrame: () => undefined, command: async () => ({}), invalidate: () => {}, lease: () => () => {}, snapshot: (read) => store.snapshot(read), model: async (purpose) => purpose,
 		ask: async () => { calls++; return new Promise((resolve, fail) => { finish = resolve; reject = fail; }); },
 	};
 	const recap = (args = {}) => rarebitView.ops!.recap!(ctx, { threadId: session.threadId, ...args });
@@ -138,7 +139,7 @@ test("Rarebit side ask freezes evidence for follow-ups, keeps failures inline, b
 	await assert.rejects(req("ask", { sideId: first.id, question: "again" }), /ended/);
 	writeFileSync(f.sessionA, before.replace(/old-prefix z+ newest-suffix/, "original evidence"));
 	await browser.until<RarebitValue>(sid, (v) => v.items?.[0]?.text === "original evidence");
-	const small = (await req("ask", { question: "first question" })).side as RarebitSide;
+	const small = (await req("ask", { question: "first question", model: "synthetic/model" })).side as RarebitSide;
 	appendFileSync(f.sessionA, row("new", "err", "user", "not in the frozen snapshot"));
 	await browser.until<RarebitValue>(sid, (v) => v.items?.at(-1)?.id === "new");
 	const follow = (await req("ask", { sideId: small.id, question: "follow up" })).side as RarebitSide;
@@ -149,7 +150,7 @@ test("Rarebit side ask freezes evidence for follow-ups, keeps failures inline, b
 	assert.match(failed.turns.at(-1)!.error!, /model_error/);
 	assert.equal(failed.id, small.id);
 	await req("ask", { sideId: small.id, end: true });
-	const fresh = (await req("ask", { question: "new snapshot" })).side as RarebitSide;
+	const fresh = (await req("ask", { question: "new snapshot", model: "synthetic/model" })).side as RarebitSide;
 	assert.notEqual(fresh.id, small.id);
 	assert.ok(fresh.turns[0]!.answer!.includes("not in the frozen snapshot"));
 	assert.deepEqual(f.herdrCalls(), []);

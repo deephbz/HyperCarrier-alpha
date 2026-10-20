@@ -1,3 +1,4 @@
+import "./bound.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { laneTotal, mergeBuckets, type Bucket, type Unit } from "../web/src/views/cos/totals.ts";

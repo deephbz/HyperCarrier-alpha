@@ -5,6 +5,7 @@
 //
 //   node apps/ampi/scripts/pi-demo.ts            # http://127.0.0.1:7880/?k=<64 × d>, data under $TMPDIR/ampi-pi-demo
 //   PORT=7881 DEMO_DIR=/tmp/x node apps/ampi/scripts/pi-demo.ts
+//   DEMO_KEEP=1 DEMO_NOW=<epoch ms> ...      # a restart: keep the hub state; the base Sessions are rewritten byte-identical
 //
 // Views extend the data through scripts/demo/index.ts (one function per view), not by editing the base Sessions.
 
@@ -16,9 +17,9 @@ import { FAKE_HERDR } from "../test/pi-fixtures.ts";
 import { DEMO_EXTENSIONS } from "./demo/index.ts";
 
 const dir = process.env.DEMO_DIR ?? join(tmpdir(), "ampi-pi-demo");
-rmSync(dir, { recursive: true, force: true });
+if (process.env.DEMO_KEEP !== "1") rmSync(dir, { recursive: true, force: true });
 const agentDir = join(dir, "agent");
-const now = Date.now();
+const now = Number(process.env.DEMO_NOW) || Date.now();
 const HOUR = 3600_000;
 const L = (o: unknown) => `${JSON.stringify(o)}\n`;
 let seq = 0;
@@ -199,9 +200,12 @@ const observation = {
 };
 
 const ptb = join(dir, "observation.mjs");
+// Editable synthetic Team authority: a browser check can start a Team after the page loads (verify journey S).
+const observationFile = join(dir, "observation.json");
+writeFileSync(observationFile, JSON.stringify(observation));
 writeFileSync(
 	ptb,
-	`export async function readObservationSnapshot() { return ${JSON.stringify(observation)}; }\n` + DEMO_EXTENSIONS.map((extend) => extend({ dir, agentDir, sessions })).join("\n"),
+	`import { readFileSync as readDemoObservation } from "node:fs";\nexport async function readObservationSnapshot() { return JSON.parse(readDemoObservation(${JSON.stringify(observationFile)}, "utf8")); }\n` + DEMO_EXTENSIONS.map((extend) => extend({ dir, agentDir, sessions })).join("\n"),
 );
 
 const token = "d".repeat(64);
@@ -220,6 +224,8 @@ const hub = new Hub(
 			},
 		],
 		backend: "pi",
+		// Helper models have no built-in default; the offline stand-in answers whatever they name.
+		models: { arcLabels: "anthropic/claude-haiku-5-5", arcSynthesis: "anthropic/claude-sonnet-5-5", rarebitRecap: "anthropic/claude-haiku-5-5", rarebitAsk: "anthropic/claude-sonnet-5-5" },
 	},
 	{ token },
 );

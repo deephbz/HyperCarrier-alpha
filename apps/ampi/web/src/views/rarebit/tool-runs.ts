@@ -1,9 +1,9 @@
-import type { UiBlock, UiEntry } from "../../../../src/node/projection.ts";
+import type { PiBlock, PiEntry } from "../../../../src/shared/protocol.ts";
 
 export type ToolRun = {
 	kind: "run";
 	id: string;
-	entries: UiEntry[];
+	entries: PiEntry[];
 	calls: number;
 	errors: number;
 	start?: number;
@@ -12,7 +12,7 @@ export type ToolRun = {
 	/** The collapsed line: counts per kind, in order of first appearance. */
 	label: string;
 };
-export type LensPart = { kind: "entry"; entry: UiEntry; key: string } | ToolRun;
+export type LensPart = { kind: "entry"; entry: PiEntry; key: string } | ToolRun;
 
 /** Custom entry kinds the run label names; any other kind is named by its entryKind prefix. */
 const STEP_NAMES: [RegExp, string, string][] = [
@@ -21,7 +21,7 @@ const STEP_NAMES: [RegExp, string, string][] = [
 	[/^(hc-)?auto-compact\./, "Auto Compact msg", "Auto Compact msgs"],
 ];
 
-function stepName(entry: UiEntry): [string, string] | undefined {
+function stepName(entry: PiEntry): [string, string] | undefined {
 	if (entry.kind === "compaction") return ["compaction", "compactions"];
 	if (entry.kind === "reset") return ["context reset", "context resets"];
 	if (entry.kind !== "custom") return undefined;
@@ -33,7 +33,7 @@ function stepName(entry: UiEntry): [string, string] | undefined {
 
 /** Display-only grouping. Only user and assistant text are prose; every other entry is a run step.
  * Prose bounds the elapsed span; source entries remain intact. */
-export function toolRuns(entries: UiEntry[], live = false): LensPart[] {
+export function toolRuns(entries: PiEntry[], live = false): LensPart[] {
 	const parts: LensPart[] = [];
 	let run: ToolRun | undefined;
 	let previous: number | undefined;
@@ -65,13 +65,13 @@ export function toolRuns(entries: UiEntry[], live = false): LensPart[] {
 		parts.push(run);
 		run = undefined;
 	};
-	const step = (entry: UiEntry, suffix: string) => {
+	const step = (entry: PiEntry, suffix: string) => {
 		const ts = "ts" in entry ? time(entry.ts) : undefined;
 		run ??= { kind: "run", id: `${entry.id}:${suffix}`, entries: [], calls: 0, errors: 0, label: "", start: previous ?? ts, end: ts, running: false };
 		run.entries.push(entry);
 		if (ts !== undefined) run.end = Math.max(run.end ?? ts, ts);
 	};
-	const prose = (entry: UiEntry, key: string) => {
+	const prose = (entry: PiEntry, key: string) => {
 		const ts = "ts" in entry ? time(entry.ts) : undefined;
 		flush(ts);
 		parts.push({ kind: "entry", entry, key });
@@ -81,7 +81,7 @@ export function toolRuns(entries: UiEntry[], live = false): LensPart[] {
 		if (entry.kind === "tool-result") step(entry, "result");
 		else if (entry.kind === "assistant") {
 			const { stop, error, ...content } = entry;
-			let blocks: UiBlock[] = [];
+			let blocks: PiBlock[] = [];
 			let first = 0;
 			const drain = () => {
 				if (blocks.length) step({ ...content, blocks }, String(first));

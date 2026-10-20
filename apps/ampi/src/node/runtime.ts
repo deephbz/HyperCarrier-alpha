@@ -30,6 +30,9 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import type { Activity, NodeInfo, ThreadSummary, ThreadsState } from "../shared/protocol.ts";
+
+/** The frozen node backend keys its threads by conversation id, outside the Pi wire contract (docs/wire-boundary.md). */
+type NodeThreadsState = Omit<ThreadsState, "threads"> & { threads: Record<string, ThreadSummary> };
 import { AmpiCore } from "./core-extension.ts";
 import { defaultModel, listModels, openModels } from "./models.ts";
 import { contentText } from "./projection.ts";
@@ -142,7 +145,7 @@ export class NodeRuntime {
 	readonly stores = new Map<string, Store>();
 	readonly terminals = new Terminals();
 	readonly accounts: Accounts;
-	readonly threads: MutableReplicatedState<ThreadsState>;
+	readonly threads: MutableReplicatedState<NodeThreadsState>;
 	readonly info: NodeInfo;
 	readonly settings: HarnessSettings;
 	#pending = new Map<string, ReturnType<typeof setTimeout>>();
@@ -176,7 +179,7 @@ export class NodeRuntime {
 		const optIn = new Set(this.plugins.flatMap((plugin) => (plugin.optIn ?? []).map((extension) => extension.name)));
 		const defaults = [CodingTools, AmpiCore, ...this.plugins.flatMap((plugin) => plugin.extensions)].filter((e) => !optIn.has(e.name));
 		this.settings = { toolExecution: "parallel", retry: { maxRetries: 3 }, ...merged, extensions: defaults };
-		this.threads = replicatedState<ThreadsState>({ threads: {} });
+		this.threads = replicatedState<NodeThreadsState>({ threads: {} });
 		this.info = {
 			nodeId: this.#nodeId(),
 			hostname: hostname(),

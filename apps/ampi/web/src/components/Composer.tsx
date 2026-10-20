@@ -1,6 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { UiThreadView } from "../../../src/node/projection.ts";
-import type { ThreadSummary } from "../../../src/shared/protocol.ts";
+import type { PiThreadView, SlashCommands, ThreadSummary } from "../../../src/shared/protocol.ts";
 import { hub } from "../client.ts";
 import { COMPOSER_BUSY_HINT, composerSubmission } from "../composer-keys.ts";
 import { openAccounts } from "./Accounts.tsx";
@@ -19,7 +18,14 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 export type ComposerActions = { openPanel: (name: string) => void };
 
-type Command = { name: string; args?: string; help: string; run: (arg: string) => Promise<void> | void };
+/** `disabled`: listed but not runnable from here. A Pi command has no `run`: the composer sends it as a typed op. */
+type Command = { name: string; args?: string; help: string; disabled?: boolean; run?: (arg: string) => Promise<void> | void };
+/** A Pi Session's command list from its control, for one Session and control state (`for`). */
+type PiCommands = { for: string; state: "loading" } | { for: string; state: "ready"; value: SlashCommands } | { for: string; state: "failed"; code: string; message: string };
+/** An inline decision the composer asks for, with the draft kept. */
+type Choice = { message: string; actions: { label: string; run: () => unknown }[] };
+/** Outcomes that leave a command's result unknown: a retry reuses its key, so the control runs it at most once. */
+const UNKNOWN_OUTCOME = new Set(["timeout", "control_unconfirmed"]);
 
 type Extras = { prompts: { name: string; description: string; body: string }[]; skills: { name: string; description: string; path: string }[] };
 /** How the composer names a queued Pi message that left Pi's queue without delivery. */
@@ -48,7 +54,7 @@ export function expandTemplate(body: string, arg: string): string {
 function commands(ctx: {
 	host: string;
 	threadId: string;
-	view: UiThreadView;
+	view: PiThreadView;
 	summary?: ThreadSummary;
 	models: ModelChoice[];
 	actions: ComposerActions;
@@ -86,7 +92,7 @@ function commands(ctx: {
 			run: async () => {
 				const last = ctx.view.entries.at(-1);
 				if (!last) throw new Error("Nothing to fork yet");
-				const { threadId: forked } = await hub.request<{ threadId: string }>(host, "thread.fork", { threadId, entryId: last.id });
+				const { threadId: forked } = await hub.request(host, "thread.fork", { threadId, entryId: last.id });
 				go(host, forked);
 			},
 		},
@@ -96,7 +102,7 @@ function commands(ctx: {
 			help: "Start a new thread in this directory with this model",
 			run: async (arg) => {
 				const agent = ctx.view.agent as Any;
-				const { threadId: created } = await hub.request<{ threadId: string }>(host, "thread.create", {
+				const { threadId: created } = await hub.request(host, "thread.create", {
 					cwd: agent?.cwd ?? ctx.summary?.cwd,
 					...(agent?.model ? { model: agent.model } : {}),
 					requestId: crypto.randomUUID(),
@@ -166,7 +172,7 @@ export function Composer({
 }: {
 	host: string;
 	threadId: string;
-	view: UiThreadView;
+	view: PiThreadView;
 	summary?: ThreadSummary;
 	models: ModelChoice[];
 	actions: ComposerActions;
@@ -179,6 +185,8 @@ export function Composer({
 	const [note, setNote] = useState<string>();
 	const [pick, setPick] = useState(0);
 	const [dragging, setDragging] = useState(false);
+	const [choice, setChoice] = useState<Choice>();
+	const [piCommands, setPiCommands] = useState<PiCommands>();
 	const ref = useRef<HTMLTextAreaElement>(null);
 	const fileInput = useRef<HTMLInputElement>(null);
 	// One request ID per message the owner means to send: a retry after a lost response reuses it, so the node
@@ -196,7 +204,7 @@ export function Composer({
 		const key = `${host}|${cwd}`;
 		let request = extrasCache.get(key);
 		if (!request) {
-			request = hub.request<Extras>(host, "prompts.list", { cwd });
+			request = hub.request(host, "prompts.list", { cwd });
 			extrasCache.set(key, request);
 			request.catch(() => extrasCache.delete(key));
 		}
@@ -208,8 +216,47 @@ export function Composer({
 	}, [host, cwd]);
 	const submitText = (content: string) =>
 		hub.request(host, "thread.submit", { threadId, content, whenBusy: "followUp", requestId: crypto.randomUUID() }).then(() => {});
+	// A Pi Session's commands come from its live control; reload when the Session or its control changes.
+	const commandsFor = `${host}|${threadId}|${summary?.control ? "control" : "keys"}`;
+	const loaded = piCommands?.for === commandsFor ? piCommands : undefined;
+	const loadedRef = useRef(loaded);
+	loadedRef.current = loaded;
+	const wantsCommands = pi && text.startsWith("/") && !text.startsWith("//");
+	const commandsRequest = useRef<{ for: string; promise: Promise<PiCommands> }>(undefined);
+	/** The list for this Session: the request in flight, or a new one after a failure. */
+	const loadCommands = (): Promise<PiCommands> => {
+		const key = commandsFor;
+		if (commandsRequest.current?.for === key && loadedRef.current?.state !== "failed") return commandsRequest.current.promise;
+		const promise = hub.request(host, "thread.commands", { threadId }).then(
+			(value): PiCommands => ({ for: key, state: "ready", value }),
+			(e: Error & { code?: string }): PiCommands => ({ for: key, state: "failed", code: e.code ?? "error", message: e.message }),
+		);
+		commandsRequest.current = { for: key, promise };
+		setPiCommands({ for: key, state: "loading" });
+		void promise.then((result) => {
+			loadedRef.current = result;
+			setPiCommands(result);
+		});
+		return promise;
+	};
+	useEffect(() => {
+		if (wantsCommands && (!loadedRef.current || loadedRef.current.state === "failed")) void loadCommands();
+	}, [wantsCommands, commandsFor]);
+	// Without a control the draft is typed into the pane, where Pi's TUI runs the command itself.
+	const commandsHint = !wantsCommands || loaded?.state === "ready" ? undefined
+		: !loaded || loaded.state === "loading" ? "Commands unavailable: loading the list from Pi…"
+		: loaded.code === "no_control" ? "No control socket: Enter types the command into the Pi pane, and Pi runs it there"
+		: loaded.code === "commands_unsupported" ? loaded.message
+		: `Commands unavailable: ${loaded.message}`;
 	const list: Command[] = pi
-		? [{ name: "stop", help: "Interrupt the current run (Esc)", run: () => abort() }]
+		? [
+				{ name: "stop", help: "Interrupt the current run (Esc)", run: () => abort() },
+				...(loaded?.state === "ready"
+					? loaded.value.commands
+							.filter((c) => c.name !== "stop")
+							.map((c) => ({ name: c.name, args: c.argsHint, help: c.supported ? (c.description ?? c.source) : "Only in the Pi pane", disabled: !c.supported }))
+					: []),
+			]
 		: [
 		...commands({ host, threadId, view, summary, models, actions, say: setNote }),
 		...extras.prompts.map((p) => ({ name: p.name, args: "[args]", help: `${p.description} (template)`, run: (arg: string) => submitText(expandTemplate(p.body, arg)) })),
@@ -220,8 +267,13 @@ export function Composer({
 			run: (arg: string) => submitText(`Use the ${k.name} skill (read ${k.path} first).${arg.trim() ? `\n\n${arg.trim()}` : ""}`),
 		})),
 			];
-	const slash = /^\/(\S*)$/.exec(text);
-	const matches = slash ? list.filter((c) => c.name.startsWith(slash[1]!.toLowerCase())) : [];
+	// After `/model `, complete from the models this Pi can use and mark the current one.
+	const modelRefs = loaded?.state === "ready" && /^\/model \S*$/.test(text)
+		? loaded.value.models.map((m) => ({ name: `model ${m.ref}`, help: m.ref === loaded.value.model ? "current" : (m.name ?? "") }))
+		: [];
+	const menu: Command[] = [...list, ...modelRefs];
+	const slash = /^\/(\S*)$/.exec(text) ?? (modelRefs.length ? /^\/(model \S*)$/.exec(text) : null);
+	const matches = slash ? menu.filter((c) => c.name.toLowerCase().startsWith(slash[1]!.toLowerCase())) : [];
 	useEffect(() => {
 		ref.current?.focus();
 	}, [threadId]);
@@ -260,7 +312,7 @@ export function Composer({
 	const runCommand = async (content: string): Promise<boolean> => {
 		const match = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(content);
 		const command = match && list.find((c) => c.name === match[1]!.toLowerCase());
-		if (!command) return false;
+		if (!command?.run) return false;
 		setText("");
 		try {
 			await command.run(match![2] ?? "");
@@ -270,16 +322,86 @@ export function Composer({
 		}
 		return true;
 	};
-	const send = async (whenBusy: "followUp" | "steer") => {
-		const content = text.trim();
+	const offerText = (content: string, message: string, whenBusy: "followUp" | "steer") =>
+		setChoice({
+			message: `${message}. Nothing was sent.`,
+			actions: [
+				{ label: "Send as text", run: () => deliver(content, whenBusy) },
+				{ label: "Edit", run: () => ref.current?.focus() },
+			],
+		});
+	/** Runs one Pi command as a typed control op (A27). The draft clears only on a typed success. */
+	const runTyped = async (content: string, name: string, args: string, whenBusy: "followUp" | "steer", abortTurn = false): Promise<void> => {
+		setText("");
+		try {
+			const ack = await hub.request(host, "thread.command", { threadId, name, ...(args ? { args } : {}), key: intent.current, whenBusy, ...(abortTurn ? { abort: true } : {}) });
+			intent.current = crypto.randomUUID();
+			// A command can change the list or the current model: load it again at the next `/`.
+			commandsRequest.current = undefined;
+			loadedRef.current = undefined;
+			setPiCommands(undefined);
+			setNote(ack.notice ?? (ack.disposition === "started" ? "Started a turn" : ack.disposition === "queued" ? "Queued" : `Sent /${name} to Pi`));
+		} catch (e) {
+			const { code, message } = e as Error & { code?: string };
+			setText(content);
+			// A typed refusal is a final reply under this key; only an unknown outcome keeps the key for a retry.
+			if (!code || !UNKNOWN_OUTCOME.has(code)) intent.current = crypto.randomUUID();
+			if (code === "busy" && name === "compact")
+				return setChoice({
+					message: "Compact stops the running turn. Stop and compact?",
+					actions: [
+						{ label: "Stop and compact", run: () => runTyped(content, name, args, whenBusy, true) },
+						{ label: "Cancel", run: () => ref.current?.focus() },
+					],
+				});
+			if (code === "commands_unsupported") return offerText(content, message.replace(/\.$/, ""), whenBusy);
+			if (code === "no_control") return void deliver(content, whenBusy);
+			setError(message);
+		}
+	};
+	/** A Pi draft that starts with `/`: true when the composer handled it, false to send it as an ordinary message. */
+	const piCommand = async (content: string, whenBusy: "followUp" | "steer"): Promise<boolean> => {
+		const match = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(content);
+		if (!match) return false;
+		const name = match[1]!;
+		if (name === "stop") {
+			setText("");
+			await abort();
+			return true;
+		}
+		// Enter can come before the list arrives: wait for it, so a fast typist gets the same outcome. A failed list is
+		// fetched again: the owner may have updated the control or started one since, and the kept draft must see it.
+		const current = loadedRef.current?.state === "ready" ? loadedRef.current : await loadCommands();
+		if (current.state === "failed" && current.code === "no_control") return false;
+		if (current.state !== "ready") {
+			if (current.state === "failed" && current.code === "commands_unsupported") offerText(content, current.message.replace(/\.$/, ""), whenBusy);
+			else setError(`Commands unavailable: ${current.state === "failed" ? current.message : "the list did not load from Pi"}.`);
+			return true;
+		}
+		const known = current.value.commands.find((c) => c.name === name);
+		if (!known) offerText(content, `Pi has no /${name} command`, whenBusy);
+		else if (!known.supported) setError(`/${name} works only in the Pi pane.`);
+		else await runTyped(content, name, match[2]?.trim() ?? "", whenBusy);
+		return true;
+	};
+	const send = async (whenBusy: "followUp" | "steer", draft = text) => {
+		const content = draft.trim();
 		if (!content && images.length === 0) return;
 		setError(undefined);
-		if (images.length === 0 && (await runCommand(content))) return;
+		setChoice(undefined);
+		if (images.length === 0 && pi && content.startsWith("//")) return deliver(content.slice(1), whenBusy, content);
+		if (images.length === 0 && pi && content.startsWith("/") && (await piCommand(content, whenBusy))) return;
+		if (images.length === 0 && !pi && (await runCommand(content))) return;
+		return deliver(content, whenBusy);
+	};
+	/** Sends `content` as a message; a failure puts `draft` back, so an escaped `//text` stays escaped. */
+	const deliver = async (content: string, whenBusy: "followUp" | "steer", draft = content) => {
+		setError(undefined);
 		const sent = images;
 		setText("");
 		setImages([]);
 		try {
-			const ack = await hub.request<{ via?: string; evidence?: string }>(host, "thread.submit", {
+			const ack = await hub.request(host, "thread.submit", {
 				threadId,
 				content,
 				whenBusy,
@@ -290,14 +412,14 @@ export function Composer({
 			// Say what the acknowledgement proves (D15): typed keys prove less than the control extension's admission.
 			if (pi && ack?.evidence) setNote(ack.evidence === "sent" ? "Typed into the pane (no admission receipt)" : ack.evidence === "started" ? "Started a turn" : whenBusy === "steer" ? "Steer admitted" : "Queued");
 		} catch (e) {
-			setText(content);
+			setText(draft);
 			setImages(sent);
 			setError((e as Error).message);
 		}
 	};
 	const abort = async () => {
 		try {
-			const ack = await hub.request<{ submissions?: { state: string }[] }>(host, "thread.abort", { threadId });
+			const ack = await hub.request(host, "thread.abort", { threadId });
 			// Pi's abort puts queued input back into its editor draft and never sends it (O3).
 			const returned = ack?.submissions?.filter((s) => s.state === "returned").length ?? 0;
 			const lost = (ack?.submissions?.length ?? 0) - returned;
@@ -354,7 +476,7 @@ export function Composer({
 					})}
 				</div>
 			)}
-			{matches.length > 0 && (
+			{(matches.length > 0 || commandsHint) && (
 				<div className="slash-menu" role="listbox" data-slash-menu>
 					{matches.map((c, i) => (
 						<div
@@ -362,6 +484,8 @@ export function Composer({
 							role="option"
 							aria-selected={i === pick}
 							className={`slash-item ${i === pick ? "on" : ""}`}
+							aria-disabled={c.disabled || undefined}
+							style={c.disabled ? { opacity: 0.55 } : undefined}
 							onMouseEnter={() => setPick(i)}
 							onMouseDown={(e) => {
 								e.preventDefault();
@@ -375,7 +499,9 @@ export function Composer({
 							<span className="hint">{c.help}</span>
 						</div>
 					))}
-					<div className="hint slash-foot">Tab completes · other /words go to the agent as written</div>
+					<div className="hint slash-foot" data-commands-hint={commandsHint ? "" : undefined}>
+						{commandsHint ?? (pi ? "Tab completes · //text sends /text as a message" : "Tab completes · other /words go to the agent as written")}
+					</div>
 				</div>
 			)}
 			{/* Keyed on this thread's model: a thread started before sign-in stays on the simulator until switched. */}
@@ -421,11 +547,14 @@ export function Composer({
 							? COMPOSER_BUSY_HINT
 							: pi
 								? summary?.control
-									? "Message the agent… (Enter starts a turn, Shift+Enter adds a line)"
+									? "Message the agent… (Enter starts a turn, Shift+Enter adds a line, / for commands)"
 									: "Message the agent… (Enter types it into the Herdr pane, Shift+Enter adds a line)"
 								: "Message the agent… (Enter sends, Shift+Enter adds a line, / for commands, paste or drop images)"
 					}
-					onChange={(e) => setText(e.target.value)}
+					onChange={(e) => {
+						setText(e.target.value);
+						setChoice(undefined);
+					}}
 					onPaste={(e) => {
 						const files = [...e.clipboardData.files].filter((f) => f.type.startsWith("image/"));
 						if (files.length) {
@@ -445,10 +574,10 @@ export function Composer({
 						} else if (whenBusy) {
 							e.preventDefault();
 							// Enter on a partly typed command picks the highlighted one.
-							if (matches.length > 0 && !list.some((c) => `/${c.name}` === text.trim())) {
+							if (matches.length > 0 && !menu.some((c) => `/${c.name}` === text.trim())) {
 								const c = matches[pick]!;
 								if (c.args) return setText(`/${c.name} `);
-								void runCommand(`/${c.name}`);
+								void send(whenBusy, `/${c.name}`);
 								return;
 							}
 							void send(whenBusy);
@@ -463,6 +592,16 @@ export function Composer({
 				/>
 				{error && <div className="composer-feedback error" role="alert">{error} Your draft is kept; correct the issue and try again.</div>}
 				{note && !error && <div className="composer-feedback" role="status">{note}</div>}
+				{choice && (
+					<div className="composer-feedback" role="alert" data-command-choice>
+						{choice.message}{" "}
+						{choice.actions.map((a) => (
+							<button key={a.label} className="btn small" onClick={() => (setChoice(undefined), void a.run())}>
+								{a.label}
+							</button>
+						))}
+					</div>
+				)}
 				<div className="composer-bar">
 					{!pi && (
 					<button className="btn ghost small" title="Attach images (or paste or drop them)" onClick={() => fileInput.current?.click()}>

@@ -19,7 +19,7 @@ export function modelsChanged(host: string): void {
 }
 
 function LoginFlow({ host, loginId, onEnd }: { host: string; loginId: string; onEnd: (state: Any) => void }) {
-	const { value } = useTopic<Any>(host, { kind: "login", loginId });
+	const { value } = useTopic(host, { kind: "login", loginId });
 	const [answer, setAnswer] = useState("");
 	const [error, setError] = useState<string>();
 	useEffect(() => setAnswer(""), [value?.prompt?.id]);
@@ -126,7 +126,7 @@ export function AccountsDialog({ host, hostLabel, onClose }: { host: string; hos
 	const [login, setLogin] = useState<{ id: string; providerId: string }>();
 	const [notice, setNotice] = useState<string>();
 	const load = () =>
-		hub.request<Provider[]>(host, "accounts.list").then(
+		hub.request(host, "accounts.list").then(
 			(list) => setProviders(list),
 			(e) => setError((e as Error).message),
 		);
@@ -137,7 +137,7 @@ export function AccountsDialog({ host, hostLabel, onClose }: { host: string; hos
 		setError(undefined);
 		setNotice(undefined);
 		try {
-			const state = await hub.request<{ id: string }>(host, "accounts.login", { providerId: provider.id, type: method.type });
+			const state = await hub.request(host, "accounts.login", { providerId: provider.id, type: method.type });
 			setLogin({ id: state.id, providerId: provider.id });
 		} catch (e) {
 			setError((e as Error).message);

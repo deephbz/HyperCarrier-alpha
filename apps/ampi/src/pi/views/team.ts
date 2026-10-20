@@ -1,8 +1,7 @@
-import type { PiView, PiViewContext } from "./types.ts";
+import type { PiTeamTask, PiTeamsFrame, PiView, PiViewContext } from "./types.ts";
 
-export type PiTeamTask = { id: string; title: string; status: string; owner?: string; deps: string[]; ready: boolean; updatedAt?: string };
-type RecordedMember = { team: string; member: string; role: string; session?: string; pane?: string };
-type TeamFrame = { status?: string; codes?: string[]; recorded?: RecordedMember[]; tasks?: Record<string, { availability: string; tasks: PiTeamTask[]; issues: string[] }> };
+export type { PiTeamTask };
+type TeamFrame = Omit<PiTeamsFrame, "t">;
 
 export type TeamValue = {
 	availability: string;
@@ -35,8 +34,9 @@ function project(ctx: PiViewContext, snapshot: TeamFrame, threadId?: string): Te
 	};
 }
 
-export const teamView: PiView = {
+export const teamView: PiView<"team"> = {
 	name: "team",
 	scope: "any",
 	value: (ctx, topic) => project(ctx, ctx.teamsFrame() ?? {}, topic.threadId),
+	ops: {},
 };

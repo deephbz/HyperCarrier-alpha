@@ -65,13 +65,15 @@ export function cosDemo({ dir, agentDir, sessions }: DemoContext) {
 		});
 		appendFileSync(big, out);
 	}
-	// Real ctx.ask transport, offline answer. Touch <DEMO_DIR>/cos-no-model to exercise a missing model.
+	// Real ctx.ask transport, offline answer. Touch <DEMO_DIR>/cos-no-model to exercise a missing model, and
+	// <DEMO_DIR>/cos-empty-tree for a tier-2 answer with nothing in it.
 	writeFileSync(join(dir, "cos-model.cjs"), `const fs = require('node:fs');
 if (fs.existsSync(${JSON.stringify(join(dir, "cos-no-model"))})) { console.error('No model available in this synthetic demo. Remove cos-no-model to enable the offline model.'); process.exit(2); }
 let input = ''; process.stdin.on('data', d => input += d).on('end', () => {
   fs.appendFileSync(${JSON.stringify(join(dir, "ask-calls.jsonl"))}, JSON.stringify({ kind: input.includes('Write the re-entry recap.') ? 'recap' : 'other' }) + '\\n');
   let p; try { p = JSON.parse(input); } catch { setTimeout(() => { if (/Question: "fail/i.test(input)) process.exit(3); console.log(input.includes('Write the re-entry recap.') ? 'The reader work has progressed; review the reported tests and decide the next step.' : 'The agent reports tests passing and changes to reader.ts. This is selected prose, not independent verification.'); }, 600); return; }
   const names = ['Session reader', 'One GUI', 'Verification'];
+  if (p.arcs && fs.existsSync(${JSON.stringify(join(dir, "cos-empty-tree"))})) { console.log(JSON.stringify({ asks: [], threads: [], unassigned: {} })); return; }
   if (p.arcs) {
     // Tier 2: cite real entry IDs from the supplied evidence and quote their first words. Every candidate becomes an
     // ask of a rotating kind; an ask whose next owner turn starts with "Yes" is answered by it. Enough leaves to fold.

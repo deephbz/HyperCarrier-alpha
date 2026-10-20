@@ -6,15 +6,21 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { homedir, hostname } from "node:os";
-import { extname, join, normalize, resolve } from "node:path";
+import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
-import type { NodeFrame, Topic } from "../shared/protocol.ts";
+import type { HostsFrame, HubOps, NodeFrame, Topic } from "../shared/protocol.ts";
 import { type HostConfig, HostLink, type HostState } from "./hosts.ts";
 import { PiHost, type PiHostConfig } from "../pi/host.ts";
+import { buildQueue, deriveQueue } from "../pi/derive-queue.ts";
 import { complete, instant, nowUs, span, tracing } from "../trace.ts";
+import { type HelperModels, hubConfigPath, updateHubHosts, useHubConfig } from "./helper-models.ts";
 
-export type HubConfig = { hosts: (HostConfig | PiHostConfig)[]; backend?: "pi"; self?: string };
+export { hubConfigPath };
+
+// `models` names helper models; helper-models.ts reads them from the file on every call and owns every hub.json write.
+/** `persistentCookie`: the login cookie outlives the client session (see `loginCookie`). */
+export type HubConfig = { hosts: (HostConfig | PiHostConfig)[]; backend?: "pi"; self?: string; models?: HelperModels; persistentCookie?: boolean };
 
 /** Browser → hub frames: node frames addressed to one host, plus hub operations. */
 type BrowserFrame =
@@ -72,6 +78,32 @@ export function cookieName(port: number): string {
 	return `ampi_k_${port}`;
 }
 
+/**
+ * The login cookie. Cookies ignore the port, so a client collects one per hub port it ever signed in to. Only a hub that
+ * opts in (`persistentCookie`: the owner's long-lived hub) leaves a year-long cookie; every other hub's cookie ends with
+ * the client session. The expiring form matches it attribute for attribute, or the client keeps the old one.
+ */
+export function loginCookie(port: number, value: string, persistent: boolean): string {
+	return `${cookieName(port)}=${value}; HttpOnly; SameSite=Strict; Path=/${persistent ? "; Max-Age=31536000" : ""}`;
+}
+const expiredCookie = (name: string) => `${name}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`;
+
+/**
+ * Above this many `ampi_k_*` cookies in one request the hub expires the other ports' cookies. At about 79 bytes each,
+ * Node's default 16 KiB header limit broke at about 205 (431 before the hub saw the request). A person with a few
+ * long-lived hubs stays far below 32, so their other hubs stay signed in; a client that collected disposable hubs'
+ * cookies heals on its next request, long before the 64 KiB limit below (about 800).
+ */
+const STALE_COOKIE_LIMIT = 32;
+/** The HTTP header limit: it must leave room for a piled-up client to reach the heal above. */
+const MAX_HEADER_BYTES = 64 * 1024;
+/** The backstop: a client past MAX_HEADER_BYTES never reaches the hub's code, so the parser's refusal must say what to do. */
+const HEADER_OVERFLOW_PAGE = `<!doctype html><meta charset="utf-8"><title>AmPi: too many cookies</title><body style="font: 14px -apple-system, sans-serif; max-width: 640px; margin: 15vh auto">
+<h2>AmPi cannot read this request: too many AmPi cookies for 127.0.0.1</h2>
+<p>Each AmPi hub you signed in to left a cookie, and together they are too large to send.</p>
+<p>In a browser, clear the cookies for 127.0.0.1, then run <code>ampi open</code> for a fresh link.</p>
+<p>AmPi.app on macOS: quit it and remove its website data: <code>rm ~/Library/HTTPStorages/dev.hypercarrier.ampi.binarycookies</code>, then open it again. Or use a browser tab via <code>ampi open</code>.</p></body>`;
+
 /** What the hub shows unauthenticated callers to prove it holds the key, without revealing it. */
 export function hubProof(token: string): string {
 	return createHash("sha256").update(`ampi-hub:${token}`).digest("hex").slice(0, 32);
@@ -84,10 +116,6 @@ function same(a: string, b: string): boolean {
 	return x.length === y.length && timingSafeEqual(x, y);
 }
 
-export function hubConfigPath(): string {
-	return process.env.AMPI_HUB_CONFIG ?? join(process.env.AMPI_HOME ?? join(homedir(), ".ampi"), "hub.json");
-}
-
 /**
  * Pi backend (D15 stage 1): `"backend": "pi"` in hub.json, or AMPI_BACKEND=pi. This machine is a Pi Host named by its
  * own Host ID (`self`, default this machine's `hostname`), and no pi-durable node starts. Without it the hub keeps the AmPi node.
@@ -95,19 +123,15 @@ export function hubConfigPath(): string {
 export function loadHubConfig(path = hubConfigPath()): HubConfig {
 	const parsed = existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as Partial<HubConfig> & { backend?: string; self?: string }) : {};
 	const hosts = parsed.hosts ?? [];
+	const models = { ...(parsed.models ? { models: parsed.models } : {}), ...(parsed.persistentCookie === true ? { persistentCookie: true } : {}) };
 	if ((parsed.backend ?? process.env.AMPI_BACKEND) === "pi") {
 		// Every Session reference names its Host, so this machine always has a real name, never a placeholder.
 		const self = parsed.self ?? process.env.AMPI_SELF ?? hostname();
 		if (!hosts.some((host) => host.kind === "pi-local")) hosts.unshift({ id: self, label: self, kind: "pi-local" });
-		return { hosts, backend: "pi", self };
+		return { hosts, backend: "pi", self, ...models };
 	}
 	if (!hosts.some((host) => host.kind === "local")) hosts.unshift({ id: "local", label: process.platform === "darwin" ? "This Mac" : "Local", kind: "local" });
-	return { hosts };
-}
-
-function saveHubConfig(config: HubConfig, path = hubConfigPath()): void {
-	mkdirSync(resolve(path, ".."), { recursive: true, mode: 0o700 });
-	writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+	return { hosts, ...models };
 }
 
 class BrowserClient {
@@ -158,9 +182,14 @@ export class Hub {
 	port = 0;
 	#milestones = new Set<string>();
 
-	constructor(config: HubConfig, options: { configPath?: string; token?: string } = {}) {
+	readonly persistentCookie: boolean;
+	#healLogged = new Map<string, number>();
+
+	constructor(config: HubConfig, options: { configPath?: string; token?: string; persistentCookie?: boolean } = {}) {
 		this.config = config;
+		this.persistentCookie = options.persistentCookie ?? config.persistentCookie === true;
 		this.configPath = options.configPath;
+		useHubConfig(options.configPath, config.models);
 		this.token = options.token ?? hubToken();
 		for (const host of config.hosts) this.#addLink(host);
 	}
@@ -190,7 +219,7 @@ export class Hub {
 
 	#broadcastHosts(): void {
 		const hosts = this.hostStates();
-		for (const client of this.clients) client.send({ t: "hosts", hosts });
+		for (const client of this.clients) client.send({ t: "hosts", hosts } satisfies HostsFrame);
 	}
 
 	#fromHost(hostId: string, frame: NodeFrame): void {
@@ -201,7 +230,7 @@ export class Hub {
 			owner.client.send({ ...frame, id: owner.id });
 			return;
 		}
-		if (frame.t === "snap" || frame.t === "ops" || frame.t === "end") {
+		if (frame.t === "snap" || frame.t === "ops" || frame.t === "end" || frame.t === "pending") {
 			const owner = this.#hostSubs.get(hostId)?.get(frame.sid);
 			if (!owner) return;
 			if (frame.t === "end") this.#hostSubs.get(hostId)!.delete(frame.sid);
@@ -287,7 +316,7 @@ export class Hub {
 
 	async #hubOp(client: BrowserClient, id: number, op: string, args: Record<string, unknown>): Promise<void> {
 		try {
-			let value: unknown;
+			let value: HubOps[keyof HubOps]["result"];
 			switch (op) {
 				case "hosts.add": {
 					const target = String(args.target ?? "").trim();
@@ -296,10 +325,10 @@ export class Hub {
 						// The SSH alias is the Host's identity (D15): one link per alias.
 						if (this.links.has(target)) throw new Error(`${target} is already added`);
 						const pi: PiHostConfig = { id: target, label: String(args.label || target), kind: "pi-ssh", target };
+						if (this.configPath) updateHubHosts<HostConfig | PiHostConfig>(this.configPath, (hosts) => [...hosts, pi]);
 						this.config.hosts.push(pi);
-						if (this.configPath) saveHubConfig(this.config, this.configPath);
 						this.#addLink(pi).start();
-						value = { id: pi.id };
+						value = { id: pi.id } satisfies HubOps["hosts.add"]["result"];
 						break;
 					}
 					const host: HostConfig = {
@@ -310,16 +339,18 @@ export class Hub {
 						// The remote command is not settable from the page: a browser-reachable API that runs arbitrary
 						// commands would turn any hub compromise into code execution. Custom commands live in hub.json.
 					};
+					if (this.configPath) updateHubHosts<HostConfig | PiHostConfig>(this.configPath, (hosts) => [...hosts, host]);
 					this.config.hosts.push(host);
-					if (this.configPath) saveHubConfig(this.config, this.configPath);
 					this.#addLink(host).start();
-					value = { id: host.id };
+					value = { id: host.id } satisfies HubOps["hosts.add"]["result"];
 					break;
 				}
 				case "hosts.remove": {
 					const hostId = String(args.id);
 					const link = this.links.get(hostId);
 					if (!link || link.config.kind === "local" || link.config.kind === "pi-local") throw new Error("Cannot remove this host");
+					// The file changes first: a refused write leaves the Host connected and listed.
+					if (this.configPath) updateHubHosts<HostConfig | PiHostConfig>(this.configPath, (hosts) => hosts.filter((h) => h.id !== hostId));
 					await link.stop();
 					this.links.delete(hostId);
 					// Fail what was in flight and end open views instead of leaving them pending forever.
@@ -328,13 +359,12 @@ export class Hub {
 					this.#hostSubs.delete(hostId);
 					this.#hostReqs.delete(hostId);
 					this.config.hosts.splice(this.config.hosts.findIndex((h) => h.id === hostId), 1);
-					if (this.configPath) saveHubConfig(this.config, this.configPath);
-					value = {};
+					value = {} satisfies HubOps["hosts.remove"]["result"];
 					break;
 				}
 				case "hosts.reconnect":
 					this.links.get(String(args.id))?.reconnect();
-					value = {};
+					value = {} satisfies HubOps["hosts.reconnect"]["result"];
 					break;
 				default:
 					throw new Error(`Unknown hub operation ${op}`);
@@ -357,7 +387,13 @@ export class Hub {
 	}
 
 	async listen(port: number, host = "127.0.0.1"): Promise<number> {
-		const server = createServer((req, res) => this.#http(req, res, port));
+		const server = createServer({ maxHeaderSize: MAX_HEADER_BYTES }, (req, res) => this.#http(req, res, port));
+		server.on("clientError", (error: NodeJS.ErrnoException, socket) => {
+			// Only header overflow gets the explanation; every other parse error keeps Node's default answer.
+			if (error.code !== "HPE_HEADER_OVERFLOW") return void socket.destroy(error);
+			if (!socket.writable) return void socket.destroy();
+			socket.end(`HTTP/1.1 431 Request Header Fields Too Large\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: ${Buffer.byteLength(HEADER_OVERFLOW_PAGE)}\r\nConnection: close\r\n\r\n${HEADER_OVERFLOW_PAGE}`);
+		});
 		const wss = new WebSocketServer({ noServer: true, maxPayload: 32 * 1024 * 1024 });
 		server.on("upgrade", (req, socket, head) => {
 			if (!this.#trusted(req) || !this.#authorized(req) || !req.url?.startsWith("/ws")) {
@@ -368,7 +404,7 @@ export class Hub {
 				const client = new BrowserClient(this, ws);
 				this.clients.add(client);
 				this.milestone("first-ws-connect");
-				client.send({ t: "hosts", hosts: this.hostStates() });
+				client.send({ t: "hosts", hosts: this.hostStates() } satisfies HostsFrame);
 				ws.on("message", (data) => {
 					const start = tracing ? nowUs() : 0;
 					let frame: BrowserFrame | undefined;
@@ -438,7 +474,23 @@ export class Hub {
 		if (health && res.statusCode === 200) this.milestone("health-ok");
 	}
 
+	/** Expiring Set-Cookie headers for the other ports' hub cookies, when a request carries a pile-up of them. */
+	#staleCookies(req: IncomingMessage): string[] {
+		const names = (req.headers.cookie ?? "").split(";").map((part) => part.trim().split("=")[0]!).filter((name) => /^ampi_k_\d+$/.test(name));
+		if (names.length <= STALE_COOKIE_LIMIT) return [];
+		const stale = [...new Set(names)].filter((name) => name !== cookieName(this.port));
+		// One line per user agent per minute: a client heals on its next response, but parallel requests can repeat.
+		const agent = String(req.headers["user-agent"] ?? "no user agent").slice(0, 120), now = Date.now();
+		if ((this.#healLogged.get(agent) ?? 0) + 60_000 <= now) {
+			this.#healLogged.set(agent, now);
+			console.log(`hub: expired ${stale.length} stale ampi_k_* cookies from a client (${agent})`);
+		}
+		return stale.map(expiredCookie);
+	}
+
 	#serve(req: IncomingMessage, res: ServerResponse, _port: number): void {
+		const stale = this.#staleCookies(req);
+		if (stale.length) res.setHeader("set-cookie", stale);
 		if (!this.#trusted(req)) {
 			res.writeHead(403).end("forbidden");
 			return;
@@ -452,13 +504,13 @@ export class Hub {
 				res.writeHead(403, { "content-type": "text/plain" }).end("This AmPi access key is not valid. Run `ampi open` for the current link.");
 				return;
 			}
-			res.writeHead(303, { location, "set-cookie": `${cookieName(this.port)}=${this.token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000` }).end();
+			res.writeHead(303, { location, "set-cookie": [...stale, loginCookie(this.port, this.token, this.persistentCookie)] }).end();
 			return;
 		}
 		if (url.pathname === "/api/health") {
 			// Unauthenticated callers learn only that this hub answers and a proof that it holds the key, so the app hands
 			// the key only to the real hub, never to another process that took the port.
-			const body = this.#authorized(req) ? { ok: true, proof: hubProof(this.token), hosts: this.hostStates() } : { ok: true, proof: hubProof(this.token) };
+			const body = this.#authorized(req) ? { ok: true, proof: hubProof(this.token), hosts: this.hostStates(), derive: deriveQueue(), builds: buildQueue() } : { ok: true, proof: hubProof(this.token) };
 			res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(body));
 			return;
 		}

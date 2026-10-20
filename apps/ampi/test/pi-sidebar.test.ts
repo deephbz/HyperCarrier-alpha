@@ -1,3 +1,4 @@
+import "./bound.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { nestTeams, projectTeamRows } from "../web/src/components/team-nesting.ts";
@@ -19,14 +20,14 @@ test("nestTeams places workers under their leader and preserves leader order", (
 	]);
 });
 
-test("projectTeamRows hides collapsed workers and exposes their count", () => {
+test("projectTeamRows folds every leader the owner did not expand, including a Team that starts later", () => {
 	const lead = thread("lead", "lead", "team");
 	const workerA = thread("worker-a", "worker", "team", "lens");
 	const workerB = thread("worker-b", "worker", "team", "side");
-	const collapsed = projectTeamRows([lead, workerA, workerB], new Set(["team"]));
+	const collapsed = projectTeamRows([lead, workerA, workerB], new Set(["other-team"]));
 	assert.deepEqual(collapsed.map(({ row, child, hasChildren, open, count }) => ({ id: row.id, child, hasChildren, open, count })), [
 		{ id: "lead", child: false, hasChildren: true, open: false, count: 2 },
 	]);
-	const expanded = projectTeamRows([lead, workerA, workerB], new Set());
+	const expanded = projectTeamRows([lead, workerA, workerB], new Set(["team"]));
 	assert.deepEqual(expanded.map(({ row }) => row.id), ["lead", "worker-a", "worker-b"]);
 });

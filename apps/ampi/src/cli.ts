@@ -9,9 +9,11 @@ import { ampiHome, doctor, hubPort, versionLine } from "./doctor.ts";
 
 const USAGE = `usage: ampi [command]
 
-  hub [--port N] [--open] [--rotate-key]
+  hub [--port N] [--open] [--rotate-key] [--persistent-cookie]
                             run the hub (the default); a terminal gets the window's link.
                             --rotate-key replaces the access key first: old links and cookies stop working
+                            --persistent-cookie keeps the login for a year (hub.json: "persistentCookie": true);
+                            otherwise it ends with the browser session
   open [--open]             print the link to the running hub, with its access key
   doctor                    check this machine and every host, and say how to fix problems
   status                    show this machine's node
@@ -51,7 +53,7 @@ switch (command) {
 		const configPath = flag("config") ?? hubConfigPath();
 		const rotated = rest.includes("--rotate-key") ? newHubToken() : undefined;
 		const config = span("config-load", "startup", () => loadHubConfig(configPath));
-		const hub = span("hub-construct", "startup", () => new Hub(config, { configPath, token: rotated ?? hubToken(ampiHome()) }));
+		const hub = span("hub-construct", "startup", () => new Hub(config, { configPath, token: rotated ?? hubToken(ampiHome()), ...(rest.includes("--persistent-cookie") ? { persistentCookie: true } : {}) }));
 		const wanted = hubPort(flag("port"));
 		const port = await spanAsync("listen", "startup", () => hub.listen(wanted)).catch((error: NodeJS.ErrnoException) => {
 			if (error.code === "EADDRINUSE") {

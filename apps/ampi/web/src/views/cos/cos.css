@@ -89,6 +89,8 @@
 .cos-brush-caption { margin-top: 8px; min-height: 16px; }
 .cos-notice, .cos-error { margin: 0; padding: 12px 20px; max-width: 86ch; font-size: 12px; color: var(--text-2); }
 .cos-error { color: var(--err); }
+.cos-models { margin: 0; padding: 0 20px 12px; font-size: 12px; color: var(--text-2); }
+.cos-models ul { margin: 4px 0 0; padding-left: 16px; max-height: 16em; overflow: auto; }
 .cos-empty { padding: 32px 20px; margin: 0; color: var(--text-2); max-width: 76ch; }
 .cos-list { padding: 0 20px 20px; }
 .cos-list-head, .cos-list-row { display: grid; grid-template-columns: minmax(0, 1fr) 64px 72px 128px; gap: 16px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }
@@ -133,7 +135,7 @@
 .cos-chunk-start, .cos-chunk-end { font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .cos-chunk-start:hover, .cos-chunk-end:hover { color: var(--accent); }
 .cos-chunk-project { min-width: 0; font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cos-chunk[data-state="unlabelled"] .cos-chunk-project { font-weight: 400; color: var(--text-2); }
+.cos-chunk[data-state="unlabelled"] .cos-chunk-project, .cos-chunk[data-state="relabel"] .cos-chunk-project { font-weight: 400; color: var(--text-2); }
 .cos-glyph { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .cos-glyph > span[aria-hidden] { color: var(--text-3); }
 .cos-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

@@ -1,3 +1,4 @@
+import "./bound.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { nextTimelineWindow, timelineWindow, windowRange, type TimelineWindow } from "../web/src/views/cos/window.ts";

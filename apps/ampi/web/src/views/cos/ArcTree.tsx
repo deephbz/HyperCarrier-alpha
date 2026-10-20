@@ -69,18 +69,30 @@ function ContextTree({ context }: { context: ArcContext }) {
 	</section>;
 }
 
-/** The stale line: what the tree covers and what is newer. One rule (Rarebit messages) for the tree and the synthesis. */
-function coverText({ context, contextStatus: s }: Pick<ArcValue, "context" | "contextStatus">) {
-	if (s.branchChanged) return "The active Rarebit branch changed since this Build. Build arc to cover it.";
+type TreeValue = Pick<ArcValue, "context" | "contextStatus"> & Partial<Pick<ArcValue, "nextAutoAt" | "relabelChunks" | "floor">>;
+const clock = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+/**
+ * The stale line: what the tree covers, what is newer, and when it updates. One rule (Rarebit messages) for the tree
+ * and the synthesis; a pending automatic Build replaces the Build arc prompt with its due time.
+ */
+function coverText({ context, contextStatus: s, nextAutoAt }: TreeValue) {
+	const next = nextAutoAt ? `Next automatic update ≈${clock(nextAutoAt)}.` : "";
+	if (s.branchChanged) return `The active Rarebit branch changed since this Build. ${next || "Build arc to cover it."}`;
 	const upTo = s.coveredAt ? when(new Date(s.coveredAt).toISOString()) : context?.asOfEntryId ? `#${context.asOfEntryId}` : "its start";
-	return `Covered up to ${upTo} · ${s.newMessages} newer message${s.newMessages === 1 ? "" : "s"} or compaction${s.newMessages === 1 ? "" : "s"}. Build arc to cover them.`;
+	return `Covered up to ${upTo} · ${s.newMessages} newer message${s.newMessages === 1 ? "" : "s"}. ${next || "Build arc to cover them."}`;
 }
 
-/** The stale line, then Needs you and the folded Work tree; a missing receipt says Not built. */
-export function ArcContextView({ value: v }: { value: Pick<ArcValue, "context" | "contextStatus"> }) {
+/**
+ * The stale line, then Needs you and the folded Work tree; a missing receipt says Not built. Below the floor a quiet
+ * line comes first; it replaces Not built, and a stored tree with work threads stays below it.
+ */
+export function ArcContextView({ value: v }: { value: TreeValue }) {
 	return <>
+		{v.floor && <p className="cos-meta" role="status">Nothing to summarize yet. Arcs build automatically after {v.floor.min} messages; this Session has {v.floor.messages}.</p>}
 		{(v.contextStatus.newMessages > 0 || v.contextStatus.branchChanged) && <p className="cos-notice" role="status">{coverText(v)}</p>}
-		{v.context && v.contextStatus.formatChanged && <p className="cos-notice">This tree uses the older long titles. The next Build arc rewrites them.</p>}
-		{v.context ? <ContextTree context={v.context} /> : <section aria-label="Evergreen context"><h2>Needs you</h2><p className="cos-meta">Not built. Build arc to create the cited work tree from this Session’s Rarebit messages.</p></section>}
+		{v.relabelChunks ? <p className="cos-notice" role="status">Chunk rules changed; one Build relabels {v.relabelChunks} chunk{v.relabelChunks === 1 ? "" : "s"}.{v.nextAutoAt ? ` Next automatic update ≈${clock(v.nextAutoAt)}.` : ""}</p>
+			: v.context && v.contextStatus.formatChanged && <p className="cos-notice">This tree uses the older long titles. The next Build arc rewrites them.</p>}
+		{v.context ? <ContextTree context={v.context} /> : !v.floor && <section aria-label="Evergreen context"><h2>Needs you</h2><p className="cos-meta">{v.contextStatus.unknown ? "This Arc was built before the work tree existed, so what it covers is unknown. Build arc to create the cited work tree." : "Not built. Build arc to create the cited work tree from this Session’s Rarebit messages."}</p></section>}
 	</>;
 }

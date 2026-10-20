@@ -1,3 +1,4 @@
+import "./bound.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 // @ts-ignore: the perf scripts are plain ESM.

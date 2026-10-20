@@ -1,3 +1,4 @@
+import "./bound.ts";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createConnection } from "node:net";

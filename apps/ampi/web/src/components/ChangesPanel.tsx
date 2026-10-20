@@ -1,11 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import type { UiEntry, UiThreadView } from "../../../src/node/projection.ts";
+import type { PiEntry } from "../../../src/shared/protocol.ts";
 import { hub, useTopic } from "../client.ts";
 import { clock } from "../util.ts";
 import { Diff, editPatch } from "./ToolCall.tsx";
-
-// biome-ignore lint: tool arguments are loosely typed JSON
-type Any = any;
 
 type Change = { entryId: string; ts?: number; tool: "edit" | "write"; patch: string; failed: boolean };
 
@@ -42,7 +39,7 @@ function WorkingTree({ host, cwd, refreshKey }: { host: string; cwd?: string; re
 	const [tick, setTick] = useState(0);
 	useEffect(() => {
 		let live = true;
-		hub.request<GitChanges>(host, "git.changes", { cwd }).then(
+		hub.request(host, "git.changes", { cwd }).then(
 			(r) => live && (setGit(r), setError(undefined)),
 			(e) => live && setError((e as Error).message),
 		);
@@ -119,17 +116,17 @@ function WorkingTree({ host, cwd, refreshKey }: { host: string; cwd?: string; re
  * edited or wrote, over the full durable history (the explanation; compaction hides nothing here).
  */
 export function ChangesPanel({ host, threadId }: { host: string; threadId: string }) {
-	const { value: view } = useTopic<UiThreadView>(host, { kind: "thread", threadId });
-	const [history, setHistory] = useState<UiEntry[]>();
+	const { value: view } = useTopic(host, { kind: "thread", threadId });
+	const [history, setHistory] = useState<PiEntry[]>();
 	const [open, setOpen] = useState<Set<string>>(new Set());
 	const lastId = view?.entries.at(-1)?.id;
 	useEffect(() => {
 		let live = true;
 		(async () => {
-			const all: UiEntry[] = [];
+			const all: PiEntry[] = [];
 			let before = String(Number(lastId ?? 0) + 1);
 			for (let page = 0; page < 40; page++) {
-				const r = await hub.request<{ entries: UiEntry[]; more: boolean }>(host, "thread.history", { threadId, before, limit: 500 });
+				const r = await hub.request(host, "thread.history", { threadId, before, limit: 500 });
 				all.unshift(...r.entries);
 				if (!r.more || r.entries.length === 0) break;
 				before = r.entries[0]!.id;
@@ -141,21 +138,21 @@ export function ChangesPanel({ host, threadId }: { host: string; threadId: strin
 		};
 	}, [host, threadId, lastId]);
 	const files = useMemo(() => {
-		const results = new Map<string, Any>();
+		const results = new Map<string, Extract<PiEntry, { kind: "tool-result" }>>();
 		for (const e of history ?? []) if (e.kind === "tool-result") results.set(e.callId, e);
 		const byPath = new Map<string, Change[]>();
 		for (const e of history ?? []) {
 			if (e.kind !== "assistant") continue;
 			for (const block of e.blocks) {
 				if (block.type !== "tool" || (block.name !== "edit" && block.name !== "write")) continue;
-				const args = (block.args ?? {}) as Any;
-				const path = String(args.path ?? "");
+				const { args } = block;
+				const path = args.path ?? "";
 				if (!path) continue;
 				const result = results.get(block.callId);
 				const patch =
 					block.name === "edit"
-						? String(result?.details?.patch ?? editPatch(args))
-						: String(args.content ?? "")
+						? editPatch(args.edits ?? [])
+						: (args.content ?? "")
 								.replace(/\n$/, "")
 								.split("\n")
 								.map((l: string) => `+${l}`)
@@ -167,7 +164,7 @@ export function ChangesPanel({ host, threadId }: { host: string; threadId: strin
 		}
 		return [...byPath.entries()].sort((a, b) => Number(b[1].at(-1)!.entryId) - Number(a[1].at(-1)!.entryId));
 	}, [history]);
-	const cwd = (view?.agent as Any)?.cwd as string | undefined;
+	const cwd = view?.agent.cwd;
 	const tree = <WorkingTree host={host} cwd={cwd} refreshKey={lastId} />;
 	if (!history)
 		return (

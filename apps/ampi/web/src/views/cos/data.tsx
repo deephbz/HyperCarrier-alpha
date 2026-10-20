@@ -1,19 +1,23 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useHosts, useTopic, type HostState } from "../../client.ts";
+import type { ViewFailure } from "../../../../src/shared/protocol.ts";
+import { useHosts, type HostState } from "../../client.ts";
 
 export type ViewError = { error: { code: string; message: string } };
 type Feed<T> = { host: HostState; value?: T; stale: boolean; error?: string };
-function HostValue<T>({ host, view, onValue }: { host: HostState; view: string; onValue: (id: string, value: Omit<Feed<T>, "host">) => void }) {
-	const feed = useTopic<T | ViewError>(host.id, { kind: "view", view });
+/** One Host's replica of a fleet view, as `useTopic` returns it. Define it at module scope: it is a hook. */
+export type FleetFeed<T> = (host: string) => { value: T | ViewFailure | undefined; stale: boolean; error?: string };
+const failed = (value: unknown): value is ViewFailure => typeof value === "object" && value !== null && "error" in value;
+function HostValue<T>({ host, feed: useFeed, onValue }: { host: HostState; feed: FleetFeed<T>; onValue: (id: string, value: Omit<Feed<T>, "host">) => void }) {
+	const feed = useFeed(host.id);
 	useEffect(() => {
-		const failed = feed.value && typeof feed.value === "object" && "error" in feed.value ? feed.value as ViewError : undefined;
-		onValue(host.id, failed ? { stale: feed.stale, error: `${failed.error.message}. Reconnect the Host to retry.` } : feed as Omit<Feed<T>, "host">);
+		const value = feed.value;
+		onValue(host.id, failed(value) ? { stale: feed.stale, error: `${value.error.message}. Reconnect the Host to retry.` } : { value, stale: feed.stale, error: feed.error });
 	}, [host.id, feed.value, feed.stale, feed.error, onValue]);
 	return null;
 }
 
 /** A child subscription per Host: hook order does not depend on fleet size. */
-export function useFleet<T>(view: string) {
+export function useFleet<T>(feed: FleetFeed<T>) {
 	const { hosts, connected } = useHosts();
 	const [values, setValues] = useState<Record<string, Omit<Feed<T>, "host">>>({});
 	const update = useCallback((id: string, feed: Omit<Feed<T>, "host">) => setValues((old) => ({ ...old, [id]: feed })), []);
@@ -21,7 +25,7 @@ export function useFleet<T>(view: string) {
 	const feeds = useMemo(() => pi.map((host) => ({ host, ...(values[host.id] ?? { stale: true }) })), [pi, values]);
 	return {
 		feeds,
-		readers: pi.map((host) => <HostValue<T> key={host.id} host={host} view={view} onValue={update} />),
+		readers: pi.map((host) => <HostValue<T> key={host.id} host={host} feed={feed} onValue={update} />),
 		connected,
 	};
 }

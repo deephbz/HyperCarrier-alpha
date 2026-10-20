@@ -10,10 +10,11 @@
 import { spawn, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { constants, homedir, tmpdir } from 'node:os';
+import { delimiter, dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ampiSubmodules, ownRepo, submoduleGit } from '../submodules.mjs';
+import { threadsSnapshot } from './live-rows.mjs';
 
 // `checkout` holds this harness and the proof. `target` is the checkout under test: the same one, or the disposable
 // worktree that `run.mjs --checkout <sha>` creates and names in AMPI_VERIFY_TARGET.
@@ -90,7 +91,7 @@ export async function launch({ runId = `run-${new Date().toISOString().replace(/
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const home = join(run, 'home'), demo = join(run, 'demo'), log = join(run, `hub-${attempt}.log`);
     mkdirSync(join(home, '.ampi'), { recursive: true });
-    const env = { ...process.env, HOME: home, AMPI_HOME: join(home, '.ampi'), AMPI_HUB_CONFIG: join(home, '.ampi/hub.json'), PI_CODING_AGENT_DIR: join(demo, 'agent'), DEMO_DIR: demo, PORT: '0' };
+    const env = { ...process.env, PATH: refusingPath(join(run, 'bin'), process.env.PATH), HOME: home, AMPI_HOME: join(home, '.ampi'), AMPI_HUB_CONFIG: join(home, '.ampi/hub.json'), PI_CODING_AGENT_DIR: join(demo, 'agent'), DEMO_DIR: demo, PORT: '0' };
     const out = openSync(log, 'a');
     const child = spawn(process.execPath, ['scripts/pi-demo.ts'], { cwd: app, detached: true, env, stdio: ['ignore', out, out] });
     child.unref();
@@ -107,9 +108,11 @@ export async function launch({ runId = `run-${new Date().toISOString().replace(/
     writeFileSync(join(run, 'hub.key'), match[2], { mode: 0o600 });
     const state = { schema: 'ampi-verify-hub/1', runId, run, proof, pid: child.pid, port, origin: `http://127.0.0.1:${port}`, home, demo, log, revision: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: app, encoding: 'utf8' }).trim(), startedAt: new Date().toISOString() };
     writeFileSync(join(run, 'hub.json'), JSON.stringify(state, null, 2) + '\n');
-    // The hub prints its URL before the demo Host connects; launch owns that wait, the doctor stays one-shot.
+    // The hub prints its URL before the demo Host connects and lists the fixture Herdr; launch owns that wait, the
+    // doctor stays one-shot.
     const hostWait = Date.now();
     while (Date.now() - hostWait < 20_000 && !(await hostConnected(state))) await sleep(100);
+    while (Date.now() - hostWait < 30_000 && !(await fixtureLeadLive(state))) await sleep(250);
     return state;
   }
   throw new Error(`OS assigned a forbidden port ${attempts} times`);
@@ -119,6 +122,16 @@ async function hostConnected(state) {
   try {
     const health = await (await fetch(`${state.origin}/api/health`, { headers: { authorization: `Bearer ${keyOf(state)}` }, signal: AbortSignal.timeout(2000) })).json();
     return (health.hosts ?? []).some(h => h.id === 'devbox' && h.status === 'connected');
+  } catch { return false; }
+}
+
+// The fixture lead is live in its fake Herdr pane (w1:p1, scripts/pi-demo.ts) only when the Host agent reads the
+// fake Herdr. Any other Herdr leaves it without that pane, so a wrong Herdr fails the doctor once instead of
+// failing every journey.
+async function fixtureLeadLive(state) {
+  try {
+    const lead = (await threadsSnapshot({ port: state.port, host: 'devbox', auth: { bearer: keyOf(state) }, timeoutMs: 3000 })).find(t => t.id === 'pi:sess-lead');
+    return Boolean(lead?.live && lead.location?.pane === 'w1:p1');
   } catch { return false; }
 }
 
@@ -156,10 +169,68 @@ export async function doctor(state) {
     check('hub holds our key', health.proof === proof, 'health proof matches hub.key');
     const hosts = (health.hosts ?? []).map(h => `${h.id}:${h.status}`);
     check('demo Host connected', hosts.includes('devbox:connected'), hosts.join(', ') || 'no hosts');
+    check('fixture Herdr read', await fixtureLeadLive(state), 'pi:sess-lead live in fake Herdr pane w1:p1; otherwise the Host agent may read another Herdr');
     const index = await fetch(`${state.origin}/`, { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(5000) });
     check('web app served', index.ok && (await index.text()).includes('<div id="root"'), `GET / ${index.status}`);
   } catch (error) { check('hub answers', false, error.message); }
   return { ok: checks.every(c => c.ok), checks };
+}
+
+/** The keyed /api/health body: Host states and the `derive` and `builds` job counters. */
+export async function health(state) {
+  return (await fetch(`${state.origin}/api/health`, { headers: { authorization: `Bearer ${keyOf(state)}` }, signal: AbortSignal.timeout(2000) })).json();
+}
+
+/** Builds the hub has started (running plus finished). A hub from before the Build counter reports none. */
+export const buildsStarted = async state => { const b = (await health(state)).builds ?? { pending: 0, done: 0 }; return b.pending + b.done; };
+
+/**
+ * Waits until the hub's background jobs (/api/health `derive` and `builds`) are drained and their counts hold for
+ * `stableMs`. Hub-start Builds call the model, so a step that counts model calls must start after them.
+ * `builds` = true waits for running Builds only. A hub from before the Build counter reports no `builds` and
+ * waits on derive alone.
+ */
+export async function settled(state, { stableMs = 1500, timeout = 60_000, builds = false } = {}) {
+  const until = Date.now() + timeout;
+  let last = '', since = Date.now(), seen = 'no answer';
+  for (;;) {
+    try {
+      const h = await health(state);
+      const b = h.builds ?? { pending: 0, done: 0 }, d = h.derive ?? { pending: 0, done: 0 };
+      seen = `derive pending ${d.pending} done ${d.done}; builds pending ${b.pending} done ${b.done}`;
+      if (builds) { if (!b.pending) return seen; }
+      else {
+        const now = `${d.pending}/${d.done}/${b.pending}/${b.done}`;
+        if (now !== last) { last = now; since = Date.now(); }
+        if (!d.pending && !b.pending && Date.now() - since >= stableMs) return seen;
+      }
+    } catch (error) { seen = `health failed: ${error.message}`; }
+    if (Date.now() > until) throw new Error(`Hub background jobs did not settle within ${timeout / 1000} s (${seen}).`);
+    await new Promise(r => setTimeout(r, 100));
+  }
+}
+
+/**
+ * Ties the hub to this process: a signal or an exit before cleanup() kills its group, so it never outlives the run
+ * (ppid 1). `hub.mjs start` does not call this; its hub keeps running by design. SIGKILL still orphans the hub.
+ */
+export function tieToProcess(state, onSignal = () => {}) {
+  process.once('exit', () => killGroup(state.pid));
+  // A closed terminal pane sends SIGHUP. onSignal runs first, synchronously, so the run can record its failure.
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.once(signal, () => {
+    try { onSignal(signal); } catch (error) { console.error(`on ${signal}: ${error.message}`); }
+    process.exit(128 + constants.signals[signal]);
+  });
+}
+
+/**
+ * The hub must never reach the owner's Herdr: a `herdr` in `dir` that refuses every call comes first on `path`.
+ * Every other tool on `path` stays reachable.
+ */
+export function refusingPath(dir, path = '') {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'herdr'), '#!/bin/sh\necho "verify hub: herdr on PATH is refused; the demo sets HERDR_BIN" >&2\nexit 1\n', { mode: 0o755 });
+  return path ? `${dir}${delimiter}${path}` : dir;
 }
 
 function killGroup(pid) {

@@ -1,3 +1,4 @@
+import "./bound.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
@@ -329,6 +330,28 @@ test("pi remote agent: a response overtakes queued Session bytes at a frame boun
 	await agent.wait((x) => x.t === "chunk" && x.path === f.sessionA && x.offset + Buffer.byteLength(x.data) === size, "last byte", 0, 30_000);
 	assert.equal(tiled(agent.frames, f.sessionA), readFileSync(f.sessionA, "utf8"));
 	assert.equal(agent.child.exitCode, null, `agent alive; stderr: ${stderr()}`);
+});
+
+test("pi remote agent: a slow HERDR_BIN is retried, never replaced by another herdr on PATH", async (t) => {
+	const f = fixture();
+	// A decoy `herdr` first on PATH stands in for the owner's real Herdr. Any call to it is the failure.
+	const decoyDir = join(f.dir, "decoy");
+	mkdirSync(decoyDir);
+	const decoyLog = join(f.dir, "decoy.log");
+	writeFileSync(join(decoyDir, "herdr"), `#!/bin/sh\necho "$*" >> '${decoyLog}'\ncase "$1" in\n--version) echo decoy;;\nsession) echo '{"sessions":[{"name":"default","running":true}]}';;\n*) echo '{"result":{"workspaces":[],"tabs":[],"agents":[{"pane_id":"decoy:p1","agent":"pi","agent_status":"idle","agent_session":{"kind":"path","agent":"pi","value":"/decoy.jsonl"}}]}}';;\nesac\n`, { mode: 0o755 });
+	const slow = join(f.dir, "slow-once");
+	writeFileSync(slow, "");
+	const { agent, stderr } = startPiped(f, { PATH: `${decoyDir}:${process.env.PATH}`, FAKE_HERDR_SLOW_ONCE: slow });
+	t.after(() => agent.stop());
+	const hello = await agent.wait((x) => x.t === "hello", "hello", 0, 10_000);
+	assert.throws(() => readFileSync(decoyLog), "the decoy herdr never ran");
+	assert.equal(hello.herdr, false, "the first probe timed out");
+	const frame = await agent.wait((x) => x.t === "agents" && x.source === "herdr" && x.agents.length > 0, "agents from the retried HERDR_BIN", 0, 10_000);
+	assert.deepEqual(frame.agents.map((a: Frame) => a.sessionId), ["sess-a", "sess-b"]);
+	assert.ok(!agent.frames.some((x) => x.t === "agents" && x.agents.some((a: Frame) => a.pane === "decoy:p1")), "no decoy agent listed");
+	assert.throws(() => readFileSync(decoyLog), "the decoy herdr never ran");
+	// One line per change of the chosen Herdr, path only.
+	assert.deepEqual(stderr().split("\n").filter((l) => l.startsWith("remote-agent herdr:")), ["remote-agent herdr: none", `remote-agent herdr: ${join(f.dir, "herdr")}`]);
 });
 
 test("pi remote agent: every exit names its reason on stderr", async (t) => {

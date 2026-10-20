@@ -71,6 +71,8 @@ export class TestClient {
 
 	/** Resolves when `predicate` holds for the subscription value. */
 	until<T = any>(sid: number, predicate: (value: T) => boolean, timeoutMs = 10_000): Promise<T> {
+		// Made here, so a timeout's stack names the waiting line, not the timer.
+		const failure = new Error("timeout");
 		return new Promise((resolve, reject) => {
 			const check = () => {
 				const value = this.values.get(sid) as T | undefined;
@@ -83,7 +85,8 @@ export class TestClient {
 			const timer = setTimeout(() => {
 				this.#listeners.delete(check);
 				const last = JSON.stringify(this.values.get(sid)) ?? "";
-				reject(new Error(`timeout; last value: ${last.length > 3000 ? `${last.slice(0, 800)} … ${last.slice(-2200)}` : last}`));
+				failure.message = `timeout; last value: ${last.length > 3000 ? `${last.slice(0, 800)} … ${last.slice(-2200)}` : last}`;
+				reject(failure);
 			}, timeoutMs);
 			this.#listeners.add(check);
 			check();
@@ -103,6 +106,8 @@ export class Browser {
 	snaps = new Map<number, number>();
 	hosts: any[] = [];
 	stale = new Set<number>();
+	/** The last `end` or `pending` frame of each subscription. */
+	closing = new Map<number, { t: "end" | "pending"; reason: string }>();
 	#id = 1;
 	#waiters = new Map<number, (frame: any) => void>();
 	#listeners = new Set<() => void>();
@@ -114,6 +119,7 @@ export class Browser {
 			if (frame.t === "res") this.#waiters.get(frame.id)?.(frame);
 			else if (frame.t === "hosts") this.hosts = frame.hosts;
 			else if (frame.t === "stale") this.stale.add(frame.sid);
+			else if (frame.t === "end" || frame.t === "pending") this.closing.set(frame.sid, { t: frame.t, reason: frame.reason });
 			else if (frame.t === "snap") {
 				this.values.set(frame.sid, frame.value);
 				this.seq.set(frame.sid, 0);
@@ -169,6 +175,8 @@ export class Browser {
 		});
 	}
 	until<T = any>(sid: number, predicate: (value: T) => boolean, timeoutMs = 10_000): Promise<T> {
+		// Made here, so a timeout's stack names the waiting line, not the timer.
+		const failure = new Error("timeout");
 		return new Promise((resolve, reject) => {
 			const check = () => {
 				const value = this.values.get(sid) as T | undefined;
@@ -180,7 +188,8 @@ export class Browser {
 			};
 			const timer = setTimeout(() => {
 				this.#listeners.delete(check);
-				reject(new Error(`timeout: ${JSON.stringify(this.values.get(sid))?.slice(0, 500)}`));
+				failure.message = `timeout: ${JSON.stringify(this.values.get(sid))?.slice(0, 500)}`;
+				reject(failure);
 			}, timeoutMs);
 			this.#listeners.add(check);
 			check();

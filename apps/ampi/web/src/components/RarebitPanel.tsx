@@ -109,7 +109,7 @@ function SummaryCard({ host, threadId, value }: { host: string; threadId: string
  * history, with compaction boundaries and the latest Summary. Evidence the model no longer sees is marked, not hidden.
  */
 export function RarebitPanel({ host, threadId }: { host: string; threadId: string }) {
-	const { value } = useTopic<Any>(host, { kind: "rarebit", threadId });
+	const { value } = useTopic(host, { kind: "rarebit", threadId });
 	const [open, setOpen] = useState<Set<string>>(new Set());
 	const [filter, setFilter] = useState<"all" | "user" | "stops">("all");
 	if (!value) return <div className="empty">Loading…</div>;
@@ -117,7 +117,7 @@ export function RarebitPanel({ host, threadId }: { host: string; threadId: strin
 		(i: Any) => i.kind !== "rarebit" || filter === "all" || (filter === "user" ? i.role === "user" : i.outcome !== "continuation"),
 	);
 	const fork = async (entryId: string) => {
-		const { threadId: forked } = await hub.request<{ threadId: string }>(host, "thread.fork", { threadId, entryId });
+		const { threadId: forked } = await hub.request(host, "thread.fork", { threadId, entryId });
 		go(host, forked);
 	};
 	return (

@@ -1,3 +1,4 @@
+import "./bound.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
@@ -9,18 +10,19 @@ import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { WorkingSet } from "../src/pi/working-set.ts";
 import { openWorkingSet, readWorkingSet } from "../src/pi/working-set-db.ts";
-import type { Source } from "../src/pi/working-set-types.ts";
+import { type Source, TOOL_ARGS_CHARS } from "../src/pi/working-set-types.ts";
 import { selectRarebits, measureRarebits } from "@hypercarrier/rarebit/core";
 const line = (o: unknown) => JSON.stringify(o) + "\n";
 const msg = (id: string, parentId: string | null, text: string, role = "user") => ({ type: "message", id, parentId, timestamp: new Date(1_770_000_000_000 + Number(id.replace(/\D/g, "")) * 1000).toISOString(), message: { role, content: [{ type: "text", text }], ...(role === "assistant" ? { stopReason: "stop", usage: { input: 20, output: 10, cost: { total: 0.1 } } } : {}) } });
+/** `own` closes another WorkingSet on the same cache before the directory goes; an open one writes into it. */
 function setup(t: { after(fn: () => void): void }, records: any[]) {
  const dir = mkdtempSync(join(tmpdir(), "ampi-working-set-"));
  const source: Source = { host: "fixture", cacheDir: join(dir, "cache"), path: "/synthetic/session.jsonl", file: join(dir, "copy.jsonl") };
  mkdirSync(source.cacheDir);
  writeFileSync(source.file, line({ type: "session", id: "fixture-session", cwd: "/synthetic", timestamp: "2026-01-01T00:00:00Z" }) + records.map(line).join(""));
- const store = new WorkingSet(source.host, source.cacheDir);
- t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
- return { source, store };
+ const store = new WorkingSet(source.host, source.cacheDir), owned = [store];
+ t.after(() => { for (const set of owned) set.close(); rmSync(dir, { recursive: true, force: true }); });
+ return { source, store, own: (set: WorkingSet) => (owned.push(set), set) };
 }
 
 test("working set: tail limits cannot truncate full-branch statistics, Rarebit snapshots or exact Timeline navigation", async (t) => {
@@ -168,17 +170,22 @@ test("working set: the preview flags only clipped visible prose; tool args and t
   turn("e1", "e0", [{ type: "text", text: "Short answer." }, { type: "toolCall", id: "c1", name: "bash", arguments: { command: "ls" } }]),
   turn("e2", "e1", [{ type: "thinking", thinking: "t".repeat(5000) }, { type: "text", text: "Done." }, { type: "toolCall", id: "c2", name: "write", arguments: { path: "/synthetic/a.txt", content: "x".repeat(9000) } }]),
   turn("e3", "e2", [{ type: "text", text: "p".repeat(20_000) }]),
+  turn("e4", "e3", [{ type: "toolCall", id: "c4", name: "read", arguments: { paths: Array.from({ length: 100 }, (_, i) => `/synthetic/${i}/${"p".repeat(200)}`) } }]),
  ];
  const { source, store } = setup(t, records);
  const data = (await store.refresh(source))!;
- const [user, small, hidden, long]: any[] = store.tail(source, data, true).entries;
+ const [user, small, hidden, long, many]: any[] = store.tail(source, data, true).entries;
  assert.ok(!user.bodyAvailable, "a short user message has no disclosure");
  assert.ok(!small.bodyAvailable, "a tool call alone does not mark a short message shortened");
- assert.deepEqual(small.blocks[1].args, { command: "ls" });
+ assert.deepEqual(small.blocks[1].args, { summary: "ls", command: "ls" });
  assert.ok(!hidden.bodyAvailable, "large tool args and long thinking do not mark visible prose shortened");
  assert.equal(hidden.blocks[0].clipped, true); assert.ok(hidden.blocks[0].text.length < 5000);
- assert.equal(hidden.blocks[2].argsClipped, true); assert.deepEqual(hidden.blocks[2].args, { path: "/synthetic/a.txt" });
+ assert.equal(hidden.blocks[2].argsClipped, true); assert.deepEqual(hidden.blocks[2].args, { summary: "/synthetic/a.txt · 1 lines", path: "/synthetic/a.txt", omitted: { content: true } });
  assert.equal(long.bodyAvailable, true, "clipped prose keeps the disclosure");
+ const row = many.blocks[0];
+ assert.equal(row.argsClipped, true);
+ assert.ok(JSON.stringify(row.args).length <= TOOL_ARGS_CHARS, "a stored row's tool args stay within the bound");
+ assert.equal(row.args.paths.length + row.args.omitted.paths, 100);
 });
 
 test("working set: tool results, custom entries and compaction summaries shorten in place; only clipped prose keeps the row disclosure", async (t) => {
@@ -195,10 +202,10 @@ test("working set: tool results, custom entries and compaction summaries shorten
  const data = (await store.refresh(source))!;
  const [user, tool, small, custom, compaction, branch, notice]: any[] = store.tail(source, data, true).entries;
  assert.equal(user.bodyAvailable, true, "clipped user prose keeps the row disclosure");
- for (const [name, entry, key, kept, bytes] of [["tool result", tool, "text", 256, 600], ["custom entry", custom, "text", 1024, 2000], ["compaction summary", compaction, "summary", 1024, 1500], ["branch summary", branch, "summary", 1024, 1500]] as const) {
+ for (const [name, entry, text, kept, bytes] of [["tool result", tool, tool.text, 256, 600], ["custom entry", custom, custom.message.text, 1024, 2000], ["compaction summary", compaction, compaction.summary, 1024, 1500], ["branch summary", branch, branch.summary, 1024, 1500]] as const) {
   await t.test(name, () => {
    assert.ok(!entry.bodyAvailable, `${entry.kind} ${entry.id} has no row disclosure`);
-   assert.equal(entry.clipped, true); assert.equal(entry.clippedBytes, bytes); assert.equal(entry[key].length, kept);
+   assert.equal(entry.clipped, true); assert.equal(entry.clippedBytes, bytes); assert.equal(text.length, kept);
   });
  }
  assert.equal(tool.truncated, true);
@@ -215,4 +222,57 @@ test("working set: user and assistant prose up to 16 KiB stay whole in the previ
  assert.equal(user.text.length, 13_616); assert.ok(!user.bodyAvailable, "a 13,616-char user message is whole");
  assert.equal(assistant.blocks[0].text.length, 13_616); assert.ok(!assistant.bodyAvailable, "a 13,616-char reply is whole");
  assert.equal(long.blocks[0].text.length, 16 * 1024); assert.equal(long.bodyAvailable, true);
+});
+
+test("working set: saved heads are readable before the derive Worker initializes, so a restart lists Sessions sooner", async (t) => {
+ const { source, store, own } = setup(t, [msg("e1", null, "saved prose")]);
+ const saved = (await store.refresh(source))!;
+ store.close();
+ const restarted = own(new WorkingSet(source.host, source.cacheDir));
+ let initialized = false;
+ void restarted.ready.then(() => { initialized = true; });
+ await restarted.readable;
+ assert.equal(initialized, false);
+ assert.equal(restarted.load(source.path)?.version, saved.version);
+ await restarted.ready;
+});
+
+/** The DERIVATION_VERSION before the whole-preview tool-args bound: its rows kept every path after clipping. */
+const UNBOUNDED_ARGS_VERSION = 6;
+
+test("working set: a row stored before the whole-preview bound re-derives within TOOL_ARGS_CHARS after a restart", async (t) => {
+ const paths = Array.from({ length: 100 }, (_, i) => `/synthetic/${i}/${"p".repeat(200)}`);
+ const m = msg("e1", null, "", "assistant");
+ const { source, store } = setup(t, [{ ...m, message: { ...m.message, content: [{ type: "toolCall", id: "c1", name: "read", arguments: { paths } }] } }]);
+ await store.refresh(source);
+ store.close();
+ // Rewrite the row as a version-6 build left it: argsClipped, every path kept, no omitted.
+ const db = new DatabaseSync(join(source.cacheDir, "working-set.sqlite"));
+ try {
+  const row = db.prepare("SELECT ui FROM entries WHERE path=? AND id='e1'").get(source.path) as { ui: string };
+  const ui = JSON.parse(row.ui);
+  ui.blocks[0] = { ...ui.blocks[0], args: { summary: "", paths }, argsClipped: true };
+  db.prepare("UPDATE entries SET ui=? WHERE path=? AND id='e1'").run(JSON.stringify(ui), source.path);
+  const { data } = db.prepare("SELECT data FROM sessions WHERE path=?").get(source.path) as { data: string };
+  const saved = JSON.parse(data);
+  saved.version = `${UNBOUNDED_ARGS_VERSION}:${String(saved.version).split(":").slice(1).join(":")}`;
+  db.prepare("UPDATE sessions SET data=? WHERE path=?").run(JSON.stringify(saved), source.path);
+ } finally {
+  db.close();
+ }
+ const restarted = new WorkingSet(source.host, source.cacheDir);
+ t.after(() => restarted.close());
+ const data = (await restarted.refresh(source))!;
+ const args = (restarted.tail(source, data, true).entries[0] as any).blocks[0].args;
+ assert.ok(JSON.stringify(args).length <= TOOL_ARGS_CHARS, `the stored row's tool args serialize to ${JSON.stringify(args).length} chars`);
+ assert.equal(args.paths.length + args.omitted.paths, 100);
+});
+
+test("working set: a database without a sessions table waits for the Worker's schema", async (t) => {
+ const dir = mkdtempSync(join(tmpdir(), "ampi-working-set-empty-"));
+ new DatabaseSync(join(dir, "working-set.sqlite")).close();
+ const store = new WorkingSet("fixture", dir);
+ t.after(() => { store.close(); rmSync(dir, { recursive: true, force: true }); });
+ await store.readable;
+ assert.equal(store.load("/synthetic/none.jsonl"), undefined);
 });

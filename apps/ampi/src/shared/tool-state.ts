@@ -15,7 +15,7 @@ export function toolCallState({ result, open, active }: { result?: { isError: bo
 	return active ? "running" : "unfinished";
 }
 
-/** The part of a transcript entry that opens or closes calls. A UiEntry fits: user, assistant and tool-result. */
+/** The part of a transcript entry that opens or closes calls. A PiEntry fits: user, assistant and tool-result. */
 export type CallEvidence = { kind: string; stop?: string; blocks?: readonly { type: string; callId?: string }[]; callId?: string };
 
 /** Tracks the open calls while entries arrive in transcript order. Only calls of the last turn can be open. */

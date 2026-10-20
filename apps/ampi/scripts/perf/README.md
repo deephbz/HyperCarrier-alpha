@@ -38,7 +38,7 @@ checks the limits. The group directory is printed at the end:
 | `compare <A> <B>` | A and B are group or run directories. Per metric: medians, Δ, Δ %, noise, verdict. |
 | `report <runDir>` | Rebuilds `trace.json` and the summaries from a run directory's raw inputs. |
 | `fixture owner [--from HOME] \| synthetic` | Freezes a fixture, then fills its warm home with one cold index. |
-| `lock` | Prints the lock path. |
+| `lock` | Prints the lock path, the holder, and the queued waiters. |
 
 Scenarios:
 
@@ -50,10 +50,11 @@ Scenarios:
   before the first job). It needs tracing. It is a long run outside the 10 s
   loop.
 - `app`: `startup` to health, then `open -n -a` launches a separate AmPi.app
-  copy (`~/.cache/ampi-perf/app/AmPiPerf.app`, bundle id
+  copy (`~/.cache/ampi-perf/app/<digest>/AmPiPerf.app`, bundle id
   `dev.hypercarrier.ampi.perf`) against the run's hub, as a Dock click does.
-  The runner builds the copy with `macos/scripts/build-app.sh` on first use;
-  delete it to rebuild. With `AMPI_TRACE` set, the app writes launch and page
+  `<digest>` covers the measured checkout's `macos/` sources, edits included,
+  so `--code` selects both the hub and its app. The runner builds each copy
+  with `macos/scripts/build-app.sh` on first use. With `AMPI_TRACE` set, the app writes launch and page
   paint marks to its own trace file and skips the notification prompt. The run
   ends at the first painted Session row and quits the copy. The stats are
   milliseconds from `open`: process start, window shown, status paint, hub
@@ -68,7 +69,13 @@ Teams. Builds and fixture copies stay parallel. The lock is a directory:
 ```
 ~/.cache/ampi-perf/run.lock/        (AMPI_PERF_HOME moves ~/.cache/ampi-perf)
   owner.json                        {"pid":…, "label":"…", "started":<epoch ms>}
+~/.cache/ampi-perf/run.lock.wait/   one {"pid","label","since"} file per queued runner
+~/.cache/ampi-perf/run.lock.stale-<inode>/   a cleared lock, kept 10 min
 ```
+
+Only the holder writes `owner.json`. A waiting runner lists itself in
+`run.lock.wait/` and never looks like the holder; `perf lock` prints the holder
+and the waiters apart.
 
 The runner takes the lock once for a whole group, before its first run, and
 removes it after the last run, on exit, and on SIGINT, SIGTERM, or SIGHUP.
@@ -80,6 +87,9 @@ takes it for a child, and never queues runs around a held lock.
 - A lock is stale only when `owner.json` names a dead pid and stays unchanged
   for 60 s. A holder may name a child pid and release up to 60 s after that
   child exits. Only then does the next runner clear it.
+- A runner clears a stale lock by renaming it to `run.lock.stale-<inode>`.
+  A second runner that judged the same lock stale fails its rename onto that
+  tomb, so it never moves the newer lock that stands at the path.
 - A holder removes only its own lock. Nobody removes a lock without an owner;
   clear such a lock by hand after checking that no timed run is active.
 

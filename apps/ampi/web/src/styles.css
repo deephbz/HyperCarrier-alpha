@@ -1838,6 +1838,8 @@ details[open] > .disclosure::before,
 .panel-overlay .panel-slot { top: var(--transcript-top, 0px); bottom: var(--transcript-bottom, 0px); border-left: 1px solid var(--border); }
 html[data-input="keyboard"] [data-region]:focus { outline: 2px solid color-mix(in srgb, var(--accent) 50%, transparent); outline-offset: -2px; }
 html[data-input="pointer"] [data-region]:focus { outline: none; }
+html[data-input="keyboard"] :is([data-page-root], [data-page-focus]):focus { outline: 2px solid color-mix(in srgb, var(--accent) 50%, transparent); outline-offset: -2px; }
+html[data-input="pointer"] :is([data-page-root], [data-page-focus]):focus { outline: none; }
 .panel-tab-choice { display: inline-flex; align-items: center; gap: 2px; }
 
 /* Long prose shows its preview with a fade, then opens inline in its message (A24). */

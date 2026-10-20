@@ -54,8 +54,8 @@ export function arrangeByLayout(data: Pick<HostThreads, "threads" | "layout">): 
 }
 
 /** A bounded page keeps a large Host cheap without dropping its Herdr order or Team nesting. */
-function SessionRows({ list, host, active, collapsedLeaders, toggleLeader, parentNavId }: { list: ThreadSummary[]; host: string; active?: string; collapsedLeaders: Set<string>; toggleLeader: (id: string) => void; parentNavId: string }) {
-	const rows = projectTeamRows(list, collapsedLeaders);
+function SessionRows({ list, host, active, expandedLeaders, toggleLeader, parentNavId }: { list: ThreadSummary[]; host: string; active?: string; expandedLeaders: Set<string>; toggleLeader: (id: string) => void; parentNavId: string }) {
+	const rows = projectTeamRows(list, expandedLeaders);
 	const activePage = Math.floor(Math.max(0, rows.findIndex(({ row }) => row.id === active)) / 80);
 	const [page, setPage] = useState(activePage);
 	useEffect(() => setPage(activePage), [active, activePage]);
@@ -75,41 +75,30 @@ function SessionRows({ list, host, active, collapsedLeaders, toggleLeader, paren
 export function PiHostSection({ data, route, filter }: { data: HostThreads; route: { host?: string; thread?: string }; filter: string }) {
 	const { host } = data;
 	const [collapsed, setCollapsed] = useState<Record<string, boolean>>({ unplaced: true });
-	const [collapsedLeaders, setCollapsedLeaders] = useState<Set<string>>(() => {
+	// The owner's expanded Teams. Every other leader is collapsed, including a Team that starts after the page loads.
+	const leadersKey = `ampi.sidebar.expandedLeaders.${host.id}`;
+	const [expandedLeaders, setExpandedLeaders] = useState<Set<string>>(() => {
 		try {
-			const saved = localStorage.getItem(`ampi.sidebar.leaders.${host.id}`);
+			const saved = localStorage.getItem(leadersKey);
 			if (saved !== null) return new Set(JSON.parse(saved) as string[]);
 		} catch { /* Use the collapsed default if storage is unavailable or invalid. */ }
 		return new Set();
 	});
-	useEffect(() => {
-		if (!data.threads.length || localStorage.getItem(`ampi.sidebar.leaders.${host.id}`) !== null) return;
-		const defaults = new Set(data.threads.filter((t) => t.team?.role === "lead").map((t) => t.team!.teamId));
-		if (defaults.size) {
-			setCollapsedLeaders(defaults);
-			localStorage.setItem(`ampi.sidebar.leaders.${host.id}`, JSON.stringify([...defaults]));
-		}
-	}, [data.threads, host.id]);
+	const saveLeaders = (next: Set<string>) => { localStorage.setItem(leadersKey, JSON.stringify([...next])); return next; };
 	const q = filter.toLowerCase();
 	const match = (t: ThreadSummary) => !q || t.title.toLowerCase().includes(q) || t.cwd.toLowerCase().includes(q) || (t.preview ?? "").toLowerCase().includes(q);
 	const { groups, unplaced } = arrangeByLayout({ threads: data.threads.filter(match), layout: data.layout });
 	const status =
 		host.status === "connected" ? "live" : host.status === "connecting" ? "connecting…" : `away${host.lastSeen ? ` · seen ${ago(host.lastSeen)} ago` : ""} · copies readable`;
 	const toggle = (key: string) => setCollapsed((c) => ({ ...c, [key]: !c[key] }));
-	const toggleLeader = (id: string) => setCollapsedLeaders((previous) => {
+	const toggleLeader = (id: string) => setExpandedLeaders((previous) => {
 		const next = new Set(previous);
 		if (next.has(id)) next.delete(id); else next.add(id);
-		localStorage.setItem(`ampi.sidebar.leaders.${host.id}`, JSON.stringify([...next]));
-		return next;
+		return saveLeaders(next);
 	});
 	const teamIds = [...new Set(data.threads.filter((t) => t.team?.role === "lead").map((t) => t.team!.teamId))];
-	const allCollapsed = teamIds.length > 0 && teamIds.every((id) => collapsedLeaders.has(id));
-	const collapseAll = () => {
-		const next = new Set(collapsedLeaders);
-		for (const id of teamIds) allCollapsed ? next.delete(id) : next.add(id);
-		setCollapsedLeaders(next);
-		localStorage.setItem(`ampi.sidebar.leaders.${host.id}`, JSON.stringify([...next]));
-	};
+	const allCollapsed = teamIds.length > 0 && teamIds.every((id) => !expandedLeaders.has(id));
+	const collapseAll = () => setExpandedLeaders(saveLeaders(allCollapsed ? new Set(teamIds) : new Set()));
 	return (
 		<div className="side-section" data-host={host.id} data-backend="pi">
 			<div className="side-head">
@@ -129,7 +118,7 @@ export function PiHostSection({ data, route, filter }: { data: HostThreads; rout
 							<span className="twisty">{collapsed[g.key] ? "▸" : "▾"}</span>
 							<span className="title group-label">{g.label}</span>
 						</button>
-						{!collapsed[g.key] && <SessionRows list={g.rows} host={host.id} active={route.host === host.id ? route.thread : undefined} collapsedLeaders={collapsedLeaders} toggleLeader={toggleLeader} parentNavId={g.key} />}
+						{!collapsed[g.key] && <SessionRows list={g.rows} host={host.id} active={route.host === host.id ? route.thread : undefined} expandedLeaders={expandedLeaders} toggleLeader={toggleLeader} parentNavId={g.key} />}
 					</div>
 				))}
 			{!collapsed.host && unplaced.length > 0 && (
@@ -138,7 +127,7 @@ export function PiHostSection({ data, route, filter }: { data: HostThreads; rout
 						<span className="twisty">{collapsed.unplaced ? "▸" : "▾"}</span>
 						<span className="title group-label">Not in a pane ({unplaced.length.toLocaleString()})</span>
 					</button>
-					{!collapsed.unplaced && <SessionRows list={unplaced} host={host.id} active={route.host === host.id ? route.thread : undefined} collapsedLeaders={collapsedLeaders} toggleLeader={toggleLeader} parentNavId="unplaced" />}
+					{!collapsed.unplaced && <SessionRows list={unplaced} host={host.id} active={route.host === host.id ? route.thread : undefined} expandedLeaders={expandedLeaders} toggleLeader={toggleLeader} parentNavId="unplaced" />}
 				</div>
 			)}
 			{!collapsed.host && groups.length === 0 && unplaced.length === 0 && host.status === "connected" && (

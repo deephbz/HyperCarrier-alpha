@@ -33,7 +33,7 @@ function Copy({ text, label = "Copy", icon = false }: { text: string; label?: st
 export function RarebitView({ host, threadId, entry }: { host: string; threadId: string; entry?: string }) {
 	const [before, setBefore] = useState<string>();
 	useEffect(() => setBefore(undefined), [host, threadId]);
-	const { value: result, stale, error } = useTopic<RarebitValue | RarebitFailure>(host, { kind: "view", view: "rarebit", threadId, ...(before ? { before } : {}) });
+	const { value: result, stale, error } = useTopic(host, { kind: "view", view: "rarebit", threadId, ...(before ? { before } : {}) });
 	const failure = result && "error" in result ? `${result.error.code}: ${result.error.message}` : error;
 	const value = result && "items" in result ? result : undefined;
 	const [state, set] = useRarebitState(host, threadId);
@@ -83,7 +83,7 @@ export function RarebitView({ host, threadId, entry }: { host: string; threadId:
 	const toggleHide = () => {
 		const hide = !state.hide;
 		const el = scroller.current;
-		if (el && value && !pinned.current) {
+		if (el && value && !keepPlace.following()) {
 			const anchor = keepPlace.capture({ accept: (node) => !hide || node.dataset.kind !== "continuation" });
 			const next = value.items.filter((i) => !hide || i.kind !== "continuation");
 			const index = anchor ? next.findIndex((i) => i.id === anchor.id) : -1;
@@ -96,7 +96,7 @@ export function RarebitView({ host, threadId, entry }: { host: string; threadId:
 		keepPlace.capture();
 		set({ hide });
 	};
-	useLayoutEffect(() => { const el = scroller.current; if (el && pinned.current) el.scrollTop = el.scrollHeight; }, [value, state.side, state.pending, state.hide]);
+	useLayoutEffect(() => { const el = scroller.current; if (el && keepPlace.following()) el.scrollTop = el.scrollHeight; }, [value, state.side, state.pending, state.hide]);
 	useEffect(() => {
 		// A linked entry is revealed once; a later Hide/Show must not jump back to it.
 		if (!entry || !value || revealed.current === entry) return;
@@ -108,20 +108,20 @@ export function RarebitView({ host, threadId, entry }: { host: string; threadId:
 		set({ window: Math.max(60, filtered.length - index) });
 		requestAnimationFrame(() => scroller.current?.querySelector(`[data-rarebit="${CSS.escape(entry)}"]`)?.scrollIntoView({ block: "center" }));
 	}, [entry, Boolean(value), state.hide]);
-	const run = async (op: string, args = {}) => hub.request(host, `view.rarebit.${op}`, { threadId, ...args });
 	const ask = async () => {
 		const current = rarebitState(host, threadId).get();
 		const question = current.draft.trim();
 		if (!question || current.pending) return;
 		set({ pending: question, draft: "", error: undefined }); pinned.current = true;
 		try {
-			const result = await run("ask", { sideId: current.side?.id, question, model: current.model }) as { side: RarebitSide };
+			const result = await hub.request(host, "view.rarebit.ask", { threadId, sideId: current.side?.id, question, model: current.model });
+			if (!("side" in result)) throw new Error("The side answer did not return its conversation");
 			set({ side: result.side, error: result.side.turns.at(-1)?.error });
 		} catch (e) { set({ error: (e as Error).message, draft: question }); }
 		finally { set({ pending: undefined }); input.current?.focus(); }
 	};
 	const end = async () => {
-		try { await run("ask", { sideId: state.side?.id, end: true }); } catch (e) { set({ error: (e as Error).message }); }
+		try { await hub.request(host, "view.rarebit.ask", { threadId, sideId: state.side?.id, end: true }); } catch (e) { set({ error: (e as Error).message }); }
 		set({ side: undefined }); pinned.current = true; input.current?.focus();
 	};
 	const count = value ? value.stats.user + value.stats.continuation + value.stats.stop : 0;
@@ -135,7 +135,7 @@ export function RarebitView({ host, threadId, entry }: { host: string; threadId:
 				<button className="btn ghost small rb-icon" title="Diagnosis" aria-label="Diagnosis" aria-expanded={state.diagnosis} onClick={() => set({ diagnosis: !state.diagnosis })}>▥</button>
 				<button className="btn ghost small rb-icon" title="Models" aria-label="Models" aria-expanded={settings} onClick={() => setSettings(!settings)}>⚙</button>
 			</div>
-			{settings && <div className="rb-models"><label>Side ask model<input value={state.model} placeholder="Default: anthropic/claude-sonnet-5-5" onChange={(e) => set({ model: e.target.value })} disabled={hasSide} /></label><label>Recap model<input value={state.recapModel} placeholder="Default: anthropic/claude-haiku-5-5" onChange={(e) => set({ recapModel: e.target.value })} /></label><p className="rb-meta">Runs isolated Pi on the hub. A side thread keeps its first model until End.</p></div>}
+			{settings && <div className="rb-models"><label>Side ask model<input value={state.model} placeholder="Blank: the hub's rarebitAsk model" onChange={(e) => set({ model: e.target.value })} disabled={hasSide} /></label><label>Recap model<input value={state.recapModel} placeholder="Blank: the hub's rarebitRecap model" onChange={(e) => set({ recapModel: e.target.value })} /></label><p className="rb-meta">Runs isolated Pi on the hub. A side thread keeps its first model until End.</p></div>}
 			{value?.source && value.source.state !== "ready" && <p className="rb-meta">Last indexed evidence · {new Date(value.source.asOf).toLocaleString()} · {value.source.state}</p>}
 			{stale && value && <div className="rb-error" role="status">Last local copy · Host may be away. Reconnect the Host to see new messages.</div>}
 			{failure && <div className="rb-error" role="alert">Rarebit: {failure} The panel retries when the Session changes.</div>}

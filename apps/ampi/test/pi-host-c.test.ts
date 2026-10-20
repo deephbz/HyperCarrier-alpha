@@ -1,6 +1,7 @@
+import "./bound.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createServer } from "node:net";
 import { join } from "node:path";
@@ -124,4 +125,66 @@ test("pi host: a live control descriptor makes a Session present before its file
 	const merged = await browser.until<any>(threads, (v) => v.threads["pi:sess-e"]?.cwd === "/fresh");
 	assert.equal(Object.keys(merged.threads).filter((id) => id.includes("sess-e")).length, 1);
 	assert.deepEqual([merged.threads["pi:sess-e"].live, merged.threads["pi:sess-e"].control, merged.threads["pi:sess-e"].preview], [true, true, "first words"]);
+});
+
+test("pi host: slash commands go only to a control that serves them; every older tier refuses at once", async (t) => {
+	const { f, browser } = await setup(t);
+	const ctl = await control(f, f.sessionA, { commands: true });
+	t.after(() => ctl.close());
+	const threads = browser.sub("devbox", { kind: "threads" });
+	await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.control === true && v.threads["pi:sess-b"]?.live === true);
+	const listed = await browser.req("devbox", "thread.commands", { threadId: "pi:sess-a" });
+	assert.deepEqual(listed.models, [{ ref: "p/m2" }]);
+	const ran = await browser.req("devbox", "thread.command", { threadId: "pi:sess-a", name: "model", args: "m2", key: "k-1" });
+	assert.deepEqual(ran, { via: "control", disposition: "handled", notice: "Model: p/m2", effect: { model: "p/m2" } });
+	assert.deepEqual(ctl.requests.filter((r) => r.op === "command").map(({ id: _id, ...r }) => r), [{ op: "command", name: "model", args: "m2", key: "k-1" }]);
+	// The control's error detail reaches the composer, so an ambiguous id can name its matches.
+	await assert.rejects(browser.req("devbox", "thread.command", { threadId: "pi:sess-a", name: "model", args: "x" }), (e: any) => e.code === "bad_args" && e.matches?.join() === "p/x,q/x");
+	// A pane with no control: the composer falls back to keys, which Pi's TUI runs natively.
+	await assert.rejects(browser.req("devbox", "thread.commands", { threadId: "pi:sess-b" }), (e: any) => e.code === "no_control");
+	assert.ok(!f.herdrCalls().some((c) => c.includes("/model")), "no command reached a pane as keys");
+	assert.equal(ctl.requests.filter((r) => r.op === "submit").length, 0, "no command reached Pi as text");
+});
+
+test("pi host: an old control or an old remote agent answers commands_unsupported without sending the command", async (t) => {
+	// An old remote agent: the same agent with its hello stripped of controlOps.
+	const wrapper = join(fixture().dir, "old-agent.cjs");
+	writeFileSync(wrapper, `#!${process.execPath}
+const agent = require("child_process").spawn(process.execPath, process.argv.slice(2), { stdio: ["inherit", "pipe", "inherit"] });
+let buf = "";
+agent.stdout.setEncoding("utf8");
+agent.stdout.on("data", (d) => {
+  buf += d;
+  let i;
+  while ((i = buf.indexOf("\\n")) >= 0) {
+    const line = buf.slice(0, i); buf = buf.slice(i + 1);
+    process.stdout.write((line.includes('"t":"hello"') ? JSON.stringify({ ...JSON.parse(line), controlOps: undefined }) : line) + "\\n");
+  }
+});
+agent.on("exit", (code) => process.exit(code ?? 1));
+process.on("SIGTERM", () => { agent.kill(); process.exit(143); });
+`);
+	chmodSync(wrapper, 0o755);
+	for (const [label, host, commands] of [["old remote agent", { remoteNode: wrapper }, true], ["old control", {}, false]] as const) {
+		const { f, browser } = await setup(t, host);
+		const ctl = await control(f, f.sessionA, { commands });
+		t.after(() => ctl.close());
+		const threads = browser.sub("devbox", { kind: "threads" });
+		await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.control === true);
+		const started = Date.now();
+		await assert.rejects(browser.req("devbox", "thread.command", { threadId: "pi:sess-a", name: "model", args: "m2" }), /too old for slash commands/, label);
+		assert.ok(Date.now() - started < 2000, `${label}: answered in ${Date.now() - started} ms`);
+		assert.deepEqual(ctl.requests.filter((r) => r.op !== "status"), [], `${label}: nothing reached the control`);
+		// A pane with no control falls back to keys whatever the agent's version, so it must not read as too old.
+		await browser.until<any>(threads, (v) => v.threads["pi:sess-b"]?.live === true);
+		await assert.rejects(browser.req("devbox", "thread.commands", { threadId: "pi:sess-b" }), (e: any) => e.code === "no_control", `${label}: a Session without a control`);
+	}
+});
+
+test("pi host: a model_change entry names the Session's model before any turn uses it (A27 /model)", async (t) => {
+	const { f, browser } = await setup(t);
+	const threads = browser.sub("devbox", { kind: "threads" });
+	await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.model);
+	appendFileSync(f.sessionA, line({ type: "model_change", id: "mc1", parentId: "r1", timestamp: new Date().toISOString(), provider: "p", modelId: "m2" }));
+	await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.model === "p/m2");
 });

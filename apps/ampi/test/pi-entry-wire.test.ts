@@ -1,3 +1,4 @@
+import "./bound.ts";
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { test } from "node:test";
@@ -10,9 +11,9 @@ const ENTRY_KEYS: Record<string, string[]> = {
 	assistant: ["id", "kind", "ts", "blocks", "stop", "error"],
 	"tool-result": ["id", "kind", "ts", "callId", "name", "isError", "text", "truncated"],
 	compaction: ["id", "kind", "ts", "summary", "reason"],
-	custom: ["id", "kind", "ts", "entryKind", "text"],
+	custom: ["id", "kind", "ts", "entryKind", "message"],
 };
-const BLOCK_KEYS: Record<string, string[]> = { text: ["type", "text"], thinking: ["type", "text"], tool: ["type", "callId", "name", "args"], image: ["type", "mimeType"] };
+const BLOCK_KEYS: Record<string, string[]> = { text: ["type", "text"], thinking: ["type", "text"], tool: ["type", "callId", "name", "args", "argsClipped"], image: ["type", "mimeType"] };
 const LONG = "long prose ".repeat(2000);
 
 const entries = [

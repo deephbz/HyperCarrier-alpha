@@ -1,3 +1,4 @@
+import "./bound.ts";
 import assert from "node:assert/strict";
 import { appendFileSync } from "node:fs";
 import { after, before, test } from "node:test";
@@ -5,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createServer, type ViteDevServer } from "vite";
+import { boundToolArgs, toolArgsPreview } from "../src/shared/entry-shapes.ts";
 import { openCalls, toolCallState } from "../src/shared/tool-state.ts";
 import { iso, line, setup, toolResult } from "./pi-host-fixtures.ts";
 
@@ -13,11 +15,11 @@ import { iso, line, setup, toolResult } from "./pi-host-fixtures.ts";
 
 const web = fileURLToPath(new URL("../web/", import.meta.url));
 let vite: ViteDevServer;
-let ToolCall: (props: object) => unknown;
+let ToolCall: (props: object) => unknown, ToolArgs: (props: object) => unknown;
 
 before(async () => {
 	vite = await createServer({ configFile: `${web}vite.config.ts`, root: web, logLevel: "silent", server: { middlewareMode: true, hmr: false } });
-	ToolCall = (await vite.ssrLoadModule("/src/components/ToolCall.tsx")).ToolCall;
+	({ ToolCall, ToolArgs } = await vite.ssrLoadModule("/src/components/ToolCall.tsx"));
 });
 after(async () => { await vite?.close(); });
 
@@ -40,7 +42,7 @@ test("tool state: only an aborted stop or a later turn makes a call without a re
 });
 
 test("tool state: a running Pi call without a live slot shows running, expands, and shows its command", () => {
-	const html = (props: object) => renderToStaticMarkup(createElement(ToolCall as never, { name: "bash", args: { command: "sleep 30" }, ...props }));
+	const html = (props: object) => renderToStaticMarkup(createElement(ToolCall as never, { name: "bash", args: toolArgsPreview("bash", { command: "sleep 30" }), ...props }));
 	const running = html({ callOpen: true, active: true });
 	assert.match(running, /class="spinner"/);
 	assert.match(running, /class="state ">running</);
@@ -56,6 +58,38 @@ test("tool state: a running Pi call without a live slot shows running, expands, 
 	const done = html({ callOpen: false, active: true, result: { text: "ok", isError: false } });
 	assert.match(done, />done</);
 	assert.doesNotMatch(done, /spinner|waiting for output/);
+});
+
+test("tool row: the modeled preview draws the edit diff, the write preview and the Team-tool lines as the raw arguments did", () => {
+	const html = (name: string, raw: object, props: object = {}) =>
+		renderToStaticMarkup(createElement(ToolCall as never, { name, args: toolArgsPreview(name, raw), result: { text: "ok", isError: false }, ...props }));
+	const edit = html("edit", { path: "src/a.ts", edits: [{ oldText: "old line", newText: "new line\nsecond" }] });
+	assert.match(edit, /<span class="arg">src\/a\.ts · 1 edit\(s\)<\/span>/);
+	assert.match(edit, /<div class="diff"><div class="hunk">@@<\/div><div class="del">-old line<\/div><div class="add">\+new line<\/div><div class="add">\+second<\/div><\/div>/);
+	const write = html("write", { path: "notes.md", content: "one\ntwo\n" }, { callOpen: true, active: true, result: undefined });
+	assert.match(write, /<span class="arg">notes\.md · 2 lines<\/span>/);
+	assert.match(write, /<pre>one\ntwo\n<\/pre>/);
+	const task = html("task_update", { task_id: "t1", transition: "goal_achieved", evidence: "ok" });
+	assert.match(task, /<span class="arg">t1 → goal_achieved<\/span>/);
+	const alert = html("alert_send", { kind: "attention", text: "Deploy\nfailed", task_id: "t1" }, { callOpen: true, active: true, result: undefined });
+	assert.match(alert, /<span class="arg">attention: Deploy failed<\/span>/);
+	assert.match(alert, /<div class="label">arguments<\/div><pre>\{\n  &quot;kind&quot;: &quot;attention&quot;/, "the remaining arguments show as JSON");
+	assert.match(html("ensure_worker", { name: "w1", scope: "Build it" }), /<span class="arg">w1 — Build it<\/span>/);
+	const clipped = renderToStaticMarkup(createElement(ToolCall as never, { name: "edit", args: { summary: "src/big.ts · 1 edit(s)", path: "src/big.ts" }, result: { text: "ok", isError: false } }));
+	assert.doesNotMatch(clipped, /class="diff"/, "a clipped preview draws no diff");
+});
+
+test("tool row: a clipped preview says what it dropped, and the shortened-arguments view reads like the arguments", () => {
+	const row = (name: string, raw: object) =>
+		renderToStaticMarkup(createElement(ToolCall as never, { name, args: boundToolArgs(toolArgsPreview(name, raw), 2048).args, callOpen: true, active: true }));
+	const paths = Array.from({ length: 100 }, (_, i) => `src/${i}/${"p".repeat(200)}`);
+	assert.match(row("grep", { paths }), /\n\+\d+ more paths<\/pre>/);
+	assert.match(row("bash", { command: "c".repeat(5000) }), /c\n…command shortened<\/pre>/);
+	const view = (name: string, raw: object) => renderToStaticMarkup(createElement(ToolArgs as never, { args: toolArgsPreview(name, raw) }));
+	const graph = view("task_graph_apply", { operation_id: "op1", tasks: [{ id: "t1", goal: "Build it" }] });
+	assert.doesNotMatch(graph, /\\n|\\&quot;/, "the arguments show as pretty JSON, not escaped JSON");
+	assert.match(graph, /&quot;goal&quot;: &quot;Build it&quot;/);
+	assert.match(view("edit", { path: "src/a.ts", edits: [{ oldText: "a", newText: "b" }] }), /<pre>src\/a\.ts<\/pre><pre>\{\n  &quot;edits&quot;/, "a shortened edit opens with its target, then its edits");
 });
 
 test("tool state: a working Pi Session with an open tail call reports running tools, never after the call ends", async (t) => {

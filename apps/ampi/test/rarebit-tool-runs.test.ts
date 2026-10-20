@@ -1,12 +1,14 @@
+import "./bound.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { UiEntry } from "../src/node/projection.ts";
+import { injectedMessage, toolArgsPreview } from "../src/shared/entry-shapes.ts";
+import type { PiEntry } from "../src/shared/protocol.ts";
 import { runClock, runDuration, toolRuns, type ToolRun } from "../web/src/views/rarebit/tool-runs.ts";
 
-const prose = (id: string, ts?: number): UiEntry => ({ id, ts, kind: "assistant", blocks: [{ type: "text", text: id }] });
-const call = (id: string, ts?: number): UiEntry => ({ id, ts, kind: "assistant", blocks: [{ type: "thinking", text: "Inspect the evidence." }, { type: "tool", callId: id, name: "bash", args: { command: "pwd" } }] });
-const result = (id: string, ts?: number, isError = false): UiEntry => ({ id: `${id}-result`, ts, kind: "tool-result", callId: id, name: "bash", text: "result", isError, truncated: false });
-const runs = (entries: UiEntry[], live = false) => toolRuns(entries, live).filter((p): p is ToolRun => p.kind === "run");
+const prose = (id: string, ts?: number): PiEntry => ({ id, ts, kind: "assistant", blocks: [{ type: "text", text: id }] });
+const call = (id: string, ts?: number): PiEntry => ({ id, ts, kind: "assistant", blocks: [{ type: "thinking", text: "Inspect the evidence." }, { type: "tool", callId: id, name: "bash", args: toolArgsPreview("bash", { command: "pwd" }) }] });
+const result = (id: string, ts?: number, isError = false): PiEntry => ({ id: `${id}-result`, ts, kind: "tool-result", callId: id, name: "bash", text: "result", isError, truncated: false });
+const runs = (entries: PiEntry[], live = false) => toolRuns(entries, live).filter((p): p is ToolRun => p.kind === "run");
 
 test("lens folds calls, results and thinking across entries between prose timestamps", () => {
 	const entries = [prose("before", 0), call("a", 1000), result("a", 2000), call("b", 3000), result("b", 4000, true), prose("after", 252000)];
@@ -22,8 +24,8 @@ test("lens folds calls, results and thinking across entries between prose timest
 });
 
 test("lens splits at prose within one assistant entry and preserves terminal errors", () => {
-	const entry: UiEntry = { id: "mixed", ts: 1000, kind: "assistant", stop: "error", error: "provider failed", blocks: [
-		{ type: "thinking", text: "first" }, { type: "text", text: "prose" }, { type: "tool", callId: "a", name: "read", args: {} },
+	const entry: PiEntry = { id: "mixed", ts: 1000, kind: "assistant", stop: "error", error: "provider failed", blocks: [
+		{ type: "thinking", text: "first" }, { type: "text", text: "prose" }, { type: "tool", callId: "a", name: "read", args: { summary: "" } },
 	] };
 	const parts = toolRuns([entry]);
 	assert.deepEqual(parts.map((p) => p.kind), ["run", "entry", "run", "entry"]);
@@ -55,10 +57,10 @@ test("thinking-only runs remain inspectable; missing and reversed times stay exp
 	assert.match(runClock(0), /^\d{2}:\d{2}$/);
 });
 
-const custom = (id: string, entryKind: string, ts?: number): UiEntry => ({ id, ts, kind: "custom", entryKind, text: id });
+const custom = (id: string, entryKind: string, ts?: number): PiEntry => ({ id, ts, kind: "custom", entryKind, message: injectedMessage(entryKind, id) });
 
 test("every non-prose entry is a run step; the run label counts each kind", () => {
-	const entries: UiEntry[] = [
+	const entries: PiEntry[] = [
 		prose("before", 0),
 		call("a", 1000), custom("dm", "pi-team-bright.direct-message", 1100), result("a", 1200),
 		custom("ix", "intercom_message", 1300), call("b", 1400), custom("tu", "ptb.team-update", 1500), result("b", 1600),

@@ -11,7 +11,7 @@ import { inPanel, type PanelSelection } from "./panel.ts";
 import { drawnSpan, laneTotal, mergeBuckets, type Unit } from "./totals.ts";
 import { SessionTitle } from "../../components/SessionTitle.tsx";
 import { useTopic } from "../../client.ts";
-import type { ThreadsState } from "../../../../src/shared/protocol.ts";
+import { isPiThreadId, type ThreadsState } from "../../../../src/shared/protocol.ts";
 import "./cos.css";
 import { hub } from "../../client.ts";
 
@@ -60,8 +60,8 @@ function group(sessions: Session[], merged: boolean): Band[] {
 
 function LaneTitle({ session, title, team }: { session: Session; title: string; team: boolean }) {
 	// useTopic shares the Host's existing thread index subscription with the sidebar and other lanes.
-	const { value } = useTopic<ThreadsState>(session.host, { kind: "threads" });
-	return <SessionTitle title={title} summary={value?.threads[session.threadId]} host={session.host}>
+	const { value } = useTopic(session.host, { kind: "threads" });
+	return <SessionTitle title={title} summary={isPiThreadId(session.threadId) ? value?.threads[session.threadId] : undefined} host={session.host}>
 		<a href={href.thread(session.host, session.threadId, { panel: team ? "team" : "rarebit" })}>{title}</a>
 	</SessionTitle>;
 }
@@ -109,7 +109,7 @@ const Stream = memo(function Stream({ band, from, to, bucketMs, unit, scale, col
 			{band.end >= from && band.start <= to && <line x1={Math.max(0, x(band.start))} x2={Math.min(X, x(band.end))} y1="28" y2="28" className="cos-duration" />}
 			{now >= from && now <= to && <line x1={x(now)} x2={x(now)} y1="0" y2="56" className="cos-now" />}
 			{moment !== undefined && moment >= from && moment <= to && <rect x={x(moment) - 2} y="0" width="4" height="56" className="cos-moment" />}
-			<a href={link} aria-label={`Open ${band.title} at nearest entry`} onClick={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); void hub.request<{ entry?: string }>(band.target.host, "view.cos.timeline.locate", { threadId: band.target.threadId, at }).then((r) => { location.hash = href.thread(band.target.host, band.target.threadId, { entry: r.entry, panel: band.team ? "team" : "rarebit" }); }, (error) => onHover(String(error))); }} onFocus={() => report(at)} onMouseMove={(e) => { const box = e.currentTarget.closest("svg")!.getBoundingClientRect(); report(from + (e.clientX - box.left) / box.width * (to - from)); }}>
+			<a href={link} aria-label={`Open ${band.title} at nearest entry`} onClick={(e) => { if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); void hub.request(band.target.host, "view.cos.timeline.locate", { threadId: band.target.threadId, at }).then((r) => { location.hash = href.thread(band.target.host, band.target.threadId, { entry: r.entry, panel: band.team ? "team" : "rarebit" }); }, (error) => onHover(String(error))); }} onFocus={() => report(at)} onMouseMove={(e) => { const box = e.currentTarget.closest("svg")!.getBoundingClientRect(); report(from + (e.clientX - box.left) / box.width * (to - from)); }}>
 				<path className={`cos-band cos-color-${color}`} d={top.join("")} />
 				<rect x={Math.max(0, x(band.start))} y="4" width={Math.max(0, Math.min(X, x(Math.max(band.end, band.start + 60_000))) - Math.max(0, x(band.start)))} height="48" fill="transparent" />
 			</a>
@@ -126,10 +126,13 @@ export function TimelinePanel({ host, threadId, summary }: { host: string; threa
 	return <TimelineView route={route} selected={{ host, threadId, teamId: summary?.team?.teamId }} />;
 }
 
+/** One Host's timeline replica, for `useFleet`. */
+const useTimeline = (host: string) => useTopic(host, { kind: "view", view: "cos.timeline" });
+
 function TimelineView({ route, selected }: { route: Route; selected?: PanelSelection }) {
 	// Seen times as of this visit: labels and order stay put while the page is open.
 	const seen = useMemo(() => new Map<string, number>(), []);
-	const { feeds, readers, connected } = useFleet<TimelineValue>("cos.timeline");
+	const { feeds, readers, connected } = useFleet<TimelineValue>(useTimeline);
 	const [hover, setHover] = useState("Hover a stream to inspect its bucket. Click to open the nearest entry.");
 	const [scroll, setScroll] = useState(0);
 	const [preview, setPreview] = useState<TimeRange>();

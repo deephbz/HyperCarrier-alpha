@@ -2,7 +2,7 @@
 // Typecheck both projects with tsgo (TypeScript native preview) in parallel.
 // `--agree` also runs tsc and fails unless both compilers pass or fail alike
 // and report the same error set per project (tsc exits 2 where tsgo exits 1). `test:full` runs `--agree`;
-// `npm run typecheck:tsc` is the fallback when tsgo is unavailable or suspect.
+// `npm run typecheck:tsc` is the fallback when tsgo is unavailable or suspect. Both modes also run lint-casts.cjs.
 const { spawn } = require("node:child_process");
 const path = require("node:path");
 
@@ -31,8 +31,12 @@ const errors = (output) => new Set(output.split("\n").map((line) => line.match(/
 async function main() {
 	const agree = process.argv.includes("--agree");
 	const compilers = agree ? ["tsgo", "tsc"] : ["tsgo"];
+	const lint = new Promise((resolve) => {
+		const child = spawn(process.execPath, [path.join(__dirname, "lint-casts.cjs")], { cwd: root, stdio: "inherit" });
+		child.on("close", resolve);
+	});
 	const runs = await Promise.all(compilers.flatMap((compiler) => projects.map((project) => check(compiler, project))));
-	let failed = false;
+	let failed = (await lint) !== 0;
 	for (const run of runs) {
 		if (run.compiler === "tsgo" || run.status !== 0) process.stdout.write(run.output);
 		console.log(`[typecheck] ${run.compiler} ${run.project}: exit ${run.status}, ${run.seconds.toFixed(1)}s`);

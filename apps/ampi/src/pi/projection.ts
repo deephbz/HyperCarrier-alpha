@@ -1,4 +1,6 @@
-import type { UiBlock, UiEntry } from "../node/projection.ts";
+import type { JsonValue } from "../node/durable-types.ts";
+import { injectedMessage, toolArgsPreview } from "../shared/entry-shapes.ts";
+import type { PiBlock, PiEntry } from "../shared/protocol.ts";
 type ReaderEntry = {
 	ref: string;
 	id: string;
@@ -9,7 +11,7 @@ type ReaderEntry = {
 	role?: string;
 	model?: string;
 	usage?: { input?: number | null; output?: number | null; cacheRead?: number | null; cacheWrite?: number | null; cost?: number | null };
-	blocks?: ({ type: "text"; text: string } | { type: "thinking"; text: string } | { type: "toolCall"; id: string; name: string; args: unknown } | { type: "image"; mimeType: string })[];
+	blocks?: ({ type: "text"; text: string } | { type: "thinking"; text: string } | { type: "toolCall"; id: string; name: string; args: JsonValue } | { type: "image"; mimeType: string })[];
 	result?: { callId: string; isError: boolean; text: string };
 	customType?: string;
 	summary?: string;
@@ -25,33 +27,33 @@ const clip = (text: string, limit: number) => (text.length <= limit ? { text, tr
  * The keys each projected entry kind and block type may carry to the browser in a full entry. Model, usage, cost,
  * provider, signatures, response IDs and parent links stay in the hub (A24).
  */
-const ENTRY_KEYS: Record<UiEntry["kind"], readonly string[]> = {
+const ENTRY_KEYS: Record<PiEntry["kind"], readonly string[]> = {
 	user: ["id", "kind", "ts", "text", "images"],
 	assistant: ["id", "kind", "ts", "blocks", "stop", "error"],
 	"tool-result": ["id", "kind", "ts", "callId", "name", "isError", "text", "truncated"],
 	compaction: ["id", "kind", "ts", "summary", "reason"],
-	custom: ["id", "kind", "ts", "entryKind", "text"],
+	custom: ["id", "kind", "ts", "entryKind", "message"],
 	reset: ["id", "kind", "ts", "handoff"],
 	system: ["id", "kind", "changed"],
 };
-const BLOCK_KEYS: Record<UiBlock["type"], readonly string[]> = {
+const BLOCK_KEYS: Record<PiBlock["type"], readonly string[]> = {
 	text: ["type", "text"],
 	thinking: ["type", "text"],
-	tool: ["type", "callId", "name", "args"],
+	tool: ["type", "callId", "name", "args", "argsClipped"],
 	image: ["type", "mimeType"],
 };
 const pick = <T extends object>(value: T, keys: readonly string[]): T =>
 	Object.fromEntries(Object.entries(value).filter(([key]) => keys.includes(key))) as T;
 
 /** One full projected entry for the browser: only the allowed keys of its kind. */
-export function wireEntry(e: UiEntry): UiEntry {
+export function wireEntry(e: PiEntry): PiEntry {
 	const out = pick(e, ENTRY_KEYS[e.kind] ?? ["id", "kind"]);
 	if (out.kind === "assistant") out.blocks = out.blocks.map((b) => pick(b, BLOCK_KEYS[b.type] ?? ["type"]));
 	return out;
 }
 
 /** Projects one reader entry into the GUI's entry shape. Returns undefined for entries the transcript does not draw. */
-export function projectEntry(e: ReaderEntry): UiEntry | undefined {
+export function projectEntry(e: ReaderEntry): PiEntry | undefined {
 	const ts = e.t ?? undefined;
 	switch (e.kind) {
 		case "human": {
@@ -60,15 +62,18 @@ export function projectEntry(e: ReaderEntry): UiEntry | undefined {
 			return { id: e.id, kind: "user", ...(ts ? { ts } : {}), text, images };
 		}
 		case "injected":
-			return { id: e.id, kind: "custom", entryKind: e.customType ?? "message", ...(ts ? { ts } : {}), text: e.text ?? (e.blocks ?? []).map((b) => ("text" in b ? b.text : "")).join("\n") };
+		{
+			const entryKind = e.customType ?? "message";
+			const text = e.text ?? (e.blocks ?? []).map((b) => ("text" in b ? b.text : "")).join("\n");
+			return { id: e.id, kind: "custom", entryKind, ...(ts ? { ts } : {}), message: injectedMessage(entryKind, text) };
+		}
 		case "assistant": {
-			const blocks: UiBlock[] = [];
+			const blocks: PiBlock[] = [];
 			for (const b of e.blocks ?? []) {
 				if (b.type === "text" || b.type === "thinking") blocks.push({ type: b.type, text: b.text });
-				else if (b.type === "toolCall") blocks.push({ type: "tool", callId: b.id, name: b.name, args: (b.args ?? null) as never });
+				else if (b.type === "toolCall") blocks.push({ type: "tool", callId: b.id, name: b.name, args: toolArgsPreview(b.name, b.args) });
 				else if (b.type === "image") blocks.push({ type: "image", mimeType: b.mimeType });
 			}
-			const u = e.usage;
 			return {
 				id: e.id,
 				kind: "assistant",
@@ -76,8 +81,6 @@ export function projectEntry(e: ReaderEntry): UiEntry | undefined {
 				blocks,
 				...(e.stop ? { stop: e.stop } : {}),
 				...(e.error ? { error: e.error } : {}),
-				...(e.model ? { model: e.model } : {}),
-				...(u ? { usage: { input: u.input ?? 0, output: u.output ?? 0, cacheRead: u.cacheRead ?? 0, cacheWrite: u.cacheWrite ?? 0, cost: u.cost ?? 0 } } : {}),
 			};
 		}
 		case "tool": {
@@ -90,6 +93,10 @@ export function projectEntry(e: ReaderEntry): UiEntry | undefined {
 		case "branch-summary":
 			return { id: e.id, kind: "compaction", summary: e.summary ?? e.text ?? "", reason: "branch", ...(ts ? { ts } : {}) };
 		default:
-			return e.text ? { id: e.id, kind: "custom", entryKind: e.role ?? e.customType ?? e.kind, ...(ts ? { ts } : {}), text: e.text } : undefined;
+		{
+			if (!e.text) return undefined;
+			const entryKind = e.role ?? e.customType ?? e.kind;
+			return { id: e.id, kind: "custom", entryKind, ...(ts ? { ts } : {}), message: injectedMessage(entryKind, e.text) };
+		}
 	}
 }

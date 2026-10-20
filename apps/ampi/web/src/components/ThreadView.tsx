@@ -1,7 +1,7 @@
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Composer } from "./Composer.tsx";
 import { openAccounts } from "./Accounts.tsx";
-import type { UiEntry, UiThreadView } from "../../../src/node/projection.ts";
+import type { InjectedMessage, PiEntry, ToolArgsPreview } from "../../../src/shared/protocol.ts";
 import type { ThreadSummary } from "../../../src/shared/protocol.ts";
 import { openCalls } from "../../../src/shared/tool-state.ts";
 import { hub, useHosts, useTopic } from "../client.ts";
@@ -10,18 +10,19 @@ import { ACTIVITY_LABEL, MOD, attentionOf, clock, go, href, money, tokens } from
 import { PANELS } from "./Panel.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { CloseAgentDialog, ResumeAgentDialog } from "./PiDialogs.tsx";
-import { type LiveSlot, ToolCall, type ToolResult } from "./ToolCall.tsx";
+import { type LiveSlot, ToolArgs, ToolCall, type ToolResult } from "./ToolCall.tsx";
 import { markSeen } from "../seen.ts";
 import { RarebitControls, RarebitJump, RarebitTools, useRarebitLens } from "../views/rarebit/Lens.tsx";
+import { useArcReopen } from "../views/cos/arc-reopen.ts";
 import { SessionFind } from "./Search.tsx";
 import { EntryBody, fetchEntry, shortenedLabel } from "./EntryBody.tsx";
-import { type NoticeView, noticeView } from "./notice.ts";
 import { PI_BANDS } from "../views/registry.ts";
 import { toolRuns } from "../views/rarebit/tool-runs.ts";
 import { useKeepPlace } from "../keep-place.ts";
 import { SessionTitle } from "./SessionTitle.tsx";
 import { perfMarkPainted } from "../perf.ts";
-import { focusRegion, handleRegionScrollKey, useKeyAction } from "../keymap.ts";
+import { handleRegionScrollKey, useKeyAction } from "../keymap.ts";
+import { useFocusIntent } from "../context.ts";
 
 // biome-ignore lint: live and inbox docs are loosely typed JSON
 type Any = any;
@@ -40,7 +41,7 @@ function UserImages({ host, threadId, entryId, count }: { host: string; threadId
 		if (!request) {
 			request = Promise.all(
 				Array.from({ length: count }, (_, index) =>
-					hub.request<{ image?: { data: string; mimeType: string } }>(host, "thread.images", { threadId, entryId, index }).then((r) => r.image),
+					hub.request(host, "thread.images", { threadId, entryId, index }).then((r) => r.image),
 				),
 			).then((list) => list.filter((image): image is { data: string; mimeType: string } => image !== undefined));
 			imageCache.set(key, request);
@@ -62,29 +63,32 @@ function UserImages({ host, threadId, entryId, count }: { host: string; threadId
 	);
 }
 
-function NoticeParts({ view }: { view: NoticeView }) {
-	return view.parts.map((part, i) => (
+const firstLine = (text: string) => text.split("\n").map((line) => line.trim()).find(Boolean) ?? "";
+
+function NoticeParts({ message }: { message: InjectedMessage }) {
+	const parts = message.parts ?? [{ text: message.text }];
+	return parts.map((part, i) => (
 		<Fragment key={i}>
-			{view.parts.length > 1 && part.from && <div className="hint">{part.from}</div>}
+			{parts.length > 1 && part.from && <div className="hint">{part.from}</div>}
 			<Markdown text={part.text} />
 		</Fragment>
 	));
 }
 
 /** One extension message as one disclosure row: kind badge, sender and first line; open, its text and, when shortened, the full text in the card. */
-function NoticeEntry({ entry, host, threadId }: { entry: Extract<UiEntry, { kind: "custom" }>; host: string; threadId: string }) {
-	const view = noticeView(entry.entryKind, entry.text ?? "");
+function NoticeEntry({ entry, host, threadId }: { entry: Extract<PiEntry, { kind: "custom" }>; host: string; threadId: string }) {
+	const { message } = entry;
 	return (
 		<details className="msg notice" data-entry={entry.id}>
 			<summary className="disclosure">
-				<span className={`badge ${view.alert ? "attn" : ""}`}>{view.kind}</span>
-				{view.sender && <span className="notice-sender">{view.sender}</span>}
-				<span className="notice-first">{view.first}</span>
+				<span className={`badge ${message.kind === "alert" ? "attn" : ""}`}>{message.label}</span>
+				{message.sender && <span className="notice-sender">{message.sender}</span>}
+				<span className="notice-first">{firstLine(message.text)}</span>
 				<span className="notice-time">{clock(entry.ts)}</span>
 			</summary>
 			<div className="notice-body">
-				<NoticeParts view={view} />
-				{entry.clipped && <EntryBody host={host} threadId={threadId} entry={entry.id} label={shortenedLabel("Text", entry.clippedBytes)} show={(full) => full.kind === "custom" && <NoticeParts view={noticeView(entry.entryKind, full.text ?? "")} />} />}
+				<NoticeParts message={message} />
+				{entry.clipped && <EntryBody host={host} threadId={threadId} entry={entry.id} label={shortenedLabel("Text", entry.clippedBytes)} show={(full) => full.kind === "custom" && <NoticeParts message={full.message} />} />}
 			</div>
 		</details>
 	);
@@ -108,7 +112,7 @@ const Entries = memo(function Entries({
 	lens = false,
 	busy = false,
 }: {
-	entries: UiEntry[];
+	entries: PiEntry[];
 	live: Any;
 	host: string;
 	threadId: string;
@@ -121,7 +125,7 @@ const Entries = memo(function Entries({
 		const map = new Map<string, ToolResult & { entry: string; clipped?: boolean; clippedBytes?: number }>();
 		for (const entry of entries)
 			if (entry.kind === "tool-result")
-				map.set(entry.callId, { text: entry.text, isError: entry.isError, truncated: entry.truncated, details: entry.details, entry: entry.id, clipped: entry.clipped, clippedBytes: entry.clippedBytes });
+				map.set(entry.callId, { text: entry.text, isError: entry.isError, truncated: entry.truncated, entry: entry.id, clipped: entry.clipped, clippedBytes: entry.clippedBytes });
 		return map;
 	}, [entries]);
 	const outputSource = (callId: string) => {
@@ -132,7 +136,7 @@ const Entries = memo(function Entries({
 		</>} />;
 	};
 	// Long prose opens inside its message: the full projected entry replaces the preview until "Show less".
-	const [fullEntries, setFullEntries] = useState<ReadonlyMap<string, UiEntry>>(new Map());
+	const [fullEntries, setFullEntries] = useState<ReadonlyMap<string, PiEntry>>(new Map());
 	const [reading, setReading] = useState<{ id: string; error?: string }>();
 	const toggleFull = async (id: string) => {
 		if (fullEntries.has(id)) return setFullEntries((m) => { const next = new Map(m); next.delete(id); return next; });
@@ -145,7 +149,7 @@ const Entries = memo(function Entries({
 			setReading({ id, error: String(e) });
 		}
 	};
-	const proseToggle = (entry: UiEntry) => entry.bodyAvailable && (
+	const proseToggle = (entry: PiEntry) => entry.bodyAvailable && (
 		<div className="prose-toggle">
 			<button className="btn ghost small" disabled={reading?.id === entry.id && !reading.error} onClick={() => void toggleFull(entry.id)}>
 				{fullEntries.has(entry.id) ? "Show less" : reading?.id === entry.id && !reading.error ? "Reading message…" : "Show full message"}
@@ -153,17 +157,17 @@ const Entries = memo(function Entries({
 			{reading?.id === entry.id && reading.error && <span role="alert">{reading.error}</span>}
 		</div>
 	);
-	const blockOf = (full: UiEntry, test: (b: Extract<UiEntry, { kind: "assistant" }>["blocks"][number], i: number) => boolean) => full.kind === "assistant" ? full.blocks.find(test) : undefined;
+	const blockOf = (full: PiEntry, test: (b: Extract<PiEntry, { kind: "assistant" }>["blocks"][number], i: number) => boolean) => full.kind === "assistant" ? full.blocks.find(test) : undefined;
 	const slots = new Map<string, LiveSlot>();
 	for (const slot of (live?.tools ?? []) as Any[]) slots.set(String(slot.callId), slot);
 	const fork = async (entryId: string) => {
-		const { threadId: forked } = await hub.request<{ threadId: string }>(host, "thread.fork", { threadId, entryId });
+		const { threadId: forked } = await hub.request(host, "thread.fork", { threadId, entryId });
 		go(host, forked);
 	};
 	const parts = useMemo(() => lens ? toolRuns(entries, busy) : [], [entries, lens, busy]);
 	const open = useMemo(() => openCalls(entries), [entries]);
 	const calls = new Set(entries.flatMap((entry) => entry.kind === "assistant" ? entry.blocks.flatMap((b) => b.type === "tool" ? [b.callId] : []) : []));
-	const renderEntry = (preview: UiEntry) => {
+	const renderEntry = (preview: PiEntry) => {
 				const entry = fullEntries.get(preview.id) ?? preview;
 				const fade = preview.bodyAvailable && !fullEntries.has(preview.id);
 				const lastText = entry.kind === "assistant" ? entry.blocks.findLastIndex((b) => b.type === "text" && b.text.trim() !== "") : -1;
@@ -204,15 +208,14 @@ const Entries = memo(function Entries({
 										<ToolCall
 											key={block.callId}
 											name={block.name}
-											args={block.args as Any}
+											args={block.args}
 											result={results.get(block.callId)}
 											live={slots.get(block.callId)}
 											callOpen={open.has(block.callId)}
 											active={busy}
-											onOpenThread={onOpenConversation}
 											source={block.argsClipped && <EntryBody host={host} threadId={threadId} entry={entry.id} label="Arguments shortened" show={(full) => {
-												const args = (blockOf(full, (b) => b.type === "tool" && b.callId === block.callId) as { args?: unknown } | undefined)?.args;
-												return <pre>{typeof args === "string" ? args : JSON.stringify(args, null, 2)}</pre>;
+												const args = (blockOf(full, (b) => b.type === "tool" && b.callId === block.callId) as { args?: ToolArgsPreview } | undefined)?.args;
+												return args && <ToolArgs args={args} />;
 											}} />}
 											outputSource={outputSource(block.callId)}
 										/>
@@ -225,7 +228,7 @@ const Entries = memo(function Entries({
 							</div>
 						);
 					case "tool-result":
-						return lens && !calls.has(entry.callId) ? <div key={entry.id} data-entry={entry.id}><ToolCall name={entry.name} args={{}} result={results.get(entry.callId)} onOpenThread={onOpenConversation} outputSource={outputSource(entry.callId)} /></div> : null;
+						return lens && !calls.has(entry.callId) ? <div key={entry.id} data-entry={entry.id}><ToolCall name={entry.name} args={{ summary: "" }} result={results.get(entry.callId)} outputSource={outputSource(entry.callId)} /></div> : null;
 					case "compaction":
 						return (
 							<Fragment key={entry.id}>
@@ -263,7 +266,7 @@ const NO_LIVE = {};
 const AUTH_FAILURE = /\b(401|403)\b|unauthori[sz]ed|authentication|invalid[ _-]?(x-)?api[ _-]?key|incorrect api key|invalid_grant/i;
 
 /** The model error the transcript already shows, so the run-failure box does not repeat it. */
-function lastEntryShows(entries: UiEntry[], error: string): boolean {
+function lastEntryShows(entries: PiEntry[], error: string): boolean {
 	const last = entries.at(-1);
 	return last?.kind === "assistant" && last.stop === "error" && (last.error ?? "") !== "" && error.includes(last.error!.slice(0, 60));
 }
@@ -356,21 +359,24 @@ export function ThreadView({
 	/** An entry to scroll to and mark, from a link (`?e=`). */
 	entry?: string;
 }) {
-	const { value: view, stale, error } = useTopic<UiThreadView>(host, { kind: "thread", threadId });
+	const { value: view, stale, error } = useTopic(host, { kind: "thread", threadId });
 	// One mount per Session (App keys this view by it): the first painted transcript ends the switch.
 	const viewArrived = view !== undefined;
 	useEffect(() => {
 		if (viewArrived) perfMarkPainted("switch-done");
 	}, [viewArrived]);
 	const pi = isPiHost(useHosts().hosts.find((h) => h.id === host));
+	// A Pi Session opens with Arc when the owner last showed it and the pane is wide; a narrow pane collapses it (R16).
+	useArcReopen(pi, panel, setPanel);
 	const [finding, setFinding] = useState(false);
-	useKeyAction("find", (event) => { if (pi) { event.preventDefault(); setFinding(true); } });
+	const focusIntent = useFocusIntent();
+	useKeyAction("find", pi ? (event) => { event.preventDefault(); setFinding(true); } : undefined);
 	const scroller = useRef<HTMLDivElement>(null);
 	const pinned = useRef(true);
 	const keepPlace = useKeepPlace(scroller, "[data-entry]", "data-entry", pinned);
 	const beforeLensChange = useCallback(() => { keepPlace.capture({ accept: (node) => node.matches(".msg.user, .compaction, .notice") || Boolean(node.querySelector(".md")) }); }, [keepPlace.capture]);
 	const lens = useRarebitLens(host, threadId, pi, beforeLensChange);
-	const [older, setOlder] = useState<UiEntry[]>([]);
+	const [older, setOlder] = useState<PiEntry[]>([]);
 	const [olderMore, setOlderMore] = useState(true);
  const [historyError, setHistoryError] = useState<string>();
 	/** A linked entry (`?e=`) that is not on this Session's active branch (or too far back to page to). */
@@ -533,7 +539,7 @@ export function ThreadView({
 				pinned.current = true;
 				el.scrollTop = el.scrollHeight;
 			}
-		} else if (pinned.current) el.scrollTop = el.scrollHeight;
+		} else if (keepPlace.following()) el.scrollTop = el.scrollHeight;
 	});
 	const openConversation = useCallback(
 		(conversationId: string) => {
@@ -547,7 +553,7 @@ export function ThreadView({
 		if (!first) return;
   setHistoryError(undefined);
   try {
-		const page = await hub.request<{ entries: UiEntry[]; more: boolean }>(host, "thread.history", { threadId, before: first, limit: 200, version: view?.sourceVersion });
+		const page = await hub.request(host, "thread.history", { threadId, before: first, limit: 200, version: view?.sourceVersion });
 		pinned.current = false;
 		// Earlier messages arrive above: keep the message being read where it is.
 		const el = scroller.current;
@@ -565,17 +571,17 @@ export function ThreadView({
 			let before = older[0]?.id ?? view.entries[0]?.id;
 			let pages = 0;
 			const loaded = () => older.some((e) => e.id === entry) || view.entries.some((e) => e.id === entry);
-			const collected: UiEntry[] = [];
+			const collected: PiEntry[] = [];
 			if (!loaded() && pi) {
 				try {
-					const page = await hub.request<{ entries: UiEntry[]; more: boolean }>(host, "thread.history", { threadId, around: entry, version: view.sourceVersion });
+					const page = await hub.request(host, "thread.history", { threadId, around: entry, version: view.sourceVersion });
 					if (cancelled) return;
 					collected.push(...page.entries); setOlder(page.entries); setOlderMore(page.more);
 				} catch { if (!cancelled) setMissing(entry); return; }
 			} else if (!loaded()) {
 				let more = olderMore;
 				while (more && before && pages < 50 && !cancelled) {
-					const page = await hub.request<{ entries: UiEntry[]; more: boolean }>(host, "thread.history", { threadId, before, limit: 500 });
+					const page = await hub.request(host, "thread.history", { threadId, before, limit: 500 });
 					collected.unshift(...page.entries);
 					more = page.more;
 					before = page.entries[0]?.id;
@@ -702,7 +708,7 @@ export function ThreadView({
 					</div>
 				)}
 			</div>
-			{pi && finding && <SessionFind host={host} threadId={threadId} onClose={() => setFinding(false)} />}
+			{pi && finding && <SessionFind host={host} threadId={threadId} onClose={() => { setFinding(false); focusIntent("find.close"); }} onGo={() => focusIntent("find.go")} />}
 			{pi && (view?.agent as Any)?.readError && <p className="err-box" role="status">Last indexed copy · {(view!.agent as Any).readError}. New source bytes retry the read.</p>}
    {historyError && <p className="err-box" role="status">{historyError}</p>}
 			{missing && (
@@ -721,7 +727,7 @@ export function ThreadView({
 				tabIndex={-1}
 				onKeyDown={(event) => {
 					handleRegionScrollKey(event);
-					if (event.key === "i" && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) { event.preventDefault(); focusRegion("composer"); }
+					if (event.key === "i" && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && focusIntent("insert")) event.preventDefault();
 				}}
 				ref={scroller}
 				onScroll={(e) => {

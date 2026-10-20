@@ -33,6 +33,12 @@ Rules:
 export type Label = { project: string; topic: string; subproject: string | null; mode: string; ideas: { text: string; evidence: string[] }[]; work: { text: string; evidence: string[] }[]; outcome: string | null };
 export type Project = { name: string; aliases: string[]; summary: string; status: string; lastState: string };
 export const text = (v: unknown, max: number) => typeof v === "string" ? v.trim().slice(0, max) : "";
+// Model answers are untrusted JSON: readers narrow every field through these.
+/** An object's fields; anything else reads as no fields. */
+export const fields = (v: unknown): Record<string, unknown> => (typeof v === "object" && v !== null && !Array.isArray(v) ? Object.fromEntries(Object.entries(v)) : {});
+export const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+export const oneOf = <T extends string>(choices: readonly T[], v: unknown, fallback: T): T => choices.find((c) => c === v) ?? fallback;
+const strings = (v: unknown, keep: (id: string) => boolean) => list(v).filter((id): id is string => typeof id === "string" && keep(id));
 export const labelPrompt = (chunks: Chunk[], evidence: Map<string, string>) => JSON.stringify({
 	shape: { chunks: [{ chunk: "<chunk id>", project: "string", subproject: "string|null", topic: "string", mode: "building|debugging|researching|planning|reviewing|discussing|operating|other", ideas: [{ text: "string", evidence: ["ref"] }], work: [{ text: "string", evidence: ["ref"] }], outcome: "string|null" }] },
 	chunks: chunks.map((c) => ({ chunk: c.id, start: c.startAt, end: c.endAt, ownerTurns: c.ownerTurns, toolCalls: c.toolCalls, where: c.where, evidence: evidence.get(c.id) })),
@@ -43,18 +49,18 @@ export const synthPrompt = (chunks: Chunk[], labels: Record<string, Label>, cwd:
 	chunks: chunks.map((c) => ({ chunk: c.id, start: c.startAt, ownerTurns: c.ownerTurns, where: c.where, ...labels[c.id] })),
 });
 
-export function normalizeLabel(raw: any, evidence: string): Label {
+export function normalizeLabel(raw: unknown, evidence: string): Label {
 	const refs = new Set([...evidence.matchAll(/^\[([^\]]+)\]/gm)].map((m) => m[1]!));
-	const items = (list: any) => (Array.isArray(list) ? list : []).slice(0, 3).map((r: any) => ({ text: text(r?.text, 200), evidence: (Array.isArray(r?.evidence) ? r.evidence : []).filter((id: unknown) => typeof id === "string" && refs.has(id)).slice(0, 3) })).filter((r) => r.text && r.evidence.length);
-	return { project: text(raw?.project, 48), topic: text(raw?.topic, 90), subproject: text(raw?.subproject, 48) || null,
-		mode: ["building", "debugging", "researching", "planning", "reviewing", "discussing", "operating"].includes(raw?.mode) ? raw.mode : "other",
-		ideas: items(raw?.ideas), work: items(raw?.work), outcome: text(raw?.outcome, 160) || null };
+	const items = (v: unknown) => list(v).slice(0, 3).map(fields).map((r) => ({ text: text(r.text, 200), evidence: strings(r.evidence, (id) => refs.has(id)).slice(0, 3) })).filter((r) => r.text && r.evidence.length);
+	const f = fields(raw);
+	return { project: text(f.project, 48), topic: text(f.topic, 90), subproject: text(f.subproject, 48) || null,
+		mode: oneOf(["building", "debugging", "researching", "planning", "reviewing", "discussing", "operating"], f.mode, "other"),
+		ideas: items(f.ideas), work: items(f.work), outcome: text(f.outcome, 160) || null };
 }
-export function normalizeProjects(raw: any, ids: Set<string>): Project[] {
-	const items = (list: any) => (Array.isArray(list) ? list : []).slice(0, 5).map((r: any) => ({ text: text(r?.text, 220), chunks: (Array.isArray(r?.chunks) ? r.chunks : []).filter((id: unknown) => typeof id === "string" && ids.has(id)).slice(0, 4) })).filter((r) => r.text && r.chunks.length);
+export function normalizeProjects(raw: unknown, ids: Set<string>): Project[] {
 	const seen = new Set<string>();
-	return (Array.isArray(raw) ? raw : []).slice(0, 24).flatMap((p: any) => {
-		const name = text(p?.name, 48); if (!name || seen.has(name.toLowerCase())) return []; seen.add(name.toLowerCase());
-		return [{ name, aliases: (Array.isArray(p.aliases) ? p.aliases : []).map((a: unknown) => text(a, 48)).filter(Boolean).slice(0, 16), summary: text(p.summary, 220), status: ["active", "paused", "done", "abandoned"].includes(p.status) ? p.status : "unknown", lastState: text(p.lastState, 240) }];
+	return list(raw).slice(0, 24).map(fields).flatMap((p) => {
+		const name = text(p.name, 48); if (!name || seen.has(name.toLowerCase())) return []; seen.add(name.toLowerCase());
+		return [{ name, aliases: list(p.aliases).map((a) => text(a, 48)).filter(Boolean).slice(0, 16), summary: text(p.summary, 220), status: oneOf(["active", "paused", "done", "abandoned"], p.status, "unknown"), lastState: text(p.lastState, 240) }];
 	});
 }

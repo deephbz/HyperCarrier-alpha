@@ -75,8 +75,9 @@ The HyperCarrier terminal-palette contract (system.md C8) continues to exclude w
 
 Paper Mono covers the whole UI. The local faces load at their declared weights;
 the unmodified variable WOFF2 supplies a same-origin fallback with nonblocking
-font swap. Body and metadata use 400, buttons use 500, headings and emphasis use
-600, and strong text uses 700. Emphasis has no synthetic italic or link underline.
+font swap. Body and metadata use 400. Buttons and work-group summaries use 500;
+Send, headings and emphasis use 600. Strong text uses 700. Emphasis has no
+synthetic italic or link underline.
 Without the font, the UI uses the system monospace stack. Font provenance and
 the SIL OFL 1.1 licence live in `vendor/paper-mono/`.
 
@@ -123,10 +124,12 @@ Extension widgets and custom renderers are unavailable. Search uses substrings.
 A forwarded port must keep the hub's port number because its Host guard checks
 that number. Lag includes remote clock skew. The Herdr sidebar and this tool use separate
 Team joins without a shared conformance fixture. Team reads have no error
-backoff. Individual oversized JSONL lines can still consume a long event-loop
-turn. Corpus scans and protocol frames yield between bounded batches. Escalate
-to worker isolation if local last-page or search p50 exceeds 1.20 times B4 during
-concurrent remote indexing.
+backoff. Each remote Host engine runs in its own worker thread. Remote JSONL
+parsing, cache indexes, search scans and HTTP result serialization stay off the
+hub event loop. Local warm search keeps the original synchronous scan; local
+index construction and protocol frames yield between batches. Individual
+oversized local JSONL lines can still consume a long hub turn. The 1.20-times
+local B4 pressure gate triggered this isolation change.
 
 ## Verification
 

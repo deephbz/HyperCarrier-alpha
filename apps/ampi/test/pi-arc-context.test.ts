@@ -1,8 +1,9 @@
+import "./bound.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Chunk } from "../src/pi/views/cos-arc-chunks.ts";
 import { askCandidates } from "../src/pi/views/cos-arc-asks.ts";
-import { TITLE_LIMITS, normalizeContext } from "../src/pi/views/cos-arc-context.ts";
+import { TITLE_LIMITS, emptyTree, normalizeContext } from "../src/pi/views/cos-arc-context.ts";
 import { arcHead, headOf } from "../src/pi/views/cos-arc.ts";
 import type { RarebitItem } from "../src/pi/views/rarebit.ts";
 
@@ -170,7 +171,8 @@ test("arc context overtaken: a 'status?' turn overtakes an earlier ask, an agent
 	const evOf = (items: RarebitItem[]) => new Map([["c0", items.map((i) => `[${i.id}] ${i.kind === "user" ? "USER" : "AGENT"}: ${i.text.replace(/\n+/g, " ")}`).join("\n")]]);
 	const at = new Map([["a1", 1_792_000_060_000], ["u2", 1_792_000_120_000], ["a3", 1_792_000_180_000], ["a4", 1_792_000_240_000]]);
 	const ctx = (items: RarebitItem[], raw: unknown = {}, evidence = evOf(items)) => normalizeContext(raw, [chunks[0]!], evidence, SESSION, at, "2026-10-19T00:00:00.000Z", "m", items.length, "f".repeat(64), items.at(-1)!.id, { texts: new Map(), ...askCandidates(items) });
-	const c = ctx(run);
+	// A thread keeps the tree non-empty (emptyTree): an overtaken ask is closed and alone is no Arc.
+	const c = ctx(run, { threads: [{ label: "Release", state: "active" }] });
 	assert.deepEqual(c.needsYou, [], "the owner moved on without answering");
 	assert.deepEqual(c.overtaken!.map((l) => [l.quote, l.closed, l.resolvedBy.map((x) => x.entryId), l.citations[0]!.at]), [["Should I tag the release?", "overtaken", ["u2"], 1_792_000_060_000]]);
 	const head = headOf({ version: 4, sourceVersion: "v", builtAt: c.builtAt, labels: {}, headline: "", projects: [], transitions: [], model: null, context: c });
@@ -180,4 +182,19 @@ test("arc context overtaken: a 'status?' turn overtakes an earlier ask, an agent
 	assert.deepEqual([reopened.needsYou.map((l) => l.citations[0]!.entryId), reopened.overtaken], [["a4"], []], "the agent restated the ask after the owner turn");
 	const outside = ctx(run, {}, new Map([["c0", `[a1] AGENT: ${run[0]!.text.replace(/\n+/g, " ")}`]]));
 	assert.deepEqual(outside.overtaken!.map((l) => l.resolvedBy), [[]], "an owner turn outside the build evidence still closes the ask, without a link");
+});
+
+test("arc context ask only: a tree whose only item is an open ask is a valid Arc, and its head counts the ask (failure: an ask-only Session read as empty)", () => {
+	const items: RarebitItem[] = [{ id: "u1", kind: "user", t: null, text: "Prepare the release." }, { id: "a2", kind: "stop", t: null, text: "Ready.\n\nShould I tag the release?" }];
+	const evidence = new Map([["c0", items.map((i) => `[${i.id}] ${i.kind === "user" ? "USER" : "AGENT"}: ${i.text.replace(/\n+/g, " ")}`).join("\n")]]);
+	const c = normalizeContext({ asks: [], threads: [], unassigned: {} }, [chunks[0]!], evidence, SESSION, new Map([["a2", 1_792_000_060_000]]), "2026-10-19T00:00:00.000Z", "m", 2, "f".repeat(64), "a2", { texts: new Map(), ...askCandidates(items) });
+	assert.equal(c.threads.length, 0);
+	assert.deepEqual(c.needsYou.map((l) => l.citations[0]!.entryId), ["a2"]);
+	assert.equal(emptyTree(c), false, "an open ask counts");
+	const head = headOf({ version: 4, sourceVersion: "v", builtAt: c.builtAt, labels: {}, headline: "", projects: [], transitions: [], model: null, context: c });
+	assert.equal("e" in head, false);
+	const h = arcHead({ data: { rarebit: { count: 2, fingerprint: c.rarebitFingerprint } } } as never, head);
+	assert.equal(h.built, true);
+	assert.equal(Object.values(h.open).reduce((a, b) => a + b, 0), 1, "the head shows the ask");
+	assert.equal(emptyTree({ ...c, needsYou: [] }), true, "without the ask nothing is left");
 });

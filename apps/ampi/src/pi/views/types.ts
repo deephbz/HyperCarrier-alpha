@@ -2,10 +2,12 @@
 // full scans through the shared Session reader and published Rarebit selector.
 // Window and range reads are explicit; a window never stands in for a full branch.
 
-import type { ThreadSummary } from "../../shared/protocol.ts";
-import type { UiEntry } from "../../node/projection.ts";
+import type { OpSpec, PiTopicValue, ThreadSummary, ViewName, ViewTopic, ViewTopics } from "../../shared/protocol.ts";
+import type { PiEntry } from "../../shared/protocol.ts";
 import type { Derived } from "../working-set-types.ts";
+import type { AskRequest, AskResult } from "../ask.ts";
 import type { RarebitValue } from "./rarebit.ts";
+import type { ModelPurpose } from "../../hub/helper-models.ts";
 
 /** One reader entry, as the trace-analytics transcript reader returns it (pi-backend.md §3). */
 export type PiReaderEntry = {
@@ -47,10 +49,12 @@ export type PiViewSession = {
 	data: Derived;
 	/** Bytes of the Session file absorbed into the copy so far. */
 	bytes: number;
+	/** Whole-line length of the Session file at its Host's last read, when the Host reports it. A copy with fewer bytes is still loading. */
+	sourceBytes?: number;
 	/** The sidebar's summary, when the Session is listed. */
 	summary?: ThreadSummary;
 	/** Bounded UI window. Whole-Session computations use data, never this window. */
-	window(): UiEntry[];
+	window(): PiEntry[];
 	/** One page of Rarebit items before `before`; texts cut at 8 KiB unless `fullText`. */
 	rarebits(before?: string, fullText?: boolean): RarebitValue;
 	rarebitSnapshot(maxChars: number): { context: string; evidenceHash: string; count: number; included: number; omittedChars: number; entry?: string };
@@ -62,10 +66,25 @@ export type PiViewSession = {
 
 export type SourceStatus = { version: string; asOf: number; state: "ready" | "stale" | "unavailable" };
 export function sourceStatus(s: PiViewSession): SourceStatus {
- return { version: s.sourceVersion, asOf: s.data.asOf, state: s.readError || s.data.invalidLines ? "unavailable" : s.bytes === s.data.bytes ? "ready" : "stale" };
+ return { version: s.sourceVersion, asOf: s.data.asOf, state: s.readError || s.data.invalidLines ? "unavailable" : s.bytes === s.data.bytes && (s.sourceBytes === undefined || s.bytes >= s.sourceBytes) ? "ready" : "stale" };
 }
 
 export type PiTeamMember = { pane: string; session: string; team: string; member: string; role: string };
+export type PiTeamTask = { id: string; title: string; status: string; owner?: string; deps: string[]; ready: boolean; updatedAt?: string };
+/** A member as Pi Team Bright recorded it, with or without a live pane. */
+export type PiRecordedMember = { team: string; member: string; role: string; session?: string; pane?: string };
+/**
+ * The remote agent's teams frame (pi-backend.md §2): Pi Team Bright's status and issue codes, members joined to live
+ * panes, recorded members, and each Team's Task read by Team name.
+ */
+export type PiTeamsFrame = {
+	t: "teams";
+	status?: string;
+	codes?: string[];
+	members?: PiTeamMember[];
+	recorded?: PiRecordedMember[];
+	tasks?: Record<string, { availability: string; tasks: PiTeamTask[]; issues: string[] }>;
+};
 
 export type PiViewContext = {
 	/** The Host ID (SSH alias, or the hub machine's hostname). */
@@ -82,32 +101,36 @@ export type PiViewContext = {
 	lease(threadId: string): () => void;
 	/** The latest raw teams frame from the remote agent (`status`, `codes`, and any published Team read it carries), or
 	 * undefined before the first one. Distinguishes "Pi Team Bright unavailable" from "no Teams". */
-	teamsFrame(): Record<string, unknown> | undefined;
+	teamsFrame(): PiTeamsFrame | undefined;
 	/** Send one command to the Host's remote agent (pi-backend.md §2); resolves with its ack, rejects with `code`. */
 	command(cmd: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown>>;
 	/**
 	 * One isolated model call on the hub (`src/pi/ask.ts`): no Session, tools, or extensions; the hub's Pi credentials.
-	 * Only on an explicit owner action (D16). Rejects with `code`: no_model, no_result, model_error, timeout, busy.
+	 * Only on an explicit owner action (D16). `purpose` picks the hub's helper model; `model` is only an owner override.
+	 * The answer names the model that answered. Rejects with `code`: no_model, no_result, model_error, timeout, busy.
 	 */
-	ask(req: { system: string; prompt: string; model?: string; timeoutMs?: number }): Promise<{ text: string; model?: string; usage?: { input?: number; output?: number; cost?: number | null } }>;
+	ask(req: AskRequest & { purpose: ModelPurpose }): Promise<AskResult>;
+	/** The exact `provider/id` that `ask` would use for `purpose` and `override`; rejects like `ask` with `no_model`. A
+	 * Build checks its models with it before its first call, so a missing model costs nothing. */
+	model(purpose: ModelPurpose, override?: string): Promise<string>;
 	/** Ask the host to recompute this view's subscriptions (for state that changed outside Session bytes). */
 	invalidate(view: string): void;
 };
 
-/** A topic for a view: `{ kind: "view", view: "<name>", ...params }`. `threadId`, when present, scopes recomputation. */
-export type PiViewTopic = { kind: "view"; view: string; threadId?: string; [param: string]: unknown };
+type ViewOp<S> = S extends OpSpec<infer A, infer R> ? (ctx: PiViewContext, args: A) => Promise<R> : never;
 
-export type PiView = {
-	name: string;
+/** A view as declared: its topic, value and ops are the ones `ViewTopics` (protocol.ts) declares for its name. */
+export type PiView<N extends ViewName> = {
+	name: N;
 	/** Release per-Session state when its disk copy leaves the retained scope. */
 	evict?(ctx: PiViewContext, threadId: string): void;
 	/**
 	 * The published value for one subscription, or undefined for "no such thing" (the subscription ends). If it throws,
 	 * subscribers get `{ error: { code: "view_failed", message } }` and the next change retries; the client shows it.
 	 */
-	value(ctx: PiViewContext, topic: PiViewTopic): unknown;
-	/** Requests `view.<name>.<op>`. */
-	ops?: Record<string, (ctx: PiViewContext, args: Record<string, unknown>) => Promise<unknown>>;
+	value(ctx: PiViewContext, topic: ViewTopic<N>): ViewTopics[N]["value"] | undefined;
+	/** Requests `view.<name>.<op>`; the Host dispatches them through `viewOps` (index.ts). */
+	ops: { [O in keyof ViewTopics[N]["ops"]]: ViewOp<ViewTopics[N]["ops"][O]> };
 	/**
 	 * Which changes recompute a subscription: "thread" (default) changes to the topic's own `threadId`; "any" every
 	 * change on the Host (timeline-like views; memoize per Session and keep the value compact, since it is diffed whole).
@@ -122,4 +145,16 @@ export type PiView = {
 	summarize?(ctx: PiViewContext, session: PiViewSession): Partial<ThreadSummary> | undefined;
 	/** Sessions whose copy or liveness changed since the last publish. May start background work; must not block. */
 	changed?(ctx: PiViewContext, sessions: PiViewSession[]): void;
+};
+
+/** Every view, by name. */
+export type PiViews = { [N in ViewName]: PiView<N> };
+
+/**
+ * A view as the Host runs it: looked up by the topic's `view` string. Views enter only through `PiViews`, so each is
+ * checked against its declaration; ops never run through this type.
+ */
+export type HostedView = Omit<PiView<ViewName>, "name" | "value" | "ops"> & {
+	name: string;
+	value(ctx: PiViewContext, topic: ViewTopic): PiTopicValue | undefined;
 };

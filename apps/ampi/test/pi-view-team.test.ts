@@ -1,3 +1,4 @@
+import "./bound.ts";
 import assert from "node:assert/strict";
 import { appendFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

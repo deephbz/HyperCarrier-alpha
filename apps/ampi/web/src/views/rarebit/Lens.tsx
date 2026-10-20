@@ -15,12 +15,12 @@ export async function writeRecap(host: string, threadId: string) {
 	store.set({ checkingRecap: true, error: undefined });
 	const args = { threadId, model: store.get().recapModel };
 	try {
-		let recap = await hub.request<RarebitRecap | null>(host, "view.rarebit.recap", { ...args, cachedOnly: true });
+		let recap = await hub.request(host, "view.rarebit.recap", { ...args, cachedOnly: true });
 		if (!recap) {
 			store.set({ recapping: true });
-			recap = await hub.request<RarebitRecap>(host, "view.rarebit.recap", args);
+			recap = await hub.request(host, "view.rarebit.recap", args);
 		}
-		store.set({ recap, recapHidden: false });
+		store.set({ recap: recap ?? undefined, recapHidden: false });
 	}
 	catch (e) { store.set({ error: (e as Error).message }); }
 	finally { store.set({ checkingRecap: false, recapping: false }); }
@@ -67,7 +67,7 @@ export function RarebitTools({ run, children }: { run: ToolRun; children: ReactN
 
 export function RarebitBand({ host, threadId }: { host: string; threadId: string; lens: boolean }) {
 	const [state, set] = useRarebitState(host, threadId);
-	const { value: result, error } = useTopic<RarebitValue | RarebitFailure>(host, state.diagnosis ? { kind: "view", view: "rarebit", threadId } : undefined);
+	const { value: result, error } = useTopic(host, state.diagnosis ? { kind: "view", view: "rarebit", threadId } : undefined);
 	const value = result && "items" in result ? result : undefined;
 	const recapVisible = state.recap && !state.recapHidden;
 	if (!recapVisible && !state.recapping && !state.error && !state.diagnosis) return null;

@@ -1,3 +1,4 @@
+import "./bound.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -8,7 +9,7 @@ import { Browser } from "./helpers.ts";
 import { control, fixture } from "./pi-fixtures.ts";
 import { PI_VIEWS } from "../src/pi/views/index.ts";
 import { modelLimits } from "../src/pi/host.ts";
-import { TOKEN, iso, line, user, assistant, toolResult, setup } from "./pi-host-fixtures.ts";
+import { TOKEN, iso, line, user, assistant, toolResult, setup, testView } from "./pi-host-fixtures.ts";
 
 test("pi host: create beside a Session binds the new Session id before Herdr runs, sends the prompt with the spawn, and never splits twice", async (t) => {
 	const { f, browser } = await setup(t);
@@ -45,18 +46,11 @@ test("pi host: create beside a Session binds the new Session id before Herdr run
 
 test("pi host: a failing view does not stop other subscriptions, a view without a threadId follows every Session, and ask runs an isolated model call", async (t) => {
 	PI_VIEWS.push(
-		{
-			name: "boom",
-			value: (ctx, topic) => {
-				if (ctx.session(String(topic.threadId))!.data.count > 3) throw new Error("too many");
-				return { ok: true };
-			},
-		},
-		{
-			name: "count",
-			value: (ctx) => ({ entries: ctx.sessions().reduce((n, s) => n + s.data.count, 0) }),
-			ops: { ask: (ctx, args) => ctx.ask({ system: "Answer briefly.", prompt: String(args.prompt) }) },
-		},
+		testView("boom", (ctx, topic) => {
+			if (ctx.session(String(topic.threadId))!.data.count > 3) throw new Error("too many");
+			return { ok: true };
+		}),
+		testView("count", (ctx) => ({ entries: ctx.sessions().reduce((n, s) => n + s.data.count, 0) })),
 	);
 	t.after(() => {
 		for (const name of ["boom", "count"]) PI_VIEWS.splice(PI_VIEWS.findIndex((v) => v.name === name), 1);
@@ -76,8 +70,11 @@ test("pi host: a failing view does not stop other subscriptions, a view without 
 	assert.equal((await browser.until<any>(boom, (v) => v.error)).error.code, "view_failed");
 	await browser.until<any>(transcript, (v) => v.entries.some((e: any) => e.id === "u2"));
 	await browser.until<any>(count, (v) => v.entries === 6);
-	assert.deepEqual(await browser.req("devbox", "view.count.ask", { prompt: "hello\nworld" }), { text: "11:hello" });
-	await assert.rejects(browser.req("devbox", "view.count.ask", { prompt: "fail now" }), (e: any) => e.code === "model_error");
+	const asked = await browser.req("devbox", "view.rarebit.ask", { threadId: "pi:sess-a", question: "hello" });
+	assert.match(asked.side.turns[0].answer, /^\d+:Snapshot: /);
+	assert.equal(asked.side.model, "anthropic/claude-sonnet-5-5", "the ask runs on the rarebitAsk purpose's resolved model");
+	const failed = await browser.req("devbox", "view.rarebit.ask", { threadId: "pi:sess-a", question: "fail now" });
+	assert.match(failed.side.turns[0].error, /^model_error/);
 });
 
 test("pi host: model limits resolve the working budget as hc-auto-compact does", () => {

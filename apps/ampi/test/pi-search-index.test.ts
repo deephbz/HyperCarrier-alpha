@@ -1,3 +1,4 @@
+import "./bound.ts";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
@@ -28,13 +29,15 @@ const ms = (run: () => void) => { const t = performance.now(); run(); return per
 // Bounds count full FTS scans timed in this process, so machine load scales both sides.
 // Each defect cost one scan per Session or per prose_path backfill (7 scans at 100k rows).
 const scan = (db: DatabaseSync) => [0, 1, 2].map(() => ms(() => db.prepare("SELECT count(*) FROM prose WHERE path=?").get("\0none"))).sort((a, b) => a - b)[1]!;
+// One 100k-row store for the two forget tests; each counts relative to its start, so test order does not matter.
+let shared: DatabaseSync | undefined;
+const big = () => { if (!shared) { shared = store(); fill(shared, 10_000, 10); } return shared; };
 
 test("search index: forgetting one path at 100k prose rows costs that path's rows, not a full FTS scan (cold rebuild stalled at 0.03 Sessions/s)", () => {
-	const db = store();
-	fill(db, 10_000, 10);
-	assert.equal(prose(db), 100_000);
+	const db = big(), n0 = prose(db);
+	assert.ok(n0 >= 100_000 - 200, `${n0} rows`);
 	const full = scan(db), elapsed = ms(() => { for (let p = 0; p < 20; p++) forgetSearch(db, `s${p}`); });
-	assert.equal(prose(db), 100_000 - 200);
+	assert.equal(prose(db), n0 - 200);
 	assert.ok(elapsed < 5 * full, `20 forgets took ${elapsed.toFixed(0)} ms, ${(elapsed / full).toFixed(1)} full scans`);
 	const plan = db.prepare("EXPLAIN QUERY PLAN DELETE FROM prose WHERE rowid IN (SELECT rowid FROM prose_path WHERE path=?)").all("s1").map((r) => String(r.detail));
 	assert.ok(plan.some((d) => /prose_path_path/.test(d)), plan.join("\n"));
@@ -42,11 +45,11 @@ test("search index: forgetting one path at 100k prose rows costs that path's row
 });
 
 test("search index: forgetting a never-indexed path changes nothing and does not scan prose", () => {
-	const db = store();
-	fill(db, 10_000, 10);
+	const db = big(), n0 = prose(db);
 	const full = scan(db), elapsed = ms(() => { for (let p = 0; p < 200; p++) forgetSearch(db, `new${p}`); });
-	assert.equal(prose(db), 100_000);
-	assert.ok(elapsed < full, `200 cold forgets took ${elapsed.toFixed(0)} ms, ${(elapsed / full).toFixed(1)} full scans`);
+	assert.equal(prose(db), n0);
+	// The defect costs 200 scans; 200 index probes reached 1.0 scan at load 285.
+	assert.ok(elapsed < 20 * full, `200 cold forgets took ${elapsed.toFixed(0)} ms, ${(elapsed / full).toFixed(1)} full scans`);
 });
 
 test("search index: delete and re-index keeps fleet results identical, including CJK bigrams", () => {
@@ -65,7 +68,8 @@ test("search index: opening a 100k-row cache written before prose_path does not 
 	const db = new DatabaseSync(":memory:");
 	db.exec("CREATE TABLE sessions (path TEXT PRIMARY KEY, data TEXT NOT NULL); CREATE VIRTUAL TABLE prose USING fts5(path UNINDEXED, id UNINDEXED, text, cjk, tokenize='unicode61');");
 	db.exec("BEGIN");
-	for (let i = 0; i < 100_000; i++) db.prepare("INSERT INTO prose(path,id,text,cjk) VALUES (?,?,?,?)").run(`old${i % 1000}`, `e${i}`, `legacy filler ${i}`, "");
+	const insert = db.prepare("INSERT INTO prose(path,id,text,cjk) VALUES (?,?,?,?)");
+	for (let i = 0; i < 100_000; i++) insert.run(`old${i % 1000}`, `e${i}`, `legacy filler ${i}`, "");
 	db.exec("COMMIT");
 	const full = scan(db), open = ms(() => searchSchema(db));
 	assert.ok(open < 2 * full, `opening took ${(open / full).toFixed(1)} full scans`);

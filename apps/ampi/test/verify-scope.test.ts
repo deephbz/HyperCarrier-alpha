@@ -1,9 +1,10 @@
+import "./bound.ts";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { test } from "node:test";
+import { after, test } from "node:test";
 
 // The scripts are untyped .mjs; a URL specifier keeps them out of the TypeScript project.
 type Pinned = { ok: boolean; detail: string; warnings: string[] };
@@ -26,7 +27,7 @@ function repo(dir: string, files: Record<string, string>) {
 }
 
 /** A workspace with three submodules: one AmPi depends on, one it imports by relative path, and one it never loads. */
-function fixture() {
+function template() {
 	const base = mkdtempSync(join(tmpdir(), "ampi-verify-scope-"));
 	const sources = {
 		inscope: repo(join(base, "src-inscope"), { "package.json": '{"name":"@x/inscope"}', "index.ts": "export {};\n" }),
@@ -40,6 +41,18 @@ function fixture() {
 	});
 	for (const [path, source] of [["packages/inscope", sources.inscope], ["apps/relsub", sources.relsub], ["packages/other", sources.other]]) git(root, "submodule", "add", "-q", source, path);
 	git(root, "commit", "-q", "-m", "submodules");
+	return { base, root };
+}
+
+// Git spawns dominate this file under load: build the workspace once, and give each test its own copy. Submodule
+// links are relative, so a copy is a complete workspace; its submodule URLs point at the template's sources.
+let shared: { base: string; root: string } | undefined;
+after(() => shared && rmSync(shared.base, { recursive: true, force: true }));
+function fixture() {
+	shared ??= template();
+	const base = mkdtempSync(join(tmpdir(), "ampi-verify-scope-"));
+	const root = join(base, "root");
+	cpSync(shared.root, root, { recursive: true });
 	return { base, root };
 }
 

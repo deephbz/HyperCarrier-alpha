@@ -1,3 +1,4 @@
+import "./bound.ts";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { closeSync, openSync, readFileSync, statSync, writeFileSync } from "node:fs";

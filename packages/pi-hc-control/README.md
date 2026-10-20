@@ -34,7 +34,9 @@ to another Session, and process exit remove both files. A new endpoint sweeps
 descriptors whose pid is dead.
 
 Frames are one JSON object per line; replies carry the request `id`. Multiple
-clients and pipelined requests are allowed. Ops: `status`, `submit`, `abort`.
+clients and pipelined requests are allowed. Ops: `status`, `submit`, `abort`,
+`commands`, `command`. `status.commands = 1` announces the last two; an older
+control answers them `unknown_op`.
 
 ## Acknowledgements
 
@@ -67,6 +69,57 @@ began, with their outcome.
 reports an active C1 lease. Error codes: `bad_request`, `too_large` (text over
 1 MiB), `unknown_op`, `busy_compacting`, `not_admitted`, `abort_timeout`,
 `closed`, `internal`.
+
+## Slash commands
+
+Invariant: a slash command reaches Pi as a typed call or not at all. `submit`
+never expands commands, so `/model x` sent through `submit` becomes a user
+message. A client sends a command through `command` instead.
+
+`{ op: "commands" }` returns
+`{ commands: [{ name, description?, argsHint?, source, supported }], models: [{ ref, name? }], model, thinkingLevels, thinking }`.
+`commands` holds the supported built-ins, the TUI-only built-ins with
+`supported: false`, and `pi.getCommands()` (`source` `extension`, `prompt`,
+or `skill`). `models` lists the available `provider/id` refs for `/model`
+completion; `model` is the current one.
+
+`{ op: "command", name, args?, key?, abort?, deliverAs? }` checks `name` again
+just before dispatch, in the same chain as `submit`. A successful reply
+carries a `disposition`:
+
+| Command | Pi call | Reply |
+| --- | --- | --- |
+| `/model <ref>` | exact `provider/id` or bare-id match over available models, then `pi.setModel` | `handled`, notice `Model: <ref>`, `effect.model` |
+| `/thinking <level>` | `pi.setThinkingLevel` (Pi clamps it) | `handled`, notice names the effective level |
+| `/name <text>` | `pi.setSessionName` | `handled` |
+| `/compact [instructions]` | `ctx.compact` | idle: `handled`, `evidence: "compaction_started"`; busy: `busy` error unless `abort: true` |
+| extension command | `sendUserMessage(text, { expandPromptTemplates: true })` | `dispatched`: Pi reports no result; errors show only in the Pi pane |
+| skill or prompt template | the same call | `started` with `entryId`, or `queued` with `submission`, as for `submit` |
+
+Pi 1.3.0 documents `setModel` as "Set the model for the current session
+without changing the configured default for new sessions" (`types.d.ts`,
+`ExtensionAPI.setModel`). It appends a `model_change` entry and no user
+entry, so a reader sees the new model before the next turn.
+
+- `effect` is for the notice only. The Session file stays the authority.
+- Order: the control checks commands in the same chain as `submit`. A
+  `handled` or extension command then takes effect at once, ahead of queued
+  messages; `deliverAs` applies only to a skill or template. `/model` while a
+  turn runs applies from Pi's next model call.
+- `busy_compacting` is checked before dispatch, as a precondition.
+- A started skill or template names the first user entry after its `input`
+  event. That `entryId` is best-effort when the owner types in the Pi pane at
+  the same moment.
+- A queued expansion reaches Pi as different text. Its submission settles as
+  `returned` when the editor draft holds the raw text, else `unknown`, never
+  `dropped`.
+- `key` makes a retry return the first reply without running the command
+  again. The runtime keeps the last 100 keys; a Pi restart or `/reload` loses
+  them.
+- Errors: `unknown_command` and `unsupported_command` (a TUI-only built-in
+  such as `/reload`, `/new`, `/fork`, `/settings`) send nothing. `bad_args`
+  (no match, or an ambiguous bare id with `matches`), `auth_missing`
+  (`setModel` returned false), `busy`, plus the `submit` errors.
 
 `@hypercarrier/pi-hc-control/client` provides `connect`, `request`, `probe`,
 and `findSession`. A descriptor is live only when its pid is alive and its

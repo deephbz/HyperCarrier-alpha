@@ -15,7 +15,7 @@ import { chromium } from 'playwright';
 import { recipes, thread } from '../ux/recipes.mjs';
 import { fixtureSocket } from '../ux/fixtures.mjs';
 import { setup } from '../ux/setup.mjs';
-import { launch, doctor, cleanup, keyOf, redact } from './hub.mjs';
+import { launch, doctor, cleanup, keyOf, redact, tieToProcess } from './hub.mjs';
 import { threadsSnapshot } from './live-rows.mjs';
 import { AMPI, CLASSIC_SCROLLBARS, SCROLLBAR_LAUNCH, checkPage, observeLayoutShifts, rowBoxes } from './invariants/rules.mjs';
 
@@ -118,6 +118,7 @@ const browserReady = timed('browserMs', chromium.launchServer({ headless: true, 
   .then(s => { server = s; return chromium.connect(s.wsEndpoint(), { timeout: 60_000 }); }));
 browserReady.catch(() => {});
 const state = await timed('hubMs', launch());
+tieToProcess(state);
 const results = [], audit = { requests: [], forwardedMutations: 0, externalRequests: [], pageErrors: [] };
 let browser;
 try {

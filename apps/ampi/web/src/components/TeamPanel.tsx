@@ -93,7 +93,7 @@ function Graph({ tasks, selected, onSelect }: { tasks: Any[]; selected?: string;
 
 export function TeamPanel({ host, threadId, summary }: { host: string; threadId: string; summary?: ThreadSummary }) {
 	const teamId = summary?.team?.teamId ?? threadId;
-	const { value } = useTopic<Any>(host, { kind: "team", teamId });
+	const { value } = useTopic(host, { kind: "team", teamId });
 	const feeds = useFeeds();
 	const [selected, setSelected] = useState<string>();
 	const threads = new Map((feeds[host]?.threads ?? []).map((t) => [t.id, t]));

@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import type { UiThreadView } from "../../../src/node/projection.ts";
 import type { ThreadSummary } from "../../../src/shared/protocol.ts";
 import { hub, useTopic } from "../client.ts";
 import { clock, money, tokens } from "../util.ts";
@@ -23,7 +22,7 @@ type Any = any;
 function PromptInputs({ host, cwd }: { host: string; cwd?: string }) {
 	const [found, setFound] = useState<{ prompts: Any[]; skills: Any[] }>();
 	useEffect(() => {
-		hub.request<{ prompts: Any[]; skills: Any[] }>(host, "prompts.list", { cwd }).then(setFound, () => setFound({ prompts: [], skills: [] }));
+		hub.request(host, "prompts.list", { cwd }).then(setFound, () => setFound({ prompts: [], skills: [] }));
 	}, [host, cwd]);
 	if (!found) return null;
 	return (
@@ -42,13 +41,13 @@ function PromptInputs({ host, cwd }: { host: string; cwd?: string }) {
 }
 
 function InfoPanel({ host, threadId, summary }: { host: string; threadId: string; summary?: ThreadSummary }) {
-	const { value: view } = useTopic<UiThreadView>(host, { kind: "thread", threadId });
+	const { value: view } = useTopic(host, { kind: "thread", threadId });
 	const agent = (view?.agent ?? {}) as Any;
 	const usage = (view?.usage ?? { models: {}, tools: {} }) as Any;
 	const [compactions, setCompactions] = useState<Any[]>([]);
 	const compactionCount = view?.entries.filter((e) => e.kind === "compaction").length ?? 0;
 	useEffect(() => {
-		hub.request<{ records: Any[] }>(host, "compact.records", { threadId }).then((r) => setCompactions(r.records), () => setCompactions([]));
+		hub.request(host, "compact.records", { threadId }).then((r) => setCompactions(r.records), () => setCompactions([]));
 	}, [host, threadId, compactionCount]);
 	return (
 		<>

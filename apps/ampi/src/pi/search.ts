@@ -5,7 +5,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { openPiSessionRange } from "../../../trace-analytics/src/sources/transcript-range.mjs";
 // @ts-ignore shared native extraction is plain ESM
 import { mirrorEntryText } from "../../../trace-analytics/src/sources/transcript.mjs";
-import { DERIVATION_VERSION, indexFile, type Source } from "./working-set-types.ts";
+import { derivedVersion, indexFile, type Source } from "./working-set-types.ts";
 import type { PiReaderEntry } from "./views/types.ts";
 
 export const PROSE_KINDS = ["human", "assistant", "compaction"] as const;
@@ -115,7 +115,7 @@ export function findInSession(source: Source, query: string, version: string): S
  const q = queryText(query).toLowerCase(), reader = openPiSessionRange(source.file, { host: source.host, indexPath: indexFile(source) });
  try {
   const info = reader.info();
-  if (`${DERIVATION_VERSION}:${info.version}` !== version) throw new Error("Session changed. Retry Find on the current copy.");
+  if (derivedVersion(info.version) !== version) throw new Error("Session changed. Retry Find on the current copy.");
   const hits: SearchHit[] = []; let total = 0, scanned = 0;
   reader.visit(({ native, entry }: { native: unknown; entry: PiReaderEntry }) => {
    scanned++;

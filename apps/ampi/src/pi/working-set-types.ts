@@ -1,9 +1,17 @@
 // Rebuildable Pi working-set values. Source evidence stays in the copied JSONL.
-import type { UiEntry } from "../node/projection.ts";
-import type { Chunk } from "./views/cos-arc-chunks.ts";
+import type { PiEntry } from "../shared/protocol.ts";
+import { CHUNKER_VERSION, EXCERPT_VERSION, type Chunk } from "./views/cos-arc-chunks.ts";
 import type { Kinds, RarebitItem } from "./views/rarebit.ts";
 
-export const DERIVATION_VERSION = 5;
+/** Bump when the entry index changes; every Session then rebuilds its entries. */
+export const DERIVATION_VERSION = 7;
+/**
+ * A derived Session version: the index rules, the chunk and excerpt rules, then the reader's source version. A chunker
+ * or excerpt change gives an unchanged Session a new version, so its next derive re-chunks it without an index rebuild.
+ */
+export const derivedVersion = (source: string) => `${DERIVATION_VERSION}/${CHUNKER_VERSION}/${EXCERPT_VERSION}:${source}`;
+/** Whether a stored derived version used these index rules (any chunk rules); otherwise the entries rebuild. */
+export const sameIndex = (version: string) => version.startsWith(`${DERIVATION_VERSION}:`) || version.startsWith(`${DERIVATION_VERSION}/`);
 /** Bump when `derive` adds or changes a Session summary field; unchanged Sessions then re-derive without an index rebuild. */
 export const SUMMARY_VERSION = 2;
 export const WINDOW_ENTRIES = 400;
@@ -41,5 +49,5 @@ export type Derived = {
   /** Rarebit messages and compactions on the active branch; with `fingerprint`, the Arc staleness input. */
   count: number; fingerprint: string };
 };
-export type StoredEntry = { id: string; position: number; t: number | null; ui?: UiEntry; rarebit?: RarebitItem };
+export type StoredEntry = { id: string; position: number; t: number | null; ui?: PiEntry; rarebit?: RarebitItem };
 export const indexFile = (source: Source) => `${source.file}.index.sqlite`;

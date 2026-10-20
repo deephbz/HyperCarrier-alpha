@@ -21,11 +21,12 @@ export function nestTeams(rows: ThreadSummary[]): { row: ThreadSummary; children
 	return out.sort((a, b) => position.get(a.row)! - position.get(b.row)!);
 }
 
-export function projectTeamRows(rows: ThreadSummary[], collapsed: Set<string>) {
+/** A Team leader folds its workers unless the owner expanded it, so a Team that starts later also starts collapsed. */
+export function projectTeamRows(rows: ThreadSummary[], expanded: Set<string>) {
 	return nestTeams(rows).flatMap(({ row, children }) => {
 		const leaderId = row.team?.teamId ?? row.id;
 		const isLeader = row.team?.role === "lead" && children.length > 0;
-		const closed = isLeader && collapsed.has(leaderId);
+		const closed = isLeader && !expanded.has(leaderId);
 		return [
 			{ row, child: false, hasChildren: isLeader, open: !closed, count: children.length, leaderId },
 			...(closed ? [] : children.map((row) => ({ row, child: true, hasChildren: false, open: true, count: 0, leaderId }))),

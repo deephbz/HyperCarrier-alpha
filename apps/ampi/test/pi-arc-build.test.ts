@@ -1,20 +1,34 @@
+import "./bound.ts";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { cosDemo } from "../scripts/demo/cos.ts";
 import type { DemoContext } from "../scripts/demo/index.ts";
+import { useHubConfig, type ModelPurpose, resolveHelperModel } from "../src/hub/helper-models.ts";
 import { ask } from "../src/pi/ask.ts";
+import { piModelRegistry } from "../src/pi/model-registry.ts";
 import type { Chunk } from "../src/pi/views/cos-arc-chunks.ts";
-import { LABEL_SYSTEM } from "../src/pi/views/cos-arc-model.ts";
-import { ARC_ASK_CONCURRENCY, LABEL_VERSION, bounded, buildArc, buildLog, cosArc, json, type ArcValue } from "../src/pi/views/cos-arc.ts";
+import { CONTEXT_SYSTEM } from "../src/pi/views/cos-arc-context.ts";
+import { LABEL_SYSTEM, SYNTH_SYSTEM } from "../src/pi/views/cos-arc-model.ts";
+import { ARC_ASK_CONCURRENCY, EMPTY_ANSWER, LABEL_VERSION, arcClock, bounded, buildArc, buildLog, cosArc, json, type ArcFailure, type ArcValue } from "../src/pi/views/cos-arc.ts";
+import * as arcModule from "../src/pi/views/cos-arc.ts";
+import { rarebitView } from "../src/pi/views/rarebit.ts";
 import type { PiViewContext, PiViewSession } from "../src/pi/views/types.ts";
 
 // Build arc through the real ask runner and the offline demo model, with a fake view context that counts calls in
 // flight and delays answers so that they complete out of order.
 
 const root = mkdtempSync(join(tmpdir(), "ampi-arc-build-"));
+// Every helper model is explicit; tests that need another set write their own hub.json, then return to this one.
+const MODELS = { arcLabels: "anthropic/claude-haiku-5-5", arcSynthesis: "anthropic/claude-sonnet-5-5", rarebitRecap: "anthropic/claude-haiku-5-5", rarebitAsk: "anthropic/claude-sonnet-5-5" };
+const HUB = join(root, "models-hub.json");
+writeFileSync(HUB, JSON.stringify({ hosts: [], models: MODELS }));
+useHubConfig(HUB);
 cosDemo({ dir: root, agentDir: join(root, "agent") } as DemoContext);
 const model = [process.execPath, join(root, "cos-model.cjs")];
 const T = Date.parse("2026-10-19T00:00:00.000Z");
@@ -36,7 +50,7 @@ type Req = Parameters<PiViewContext["ask"]>[0];
 function context(name: string, delay: (call: number) => number, fail?: (call: number, req: Req) => boolean, edit?: (call: number, req: Req, text: string) => string) {
 	const run: Run = { inFlight: 0, maxInFlight: 0, started: 0, startedAfterFailure: 0, failed: false };
 	const dir = join(root, name); mkdirSync(dir, { recursive: true });
-	const ctx = { host: "devbox", stateDir: () => dir, session: () => session, lease: () => () => {}, invalidate() {}, snapshot: <T>(read: () => T) => read(),
+	const ctx = { host: "devbox", stateDir: () => dir, session: () => session, lease: () => () => {}, invalidate() {}, snapshot: <T>(read: () => T) => read(), model: (p: ModelPurpose, o?: string) => resolveHelperModel(p, o),
 		async ask(req: Parameters<PiViewContext["ask"]>[0]) {
 			const call = run.started++;
 			if (run.failed) run.startedAfterFailure++;
@@ -231,7 +245,9 @@ test("arc build v3 receipt: a stored v3 receipt parses and renders, and reuses n
 	const r = seeded("v3", v3, session);
 	const before = arcOf(r.ctx);
 	assert.equal(before.synthesis?.headline, v3.headline);
-	assert.deepEqual(before.cards.map((c) => c.name), ["demo", "release"]);
+	assert.deepEqual(before.cards, [], "labels of other chunk rules make no Projects card");
+	assert.ok(before.chunks.some((c) => c.relabel) && before.chunks.every((c) => !c.label), "they show as relabel pending");
+	assert.equal(before.relabelChunks, before.chunks.length);
 	assert.equal(before.transitions.length, 1);
 	assert.equal(before.coverage.labelledChunks, 0);
 	assert.equal(before.buildEstimate.calls, 6, "every chunk is labelled again");
@@ -252,6 +268,8 @@ test("arc build source: a Rarebit page from another Session version fails the Bu
 	assert.equal(v.job?.state, "error");
 	assert.equal(v.job?.lastError?.code, "source");
 	assert.equal(r.run.started, 0, "no model call on a mixed read");
+	assert.match(v.job?.lastError?.message ?? "", /A Rarebit page has version v2; the snapshot has v1\./, "the message names both versions");
+	assert.doesNotMatch(v.job?.lastError?.message ?? "", /Build arc could not load the whole Session/, "the prefix sentence is not repeated");
 	assert.equal(readdirSync(r.dir).filter((f) => /^[0-9a-f]{64}\.json$/.test(f)).length, 0, "no receipt");
 });
 
@@ -278,4 +296,508 @@ test("arc build errors: only a model failure asks to check Pi's model configurat
 	const answer = await build(a.ctx);
 	assert.equal(answer.job?.lastError?.code, "answer");
 	assert.equal(buildLog(a.ctx, session.threadId).at(-1)!.errorCode, "answer");
+});
+
+test("arc build model: labels and context use models.arcLabels, synthesis uses models.arcSynthesis, unset keys fail the Build before any call, and the Build log names the model per purpose (failure: synthesis ran on the label model, or a built-in default answered)", async () => {
+	const builtWith = async (name: string) => {
+		// The Build asks by purpose and holds no model id; the ask runner resolves it and the answer names it.
+		const r = context(name, () => 1), asked: string[] = [], inner = r.ctx.ask;
+		Object.assign(r.ctx, { ask: (req: Req) => { asked.push(`${req.purpose}:${req.model ?? ""}`); return inner(req); } });
+		const v = await build(r.ctx);
+		const log = buildLog(r.ctx, session.threadId).at(-1)!;
+		if (v.job?.state !== "done") return { error: v.job?.lastError, calls: log.calls, asked };
+		return { asked: [...new Set(asked)].sort(), synthesis: v.synthesis?.model, models: log.models, calls: Object.values(log.usageByPurpose!).map((u) => u.calls) };
+	};
+	const haiku = "anthropic/claude-haiku-5-5", sonnet = "anthropic/claude-sonnet-5-5", opus = "anthropic/claude-opus-5-5";
+	assert.deepEqual(await builtWith("model-explicit"), { asked: [`arcLabels:${haiku}`, `arcSynthesis:${sonnet}`], synthesis: sonnet, models: { labels: haiku, synthesis: sonnet, context: haiku }, calls: [4, 1, 1] });
+	const file = join(root, "hub.json");
+	writeFileSync(file, JSON.stringify({ hosts: [], models: { arcLabels: opus, arcSynthesis: opus } }));
+	useHubConfig(file);
+	try {
+		assert.deepEqual(await builtWith("model-hub"), { asked: [`arcLabels:${opus}`, `arcSynthesis:${opus}`], synthesis: opus, models: { labels: opus, synthesis: opus, context: opus }, calls: [4, 1, 1] });
+		writeFileSync(file, JSON.stringify({ hosts: [], models: { arcLabels: opus, arcSynthesis: sonnet } }));
+		assert.deepEqual((await builtWith("model-split")).models, { labels: opus, synthesis: sonnet, context: opus });
+		// A stale models.arc sets nothing; both keys read as unset, once, with the note.
+		writeFileSync(file, JSON.stringify({ hosts: [], models: { arc: opus } }));
+		const warn = console.warn;
+		console.warn = () => {};
+		const unset = await builtWith("model-unset").finally(() => { console.warn = warn; }) as { error: ArcFailure; calls: number; asked: string[] };
+		assert.deepEqual([unset.calls, unset.asked, unset.error.code, unset.error.preflight, unset.error.model], [0, [], "model", true, null]);
+		assert.equal(unset.error.message, "No model set for Arc labels and synthesis.");
+		assert.equal(unset.error.hint, `Set models.arcLabels and models.arcSynthesis in ${file}. models.arc is no longer read; set models.arcLabels and models.arcSynthesis. Use a provider/model-id from pi --list-models on the hub.`);
+	}
+	finally { useHubConfig(HUB); }
+});
+
+test("arc build ask model: an answer from another model or a failed sign-in rejects with the requested model's name (failure: Pi's custom-model fallback answered silently)", async () => {
+	// A fake Pi that answers as FAKE_ANSWER (default: the requested --model), or fails with FAKE_ERROR.
+	const bin = join(root, "fake-pi.cjs");
+	writeFileSync(bin, `#!${process.execPath}
+const argv = process.argv, arg = (flag) => argv.includes(flag) ? argv[argv.indexOf(flag) + 1] : undefined;
+if (argv.includes("--list-models")) { console.log(process.env.FAKE_LIST ?? "provider model context\\nanthropic claude-haiku-5-5 1M\\nanthropic claude-sonnet-5-5 1M\\nanthropic claude-opus-5-5 1M"); process.exit(0); }
+const requested = arg("--provider") ? arg("--provider") + "/" + arg("--model") : arg("--model") ?? "";
+const [provider, ...rest] = (process.env.FAKE_ANSWER || requested).split("/"), model = rest.join("/");
+process.stdin.resume(); process.stdin.on("end", () => console.log(JSON.stringify({ type: "message_end", message: { role: "assistant", provider, model,
+	stopReason: process.env.FAKE_ERROR ? "error" : "stop", errorMessage: process.env.FAKE_ERROR, content: [{ type: "text", text: "ok" }] } })));
+`);
+	chmodSync(bin, 0o755);
+	const saved = { PI_BIN: process.env.PI_BIN, FAKE_ANSWER: process.env.FAKE_ANSWER, FAKE_ERROR: process.env.FAKE_ERROR, FAKE_LIST: process.env.FAKE_LIST };
+	const haiku = "anthropic/claude-haiku-5-5";
+	process.env.PI_BIN = bin;
+	try {
+		assert.equal((await ask({ system: "s", prompt: "p", purpose: "arcLabels" })).model, haiku, "the purpose resolves through Pi's list to --provider and --model, and the answer names it");
+		const echo = [process.execPath, "-e", "process.stdout.write(process.env.AMPI_ASK_MODEL ?? 'none')"];
+		assert.deepEqual(await ask({ system: "s", prompt: "p", purpose: "arcLabels" }, echo), { text: haiku, model: haiku }, "a command gets and reports the model name as written");
+		await assert.rejects(ask({ system: "s", prompt: "p", purpose: "arcSynthesis", model: "anthropic/claude-nope-9" }), (e: Error & { code?: string }) => e.code === "model_not_found" && e.message === "No model named anthropic/claude-nope-9 (per-Build model, Arc synthesis). Change or clear the per-Build model. Available: anthropic/claude-haiku-5-5, anthropic/claude-opus-5-5, anthropic/claude-sonnet-5-5.");
+		const bad = join(root, "bad-hub.json");
+		writeFileSync(bad, JSON.stringify({ models: { arcLabels: "" } }));
+		useHubConfig(bad);
+		try { await assert.rejects(ask({ system: "s", prompt: "p", purpose: "arcLabels" }, echo), (e: Error & { code?: string }) => e.code === "no_model" && e.message.includes(bad) && e.message.includes("models.arcLabels")); }
+		finally { useHubConfig(HUB); }
+		process.env.FAKE_ANSWER = haiku;
+		assert.equal((await ask({ system: "s", prompt: "p", model: "claude-haiku-5-5" })).model, haiku, "a call without a purpose passes its model to Pi as written");
+		process.env.FAKE_ANSWER = "anthropic/claude-opus-5-5";
+		await assert.rejects(ask({ system: "s", prompt: "p", model: haiku }), (e: Error & { code?: string }) => e.code === "model_error" && /anthropic\/claude-haiku-5-5 was requested, but anthropic\/claude-opus-5-5 answered/.test(e.message));
+		// An unreadable model list fails the Build before any call and is not cached: the next call reads Pi again.
+		// A second path for the same fake Pi starts with no cached list.
+		process.env.FAKE_LIST = "Usage: pi [options]"; process.env.PI_BIN = `${bin}-fresh`; symlinkSync(bin, process.env.PI_BIN);
+		const r = context("unreadable", () => 0);
+		Object.assign(r.ctx, { model: (p: ModelPurpose, o?: string) => resolveHelperModel(p, o, piModelRegistry) });
+		const v = await build(r.ctx);
+		assert.deepEqual([v.job?.state, v.job?.lastError?.code, r.run.started, buildLog(r.ctx, session.threadId).at(-1)!.calls], ["error", "model", 0, 0]);
+		assert.match(v.job!.lastError!.message, /^Pi's model list format changed/);
+		assert.equal(v.job!.lastError!.message.split("Pi's model list").length, 2, "both Arc purposes failed alike; the message says it once");
+		delete process.env.FAKE_ANSWER;
+		const sonnet = "anthropic/claude-sonnet-5-5";
+		assert.equal((await ask({ system: "s", prompt: "p", purpose: "arcSynthesis", model: sonnet, resolved: true })).model, sonnet, "a resolved model skips the unreadable list");
+		delete process.env.FAKE_LIST;
+		assert.equal((await ask({ system: "s", prompt: "p", purpose: "arcSynthesis" })).model, "anthropic/claude-sonnet-5-5", "the next call reads the list again");
+		delete process.env.FAKE_ANSWER; process.env.FAKE_ERROR = "No API key found for anthropic";
+		await assert.rejects(ask({ system: "s", prompt: "p", model: haiku }), (e: Error & { code?: string }) => e.code === "model_error" && e.message === `${haiku}: No API key found for anthropic`);
+	} finally {
+		for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k]; else process.env[k] = v;
+	}
+});
+
+
+// Real Pi calls go to a local Anthropic Messages endpoint (models.json sets only baseUrl, so built-in models stay). It
+// records the model of every outgoing request and answers with the offline demo model. A two-chunk Arc Build (labels,
+// synthesis, context), one Rarebit recap and one side ask cover every purpose in five Pi calls. `providers` adds
+// models.json providers on the same endpoint; settings.json names magpie as Pi's defaultProvider, which the hub ignores.
+// `hubModels` is the whole hub.json models block. With `fails`, the
+// Build must fail and the Rarebit calls are skipped. `providerRun` keeps the Build's job and log record.
+let providerRun: { job: ArcValue["job"]; build: ReturnType<typeof buildLog>[number] | undefined } | undefined;
+async function providerModels(name: string, hubModels: Record<string, string>, { providers = {}, fails = false }: { providers?: Record<string, object>; fails?: boolean } = {}) {
+	const requests: { purpose: string; model: string }[] = [];
+	const purposeOf = (system: string) => system.startsWith("You label") ? "labels" : system.startsWith("You maintain") ? "context" : system.includes("chief of staff") ? "synthesis" : system.includes("re-entry sentence") ? "rarebitRecap" : "rarebitAsk";
+	const text = (v: unknown): string => typeof v === "string" ? v : Array.isArray(v) ? v.map((b: { text?: string }) => b.text ?? "").join("") : "";
+	const server = createServer((req, res) => {
+		let body = "";
+		req.on("data", (d) => (body += d)).on("end", () => {
+			const b = JSON.parse(body) as { model: string; system?: unknown; messages: { role: string; content: unknown }[] };
+			requests.push({ purpose: purposeOf(text(b.system)), model: b.model });
+			const answer = spawnSync(model[0]!, model.slice(1), { input: text(b.messages.findLast((m) => m.role === "user")?.content), encoding: "utf8" }).stdout.trim();
+			const ev = (type: string, data: object) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
+			res.writeHead(200, { "content-type": "text/event-stream" });
+			ev("message_start", { message: { id: "msg_1", type: "message", role: "assistant", model: b.model, content: [], stop_reason: null, usage: { input_tokens: 1, output_tokens: 0 } } });
+			ev("content_block_start", { index: 0, content_block: { type: "text", text: "" } });
+			ev("content_block_delta", { index: 0, delta: { type: "text_delta", text: answer } });
+			ev("content_block_stop", { index: 0 });
+			ev("message_delta", { delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } });
+			ev("message_stop", {});
+			res.end();
+		});
+	});
+	await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+	const agentDir = join(root, `${name}-agent`); mkdirSync(agentDir, { recursive: true });
+	const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+	writeFileSync(join(agentDir, "models.json"), JSON.stringify({ providers: { anthropic: { baseUrl, apiKey: "test-key" }, ...Object.fromEntries(Object.entries(providers).map(([k, v]) => [k, { baseUrl, api: "anthropic-messages", ...v }])) } }));
+	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ defaultProvider: "magpie" }));
+	const saved = { PI_BIN: process.env.PI_BIN, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR, PI_OFFLINE: process.env.PI_OFFLINE, PI_SKIP_VERSION_CHECK: process.env.PI_SKIP_VERSION_CHECK };
+	Object.assign(process.env, { PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1", PI_SKIP_VERSION_CHECK: "1" });
+	delete process.env.PI_BIN;
+	const small = { ...session, data: { ...session.data, arc: { chunks: chunks.slice(0, 2) } } } as PiViewSession;
+	const rarebit = { threadId: "pi:sess-r", revision: 1, rarebitSnapshot: () => ({ context: "[u1] USER: Ship the cache cap?", count: 1, included: 1, omittedChars: 0, evidenceHash: "e".repeat(64), entry: "u1" }) } as unknown as PiViewSession;
+	try {
+		const file = join(root, `${name}-hub.json`);
+		writeFileSync(file, JSON.stringify({ hosts: [], models: hubModels }));
+		useHubConfig(file);
+		const r = context(name, () => 0);
+		Object.assign(r.ctx, { ask: (req: Req) => ask(req), model: (p: ModelPurpose, o?: string) => resolveHelperModel(p, o, piModelRegistry), session: (id: string) => (id === rarebit.threadId ? rarebit : small) });
+		buildArc(r.ctx, small);
+		let v: ArcValue | undefined;
+		for (let i = 0; i < 2400 && (!v || v.job?.state === "running"); i++) {
+			await new Promise((res) => setTimeout(res, 25));
+			v = cosArc.value(r.ctx, { kind: "view", view: "cos.arc", threadId: small.threadId }) as ArcValue;
+		}
+		providerRun = { job: v?.job ?? null, build: buildLog(r.ctx, small.threadId).at(-1) };
+		assert.equal(v?.job?.state, fails ? "error" : "done", JSON.stringify(v?.job?.lastError));
+		if (fails) return { requests: requests.length };
+		assert.ok((await rarebitView.ops!.recap!(r.ctx, { threadId: rarebit.threadId }) as { text: string }).text);
+		const side = await rarebitView.ops!.ask!(r.ctx, { threadId: rarebit.threadId, question: "Is the cap set?" }) as { side: { turns: { error?: string }[] } };
+		assert.equal(side.side.turns[0]!.error, undefined);
+		return Object.fromEntries(["labels", "synthesis", "context", "rarebitRecap", "rarebitAsk"].map((p) => [p, [...new Set(requests.filter((q) => q.purpose === p).map((q) => q.model))]]));
+	} finally {
+		useHubConfig(HUB);
+		server.close();
+		for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k]; else process.env[k] = v;
+	}
+}
+
+test("arc build provider model: each purpose's outgoing provider request carries its hub.json model (failure: Arc calls went out on Pi's default model)", async () => {
+	assert.deepEqual(await providerModels("provider-explicit", MODELS), { labels: ["claude-haiku-5-5"], synthesis: ["claude-sonnet-5-5"], context: ["claude-haiku-5-5"], rarebitRecap: ["claude-haiku-5-5"], rarebitAsk: ["claude-sonnet-5-5"] });
+	assert.deepEqual(providerRun!.build!.models, { labels: "anthropic/claude-haiku-5-5", synthesis: "anthropic/claude-sonnet-5-5", context: "anthropic/claude-haiku-5-5" });
+});
+
+test("arc build provider model override: hub.json models.<purpose> changes that purpose's outgoing provider request (failure: a call site lost its purpose)", async () => {
+	assert.deepEqual(await providerModels("provider-hub", { arcLabels: "anthropic/claude-sonnet-5-5", arcSynthesis: "anthropic/claude-sonnet-5-5", rarebitRecap: "anthropic/claude-opus-5-5", rarebitAsk: "anthropic/claude-haiku-5-5" }),
+		{ labels: ["claude-sonnet-5-5"], synthesis: ["claude-sonnet-5-5"], context: ["claude-sonnet-5-5"], rarebitRecap: ["claude-opus-5-5"], rarebitAsk: ["claude-haiku-5-5"] });
+});
+
+// A local gateway provider, as on the owner's hub: its ids carry a route prefix.
+const MAGPIE = { magpie: { apiKey: "test-key", models: [{ id: "claude/claude-haiku-5-5" }, { id: "claude/claude-sonnet-5-5" }] } };
+
+test("arc build provider alias: a gateway provider/id reaches the provider as configured and the Build log names provider/id per purpose (failure: Pi's fuzzy --model or a custom-model fallback picked the route)", async () => {
+	assert.deepEqual(await providerModels("provider-alias", { ...MODELS, arcLabels: "magpie/claude/claude-haiku-5-5", rarebitRecap: "magpie/claude/claude-haiku-5-5" }, { providers: MAGPIE }),
+		{ labels: ["claude/claude-haiku-5-5"], synthesis: ["claude-sonnet-5-5"], context: ["claude/claude-haiku-5-5"], rarebitRecap: ["claude/claude-haiku-5-5"], rarebitAsk: ["claude-sonnet-5-5"] });
+	assert.deepEqual(providerRun!.build!.models, { labels: "magpie/claude/claude-haiku-5-5", synthesis: "anthropic/claude-sonnet-5-5", context: "magpie/claude/claude-haiku-5-5" });
+});
+
+test("arc build missing model: an unknown, bare, signed-out or unset model fails the Build with model, purpose, hub.json key and the listed rows before any provider call (failure: the Build spent labels, then fell back, guessed a provider, or failed late)", async () => {
+	// Each case: hub.json models, the key and name that fail, the failed Build purpose, the purposes the message names, and the Try rows.
+	const nope = "anthropic/claude-nope-9";
+	for (const [name, hub, key, model, purpose, words, tried] of [["missing", { ...MODELS, arcSynthesis: nope }, "arcSynthesis", nope, "synthesis", "Arc synthesis", ""],
+		["bare", { ...MODELS, arcSynthesis: "claude-sonnet-5-5" }, "arcSynthesis", "claude-sonnet-5-5", "synthesis", "Arc synthesis", " Try: anthropic/claude-sonnet-5-5."],
+		["signed-out", { ...MODELS, arcLabels: "locked/claude-haiku-5-5" }, "arcLabels", "locked/claude-haiku-5-5", "label", "Arc labels", " Try: anthropic/claude-haiku-5-5."]] as const) {
+		// `locked` has models but no credential, so Pi does not list it.
+		assert.deepEqual(await providerModels(`provider-${name}`, hub, { providers: { locked: { models: [{ id: "claude-haiku-5-5" }] } }, fails: true }), { requests: 0 }, name);
+		const err = providerRun!.job!.lastError!;
+		assert.deepEqual([err.code, err.purpose, err.model, err.preflight], ["model", purpose, model, true], name);
+		assert.equal(err.message, `No model named ${model} (hub.json, ${words}).`, name);
+		assert.ok(err.hint!.startsWith(`Edit models.${key} in ${join(root, `provider-${name}-hub.json`)}.${tried} Available: anthropic/claude-`), `${name}: ${err.hint}`);
+		assert.ok(err.available!.includes("anthropic/claude-sonnet-5-5") && !err.available!.some((m) => m.startsWith("locked/")), name);
+		assert.deepEqual([providerRun!.build!.state, providerRun!.build!.errorCode, providerRun!.build!.calls, providerRun!.build!.models], ["error", "model", 0, undefined], name);
+		assert.equal(providerRun!.build!.missingModel, model, name);
+	}
+	// Two bad keys: one Build failure names both, labels first, with one Available list.
+	await providerModels("provider-both", { ...MODELS, arcLabels: "anthropic/claude-nope-8", arcSynthesis: nope }, { fails: true });
+	const err = providerRun!.job!.lastError!;
+	assert.deepEqual([err.purpose, err.model], ["label", "anthropic/claude-nope-8"]);
+	assert.equal(err.message, "No model named anthropic/claude-nope-8 (hub.json, Arc labels). No model named anthropic/claude-nope-9 (hub.json, Arc synthesis).");
+	assert.match(err.hint!, /^Edit models\.arcLabels in [^ ]*\. Edit models\.arcSynthesis in [^ ]*\. Available: anthropic\/claude-.*, \+\d+ more\.$/);
+	// An unset key names the key and file, and the Build makes no provider call.
+	await providerModels("provider-unset", { arcSynthesis: MODELS.arcSynthesis }, { fails: true });
+	assert.equal(providerRun!.job!.lastError!.message, "No model set for Arc labels.");
+	assert.equal(providerRun!.job!.lastError!.hint, `Set models.arcLabels in ${join(root, "provider-unset-hub.json")}. Use a provider/model-id from pi --list-models on the hub.`);
+	assert.equal(providerRun!.build!.calls, 0);
+});
+
+test("arc build label gaps: a model answer that omits or nulls chunks records code answer, not internal (failure: an answered call was logged as internal)", async () => {
+	for (const [name, drop] of [["omit", (raw: any) => { raw.chunks = raw.chunks.filter((l: any) => l.chunk !== "c2"); }], ["null", (raw: any) => { raw.chunks = raw.chunks.map((l: any) => (l.chunk === "c2" ? null : l)); }]] as const) {
+		const r = context(`gap-${name}`, () => 1, undefined, (_call, req, text) => {
+			if (!labelled(req).includes("c2")) return text;
+			const raw = JSON.parse(text); drop(raw); return JSON.stringify(raw);
+		});
+		const v = await build(r.ctx);
+		assert.equal(v.job?.state, "done", `${name}: ${v.job?.lastError?.message ?? ""}`);
+		const log = buildLog(r.ctx, session.threadId).at(-1)!;
+		assert.equal(log.unlabelledChunks, 1, name);
+		assert.equal(log.labelErrorCode, "answer", name);
+	}
+});
+
+// Synthetic copies of recorded Haiku synthesis replies that echo the prompt: every key, bracket and chunk id is kept and
+// the text is invented. 81634 and 90081 drop a brace, 36032 nests the result under "shape".
+const recorded = (id: string) => readFileSync(new URL(`./fixtures/arc-replies/haiku-synthesis-${id}.txt`, import.meta.url), "utf8");
+const HAIKU = "anthropic/claude-haiku-4-5";
+/** A context whose reply for the nth call of a purpose is `pick`'s text, or the demo model's when `pick` returns null. */
+function replying(name: string, pick: (system: string, nth: number) => string | null) {
+	const r = context(name, () => 0), inner = r.ctx.ask.bind(r.ctx), calls = new Map<string, number>();
+	Object.assign(r.ctx, { ask: async (req: Req) => {
+		const base = [LABEL_SYSTEM, SYNTH_SYSTEM, CONTEXT_SYSTEM].find((system) => req.system.startsWith(system))!;
+		const nth = calls.get(base) ?? 0; calls.set(base, nth + 1);
+		const answer = await inner(req);
+		return { ...answer, model: HAIKU, text: pick(base, nth) ?? answer.text };
+	} });
+	return { ...r, calls };
+}
+
+test("arc reply recorded echoes: each recorded Haiku echo fails its call visibly after one retry (failure: 36032 built 'done' with an empty headline)", async () => {
+	for (const [purpose, system, id] of [["synthesis", SYNTH_SYSTEM, "81634"], ["synthesis", SYNTH_SYSTEM, "90081"], ["synthesis", SYNTH_SYSTEM, "36032"], ["context", CONTEXT_SYSTEM, "36032"]] as const) {
+		const r = replying(`echo-${purpose}-${id}`, (s) => (s === system ? recorded(id) : null));
+		const v = await build(r.ctx);
+		assert.equal(v.job?.state, "error", `${purpose} ${id}`);
+		assert.equal(r.calls.get(system), 2, `${purpose} ${id}: one retry`);
+		assert.equal(v.job?.lastError?.purpose, purpose);
+		assert.equal(v.job?.lastError?.model, HAIKU);
+		assert.match(v.job?.lastError?.message ?? "", new RegExp(`^${purpose} reply invalid: `));
+		assert.ok(Date.parse(v.job?.lastError?.at ?? ""), "the failure has a time");
+		assert.equal(v.synthesis, null, "no receipt");
+		assert.ok(!readdirSync(r.dir).some((f) => /^[0-9a-f]{64}\.json$/.test(f)));
+	}
+});
+
+test("arc reply exhausted retry: the last valid stored Arc stays unchanged and the failure names purpose and model (failure: an echo replaced the headline with an empty one)", async () => {
+	let echo = false;
+	const r = replying("echo-kept", (s) => (echo && s === SYNTH_SYSTEM ? recorded("36032") : null));
+	const first = await build(r.ctx);
+	assert.equal(first.job?.state, "done");
+	assert.ok(first.synthesis?.headline);
+	const stored = receipt(r.dir);
+	echo = true;
+	const v = await build(r.ctx);
+	assert.deepEqual(receipt(r.dir), stored, "the stored receipt is unchanged");
+	assert.equal(v.synthesis?.headline, first.synthesis?.headline, "the Arc value still shows the last valid headline");
+	assert.equal(v.job?.state, "error");
+	assert.deepEqual({ purpose: v.job?.lastError?.purpose, model: v.job?.lastError?.model, code: v.job?.lastError?.code }, { purpose: "synthesis", model: HAIKU, code: "answer" });
+	assert.match(v.job?.lastError?.message ?? "", /headline/);
+	assert.deepEqual(buildLog(r.ctx, session.threadId).map((b) => b.state), ["done", "error"]);
+});
+
+test("arc reply invalid then valid: the retry's valid reply commits exactly one result (failure: one dropped brace failed the Build)", async () => {
+	const r = replying("echo-then-valid", (s, nth) => (s === SYNTH_SYSTEM && nth === 0 ? recorded("81634") : null));
+	const v = await build(r.ctx);
+	assert.equal(v.job?.state, "done");
+	assert.equal(r.calls.get(SYNTH_SYSTEM), 2);
+	assert.ok(v.synthesis?.headline, "the retry's headline");
+	const log = buildLog(r.ctx, session.threadId);
+	assert.equal(log.length, 1);
+	assert.equal(log[0]!.retries, 1);
+	assert.equal(readdirSync(r.dir).filter((f) => /^[0-9a-f]{64}\.json$/.test(f)).length, 1, "one receipt");
+	assert.equal(receipt(r.dir).headline, v.synthesis?.headline);
+});
+
+// Hub ingest: a Session copy that lags its file (bytes < sourceBytes) is a partial Session. Read the bound through the
+// module namespace so these tests also load, and fail, on a tree without it.
+const ingest = (arcModule as { INGEST?: { waitMs: number; pollMs: number } }).INGEST ?? { waitMs: 0, pollMs: 0 };
+const partial = { ...session, bytes: 100, sourceBytes: 500, data: { ...session.data, bytes: 100, arc: { chunks: chunks.slice(0, 2) } } } as unknown as PiViewSession;
+const whole = { ...session, bytes: 500, sourceBytes: 500, data: { ...session.data, bytes: 500 } } as unknown as PiViewSession;
+async function buildFrom(ctx: PiViewContext, first: PiViewSession) {
+	buildArc(ctx, first);
+	for (let i = 0; i < 400; i++) {
+		const v = cosArc.value(ctx, { kind: "view", view: "cos.arc", threadId: session.threadId }) as ArcValue;
+		if (v.job?.state !== "running") return v;
+		await new Promise((r) => setTimeout(r, 25));
+	}
+	throw new Error("Build arc did not finish");
+}
+
+test("arc build during ingest: the Build waits for the hub to read the whole Session, then labels every chunk (failure: a Build covered 2 of 12 chunks and read done)", async () => {
+	const r = context("ingest-wait", () => 0);
+	let current = partial;
+	setTimeout(() => { current = whole; }, 600);
+	const ctx = { ...r.ctx, session: () => current } as PiViewContext;
+	buildArc(ctx, partial);
+	await new Promise((res) => setTimeout(res, 200));
+	const early = cosArc.value(ctx, { kind: "view", view: "cos.arc", threadId: session.threadId }) as ArcValue;
+	const waited = early.job?.state === "running" && /^Waiting for this Session to finish loading: loaded 20% \(100 of 500 B\)\. Build starts when loading finishes; it stops after 2 min\.$/.test(early.job?.waitingFor ?? "");
+	const v = await buildFrom(ctx, current);
+	assert.equal(v.job?.state, "done");
+	assert.equal(Object.keys(receipt(r.dir).labels).length, 20, "every chunk of the whole Session is labelled");
+	assert.ok(waited, "the job says it waits for the hub");
+});
+
+test("arc build during endless ingest: past the bound the Build fails with a source error, makes no model call, and keeps the last valid Arc", async () => {
+	const saved = { ...ingest };
+	Object.assign(ingest, { waitMs: 1000, pollMs: 25 });
+	try {
+		const r = context("ingest-endless", () => 0);
+		let current = whole;
+		const ctx = { ...r.ctx, session: () => current } as PiViewContext;
+		const first = await buildFrom(ctx, whole);
+		assert.equal(first.job?.state, "done");
+		const stored = receipt(r.dir), calls = r.run.started;
+		current = partial;
+		const v = await buildFrom(ctx, partial);
+		assert.equal(v.job?.state, "error");
+		assert.equal(v.job?.lastError?.code, "source");
+		assert.equal(v.job?.lastError?.message, "Loaded 20% (100 of 500 B) of the Session in 1 s");
+		assert.equal(r.run.started, calls, "no model call");
+		assert.deepEqual(receipt(r.dir), stored, "the stored receipt is unchanged");
+		assert.equal(readdirSync(r.dir).filter((f) => /^[0-9a-f]{64}\.json$/.test(f)).length, 1, "one receipt");
+		assert.equal(v.synthesis?.headline, first.synthesis?.headline, "the Arc value still shows the last valid headline");
+	} finally { Object.assign(ingest, saved); }
+});
+
+test("arc build models: the receipt records the labels, synthesis and context models apart (failure: the synthesis model showed the context model)", async () => {
+	const r = context("models-apart", () => 0), inner = r.ctx.ask.bind(r.ctx);
+	const names = new Map([[LABEL_SYSTEM, "m-labels"], [SYNTH_SYSTEM, "m-synthesis"], [CONTEXT_SYSTEM, "m-context"]]);
+	Object.assign(r.ctx, { ask: async (req: Req) => ({ ...await inner(req), model: [...names].find(([system]) => req.system.startsWith(system))![1] }) });
+	const v = await build(r.ctx);
+	assert.equal(v.job?.state, "done");
+	assert.deepEqual(receipt(r.dir).models, { labels: "m-labels", synthesis: "m-synthesis", context: "m-context" });
+	assert.equal(v.synthesis?.model, "m-synthesis");
+	assert.equal(receipt(r.dir).context.model, "m-context");
+});
+
+// An empty tier-2 tree: no threads and no unassigned leaves. The second form is non-empty JSON whose only leaf cites
+// nothing the Build saw, so it normalizes to the same empty tree.
+const EMPTY_TREE = JSON.stringify({ asks: [], threads: [], unassigned: {} });
+const UNCITED_TREE = JSON.stringify({ asks: [], threads: [], unassigned: { progress: [{ text: "Work happened", citations: ["nope"], quote: "Work happened" }], decisions: [], blockers: [] } });
+const treeSize = (v: ArcValue) => (v.context?.threads.length ?? 0) + Object.values(v.context?.unassigned ?? {}).flat().length;
+const headFile = (dir: string) => join(dir, readdirSync(dir).find((f) => f.endsWith(".head.json"))!);
+
+test("arc empty result: a context tree with no threads and no unassigned items fails the Build after one retry and keeps the last good Arc (failure: a Build stored an empty tree as done)", async () => {
+	let empty = false;
+	const r = replying("empty-tree", (s, nth) => (empty && s === CONTEXT_SYSTEM ? (nth % 2 ? EMPTY_TREE : UNCITED_TREE) : null));
+	const first = await build(r.ctx);
+	assert.equal(first.job?.state, "done");
+	assert.ok(treeSize(first) > 0, "the first Build has a tree");
+	const stored = receipt(r.dir), head = readFileSync(headFile(r.dir), "utf8"), contextCalls = r.calls.get(CONTEXT_SYSTEM) ?? 0, synthCalls = r.calls.get(SYNTH_SYSTEM) ?? 0;
+	empty = true;
+	const v = await build(r.ctx);
+	assert.equal(v.job?.state, "error");
+	assert.deepEqual({ purpose: v.job?.lastError?.purpose, model: v.job?.lastError?.model, code: v.job?.lastError?.code }, { purpose: "context", model: HAIKU, code: "answer" });
+	assert.equal(v.job?.lastError?.message, EMPTY_ANSWER);
+	assert.equal(EMPTY_ANSWER, "The Arc answer was empty: it listed no work threads, open asks, progress, decisions or blockers, even after one retry, in a Session at or above the 4-message floor.");
+	assert.equal((r.calls.get(CONTEXT_SYSTEM) ?? 0) - contextCalls, 2, "context is asked twice: one retry");
+	assert.equal((r.calls.get(SYNTH_SYSTEM) ?? 0) - synthCalls, 1, "synthesis is asked once");
+	assert.deepEqual(receipt(r.dir), stored, "the stored receipt is unchanged");
+	assert.equal(readFileSync(headFile(r.dir), "utf8"), head, "the head is unchanged");
+	assert.equal(treeSize(v), treeSize(first), "the Arc value still shows the last good tree");
+	assert.equal(v.keptAt, first.keptAt, "the shown Arc is the first Build's");
+	assert.ok(v.keptAt);
+	const log = buildLog(r.ctx, session.threadId);
+	assert.deepEqual(log.map((b) => b.state), ["done", "error"]);
+	assert.deepEqual({ error: log[1]!.error, purpose: log[1]!.errorPurpose, errorModel: log[1]!.errorModel, model: log[1]!.model }, { error: EMPTY_ANSWER, purpose: "context", errorModel: HAIKU, model: HAIKU });
+	// The last answer (UNCITED_TREE) had one leaf; the citation filter dropped it.
+	assert.deepEqual(log[1]!.tree, { raw: { threads: 0, leaves: 1, asks: 0 }, kept: { threads: 0, leaves: 0, asks: 0 } });
+	assert.ok(log[0]!.tree!.kept.threads > 0, "a done Build records its counts too");
+});
+
+test("arc stored empty tree: a receipt from before the rule reads as not built, rebuilds once on view, and a failed rebuild neither claims a kept Arc nor runs again (failure: an empty tree read as a valid Arc)", async () => {
+	let empty = false;
+	const pick = (s: string, nth: number) => (empty && s === CONTEXT_SYSTEM ? (nth % 2 ? EMPTY_TREE : UNCITED_TREE) : null);
+	const r = replying("empty-stored", pick);
+	assert.equal((await build(r.ctx)).job?.state, "done");
+	// Rewrite the receipt as an older Build stored it: an empty tree under a v2 head that has no empty flag.
+	const file = join(r.dir, receiptFile(r.dir)), raw = JSON.parse(readFileSync(file, "utf8"));
+	raw.context = { ...raw.context, threads: [], needsYou: [], unassigned: { progress: [], decisions: [], blockers: [] } };
+	writeFileSync(file, JSON.stringify(raw));
+	const legacy = JSON.parse(readFileSync(headFile(r.dir), "utf8")); legacy.v = 2; delete legacy.e;
+	writeFileSync(headFile(r.dir), JSON.stringify(legacy));
+	// A fresh hub on the same state directory.
+	empty = true;
+	const again = replying("empty-stored", pick), now = arcClock.now, later = arcClock.later;
+	let clock = Date.now() + 11 * 60_000;
+	const timers: (() => void)[] = [];
+	assert.equal(cosArc.summarize!(again.ctx, session), undefined, "the legacy head of an empty tree is not built");
+	assert.equal(JSON.parse(readFileSync(headFile(r.dir), "utf8")).e, 1, "readHead rewrote the head with the empty flag");
+	Object.assign(arcClock, { now: () => clock, later: (fn: () => void) => timers.push(fn) });
+	try {
+		const opened = arcOf(again.ctx);
+		assert.equal(opened.keptAt, null, "an empty stored tree is no kept Arc");
+		assert.equal(opened.synthesis, null, "nor does its headline show");
+		assert.equal(opened.job?.state, "running", "viewing it starts one rebuild");
+		assert.deepEqual([opened.context?.threads.length, opened.context?.needsYou.length], [0, 0], "the stored empty tree stays drawn while the rebuild runs");
+		let v = opened;
+		for (let i = 0; i < 400 && v.job?.state === "running"; i++) { await new Promise((res) => setTimeout(res, 25)); v = arcOf(again.ctx); }
+		assert.equal(v.job?.state, "error");
+		assert.equal(v.job?.lastError?.message, EMPTY_ANSWER);
+		assert.equal(v.keptAt, null, "no Arc claims to be kept");
+		assert.equal(cosArc.summarize!(again.ctx, session), undefined, "still not built");
+		const calls = again.calls.get(CONTEXT_SYSTEM);
+		assert.equal(calls, 2);
+		// Past the 10 min bound, so only the answer rule holds the rebuild back.
+		clock += 11 * 60_000;
+		await new Promise((res) => setTimeout(res, 50));
+		const after = arcOf(again.ctx);
+		assert.notEqual(after.job?.state, "running", "a failed rebuild does not run again on view");
+		assert.equal(again.calls.get(CONTEXT_SYSTEM), calls);
+		assert.equal(timers.length, 0, "no automatic rebuild waits either");
+		assert.deepEqual(buildLog(again.ctx, session.threadId).map((b) => [b.trigger, b.state, b.cause]), [["manual", "done", undefined], ["auto", "error", "rebuilt: the stored Arc was empty"]]);
+	} finally { Object.assign(arcClock, { now, later }); }
+});
+
+// Runs `fn` with the shared test Session at `count` Rarebit messages.
+async function withCount<T>(count: number, fn: () => Promise<T>): Promise<T> {
+	const saved = session.data.rarebit.count;
+	session.data.rarebit.count = count;
+	try { return await fn(); } finally { session.data.rarebit.count = saved; }
+}
+
+test("arc floor: a manual Build below 4 messages whose answer is empty ends done and empty, asks once, and writes no receipt or head (failure: a one-prompt Session read as a failed Build)", async () => {
+	const r = replying("floor-manual", (s) => (s === CONTEXT_SYSTEM ? EMPTY_TREE : null));
+	await withCount(2, async () => {
+		const v = await build(r.ctx);
+		assert.deepEqual([v.job?.state, v.job?.empty], ["done", true]);
+		assert.equal(v.job?.lastError, null, "no failure");
+		assert.equal(r.calls.get(CONTEXT_SYSTEM), 1, "an empty answer below the floor is not retried");
+		assert.deepEqual(readdirSync(r.dir).filter((f) => /^[0-9a-f]{64}(\.head)?\.json$/.test(f)), [], "no receipt and no head");
+		assert.deepEqual(v.floor, { min: 4, messages: 2 });
+		assert.equal(v.keptAt, null);
+		assert.equal(cosArc.summarize!(r.ctx, session), undefined, "the Session still reads as not built");
+		const [record] = buildLog(r.ctx, session.threadId);
+		assert.deepEqual([record!.trigger, record!.state, record!.empty, record!.error], ["manual", "done", true, undefined]);
+	});
+	// At the floor an empty answer stays an error.
+	await withCount(4, async () => {
+		const v = await build(r.ctx);
+		assert.equal(v.job?.lastError?.message, EMPTY_ANSWER);
+		assert.equal(v.floor, null);
+	});
+});
+
+test("arc floor: a stored empty tree below 4 messages neither rebuilds on view nor draws a hollow tree (failure: viewing a one-prompt Session spent a Build)", async () => {
+	let empty = false;
+	const pick = (s: string) => (empty && s === CONTEXT_SYSTEM ? EMPTY_TREE : null);
+	const r = replying("floor-stored", pick);
+	assert.equal((await build(r.ctx)).job?.state, "done");
+	const file = join(r.dir, receiptFile(r.dir)), raw = JSON.parse(readFileSync(file, "utf8"));
+	raw.context = { ...raw.context, threads: [], needsYou: [], unassigned: { progress: [], decisions: [], blockers: [] } };
+	writeFileSync(file, JSON.stringify(raw));
+	await withCount(2, async () => {
+		const again = replying("floor-stored", pick), now = arcClock.now, later = arcClock.later, timers: (() => void)[] = [];
+		Object.assign(arcClock, { now: () => Date.now() + 11 * 60_000, later: (fn: () => void) => timers.push(fn) });
+		try {
+			const v = arcOf(again.ctx);
+			assert.notEqual(v.job?.state, "running", "no rebuild on view");
+			assert.equal(timers.length, 0, "none waits either");
+			assert.equal(v.context, null, "the empty tree is not drawn");
+			assert.deepEqual(v.floor, { min: 4, messages: 2 });
+			assert.equal(again.calls.size, 0, "no model call");
+		} finally { Object.assign(arcClock, { now, later }); }
+		// A manual Build whose answer is empty ends done and empty; the stored receipt and head stay.
+		empty = true;
+		const stored = readFileSync(file, "utf8"), head = readFileSync(headFile(r.dir), "utf8");
+		const v = await build(again.ctx);
+		assert.deepEqual([v.job?.state, v.job?.empty, v.job?.lastError], ["done", true, null]);
+		assert.equal(readFileSync(file, "utf8"), stored, "the receipt is unchanged");
+		assert.equal(readFileSync(headFile(r.dir), "utf8"), head, "the head is unchanged");
+	});
+});
+
+test("arc empty result then a tree: the retry's non-empty tree commits (failure: one empty reply failed the Build)", async () => {
+	const r = replying("empty-then-tree", (s, nth) => (s === CONTEXT_SYSTEM && nth === 0 ? EMPTY_TREE : null));
+	const v = await build(r.ctx);
+	assert.equal(v.job?.state, "done");
+	assert.equal(r.calls.get(CONTEXT_SYSTEM), 2);
+	assert.ok(treeSize(v) > 0);
+	assert.equal(buildLog(r.ctx, session.threadId)[0]!.retries, 1);
+});
+
+test("arc upgrade after a transient failure: an outdated receipt whose rebuild failed with a model error rebuilds on a view past the 10 min bound (failure: a transient failure stopped the upgrade for good)", async () => {
+	let failing = false, clock = Date.now() + 11 * 60_000;
+	const r = context("upgrade-transient", () => 0, () => failing);
+	assert.equal((await build(r.ctx)).job?.state, "done");
+	const file = join(r.dir, receiptFile(r.dir)), raw = JSON.parse(readFileSync(file, "utf8"));
+	writeFileSync(file, JSON.stringify({ ...raw, chunkerVersion: "older-rules" }));
+	const again = context("upgrade-transient", () => 0, () => failing), now = arcClock.now, later = arcClock.later, timers: (() => void)[] = [];
+	Object.assign(arcClock, { now: () => clock, later: (fn: () => void) => timers.push(fn) });
+	const settle = async () => { let v = arcOf(again.ctx); for (let i = 0; i < 400 && v.job?.state === "running"; i++) { await new Promise((res) => setTimeout(res, 25)); v = arcOf(again.ctx); } return v; };
+	try {
+		failing = true;
+		assert.equal(arcOf(again.ctx).job?.state, "running", "the view starts the upgrade");
+		assert.equal((await settle()).job?.lastError?.code, "model");
+		// The view after the failure set the pending flag; the bound's timer runs it once the 10 min pass.
+		assert.equal(timers.length, 1, "one pending upgrade waits for the bound");
+		failing = false; clock += 11 * 60_000;
+		const started = again.run.started;
+		timers[0]!();
+		assert.equal(arcOf(again.ctx).job?.state, "running", "the upgrade runs once more past the bound");
+		assert.equal((await settle()).job?.state, "done");
+		assert.ok(again.run.started > started);
+		assert.deepEqual(buildLog(again.ctx, session.threadId).map((b) => [b.trigger, b.state, b.errorCode, b.cause]),
+			[["manual", "done", undefined, undefined], ["auto", "error", "model", "rebuilt: chunk rules changed"], ["auto", "done", undefined, "rebuilt: chunk rules changed"]]);
+	} finally { Object.assign(arcClock, { now, later }); }
 });

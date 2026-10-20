@@ -7,6 +7,7 @@
 //   perf report <runDir>
 //   perf fixture owner [--from HOME] | synthetic
 import { execFileSync, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { cpus, loadavg } from "node:os";
@@ -14,7 +15,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { performance } from "node:perf_hooks";
 import WebSocket from "ws";
-import { acquireRunLock, PERF_HOME, RUN_LOCK } from "./lock.mjs";
+import { acquireRunLock, lockStatus, PERF_HOME, RUN_LOCK } from "./lock.mjs";
 import { cloneColdHome, fixtureDir, makeOwnerFixture, makeSyntheticFixture, prepareHome, readManifest, recordFill } from "./fixture.mjs";
 import { parseTrace, renderSummary, report, writeSummary } from "./report.mjs";
 import { compareDirs, renderGroup, summarizeGroup } from "./compare.mjs";
@@ -194,14 +195,17 @@ function memoryPressure() {
 }
 
 // The app scenario launches a separate AmPi.app copy (own bundle id, so its preferences and website data stay apart
-// from the installed app) through LaunchServices, as a Dock click does. build-app.sh builds it on first use.
-const PERF_APP = join(PERF_HOME, "app", "AmPiPerf.app");
-const PERF_APP_EXEC = join(PERF_APP, "Contents", "MacOS", "AmPi");
-
+// from the installed app) through LaunchServices, as a Dock click does. Each version of the measured checkout's macos/
+// sources, edits included, builds its own copy on first use, so an app change is never measured with a stale build.
 function ensurePerfApp(app) {
-	if (existsSync(PERF_APP_EXEC)) return;
-	log(`building ${PERF_APP}`);
-	execFileSync("sh", [join(app, "macos", "scripts", "build-app.sh")], { env: { ...process.env, AMPI_APP: PERF_APP, AMPI_APP_ID: "dev.hypercarrier.ampi.perf" }, stdio: ["ignore", "ignore", "inherit"] });
+	const hash = createHash("sha256");
+	for (const file of (git(app, ["ls-files", "macos"]) ?? "").split("\n").filter(Boolean)) hash.update(`${file}\0`).update(readFileSync(join(app, file)));
+	const path = join(PERF_HOME, "app", hash.digest("hex").slice(0, 12), "AmPiPerf.app");
+	const perfApp = { path, exec: join(path, "Contents", "MacOS", "AmPi") };
+	if (existsSync(perfApp.exec)) return perfApp;
+	log(`building ${path}`);
+	execFileSync("sh", [join(app, "macos", "scripts", "build-app.sh")], { env: { ...process.env, AMPI_APP: path, AMPI_APP_ID: "dev.hypercarrier.ampi.perf" }, stdio: ["ignore", "ignore", "inherit"] });
+	return perfApp;
 }
 
 /** App events from the app's own trace file (trace-<pid>-1.json, written by main.swift's AppTrace). */
@@ -216,10 +220,10 @@ function appEvents(runDir, hubPid) {
 }
 
 /** Launch to first painted Session row. `open` starts the clock: it stands in for the Dock click. */
-async function appScenario({ port, home, runDir, hubPid, trace, signal }) {
+async function appScenario({ perfApp, port, home, runDir, hubPid, trace, signal }) {
 	if (!trace) throw new Error("The app scenario reads its marks from the app trace; run it with tracing on");
 	const openUs = epochUs();
-	execFileSync("open", ["-n", "-a", PERF_APP, "--env", `AMPI_HOME=${home}`, "--env", `AMPI_HUB_PORT=${port}`, "--env", `AMPI_TRACE=${runDir}`]);
+	execFileSync("open", ["-n", "-a", perfApp.path, "--env", `AMPI_HOME=${home}`, "--env", `AMPI_HUB_PORT=${port}`, "--env", `AMPI_TRACE=${runDir}`]);
 	const hubPage = (e) => e.args?.url === "/";
 	let events = [];
 	try {
@@ -232,7 +236,7 @@ async function appScenario({ port, home, runDir, hubPid, trace, signal }) {
 		events = appEvents(runDir, hubPid);
 	} finally {
 		// Only this perf copy matches the path; the installed AmPi.app keeps running.
-		try { execFileSync("pkill", ["-TERM", "-f", PERF_APP_EXEC]); } catch {}
+		try { execFileSync("pkill", ["-TERM", "-f", perfApp.exec]); } catch {}
 	}
 	const at = (name, page) => events.find((e) => e.name === name && (!page || hubPage(e)))?.ts;
 	const ms = (ts) => (ts === undefined ? undefined : Math.round((ts - openUs) / 100) / 10);
@@ -266,7 +270,7 @@ export async function runOnce(options) {
 	// The measured checkout's driver first: its web marks belong to that build.
 	const browserHook = [join(app, "scripts", "perf", "browser.mjs"), join(HERE, "browser.mjs")].find((f) => existsSync(f)) ?? join(HERE, "browser.mjs");
 	const driver = scenario === "index" ? "none" : scenario === "app" ? "app" : wanted ?? (existsSync(browserHook) ? "browser" : "probe");
-	if (scenario === "app") ensurePerfApp(app);
+	const perfApp = scenario === "app" ? ensurePerfApp(app) : undefined;
 	const receipt = {
 		commit: git(app, ["rev-parse", "HEAD"]),
 		dirty: Boolean(git(app, ["status", "--porcelain", "-uno", "--ignore-submodules=all", "--", "."])),
@@ -329,7 +333,7 @@ export async function runOnce(options) {
 				receipt.scenario.ok = Boolean(drained);
 				await sleep(2000);
 			} else if (driver === "app") {
-				const result = await appScenario({ port, home, runDir, hubPid: hub.pid, trace, signal: controller.signal });
+				const result = await appScenario({ perfApp, port, home, runDir, hubPid: hub.pid, trace, signal: controller.signal });
 				Object.assign(receipt.scenario, result);
 				log(Object.entries(result.stats).map(([k, v]) => `${k} ${v ?? "—"} ms`).join("  "));
 			} else if (driver === "browser") {
@@ -393,6 +397,15 @@ export async function runOnce(options) {
 /** One lock for a whole group, so no other runner measures between its runs. A held lock stops the command unless --wait. */
 function takeRunLock(label, args) {
 	return acquireRunLock(label, { wait: args.wait === true, onWait: (h) => log(`waiting for the run lock held by ${h.label} (pid ${h.pid})`) });
+}
+
+/** The lock path, its holder, and the queued waiters, each on its own lines. */
+function renderLockStatus() {
+	const { holder, waiters } = lockStatus();
+	const who = (o, at) => `${o.label} (pid ${o.pid}${at ? `, since ${new Date(at).toISOString()}` : ""})`;
+	const lines = [`lock: ${RUN_LOCK}`, `holder: ${holder ? `${who(holder, holder.started)}${holder.dead ? " — pid dead, stale after the grace period" : ""}` : "none"}`];
+	lines.push(waiters.length ? "waiting:" : "waiting: none", ...waiters.map((w) => `  ${who(w, w.since)}`));
+	return lines.join("\n");
 }
 
 async function run(args) {
@@ -459,7 +472,7 @@ try {
 	else if (command === "compare") console.log(compareDirs(args._[1], args._[2]));
 	else if (command === "report") console.log(renderSummary(report(args._[1])));
 	else if (command === "fixture") await fixtureCommand(args);
-	else if (command === "lock") console.log(RUN_LOCK);
+	else if (command === "lock") console.log(renderLockStatus());
 	else throw new Error(`Unknown command ${command}`);
 } catch (error) {
 	log(error.message);

@@ -1,5 +1,4 @@
 import type { ThreadSummary } from "../../../src/shared/protocol.ts";
-import { isSessionInScope } from "../../../src/shared/session-scope.ts";
 import { ACTIVITY_LABEL, MOD, ago, attentionOf, go, href, isBusy, money, needsYou } from "../util.ts";
 import { useEffect, useRef, useState } from "react";
 import { useKeepPlace } from "../keep-place.ts";
@@ -151,7 +150,8 @@ export function Overview({ data, onNew, onAddHost, onHelp }: { data: HostThreads
 		document.addEventListener("visibilitychange", visibility);
 		return () => { remember(); document.removeEventListener("visibilitychange", visibility); };
 	}, []);
-	const inScope = (t: ThreadSummary) => !t.archived && isSessionInScope({ activityAt: t.updatedAt, live: t.live });
+	// The Host decides which Sessions are in scope (it keeps unknown-age and source-loss copies); count what it lists.
+	const inScope = (t: ThreadSummary) => !t.archived;
 	const rows: Row[] = data.flatMap((d) => d.threads.filter(inScope).map((t) => ({ host: d.host.id, hostLabel: d.host.label, t })));
 	const byRecent = (a: Row, b: Row) => b.t.updatedAt - a.t.updatedAt;
 	// Live signals (errors, Herdr, node Summaries) first; then Pi Sessions' open tier-2 asks by kind (D16).
@@ -206,7 +206,7 @@ export function Overview({ data, onNew, onAddHost, onHelp }: { data: HostThreads
 								<b>{host.label}</b>
 								<span className="hint">
 									{host.status === "connected"
-										? stale && threads.length === 0 ? "Reading Sessions…" : `${host.node?.hostname ? `${host.node.hostname} · ` : ""}${threads.filter(inScope).filter(isBusyT).length} running · ${threads.filter(inScope).length.toLocaleString()} Sessions in scope`
+										? stale && threads.length === 0 ? "Reading Sessions…" : `${host.node?.hostname ? `${host.node.hostname} · ` : ""}${rows.filter((r) => r.host === host.id && isBusyT(r.t)).length} running · ${rows.filter((r) => r.host === host.id).length.toLocaleString()} Sessions in scope`
 										: host.status === "connecting"
 											? "connecting…"
 											: `disconnected${host.lastSeen ? `, last seen ${ago(host.lastSeen)} ago` : ""}${host.error ? ` — ${host.error}` : ""}`}

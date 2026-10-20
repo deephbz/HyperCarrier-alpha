@@ -2,14 +2,18 @@
 // ingestion owns full scans; navigation reads local indexed pages, never full files.
 import { fleetSearch, type SearchResult } from "./search.ts";
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { getCompileCacheDir } from "node:module";
 import { Worker } from "node:worker_threads";
 import type { StatementSync } from "node:sqlite";
 // @ts-ignore: shared reader is plain ESM.
 import { openPiSessionRange } from "../../../trace-analytics/src/sources/transcript-range.mjs";
 import { readWorkingSet } from "./working-set-db.ts";
 import { counter, tracing } from "../trace.ts";
-import { DERIVATION_VERSION, WINDOW_BYTES, WINDOW_ENTRIES, ENTRY_PAGE_BYTES, type Source, type Derived, type WorkerJob } from "./working-set-types.ts";
-import type { UiEntry } from "../node/projection.ts";
+import { trackDerive } from "./derive-queue.ts";
+import { derivedVersion, WINDOW_BYTES, WINDOW_ENTRIES, ENTRY_PAGE_BYTES, type Source, type Derived, type WorkerJob } from "./working-set-types.ts";
+import type { PiEntry } from "../shared/protocol.ts";
 import { projectEntry, wireEntry } from "./projection.ts";
 import type { RarebitItem, RarebitValue } from "./views/rarebit.ts";
 
@@ -17,7 +21,9 @@ let worker: Worker | undefined, owners = 0, serial = 0, ingestions = 0;
 const pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void; onStart?: () => void }>();
 function ensureWorker() {
  if (worker) return;
- const current = new Worker(new URL("./derive-worker.ts", import.meta.url));
+ // A worker does not inherit the main thread's compile cache (bin/ampi.mjs); the variable gives it the same directory.
+ const cache = getCompileCacheDir?.();
+ const current = new Worker(new URL("./derive-worker.ts", import.meta.url), cache ? { env: { ...process.env, NODE_COMPILE_CACHE: cache } } : {});
  worker = current;
  current.on("message", (m: { id: number; data?: unknown; error?: string; started?: boolean }) => {
   if (worker !== current) return;
@@ -53,7 +59,7 @@ function release() {
  for (const p of pending.values()) p.reject(new Error("Working set stopped")); pending.clear();
 }
 
-type Window = { value: { entries: UiEntry[]; more: boolean; version: string }; bytes: number; live: boolean };
+type Window = { value: { entries: PiEntry[]; more: boolean; version: string }; bytes: number; live: boolean };
 const windows = new Map<string, Window>();
 const LIVE_BYTES = 64 * 1024 * 1024, LRU_BYTES = 64 * 1024 * 1024, LRU_SLOTS = 20;
 const cacheKey = (s: Source) => `${s.host}\0${s.path}`;
@@ -78,6 +84,8 @@ export function workingSetUsage() {
 export class WorkingSet {
  db!: ReturnType<typeof readWorkingSet>;
  readonly ready: Promise<void>;
+ /** Resolves once saved heads are readable. A saved database opens at once, while the Worker initializes. */
+ readonly readable: Promise<void>;
  readonly host: string;
  readonly cacheDir: string;
  #closed = false;
@@ -85,10 +93,16 @@ export class WorkingSet {
  #forgetIds = new Map<string, number>();
  constructor(host: string, cacheDir: string) {
   this.host = host; this.cacheDir = cacheDir; acquire();
+  // Init only creates missing tables, so a saved sessions table needs no Worker before the first read.
+  if (existsSync(join(cacheDir, "working-set.sqlite"))) {
+   try { this.db = readWorkingSet(cacheDir); this.#head = this.db.prepare('SELECT data FROM sessions WHERE path=?'); }
+   catch { this.db?.close(); this.db = undefined!; this.#head = undefined; }
+  }
   this.ready = request<void>({ op: "init", cacheDir }).then(() => {
    if (this.#closed) throw new Error("Working set stopped");
-   this.db = readWorkingSet(cacheDir);
+   this.db ??= readWorkingSet(cacheDir);
   });
+  this.readable = this.db ? Promise.resolve() : this.ready;
   // close() may cancel initialization before a caller waits for readiness.
   void this.ready.catch(() => {});
  }
@@ -101,11 +115,13 @@ export class WorkingSet {
   try { return run(); } finally { this.#reading = false; this.db.exec("ROLLBACK"); }
  }
  load(path: string): Derived | undefined { const row = (this.#head ??= this.db.prepare('SELECT data FROM sessions WHERE path=?')).get(path); return row ? JSON.parse(String(row.data)) : undefined; }
- async refresh(source: Source, onStart?: () => void, urgent = false): Promise<Derived | null> {
-  await this.ready;
-  if (this.#closed) throw new Error("Working set stopped");
-  ingestions++;
-  return request<Derived | null>({ op: "derive", source, ...(urgent ? { urgent } : {}) }, undefined, onStart);
+ refresh(source: Source, onStart?: () => void, urgent = false): Promise<Derived | null> {
+  return trackDerive(async () => {
+   await this.ready;
+   if (this.#closed) throw new Error("Working set stopped");
+   ingestions++;
+   return request<Derived | null>({ op: "derive", source, ...(urgent ? { urgent } : {}) }, undefined, onStart);
+  });
  }
  /** Moves a queued derivation of this Session ahead of the cold backlog. */
  urgent(source: Source): void { worker?.postMessage({ op: "urgent", cacheDir: source.cacheDir, path: source.path }); }
@@ -137,7 +153,7 @@ export class WorkingSet {
   }
   limit = Math.max(1, Math.min(WINDOW_ENTRIES, limit));
   const rows = this.db.prepare("SELECT ui FROM entries WHERE path=? AND position < ? AND ui <> 'null' ORDER BY position DESC LIMIT ?").all(path, end, limit + 1);
-  const entries: UiEntry[] = []; let size = 0;
+  const entries: PiEntry[] = []; let size = 0;
   for (const row of rows.slice(0, limit)) {
    const text = String(row.ui), bytes = Buffer.byteLength(text);
    if (size + bytes > WINDOW_BYTES - 1024) break;
@@ -205,7 +221,7 @@ export class WorkingSet {
   if (!row) throw new Error("Entry is not on the current branch");
   const reader = openPiSessionRange(source.file, { host: source.host, indexPath: `${source.file}.index.sqlite` });
   try {
-   if (`${DERIVATION_VERSION}:${reader.info().version}` !== data.version) throw new Error("Source changed; retry after indexing completes");
+   if (derivedVersion(reader.info().version) !== data.version) throw new Error("Source changed; retry after indexing completes");
    const projected = projectEntry(reader.entry(id, { full: true }));
    if (!projected) throw new Error("Entry has no transcript view");
    const bytes = Buffer.from(JSON.stringify(wireEntry(projected)));

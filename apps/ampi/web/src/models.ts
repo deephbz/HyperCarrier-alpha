@@ -24,7 +24,7 @@ export function useModels(host: string | undefined, connected: boolean): ModelCh
 		setModels(cache.get(host));
 		if (!connected) return;
 		let live = true;
-		hub.request<ModelChoice[]>(host, "models.list").then(
+		hub.request(host, "models.list").then(
 			(list) => {
 				cache.set(host, list);
 				if (live) setModels(list);

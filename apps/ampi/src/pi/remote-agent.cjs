@@ -7,6 +7,9 @@
 // In:  {t:'submit', id, session, pane?, text, deliverAs: 'steer'|'followUp'}
 //      {t:'submit', id, pane, expectSession, text, deliverAs}   a spawned Session with no file yet (pane from the ledger)
 //      {t:'abort', id, session, pane?}
+//      {t:'commands', id, session}           slash commands, models and thinking levels from the live control
+//      {t:'command', id, session, name, args?, key?, abort?, deliverAs?}
+//                                            one typed slash command through the live control; never keys or text
 //      {t:'screen', id, session, pane, ms}   stream a pane's screen for ms
 //      {t:'watch', panes:[...]}              live screen of watched panes while active
 //      {t:'spawn', id, requestId, sessionId | resume, cwd, beside?, direction?, label?, name?, prompt?}
@@ -134,21 +137,40 @@ const tracked = new Map(); // path -> { offset }
 const forgotten = new Map(Object.entries(cfg.forgotten || {})); // path -> source watermark; unchanged old Team records cannot recopy it
 
 // ---- Herdr CLI ----
+// A set HERDR_BIN is the only candidate: a slow answer must never fall through to another Herdr server on PATH.
+const herdrCandidates = process.env.HERDR_BIN ? [process.env.HERDR_BIN] : ['herdr', path.join(os.homedir(), '.local/bin/herdr')];
 function herdrBin() {
-  for (const p of [process.env.HERDR_BIN, 'herdr', path.join(os.homedir(), '.local/bin/herdr')]) {
-    if (!p) continue;
+  for (const p of herdrCandidates) {
     const ts = tracing ? traceNow() : 0;
     try { cp.execFileSync(p, ['--version'], { stdio: 'ignore', timeout: 3000 }); return p; } catch {} finally { if (tracing) traceSpan('herdr --version', 'startup', ts); }
   }
   return null;
 }
-const herdr = herdrBin();
+let herdr, probing;
+// One stderr line per change of the chosen Herdr: the path only, never arguments.
+function useHerdr(p) {
+  if (p === herdr) return;
+  herdr = p;
+  process.stderr.write(`remote-agent herdr: ${p || 'none'}\n`);
+}
+useHerdr(herdrBin());
+// A failed probe is not final: one slow answer under load must not leave the agent without Herdr until restart.
+function reprobeHerdr() {
+  probing ||= herdrCandidates.reduce((prior, p) => prior.then((found) => found || new Promise((resolve) => {
+    const ts = tracing ? traceNow() : 0;
+    cp.execFile(p, ['--version'], { timeout: 3000 }, (err) => {
+      if (tracing) traceSpan('herdr --version', 'ipc', ts, { ok: !err });
+      resolve(err ? null : p);
+    });
+  })), Promise.resolve(null)).then((found) => { if (found && !herdr) useHerdr(found); return !!herdr; }).finally(() => { probing = null; });
+  return probing;
+}
 const herdrSession = cfg.herdrSession || 'default';
 const scoped = (argv) => ['--session', herdrSession, ...argv];
 let sessionReady = false, checking;
 // A scoped CLI call can create a missing server. Every retry starts with this list.
 function checkSession() {
-  if (!herdr) return Promise.resolve(false);
+  if (!herdr) return reprobeHerdr().then((found) => found && checkSession());
   const ts = tracing ? traceNow() : 0;
   checking ||= new Promise((resolve) => cp.execFile(herdr, ['session', 'list', '--json'], { timeout: 3000 }, (err, stdout) => {
     if (tracing) traceSpan('herdr session list', 'ipc', ts, { ok: !err });
@@ -170,8 +192,13 @@ function runHerdr(argv, options, cb) {
     cb(err, stdout, stderr);
   });
 }
-const herdrRun = (argv, timeout = 15000) => new Promise((resolve) =>
-  runHerdr(argv, { timeout, maxBuffer: 32 << 20 }, (err, stdout, stderr) => resolve({ err, stdout, stderr })));
+// Any failed call (another pass's timeout or refusal) marks the server unchecked; an action rechecks it first, as
+// herdrCall does, instead of failing on an earlier call's outcome.
+const herdrRun = async (argv, timeout = 15000) => {
+  if (!sessionReady) await checkSession();
+  return new Promise((resolve) =>
+    runHerdr(argv, { timeout, maxBuffer: 32 << 20 }, (err, stdout, stderr) => resolve({ err, stdout, stderr })));
+};
 async function herdrResult(argv, timeout) {
   const { err, stdout } = await herdrRun(argv, timeout);
   if (err) return null;
@@ -229,12 +256,31 @@ function track(p, live = false) {
   tracked.set(p, { offset });
 }
 
+// Offset just past the last complete line before `size`, never below `from`. A tail block holds it unless the last
+// line is longer than the block.
+function wholeEnd(p, from, size) {
+  const fd = fs.openSync(p, 'r');
+  try {
+    for (let end = size; end > from;) {
+      const len = Math.min(65536, end - from), buf = Buffer.alloc(len);
+      readAt(fd, buf, len, end - len);
+      const nl = buf.lastIndexOf(10);
+      if (nl >= 0) return end - len + nl + 1;
+      end -= len;
+    }
+    return from;
+  } finally { fs.closeSync(fd); }
+}
+
 function pump() {
   if (outBytes > outHigh) return; // backpressure: the next tick ships the rest
   for (const [p, st] of tracked) {
-    let size;
+    let size, whole;
     try { size = fs.statSync(p).size; } catch { continue; }
     if (size < st.offset) { st.offset = 0; out({ t: 'reset', path: p, offset: 0, truncatedHead: false }); }
+    // `size` on each chunk is the file's whole-line length at this stat. A copy shorter than it is still loading;
+    // an unfinished last line (a live write, a crash-cut tail) never counts.
+    if (size > st.offset) try { whole = wholeEnd(p, st.offset, size); } catch { continue; }
     while (size > st.offset && outBytes <= outHigh) {
       // One entry can exceed maxChunk (an image read is several MB): grow the read until it
       // holds a whole line, or the file ends inside an unfinished line.
@@ -249,7 +295,7 @@ function pump() {
         len = Math.min(len * 2, size - st.offset);
       }
       if (last < 0) break; // partial line; wait for the writer to finish it
-      out({ t: 'chunk', path: p, offset: st.offset, data: buf.subarray(0, last + 1).toString('utf8') });
+      out({ t: 'chunk', path: p, offset: st.offset, size: whole, data: buf.subarray(0, last + 1).toString('utf8') });
       st.offset += last + 1;
     }
   }
@@ -346,6 +392,8 @@ async function liveControlFor(session) {
 }
 const controlView = (r) => r ? {
   live: true, idle: !!r.value.idle, compacting: !!r.value.compacting,
+  // The control serves typed slash commands (pi-hc-control `commands`/`command`).
+  ...(r.value.commands === 1 ? { commands: true } : {}),
   pending: { steer: r.value.pending?.steer ?? 0, followUp: r.value.pending?.followUp ?? 0 },
   // An older control extension tracks no submissions: leave the key out, so absence proves nothing.
   ...(Array.isArray(r.value.submissions) ? { submissions: r.value.submissions.map(submissionView) } : {}),
@@ -420,8 +468,9 @@ async function discover() {
   discovering = true; discoverAgain = false;
   const ts = tracing ? traceNow() : 0;
   try {
+    const live = await checkSession();
     let agents = [], panes, layout = { workspaces: [] }, source = herdr ? 'herdr' : 'mtime';
-    if (herdr && await checkSession()) {
+    if (live) {
       const workspaces = (await herdrResult(['workspace', 'list'], 3000))?.workspaces;
       const tabs = (await herdrResult(['tab', 'list'], 3000))?.tabs;
       const list = (await herdrResult(['agent', 'list'], 5000))?.agents;
@@ -525,6 +574,29 @@ async function viaControl(msg, req) {
     fail(msg, 'control', 'control_unconfirmed', String(e.message || e));
   }
   return true;
+}
+
+// Typed slash commands go only through a live control that serves them: a command string must never reach Pi
+// as text or keys (packages/pi-hc-control README, Slash commands).
+async function viaCommandControl(msg, req) {
+  const r = msg.session ? await liveControlFor(msg.session) : null;
+  if (!r) return fail(msg, 'control', 'no_control', 'This Session has no live control socket, so AmPi cannot run slash commands; use the Pi pane');
+  if (r.value.commands !== 1) return fail(msg, 'control', 'commands_unsupported', "This Pi's control is too old for slash commands: update pi-hc-control and /reload in the Pi pane");
+  try {
+    const rep = await controlRequest(r.descriptor.socket, { id: `c${++controlSeq}`, ...req }, controlSubmitMs);
+    if (rep.ok) {
+      const { id: _id, ok: _ok, ...result } = rep;
+      ackOf(msg, 'control', { ok: true, ...result });
+    } else ackOf(msg, 'control', { ok: false, error: rep.error || { code: 'control_error', message: 'control refused' } });
+  } catch (e) {
+    // A command may have run; the outcome is unknown, so it is never retried here.
+    fail(msg, 'control', 'control_unconfirmed', String(e.message || e));
+  }
+}
+function slashCommand(msg) {
+  const req = { op: 'command', name: msg.name };
+  for (const k of ['args', 'key', 'abort', 'deliverAs']) if (msg[k] !== undefined) req[k] = msg[k];
+  return viaCommandControl(msg, req);
 }
 
 async function submit(msg) {
@@ -733,6 +805,8 @@ async function command(msg) {
   if (msg.t === 'watch') { watched = new Set(msg.panes || []); return; }
   if (msg.t === 'submit') return submit(msg);
   if (msg.t === 'abort') return abort(msg);
+  if (msg.t === 'commands') return viaCommandControl(msg, { op: 'commands' });
+  if (msg.t === 'command') return slashCommand(msg);
   if (msg.t === 'screen') return screen(msg);
   if (msg.t === 'spawn') return spawnAgent(msg);
   if (msg.t === 'close') return closePane(msg);
@@ -890,7 +964,7 @@ function readLimits() {
 }
 
 if (tracing) traceEvents.push({ ph: 'i', s: 'p', name: 'hello', cat: 'startup', ts: traceNow(), pid: process.pid, tid: 0 });
-out({ t: 'hello', host: cfg.host || os.hostname(), pid: process.pid, herdr: !!herdr, herdrSession, control: (() => { try { return fs.readdirSync(controlDir).some((f) => f.endsWith('.json')); } catch { return false; } })(), at: Date.now() });
+out({ t: 'hello', host: cfg.host || os.hostname(), pid: process.pid, herdr: !!herdr, herdrSession, controlOps: ['commands', 'command'], control: (() => { try { return fs.readdirSync(controlDir).some((f) => f.endsWith('.json')); } catch { return false; } })(), at: Date.now() });
 for (const p of Object.keys(offsets)) track(p);
 discover();
 readLimits();

@@ -3,15 +3,20 @@
 // A runner refuses to start while the lock is held, unless it asked to wait. Nobody takes or removes a lock whose owner
 // pid is alive, or whose owner cannot be read. A dead-pid lock is cleared only after the same owner stays in place for
 // the grace period. A holder removes only the lock it owns, on release, on exit, and on SIGINT, SIGTERM, or SIGHUP.
-import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+// A cleared lock stays as a tomb named by its inode for TOMB_KEEP_MS, so a second clearer of the same stale lock fails
+// its rename onto that tomb and never moves a newer lock. A waiter never writes into the lock: it lists itself in the
+// queue directory beside it, so a status read names the holder and the waiters apart.
+import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 export const PERF_HOME = process.env.AMPI_PERF_HOME ?? join(homedir(), ".cache", "ampi-perf");
 export const RUN_LOCK = join(PERF_HOME, "run.lock");
 /** A holder may name a child pid and release a little after that child exits; its lock is not stale in that window. */
 export const STALE_GRACE_MS = 60_000;
+/** A clearer acts within milliseconds of its last look, so a tomb kept this long outlives every clearer that saw it. */
+export const TOMB_KEEP_MS = 10 * 60_000;
 
 const alive = (pid) => {
 	try {
@@ -47,20 +52,73 @@ export function lockHolder(lock = RUN_LOCK) {
 	return observe(lock)?.owner;
 }
 
-/** Moves a stale lock aside and deletes it, unless the directory changed since it was judged stale. */
-function clearStale(lock, seen) {
-	const tomb = `${lock}.stale-${process.pid}-${randomUUID()}`;
+const queueDir = (lock) => `${lock}.wait`;
+
+/** Lists this waiter in the queue until the returned function runs, the process exits, or a signal stops it. */
+function joinQueue(lock, label) {
+	const file = join(queueDir(lock), `${process.pid}-${randomUUID()}.json`);
+	// Handlers first: a signal between the write and the handlers would leave a stale entry.
+	const leave = () => rmSync(file, { force: true });
+	const detach = releaseOnExit(leave);
+	mkdirSync(queueDir(lock), { recursive: true });
+	writeFileSync(file, JSON.stringify({ pid: process.pid, label, since: Date.now() }));
+	return () => {
+		detach();
+		leave();
+	};
+}
+
+/** The holder (undefined when free) and the live waiters, oldest first. Waiters never count as holders. */
+export function lockStatus(lock = RUN_LOCK) {
+	const seen = observe(lock);
+	let names = [];
+	try {
+		names = readdirSync(queueDir(lock));
+	} catch {}
+	const waiters = names
+		.map((name) => {
+			try {
+				return JSON.parse(readFileSync(join(queueDir(lock), name), "utf8"));
+			} catch {}
+		})
+		.filter((w) => Number.isInteger(w?.pid) && alive(w.pid))
+		.sort((a, b) => a.since - b.since);
+	return { holder: seen && { ...seen.owner, dead: seen.dead }, waiters };
+}
+
+/** Removes tombs older than TOMB_KEEP_MS. */
+function sweepTombs(lock) {
+	const prefix = `${basename(lock)}.stale-`;
+	for (const name of readdirSync(dirname(lock)).filter((n) => n.startsWith(prefix))) {
+		const tomb = join(dirname(lock), name);
+		try {
+			if (Date.now() - statSync(tomb).mtimeMs > TOMB_KEEP_MS) rmSync(tomb, { recursive: true, force: true });
+		} catch {}
+	}
+}
+
+/**
+ * Moves the stale lock `seen` to its tomb. The rename is the only step that acts on the lock path. It fails when the
+ * tomb exists, because the tomb holds the stale owner and is not empty: another clearer moved this lock already, and
+ * whatever stands at the path now is newer.
+ */
+async function clearStale(lock, seen, pause) {
+	sweepTombs(lock);
+	const tomb = `${lock}.stale-${seen.ino}`;
 	try {
 		renameSync(lock, tomb);
 	} catch (error) {
-		if (error.code === "ENOENT") return;
+		if (["ENOENT", "ENOTEMPTY", "EEXIST"].includes(error.code)) return;
 		throw error;
 	}
-	if (observe(tomb)?.ino === seen.ino && observe(tomb).text === seen.text) {
-		rmSync(tomb, { recursive: true, force: true });
+	await pause?.("after-move");
+	const moved = observe(tomb);
+	if (moved?.ino === seen.ino && moved.text === seen.text) {
+		// The tomb's mtime starts its keep time.
+		writeFileSync(join(tomb, "cleared.json"), JSON.stringify({ pid: process.pid, at: Date.now() }));
 		return;
 	}
-	// Another waiter cleared the stale lock first and a new holder took the path; give its lock back.
+	// The stale holder released and a new lock took the path with a reused inode; give it back.
 	try {
 		renameSync(tomb, lock);
 	} catch (error) {
@@ -87,10 +145,20 @@ function releaseOnExit(release) {
 
 /**
  * Takes the lock and returns its release function. A live or unreadable owner makes it throw at once; with `wait`, it
- * waits up to `timeoutMs` instead, and `onWait` hears about each holder once.
+ * waits up to `timeoutMs` instead, and `onWait` hears about each holder once. While it waits, it is in the queue.
+ * `pause` is a test hook: it is awaited at "before-clear" and "after-move", so a test can force one schedule.
  */
-export async function acquireRunLock(label, { lock = RUN_LOCK, wait = false, timeoutMs = 30 * 60_000, graceMs = STALE_GRACE_MS, pollMs = 200, onWait } = {}) {
+export async function acquireRunLock(label, { lock = RUN_LOCK, wait = false, timeoutMs = 30 * 60_000, graceMs = STALE_GRACE_MS, pollMs = 200, onWait, pause } = {}) {
 	mkdirSync(join(lock, ".."), { recursive: true });
+	let leaveQueue;
+	try {
+		return await takeLock(lock, label, { wait, timeoutMs, graceMs, pollMs, onWait, pause }, () => (leaveQueue ??= joinQueue(lock, label)));
+	} finally {
+		leaveQueue?.();
+	}
+}
+
+async function takeLock(lock, label, { wait, timeoutMs, graceMs, pollMs, onWait, pause }, queue) {
 	const deadline = Date.now() + timeoutMs;
 	let reported, stale;
 	for (;;) {
@@ -102,8 +170,8 @@ export async function acquireRunLock(label, { lock = RUN_LOCK, wait = false, tim
 				writeFileSync(join(lock, "owner.tmp"), JSON.stringify({ pid: process.pid, label, started: Date.now(), token }));
 				renameSync(join(lock, "owner.tmp"), join(lock, "owner.json"));
 			} catch (error) {
-				// An ownerless lock is never cleared by others; remove it before failing.
-				rmSync(lock, { recursive: true, force: true });
+				// An ownerless lock is never cleared by others; remove it before failing, if it is still this one.
+				if (observe(lock)?.ino === ino) rmSync(lock, { recursive: true, force: true });
 				throw new Error(`perf run lock: cannot write its owner: ${error.message}`);
 			}
 			let released = false, detach = () => {};
@@ -125,7 +193,8 @@ export async function acquireRunLock(label, { lock = RUN_LOCK, wait = false, tim
 		if (!seen.dead) stale = undefined;
 		else if (stale?.ino !== seen.ino || stale.text !== seen.text) stale = { ...seen, since: Date.now() };
 		else if (Date.now() - stale.since >= graceMs) {
-			clearStale(lock, stale);
+			await pause?.("before-clear");
+			await clearStale(lock, stale, pause);
 			stale = undefined;
 			continue;
 		}
@@ -136,6 +205,7 @@ export async function acquireRunLock(label, { lock = RUN_LOCK, wait = false, tim
 			onWait?.(seen.owner);
 		}
 		if (Date.now() > deadline) throw new Error(`perf run lock still held by ${seen.owner.label} (pid ${seen.owner.pid}) after ${timeoutMs} ms: ${lock}`);
+		queue();
 		await new Promise((resolve) => setTimeout(resolve, pollMs));
 	}
 }

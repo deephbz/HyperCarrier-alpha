@@ -8,15 +8,23 @@ import { TestClient, tempHome } from "./helpers.ts";
 export const BIN = fileURLToPath(new URL("../bin/ampi.mjs", import.meta.url));
 export const SIM = { provider: "ampi-sim", modelId: "sim-1" };
 
-/** A real `ampi node` process, so the crash is a SIGKILL with no shutdown path. */
+/**
+ * A real `ampi node` process, so the crash is a SIGKILL with no shutdown path. The node belongs to this call until it
+ * answers: on failure the call kills it, because a live orphan keeps the test file running.
+ */
 export async function startNode(home: string, tps: number, env: Record<string, string> = {}): Promise<{ child: ChildProcess; client: TestClient }> {
 	const child = spawn(process.execPath, [BIN, "node"], { env: { ...process.env, AMPI_HOME: home, AMPI_SIM_TPS: String(tps), ...env }, stdio: "ignore" });
-	const deadline = Date.now() + 15_000;
+	// Startup took over 15 s at load 285.
+	const deadline = Date.now() + 30_000;
 	for (;;) {
 		try {
 			return { child, client: await TestClient.connect(socketPath(home)) };
 		} catch (error) {
-			if (Date.now() > deadline) throw error;
+			const exited = child.exitCode !== null || child.signalCode !== null;
+			if (exited || Date.now() > deadline) {
+				await kill(child);
+				throw exited ? new Error(`ampi node exited (${child.exitCode ?? child.signalCode}) before it answered on ${socketPath(home)}`) : error;
+			}
 			await new Promise((r) => setTimeout(r, 100));
 		}
 	}

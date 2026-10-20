@@ -13,7 +13,7 @@ const keyOf = (host: string, threadId: string) => `ampi.shell.${host}|${threadId
  * in the thread's directory once, and the same shell comes back whenever the thread is shown again.
  */
 export function ShellDock({ host, threadId, cwd, title }: { host: string; threadId: string; cwd?: string; title?: string }) {
-	const { value: list } = useTopic<Any>(host, { kind: "terms" });
+	const { value: list } = useTopic(host, { kind: "terms" });
 	const [termId, setTermId] = useState<string | undefined>(() => localStorage.getItem(keyOf(host, threadId)) ?? undefined);
 	const [ended, setEnded] = useState(false);
 	const [error, setError] = useState<string>();
@@ -25,7 +25,7 @@ export function ShellDock({ host, threadId, cwd, title }: { host: string; thread
 		setError(undefined);
 		try {
 			// Named for its thread, so the host's terminal list says whose shell it is.
-			const term = await hub.request<{ id: string }>(host, "term.open", { cwd, cols: 80, rows: 30, title: `shell · ${title ?? "thread"}`.slice(0, 60) });
+			const term = await hub.request(host, "term.open", { cwd, cols: 80, rows: 30, title: `shell · ${title ?? "thread"}`.slice(0, 60) });
 			localStorage.setItem(keyOf(host, threadId), term.id);
 			setTermId(term.id);
 			setEnded(false);

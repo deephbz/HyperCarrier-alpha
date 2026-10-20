@@ -2,20 +2,28 @@ import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState 
 import { hub, type HostState } from "../client.ts";
 import { MOD, go } from "../util.ts";
 import { COMPOSER_KEYS } from "../composer-keys.ts";
-import { dispatchKeyAction, KEYMAP, type KeyBinding } from "../keymap.ts";
+import { dispatchKeyAction, keyAvailable, KEYMAP, registerOverlay, type KeyBinding } from "../keymap.ts";
+import type { Overlay } from "../focus.ts";
 import { PAGES } from "../views/registry.ts";
 import { href } from "../util.ts";
 import type { HostThreads } from "./Sidebar.tsx";
 import type { ModelChoice } from "./ThreadView.tsx";
 
-export function Modal({ children, onClose, label = "AmPi dialog" }: { children: React.ReactNode; onClose: () => void; label?: string }) {
+/** The opener of the open Modal. A Modal opened from inside another (palette switching) inherits it. */
+let modalOpener: HTMLElement | null = null;
+
+export function Modal({ children, onClose, label = "AmPi dialog", overlay = "dialog" }: { children: React.ReactNode; onClose: () => void; label?: string; overlay?: Overlay }) {
 	const ref = useRef<HTMLDivElement>(null);
-	const opener = useRef(document.activeElement as HTMLElement | null);
+	const active = document.activeElement as HTMLElement | null;
+	const opener = useRef(active?.closest('[aria-modal="true"]') ? modalOpener : active);
 	const close = useRef(onClose);
 	close.current = onClose;
 	const titleId = useId();
+	// Every Modal gates global chords while it is open (focus R12), including Modals that App does not own.
+	useLayoutEffect(() => registerOverlay(overlay), [overlay]);
 	useLayoutEffect(() => {
 		const modal = ref.current!;
+		modalOpener = opener.current;
 		const title = modal.querySelector("h2");
 		if (title) { title.id = titleId; modal.setAttribute("aria-labelledby", titleId); }
 		const controls = () => [...modal.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], input:not(:disabled):not([type="hidden"]), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])')].filter((el) => el.getClientRects().length > 0);
@@ -84,12 +92,12 @@ export function NewThreadDialog({
 	useEffect(() => {
 		setCwd(last.cwd?.[host] ?? "");
 		setModel(last.model?.[host] ?? "");
-		hub.request<ModelChoice[]>(host, "models.list").then(setModels, () => setModels([]));
+		hub.request(host, "models.list").then(setModels, () => setModels([]));
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [host]);
 	useEffect(() => {
 		const timer = setTimeout(() => {
-			hub.request<{ path: string; parent: string; dirs: string[] }>(host, "fs.dirs", { path: cwd }).then(setDirs, () => setDirs(undefined));
+			hub.request(host, "fs.dirs", { path: cwd }).then(setDirs, () => setDirs(undefined));
 		}, 150);
 		return () => clearTimeout(timer);
 	}, [host, cwd]);
@@ -98,7 +106,7 @@ export function NewThreadDialog({
 		setError(undefined);
 		try {
 			const [provider, ...id] = model.split("/");
-			const { threadId } = await hub.request<{ threadId: string }>(host, "thread.create", {
+			const { threadId } = await hub.request(host, "thread.create", {
 				cwd: dirs?.path ?? cwd,
 				...(model ? { model: { provider, modelId: id.join("/") } } : {}),
 				requestId,
@@ -228,8 +236,9 @@ export function AddHostDialog({ onClose }: { onClose: () => void }) {
 	);
 }
 
-export function Palette({ data, onClose }: { data: HostThreads[]; onClose: () => void }) {
-	const [q, setQ] = useState("");
+export function Palette({ data, onClose, query = "", onQuery }: { data: HostThreads[]; onClose: () => void; query?: string; onQuery?: (query: string) => void }) {
+	const [q, setQState] = useState(query);
+	const setQ = (value: string) => { setQState(value); onQuery?.(value); };
 	const [index, setIndex] = useState(0);
 	const rows = useMemo(() => {
 		const all = data.flatMap((d) => d.threads.map((t) => ({ host: d.host, t })));
@@ -250,7 +259,7 @@ export function Palette({ data, onClose }: { data: HostThreads[]; onClose: () =>
 		go(row.host.id, row.t.id);
 	};
 	return (
-		<Modal onClose={onClose} label="Jump to a Session">
+		<Modal onClose={onClose} label="Jump to a Session" overlay="palette">
 			<input
 				className="search"
 				aria-label="Find a Session"
@@ -309,22 +318,30 @@ export function DisplayDialog({ onClose }: { onClose: () => void }) {
 }
 
 
-export function CommandPalette({ onClose }: { onClose: () => void }) {
-	const [query, setQuery] = useState("");
+/** A palette action runs after the close commits, so its focus snapshot sees the opener, not the palette (focus.ts R2). */
+const runAfterClose = (run: () => void) => requestAnimationFrame(run);
+
+export function CommandPalette({ onClose, query: initialQuery = "", onQuery }: { onClose: () => void; query?: string; onQuery?: (query: string) => void }) {
+	const [query, setQueryState] = useState(initialQuery);
+	const setQuery = (value: string) => { setQueryState(value); onQuery?.(value); };
 	const entries = [
-		{ label: "Overview", key: `${MOD}0`, run: () => { location.hash = href.page("overview"); } },
 		...PAGES.map((page) => ({ label: page.label, key: "", run: () => { location.hash = href.page(page.name); } })),
-		...KEYMAP.filter((entry) => entry.palette).map((entry) => ({ label: entry.label, key: bindingLabel(entry), run: () => dispatchKeyAction(entry.id, new KeyboardEvent("keydown")) })),
+		// One row per action; an action with two chords (⌘L and ⌘\) lists both (focus R19).
+		...KEYMAP.filter((entry, i, all) => entry.palette && keyAvailable(entry) && all.findIndex((other) => other.id === entry.id && other.palette) === i).map((entry) => ({
+			label: entry.label,
+			key: KEYMAP.filter((other) => other.id === entry.id && other.palette && keyAvailable(other)).map(bindingLabel).join(" "),
+			run: () => dispatchKeyAction(entry.id, new KeyboardEvent("keydown")),
+		})),
 	].filter((entry) => entry.label.toLowerCase().includes(query.toLowerCase()));
-	return <Modal onClose={onClose} label="Command palette"><h2>Go to or run</h2><input autoFocus aria-label="Find a command" value={query} onChange={(e) => setQuery(e.target.value)} /><div className="palette-list">{entries.map((entry) => <button key={`${entry.label}:${entry.key}`} className="palette-item" onClick={() => { onClose(); entry.run(); }}><span>{entry.label}</span><span className="kbd">{entry.key}</span></button>)}</div><div className="actions"><button className="btn" onClick={() => { onClose(); dispatchKeyAction("display", new KeyboardEvent("keydown")); }}>Display settings</button></div></Modal>;
+	return <Modal onClose={onClose} label="Command palette" overlay="commands"><h2>Go to or run</h2><input autoFocus aria-label="Find a command" value={query} onChange={(e) => setQuery(e.target.value)} /><div className="palette-list">{entries.map((entry) => <button key={`${entry.label}:${entry.key}`} className="palette-item" onClick={() => { onClose(); runAfterClose(entry.run); }}><span>{entry.label}</span><span className="kbd">{entry.key}</span></button>)}</div><div className="actions"><button className="btn" onClick={() => { onClose(); runAfterClose(() => dispatchKeyAction("display", new KeyboardEvent("keydown"))); }}>Display settings</button></div></Modal>;
 }
 
 export function HelpDialog({ onClose }: { onClose: () => void }) {
 	return (
-		<Modal onClose={onClose}>
+		<Modal onClose={onClose} overlay="help">
 			<h2>Keys and help</h2>
 			<div data-help>
-				{(["global", "sidebar", "transcript", "composer", "panel"] as const).map((region) => <section key={region}><h3>{region[0]!.toUpperCase() + region.slice(1)}</h3><div className="kbd-grid">{KEYMAP.filter((binding) => binding.region === region).map((binding, i) => <Fragment key={`${binding.id}:${binding.code}:${i}`}><span className="kbd">{bindingLabel(binding)}{appOnly(binding) ? " · app only" : ""}</span><span>{binding.label}</span></Fragment>)}{region === "composer" && COMPOSER_KEYS.map(({ key, help }) => <Fragment key={key}><span className="kbd">{key}</span><span>{help}</span></Fragment>)}{region === "global" && <><Fragment><span className="kbd">Alt+↑ / Alt+↓</span><span>Previous or next Session</span></Fragment><Fragment><span className="kbd">Esc</span><span>Interrupt or close the current popup</span></Fragment></>}</div></section>)}
+				{(["global", "sidebar", "transcript", "composer", "panel"] as const).map((region) => <section key={region}><h3>{region[0]!.toUpperCase() + region.slice(1)}</h3><div className="kbd-grid">{KEYMAP.filter((binding) => binding.region === region && (keyAvailable(binding) || binding.context)).map((binding, i) => <Fragment key={`${binding.id}:${binding.code}:${i}`}><span className="kbd">{bindingLabel(binding)}{appOnly(binding) ? " · app only" : ""}</span><span>{binding.label}{keyAvailable(binding) ? "" : ` · ${binding.context}`}</span></Fragment>)}{region === "composer" && COMPOSER_KEYS.map(({ key, help }) => <Fragment key={key}><span className="kbd">{key}</span><span>{help}</span></Fragment>)}{region === "global" && <><Fragment><span className="kbd">Alt+↑ / Alt+↓</span><span>Previous or next Session</span></Fragment><Fragment><span className="kbd">Esc</span><span>Interrupt or close the current popup</span></Fragment></>}</div></section>)}
 			</div>
 			<p className="hint">
 				In a terminal: <code>ampi doctor</code> checks this machine and every host and says how to fix what is missing;{" "}

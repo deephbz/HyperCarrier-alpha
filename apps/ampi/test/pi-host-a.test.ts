@@ -1,3 +1,4 @@
+import "./bound.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -8,7 +9,7 @@ import { Browser } from "./helpers.ts";
 import { control, fixture } from "./pi-fixtures.ts";
 import { PI_VIEWS } from "../src/pi/views/index.ts";
 import { modelLimits } from "../src/pi/host.ts";
-import { TOKEN, iso, line, user, assistant, toolResult, setup } from "./pi-host-fixtures.ts";
+import { TOKEN, iso, line, user, assistant, toolResult, setup, testView } from "./pi-host-fixtures.ts";
 
 test("pi host: Sessions arrive Host-qualified, in Herdr's layout, and a transcript updates as bytes arrive", async (t) => {
 	const { f, browser } = await setup(t);
@@ -42,10 +43,10 @@ test("pi host: Sessions arrive Host-qualified, in Herdr's layout, and a transcri
 		view.entries.map((e: any) => e.kind),
 		["user", "assistant", "tool-result"],
 	);
-	assert.deepEqual(view.entries[1].blocks[1], { type: "tool", callId: "call-a1", name: "bash", args: { command: "ls" } });
+	assert.deepEqual(view.entries[1].blocks[1], { type: "tool", callId: "call-a1", name: "bash", args: { summary: "ls", command: "ls" } });
 	assert.ok(!view.entries[1].bodyAvailable, "a short answer with a tool call is not a shortened preview");
 	const page: any = await browser.req("devbox", "thread.entry", { threadId: "pi:sess-a", entry: "a1" });
-	assert.deepEqual(JSON.parse(page.text), { id: "a1", kind: "assistant", ts: Date.parse(iso(2)), blocks: [{ type: "text", text: "Listing." }, { type: "tool", callId: "call-a1", name: "bash", args: { command: "ls" } }] });
+	assert.deepEqual(JSON.parse(page.text), { id: "a1", kind: "assistant", ts: Date.parse(iso(2)), blocks: [{ type: "text", text: "Listing." }, { type: "tool", callId: "call-a1", name: "bash", args: { summary: "ls", command: "ls" } }] });
 	assert.equal(view.entries[2].callId, "call-a1");
 
 	// New bytes on the Host reach the open transcript as ops, without a resubscribe.
@@ -100,7 +101,9 @@ test("pi host: a new agent is listed before its first message; close suspends, r
 	assert.ok(!f.state.agents.some((a: any) => a.workspace_id === ws));
 
 	// Beside another pane: closes; the Session leaves its pane and stays readable from its copy.
-	// Its entries are from 2026-01-01, older than recentMs: closing from the GUI still keeps it listed.
+	// Its entries are from 2026-01-01, older than recentMs: closing from the GUI still keeps it listed,
+	// also when discovery reports the closed pane before the close returns.
+	f.setState({ ...f.state, closeDelayMs: 700 });
 	assert.deepEqual(await browser.req("devbox", "thread.close", { threadId: "pi:sess-a" }), { via: "herdr", evidence: "closed" });
 	assert.deepEqual(f.herdrCalls().at(-1), ["pane", "close", "w1:p2"]);
 	const after = await browser.until<any>(threads, (v) => v.threads["pi:sess-a"] && !v.threads["pi:sess-a"].location);
@@ -121,14 +124,10 @@ test("pi host: a new agent is listed before its first message; close suspends, r
 });
 
 test("pi host: a view publishes from the Session's entries and follows new bytes; its ops run on the named Host", async (t) => {
-	PI_VIEWS.push({
-		name: "probe",
-		value: (ctx, topic) => {
-			const session = ctx.session(String(topic.threadId));
-			return session ? { host: ctx.host, ref: session.ref, kinds: session.window().map((e) => e.kind), revision: session.revision } : undefined;
-		},
-		ops: { echo: async (ctx, args) => ({ host: ctx.host, args }) },
-	});
+	PI_VIEWS.push(testView("probe", (ctx, topic) => {
+		const session = ctx.session(String(topic.threadId));
+		return session ? { host: ctx.host, ref: session.ref, kinds: session.window().map((e) => e.kind), revision: session.revision } : undefined;
+	}));
 	t.after(() => void PI_VIEWS.splice(PI_VIEWS.findIndex((v) => v.name === "probe"), 1));
 	const { f, browser } = await setup(t);
 	await browser.until<any>(browser.sub("devbox", { kind: "threads" }), (v) => v.threads["pi:sess-a"]);
@@ -138,6 +137,8 @@ test("pi host: a view publishes from the Session's entries and follows new bytes
 	appendFileSync(f.sessionA, user("u2", "r1", 4, "more"));
 	const next = await browser.until<any>(sid, (v) => v.kinds.length === 4);
 	assert.ok(next.revision > first.revision);
-	assert.deepEqual(await browser.req("devbox", "view.probe.echo", { x: 1 }), { host: "devbox", args: { x: 1 } });
+	// A registry view op runs against the named Host's Sessions.
+	assert.equal((await browser.req("devbox", "view.cos.timeline.locate", { threadId: "pi:sess-a", at: Date.parse(iso(2)) })).ref, "devbox/pi:sess-a");
+	await assert.rejects(browser.req("devbox", "view.probe.echo", {}), /not available/);
 	await assert.rejects(browser.req("devbox", "view.nope.echo", {}), /not available/);
 });

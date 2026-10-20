@@ -1,3 +1,4 @@
+import "./bound.ts";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
@@ -27,7 +28,7 @@ test("composer help and busy hint match submission keys; newline and IME input n
 		return (attr.initializer as ts.JsxExpression).expression!;
 	};
 	const dialogSource = readFileSync(new URL("../web/src/components/Dialogs.tsx", import.meta.url), "utf8");
-	assert.match(dialogSource, /KEYMAP\.filter\(\(binding\) => binding\.region === region\)/);
+	assert.match(dialogSource, /KEYMAP\.filter\(\(binding\) => binding\.region === region && \(keyAvailable\(binding\) \|\| binding\.context\)\)/);
 	assert.match(dialogSource, /COMPOSER_KEYS\.map\(/);
 	assert.deepEqual(COMPOSER_SHORTCUTS.filter(([key]) => key.includes("Enter")), [
 		["Enter", "Send, or steer while the agent works"], ["Alt+Enter", "Queue a follow-up"], ["Shift+Enter", "New line"],

@@ -1,5 +1,6 @@
 // Session control core: validates frames, honors compaction and C1 delivery
-// holds, submits owner input through Pi, and acknowledges only what Pi showed.
+// holds, submits owner input through Pi, runs typed slash commands, and
+// acknowledges only what Pi showed.
 // Transport-free so it runs under the real SDK in pi-sim.
 
 export const HOLD_CHANNEL = "hc.delivery-hold";
@@ -17,6 +18,19 @@ export const DEFAULTS = Object.freeze({
 });
 
 const DELIVER_AS = new Set(["steer", "followUp"]);
+// Pi 1.3.0 built-ins (core/slash-commands.js; not exported). Only the TUI runs them, so the
+// control maps the ones with a typed extension API and refuses the rest.
+const BUILTINS = [
+  ["model", "Set the model", "<provider/model>"],
+  ["thinking", "Set the thinking level", "<level>"],
+  ["name", "Set the Session display name", "<name>"],
+  ["compact", "Compact the Session context", "[instructions]"],
+];
+const PANE_ONLY = ["settings", "tree", "scoped-models", "export", "import", "share", "bug", "copy", "session",
+  "changelog", "hotkeys", "fork", "clone", "trust", "login", "logout", "new", "resume", "reload", "quit"];
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
+const NAME = /^[A-Za-z0-9][\w:.-]*$/;
+const KEEP_KEYS = 100;
 const textOf = (content) =>
   typeof content === "string"
     ? content
@@ -24,7 +38,8 @@ const textOf = (content) =>
       ? content.filter((b) => b?.type === "text").map((b) => b.text).join("\n")
       : "";
 
-const fail = (id, code, message) => ({ id, ok: false, error: { code, message } });
+const fail = (id, code, message, extra) => ({ id, ok: false, error: { code, message, ...extra } });
+const refOf = (model) => (model ? `${model.provider}/${model.id}` : null);
 // Status carries each tracked text so a client can recover it; a longer text is clipped and marked.
 export const STATUS_TEXT_BYTES = 16 * 1024;
 const clipped = (text) => {
@@ -101,7 +116,8 @@ export function createControl(pi, options = {}) {
     for (const record of submissions) {
       if (record.state !== "queued") continue;
       editor ??= String(ctx.ui?.getEditorText?.() ?? "");
-      record.state = editor.includes(record.text) ? "returned" : "dropped";
+      // A queued skill or template reaches Pi as different text, so delivery is not observable.
+      record.state = editor.includes(record.text) ? "returned" : record.expanded ? "unknown" : "dropped";
       record.at = Date.now();
       settled.push(record);
     }
@@ -113,11 +129,12 @@ export function createControl(pi, options = {}) {
       } else i++;
     return settled;
   };
-  const view = ({ submission, deliverAs, text, state, at, entryId }) => ({
+  const view = ({ submission, deliverAs, text, state, at, entryId, expanded }) => ({
     submission,
     deliverAs,
     state,
     at,
+    ...(expanded ? { expanded } : {}),
     ...(entryId ? { entryId } : {}),
     ...clipped(text),
   });
@@ -171,7 +188,7 @@ export function createControl(pi, options = {}) {
     if (inflight && !inflight.inputSeen && event.source === "extension" && event.text === inflight.text) {
       inflight.inputSeen = event.streamingBehavior ?? "start";
       if (inflight.inputSeen !== "start") {
-        inflight.record = { submission: globalThis.crypto.randomUUID(), deliverAs: inflight.inputSeen, text: event.text, state: "queued", at: Date.now() };
+        inflight.record = { submission: globalThis.crypto.randomUUID(), deliverAs: inflight.inputSeen, text: event.text, state: "queued", at: Date.now(), ...(inflight.expand ? { expanded: true } : {}) };
         submissions.push(inflight.record);
         inflight.checkQueued();
       }
@@ -237,13 +254,14 @@ export function createControl(pi, options = {}) {
     return closed ? "closed" : "open";
   };
 
-  const deliver = (text, deliverAs) =>
+  const deliver = (text, deliverAs, expand) =>
     new Promise((resolve) => {
       let done = false;
       let timer;
       let poll;
       const attempt = {
         text,
+        expand,
         inputSeen: undefined,
         userMessage: undefined,
         settle(value) {
@@ -284,18 +302,18 @@ export function createControl(pi, options = {}) {
       attempt.closeOut = () => attempt.settle({ error: "closed", message: "Session control closed." });
       arm();
       try {
-        pi.sendUserMessage(text, { deliverAs });
+        pi.sendUserMessage(text, { deliverAs, ...(expand ? { expandPromptTemplates: true } : {}) });
       } catch (error) {
         attempt.settle({ error: "not_admitted", message: String(error?.message ?? error) });
       }
     });
 
-  const submit = async (id, text, deliverAs, arrived) => {
+  const submit = async (id, text, deliverAs, arrived, expand = false) => {
     const gate = await waitOpen(arrived + cfg.holdWaitMs);
     if (gate === "closed") return fail(id, "closed", "Session control closed.");
     if (gate === "timeout")
       return fail(id, "busy_compacting", `Compaction or a delivery hold did not clear within ${cfg.holdWaitMs} ms.`);
-    const result = await deliver(text, deliverAs);
+    const result = await deliver(text, deliverAs, expand);
     if (result.error) return fail(id, result.error, result.message);
     return { id, ok: true, ...result };
   };
@@ -315,16 +333,128 @@ export function createControl(pi, options = {}) {
     return { id, ok: true, evidence: "aborted", ...(queued.length ? { submissions: queued.map(view) } : {}) };
   };
 
+  const compactingNow = () => compacting || settling || piCompacting();
+  const usableModels = () => {
+    const scoped = ctx.scopedModels ?? [];
+    return scoped.length ? scoped.map((s) => s.model) : (ctx.modelRegistry?.getAvailable?.() ?? []);
+  };
+  const thinkingLevels = () => (ctx.model?.reasoning ? THINKING_LEVELS : ["off"]);
+  // Built-ins first, as in Pi's TUI; then what Pi registers now (extension, prompt, skill).
+  const listCommands = () => [
+    ...BUILTINS.map(([name, description, argsHint]) => ({ name, description, argsHint, source: "builtin", supported: true })),
+    ...PANE_ONLY.map((name) => ({ name, source: "builtin", supported: false })),
+    ...pi
+      .getCommands()
+      .filter((c) => !BUILTINS.some(([b]) => b === c.name) && !PANE_ONLY.includes(c.name))
+      .map(({ name, description, source }) => ({ name, ...(description ? { description } : {}), source, supported: true })),
+  ];
+  const commands = () => ({
+    commands: listCommands(),
+    models: usableModels().map((m) => ({ ref: refOf(m), ...(m.name ? { name: m.name } : {}) })),
+    model: refOf(ctx.model),
+    thinkingLevels: thinkingLevels(),
+    thinking: pi.getThinkingLevel(),
+  });
+
+  // Exact provider/id, or a bare id that names one model, as Pi's TUI /model does (no fuzzy match).
+  const matchModel = (ref) => {
+    const models = usableModels();
+    const slash = ref.indexOf("/");
+    const exact = slash > 0 && models.find((m) => m.provider === ref.slice(0, slash) && m.id === ref.slice(slash + 1));
+    if (exact) return { model: exact };
+    const bare = models.filter((m) => m.id === ref);
+    return bare.length === 1 ? { model: bare[0] } : { matches: bare.map(refOf) };
+  };
+
+  const builtin = {
+    async model(id, args) {
+      if (!args) return fail(id, "bad_args", "Name a model: /model <provider/id>.");
+      const { model, matches } = matchModel(args);
+      if (!model)
+        return matches.length
+          ? fail(id, "bad_args", `"${args}" names ${matches.length} models; use one of: ${matches.join(", ")}.`, { matches })
+          : fail(id, "bad_args", `No available model matches "${args}".`, { matches });
+      const busy = !ctx.isIdle();
+      if (!(await pi.setModel(model))) return fail(id, "auth_missing", `No credentials for ${refOf(model)}.`);
+      const ref = refOf(model);
+      // Pi switches at once; a running turn uses the model from its next model call.
+      return handled(id, `Model: ${ref}${busy ? " (from Pi's next model call)" : ""}`, { model: ref });
+    },
+    async thinking(id, args) {
+      if (!THINKING_LEVELS.includes(args))
+        return fail(id, "bad_args", `Thinking level must be one of: ${THINKING_LEVELS.join(", ")}.`);
+      const before = pi.getThinkingLevel();
+      pi.setThinkingLevel(args); // Pi clamps to what the model supports.
+      const level = pi.getThinkingLevel();
+      const notice = level === args ? `Thinking: ${level}` : `Thinking: ${level} (${args} is not available for this model)`;
+      return handled(id, notice, { thinking: level, requested: args, changed: level !== before });
+    },
+    async name(id, args) {
+      if (!args) return fail(id, "bad_args", "Give a name: /name <name>.");
+      pi.setSessionName(args);
+      return handled(id, `Name: ${args}`, { name: args });
+    },
+    async compact(id, args, frame) {
+      // Pi's compact aborts a running turn first; that must be the owner's explicit choice.
+      if (!ctx.isIdle() && frame.abort !== true)
+        return fail(id, "busy", "Compact stops the running turn. Send again with abort to stop and compact.");
+      ctx.compact(args ? { customInstructions: args } : {});
+      return { ...handled(id, "Compaction started"), evidence: "compaction_started" };
+    },
+  };
+  const handled = (id, notice, effect) => ({ id, ok: true, disposition: "handled", notice, ...(effect ? { effect } : {}) });
+
+  // Resolve the name here, inside the chain: Pi sends an unregistered "/x" on as a plain user message.
+  const runCommand = async (id, frame, arrived) => {
+    const { name } = frame;
+    const args = (frame.args ?? "").trim();
+    if (compactingNow()) return fail(id, "busy_compacting", "Pi is compacting; send the command after it ends.");
+    if (builtin[name]) return await builtin[name](id, args, frame);
+    if (PANE_ONLY.includes(name)) return fail(id, "unsupported_command", `/${name} works only in the Pi pane.`);
+    const found = pi.getCommands().find((c) => c.name === name);
+    if (!found) return fail(id, "unknown_command", `Pi has no command /${name}; nothing was sent.`);
+    const text = `/${name}${args ? ` ${args}` : ""}`;
+    if (found.source === "extension") {
+      // Pi runs the handler at once and reports neither completion nor failure to extensions.
+      pi.sendUserMessage(text, { deliverAs: "followUp", expandPromptTemplates: true });
+      return { id, ok: true, disposition: "dispatched", notice: `Sent ${text} to Pi; its result and errors show in the Pi pane.` };
+    }
+    // A skill or prompt template expands into a user message: admission as for submit.
+    const reply = await submit(id, text, frame.deliverAs ?? "followUp", arrived, true);
+    return reply.ok ? { ...reply, disposition: reply.evidence === "started" ? "started" : "queued" } : reply;
+  };
+
+  const keyed = new Map(); // idempotency key -> reply promise
+  const command = (id, frame, arrived) => {
+    const { name, args, key, deliverAs } = frame;
+    if (typeof name !== "string" || !NAME.test(name))
+      return fail(id, "bad_request", "name must be a command name without the leading slash.");
+    if (args !== undefined && typeof args !== "string") return fail(id, "bad_request", "args must be a string.");
+    if (key !== undefined && (typeof key !== "string" || !key)) return fail(id, "bad_request", "key must be a nonempty string.");
+    if (deliverAs !== undefined && !DELIVER_AS.has(deliverAs))
+      return fail(id, "bad_request", 'deliverAs must be "steer" or "followUp".');
+    if (key && keyed.has(key)) return keyed.get(key).then((reply) => ({ ...reply, id }));
+    const run = chain.then(() => runCommand(id, frame, arrived));
+    chain = run.catch(() => {});
+    if (key) {
+      keyed.set(key, run);
+      if (keyed.size > KEEP_KEYS) keyed.delete(keyed.keys().next().value);
+    }
+    return run;
+  };
+
   const status = () => {
     reconcileQueue();
     settleQueued();
     return {
       ...identity,
       idle: ctx ? ctx.isIdle() : false,
-      compacting: compacting || settling || piCompacting(),
+      compacting: compactingNow(),
       held: holds.size > 0,
       pending: { steer: queue.steer.length, followUp: queue.followUp.length },
       submissions: submissions.map(view),
+      // Capability: this control serves the commands and command ops.
+      commands: 1,
     };
   };
 
@@ -356,8 +486,12 @@ export function createControl(pi, options = {}) {
           chain = run.catch(() => {});
           return await run;
         }
+        case "commands":
+          return { id, ok: true, value: commands() };
+        case "command":
+          return await command(id, frame, arrived);
         default:
-          return fail(id, "unknown_op", "op must be status, submit, or abort.");
+          return fail(id, "unknown_op", "op must be status, submit, abort, commands, or command.");
       }
     } catch (error) {
       return fail(id, "internal", String(error?.message ?? error));

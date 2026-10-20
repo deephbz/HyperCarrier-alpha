@@ -15,6 +15,7 @@ import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export function parseArgs(argv) {
@@ -26,7 +27,7 @@ export function parseArgs(argv) {
   }
   return options;
 }
-const args = parseArgs(process.argv.slice(2));
+const args = workerData?.args || parseArgs(process.argv.slice(2));
 const port = Number(args.port || 7777);
 const delayMs = Number(args['delay-ms'] || 0);
 const tailBytes = Number(args['tail-bytes'] || 0);
@@ -91,7 +92,7 @@ function markedScript() {
 }
 
 // Each engine owns one transport and one rebuildable cache. No cross-host lookup.
-export function createEngine(descriptor, publish = () => {}) {
+export function createEngine(descriptor, publish = () => {}, subscriptions = () => clients.values()) {
 const { id: host, target, session: herdrSession } = descriptor;
 const cacheDir = path.join(cacheRoot, 'hosts-v1', digest(JSON.stringify([host, target, herdrSession])));
 // ---- Session store: append-only disk copy + line index; parsed only on demand ----
@@ -209,7 +210,8 @@ async function search(s, q, limit) {
   const hits = [];
   let total = 0, matches = 0;
   for (let i = 0; i < c.lower.length; i++) {
-    if (i && i % 128 === 0) await yieldTurn();
+    // Preserve local warm-scan scheduling; remote RPC traffic must not split it.
+    if (target && i && i % 128 === 0) await yieldTurn();
     let at = c.lower[i].indexOf(needle);
     if (at < 0) continue;
     total++;
@@ -237,7 +239,7 @@ const later = (fn) => (delayMs ? setTimeout(fn, delayMs) : fn());
 const send = (cmd) => { const channel = child; later(() => { if (channel === child && channel?.stdin.writable && !channel.killed) channel.stdin.write(JSON.stringify(cmd) + '\n'); }); };
 function pushWatch() {
   const panes = new Set();
-  for (const c of clients.values()) for (const p of c.panes) { const [h, pane] = JSON.parse(p); if (h === host) panes.add(pane); }
+  for (const c of subscriptions()) for (const p of c.panes) { const [h, pane] = JSON.parse(p); if (h === host) panes.add(pane); }
   send({ t: 'watch', panes: [...panes] });
 }
 function broadcast(event, data) { publish(host, event, data); }
@@ -299,7 +301,8 @@ function handle(msg) {
       if (s.corpus) for (const e of parse()) { const t = entryText(e); s.corpus.text.push(t); s.corpus.lower.push(t.toLowerCase()); }
       if (s.prompts) parse().forEach((e, k) => { if (isPrompt(e)) s.prompts.push(from + k); });
       const head = { path: msg.path, from, total: s.lines.length, updatedAt: s.updatedAt };
-      for (const [res, c] of clients) writeEvent(res, 'append', { host, ...(wants(c, msg.path) ? { ...head, entries: parse() } : head) });
+      const watched = [...subscriptions()].some((c) => wants(c, msg.path));
+      broadcast('append', { ...head, ...(watched ? { entries: parse() } : {}) });
       break;
     }
   }
@@ -330,7 +333,7 @@ function connect() {
         '--', target, `sh -lc ${JSON.stringify(remoteCmd)}`], { stdio: ['pipe', 'pipe', 'inherit'] });
   const channel = child;
   child.stdin.on('error', () => {});
-  if (clients.size) pushWatch();
+  if ([...subscriptions()].length) pushWatch();
   link.state = 'connecting';
   let buf = '';
   child.stdout.setEncoding('utf8');
@@ -451,11 +454,13 @@ export function makeServer() { return http.createServer(async (req, res) => {
     ...(single() ? { link: engines[0].linkView() } : { compatibility: 'Legacy clients require an explicit single --host, such as --host local.' }) });
   if (['/session', '/search'].includes(url.pathname)) {
     const h = selectHost(engines, q.get('host'));
-    return json(res, 200, { host: h.id, path: q.get('path'), ...await h[url.pathname === '/session' ? 'page' : 'search'](q.get('path'), q) });
+    const op = url.pathname === '/session' ? 'page' : 'search';
+    if (h.respond) { const bytes = await h.respond(op, q.get('path'), q); res.writeHead(200, { 'content-type': 'application/json' }); return res.end(bytes); }
+    return json(res, 200, { host: h.id, path: q.get('path'), ...await h[op](q.get('path'), q) });
   }
   if (req.method === 'POST' && ['/prompt', '/interrupt', '/screen'].includes(url.pathname)) {
     const b = await body(req), h = selectHost(engines, b.host);
-    return h.command(res, url.pathname, b);
+    return await h.command(res, url.pathname, b);
   }
   if (url.pathname === '/events') {
     const refs = (k, field) => {
@@ -488,10 +493,82 @@ export function makeServer() { return http.createServer(async (req, res) => {
 function hostSnapshot() { return { hosts: engines.map((h) => ({ id: h.id, label: h.label, link: h.linkView() })), registryAt, registryWarning }; }
 function publish(host, event, data) {
   const payload = event === 'agents' ? (single() ? data : { host, agents: data }) : { host, ...data };
-  for (const res of clients.keys()) writeEvent(res, event, payload);
+  for (const [res, c] of clients) {
+    if (event === 'append') {
+      const h = engines.find((h) => h.id === host);
+      const watched = c.sessions.has(refKey(host, data.path)) || h.agentView().some((a) => a.session === data.path && c.panes.has(refKey(host, a.pane)));
+      const { entries, ...head } = payload;
+      writeEvent(res, event, watched ? payload : head);
+    } else writeEvent(res, event, payload);
+  }
+}
+
+// Remote scans, JSONL parsing and indexes run off the hub event loop. Only request
+// results and watched append entries cross this boundary. No RPC replays.
+export function createRemoteEngine(descriptor, publishEvent = publish) {
+  const worker = new Worker(new URL(import.meta.url), { workerData: { descriptor, args } });
+  let agents = [], link = { host: descriptor.id, state: 'connecting' }, sequence = 0, stopped = false;
+  const live = new Map(), pending = new Map();
+  function fail(error) {
+    link = { ...link, state: `down (${error})` };
+    agents = agents.map((a) => ({ ...a, pane: null })); live.clear();
+    for (const p of pending.values()) p.reject(Object.assign(new Error('Host engine stopped; command outcome unknown'), { status: 503 }));
+    pending.clear();
+    publishEvent(descriptor.id, 'agents', agents); publishEvent(descriptor.id, 'link', link);
+  }
+  worker.on('message', (msg) => {
+    if (stopped) return;
+    if (msg.reply) {
+      const p = pending.get(msg.reply); if (!p) return;
+      pending.delete(msg.reply);
+      if (msg.error) p.reject(new Error(msg.error)); else p.resolve(msg.value);
+      return;
+    }
+    if (msg.event === 'agents') agents = msg.data;
+    if (msg.event === 'link') { link = msg.data; if (link.state !== 'live') live.clear(); }
+    if (msg.event === 'live') live.set(msg.data.pane, msg.data.text);
+    publishEvent(descriptor.id, msg.event, msg.data);
+  });
+  worker.on('error', (e) => fail(e.message));
+  worker.on('exit', (code) => { if (!stopped) fail(`worker exit ${code}`); });
+  const rpc = (op, ...params) => new Promise((resolve, reject) => {
+    if (stopped || worker.threadId < 0) return reject(Object.assign(new Error('Host engine unavailable'), { status: 503 }));
+    const id = ++sequence; pending.set(id, { resolve, reject }); worker.postMessage({ id, op, params });
+  });
+  return { ...descriptor, live, agentView: () => agents, linkView: () => link,
+    connect: () => worker.postMessage({ op: 'connect' }),
+    pushWatch: () => worker.postMessage({ op: 'watch', watchers: [...clients.values()].map((c) => ({ panes: [...c.panes], sessions: [...c.sessions] })) }),
+    page: (p, q) => rpc('page', p, q.toString()), search: (p, q) => rpc('search', p, q.toString()),
+    respond: (op, p, q) => rpc('response', op, p, q.toString()),
+    command: async (res, route, b) => {
+      const r = await rpc('command', route, b); res.writeHead(r.status, { 'content-type': 'application/json' }); res.end(r.body);
+    },
+    stop: () => { stopped = true; worker.postMessage({ op: 'stop' }); fail('stopped'); },
+  };
+}
+function runEngineWorker() {
+  let watchers = [];
+  const engine = createEngine(workerData.descriptor, (_host, event, data) => parentPort.postMessage({ event, data }), () => watchers);
+  parentPort.on('message', async (msg) => {
+    try {
+      if (msg.op === 'connect') return engine.connect();
+      if (msg.op === 'watch') { watchers = msg.watchers.map((c) => ({ panes: new Set(c.panes), sessions: new Set(c.sessions) })); return engine.pushWatch(); }
+      if (msg.op === 'stop') { engine.stop(); parentPort.close(); return; }
+      let value;
+      if (msg.op === 'response') {
+        const [op, p, q] = msg.params;
+        value = JSON.stringify({ host: engine.id, path: p, ...await engine[op](p, new URLSearchParams(q)) });
+      } else if (msg.op === 'command') value = await new Promise((resolve) => {
+        let status;
+        engine.command({ writeHead: (code) => { status = code; }, end: (body) => resolve({ status, body }) }, ...msg.params);
+      });
+      else value = await engine[msg.op](msg.params[0], new URLSearchParams(msg.params[1]));
+      parentPort.postMessage({ reply: msg.id, value });
+    } catch (e) { parentPort.postMessage({ reply: msg.id, error: e.message }); }
+  });
 }
 export async function startHub(descriptors) {
-  engines = descriptors.map((h) => createEngine(h, publish));
+  engines = descriptors.map((h) => h.target ? createRemoteEngine(h) : createEngine(h, publish));
   const server = makeServer();
   await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
   for (const h of engines) h.connect();
@@ -508,4 +585,5 @@ async function main() {
   console.log(`Session mirror (${descriptors.map((h) => h.label).join(', ')}): http://127.0.0.1:${port}`);
   for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { hub.stop(); setTimeout(() => process.exit(0), 100).unref(); });
 }
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main().catch((e) => { console.error(e.message); process.exitCode = 1; });
+if (!isMainThread) runEngineWorker();
+else if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main().catch((e) => { console.error(e.message); process.exitCode = 1; });

@@ -1,3 +1,4 @@
+import "./bound.ts";
 import assert from "node:assert/strict";
 import { type ChildProcess, spawn } from "node:child_process";
 import { test } from "node:test";

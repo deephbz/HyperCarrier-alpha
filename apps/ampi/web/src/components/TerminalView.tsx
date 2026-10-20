@@ -19,7 +19,7 @@ const TERM_THEME: Record<Theme, Terminal["options"]["theme"]> = {
  * goes away; reopening it replays the retained scrollback.
  */
 export function TerminalView({ host, termId, docked }: { host: string; termId: string; docked?: { onClosed: () => void } }) {
-	const { value, stale, error } = useTopic<Any>(host, { kind: "term", termId });
+	const { value, stale, error } = useTopic(host, { kind: "term", termId });
 	const box = useRef<HTMLDivElement>(null);
 	const term = useRef<Terminal>(undefined);
 	const written = useRef(0);

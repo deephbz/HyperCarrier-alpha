@@ -1,3 +1,4 @@
+import "./bound.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 // @ts-expect-error hc-hud ships JavaScript without declarations; the test compares against its source rule.

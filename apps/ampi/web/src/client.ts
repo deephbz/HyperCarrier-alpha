@@ -4,10 +4,12 @@
 import { applyImmutable, type Op } from "@earendil-works/chord/delta";
 import { useSyncExternalStore } from "react";
 import type { HostState } from "../../src/hub/hosts.ts";
-import type { Topic } from "../../src/shared/protocol.ts";
+import type { ClientOps, HubOps, Topic, TopicValue } from "../../src/shared/protocol.ts";
 import { perfMarkOnce } from "./perf.ts";
 
 export type { HostState };
+/** An op's arguments as a rest tuple: optional when every field is. */
+type Args<A> = {} extends A ? [args?: A] : [args: A];
 
 type Sub = {
 	sid: number;
@@ -104,6 +106,8 @@ export class HubClient {
 				if (sub) this.#update(sub, { stale: true });
 				return;
 			}
+			// A pending subscription stays open: the next snap clears the error.
+			case "pending":
 			case "end": {
 				const sub = this.#bySid.get(frame.sid);
 				if (sub) this.#update(sub, { error: frame.reason, stale: true });
@@ -134,9 +138,10 @@ export class HubClient {
 		return () => this.#listeners.delete(listener);
 	}
 
-	request<T = unknown>(host: string, op: string, args: unknown = {}): Promise<T> {
+	/** Requests an op of a host. `ClientOps` types its arguments and result; ops whose arguments are all optional may omit them. */
+	request<K extends keyof ClientOps>(host: string, op: K, ...[args = {}]: Args<ClientOps[K]["args"]>): Promise<ClientOps[K]["result"]> {
 		const id = this.#id++;
-		return new Promise<T>((resolve, reject) => {
+		return new Promise<ClientOps[K]["result"]>((resolve, reject) => {
 			this.#pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
 			// Never queue an action for later: a request the owner saw fail must not run after a reconnect.
 			if (!this.#send({ t: "req", id, host, op, args })) {
@@ -146,9 +151,10 @@ export class HubClient {
 		});
 	}
 
-	hub<T = unknown>(op: string, args: Record<string, unknown> = {}): Promise<T> {
+	/** Requests an op the hub serves itself (`HubOps`). */
+	hub<K extends keyof HubOps>(op: K, args: HubOps[K]["args"]): Promise<HubOps[K]["result"]> {
 		const id = this.#id++;
-		return new Promise<T>((resolve, reject) => {
+		return new Promise<HubOps[K]["result"]>((resolve, reject) => {
 			this.#pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
 			if (!this.#send({ t: "hub", id, op, args })) {
 				this.#pending.delete(id);
@@ -212,11 +218,13 @@ export function useHosts(): { hosts: HostState[]; connected: boolean } {
 
 const EMPTY = { value: undefined, stale: true } as const;
 
-export function useTopic<T>(host: string | undefined, topic: Topic | undefined): { value: T | undefined; stale: boolean; error?: string } {
+/** A replica of one topic; `TopicValue` types its value from the topic's kind and view. */
+export function useTopic<T extends Topic>(host: string | undefined, topic: T | undefined): { value: TopicValue<T> | undefined; stale: boolean; error?: string } {
 	const key = host && topic ? `${host}|${JSON.stringify(topic)}` : "";
 	const store = useMemoSub(key, host, topic);
 	const snapshot = useSyncExternalStore(store.subscribe, store.get);
-	return snapshot as { value: T | undefined; stale: boolean; error?: string };
+	// The one decode point: the hub relays what the host published for this topic.
+	return snapshot as { value: TopicValue<T> | undefined; stale: boolean; error?: string };
 }
 
 const stores = new Map<string, { subscribe: (l: () => void) => () => void; get: () => Sub["snapshot"] | typeof EMPTY }>();

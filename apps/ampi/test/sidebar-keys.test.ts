@@ -1,3 +1,4 @@
+import "./bound.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { sidebarKeyAction } from "../web/src/components/sidebar-keys.ts";

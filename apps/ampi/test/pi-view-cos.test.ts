@@ -1,3 +1,4 @@
+import "./bound.ts";
 import assert from "node:assert/strict";
 import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -7,6 +8,7 @@ import type { ArcListValue, ArcValue } from "../src/pi/views/cos-arc.ts";
 import { CONTEXT_VERSION } from "../src/pi/views/cos-arc.ts";
 import type { TimelineValue } from "../src/pi/views/cos-timeline.ts";
 import { Browser } from "./helpers.ts";
+import { HELPER_MODELS } from "./pi-host-fixtures.ts";
 import { fixture } from "./pi-fixtures.ts";
 
 const T = Date.UTC(2026, 9, 18);
@@ -24,7 +26,7 @@ async function setup(t: { after: (fn: () => unknown) => void }, header: object =
 	const ask = `const fs = require('node:fs'); fs.appendFileSync(${JSON.stringify(calls)}, 'call\\n');
 if(fs.existsSync(${JSON.stringify(fail)})){ console.error('No model configured on this synthetic hub'); process.exit(2); }
 let s=''; process.stdin.on('data',d=>s+=d).on('end',()=>{try{const p=JSON.parse(s); console.log(JSON.stringify(p.arcs ? (()=>{const id=(p.arcs.map(a=>a.rarebitEvidence).join('\\n').match(/\\[([^\\]]+)\\]/)||[])[1]; return {asks:p.askCandidates[0]?[{candidates:[p.askCandidates[0].id],text:'Approve the deploy',kind:'approval',answeredBy:null}]:[],threads:[{label:'Reader work',state:'active',progress:[],decisions:[{text:'Pick the parser',citations:[id],quote:'user evidence u1'}],blockers:[]}],unassigned:{progress:[],decisions:[],blockers:[]}};})() : p.chunks.some(c=>'evidence' in c) ? {chunks:p.chunks.map(c=>({chunk:c.chunk,topic:'Label '+c.chunk,project:'Reader',ideas:[{text:'Cited idea',evidence:[c.evidence.match(/\\[([^\\]]+)\\]/)[1],'invented']},{text:'Invented only',evidence:['invented']}]}))} : {headline:'Reader arc',projects:[{name:'Canonical Reader',aliases:['Reader'],summary:'Synthetic work',status:'paused'}],transitions:[{chunk:'c0',kind:'pivot',to:'Reader'},{chunk:'invented',kind:'pivot'}]}));}catch(e){console.error(String(e.stack).replace(/\\n/g,' | ')+' INPUT '+s.slice(0,400));process.exit(3);}});`;
-	const hub = new Hub({ backend: "pi", hosts: [{ id: "devbox", label: "devbox", kind: "pi-local", cacheDir: join(f.dir, "cache"), askCommand: [process.execPath, "-e", ask], agentConfig: { agentDir: f.agentDir, pollMs: 30, discoverMs: 150, teams: false }, env: { HOME: f.dir, HERDR_BIN: join(f.dir, "herdr"), FAKE_HERDR_STATE: join(f.dir, "state.json"), FAKE_HERDR_LOG: join(f.dir, "calls.jsonl") } }] }, { token: "c".repeat(64) });
+	const hub = new Hub({ backend: "pi", models: HELPER_MODELS, hosts: [{ id: "devbox", label: "devbox", kind: "pi-local", cacheDir: join(f.dir, "cache"), askCommand: [process.execPath, "-e", ask], agentConfig: { agentDir: f.agentDir, pollMs: 30, discoverMs: 150, teams: false }, env: { HOME: f.dir, HERDR_BIN: join(f.dir, "herdr"), FAKE_HERDR_STATE: join(f.dir, "state.json"), FAKE_HERDR_LOG: join(f.dir, "calls.jsonl") } }] }, { token: "c".repeat(64) });
 	const port = await hub.listen(0);
 	const browser = await Browser.open(port, undefined, `ampi_k_${port}=${"c".repeat(64)}`);
 	t.after(async () => { browser.ws.close(); await hub.close(); });

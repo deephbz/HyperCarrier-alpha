@@ -38,6 +38,16 @@ try {
 		process.exitCode = 1;
 		return;
 	}
+	// In a deploy checkout (one with dev/ampi-int), HEAD must be deployable: current deploy entry, every gitlink on its
+	// origin, and no unintended gitlink change against int (scripts/pin-guard.mjs). Public and CI clones skip it.
+	const guard = path.join(__dirname, "pin-guard.mjs");
+	if (fs.existsSync(guard) && spawnSync("git", ["rev-parse", "-q", "--verify", "refs/heads/dev/ampi-int"], { cwd: repo }).status === 0) {
+		const result = spawnSync(process.execPath, [guard, "--root", repo, "HEAD"], { cwd: repo, stdio: "inherit" });
+		if (result.status !== 0) {
+			process.exitCode = 1;
+			return;
+		}
+	}
 	try {
 		const packageDir = path.dirname(path.dirname(require.resolve("node-pty")));
 		const helper = path.join(packageDir, "prebuilds", `${process.platform}-${process.arch}`, "spawn-helper");

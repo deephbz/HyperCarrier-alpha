@@ -117,7 +117,7 @@ export function ThreadRow({
 /** Node-owned terminals of one host, listed under its threads. */
 function HostTerms({ host, route }: { host: HostState; route: { host?: string; term?: string } }) {
 	// biome-ignore lint: loosely typed terminal list
-	const { value } = useTopic<any>(host.id, { kind: "terms" });
+	const { value } = useTopic(host.id, { kind: "terms" });
 	const terms = Object.values(value?.terms ?? {}) as { id: string; title: string; exited?: number; createdAt: number }[];
 	return (
 		<>
@@ -135,7 +135,7 @@ function HostTerms({ host, route }: { host: HostState; route: { host?: string; t
 }
 
 export async function openTerminal(host: string, cwd?: string): Promise<void> {
-	const term = await hub.request<{ id: string }>(host, "term.open", { cwd, cols: 120, rows: 32 });
+	const term = await hub.request(host, "term.open", { cwd, cols: 120, rows: 32 });
 	goTerm(host, term.id);
 }
 

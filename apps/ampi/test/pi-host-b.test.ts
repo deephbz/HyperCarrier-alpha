@@ -1,3 +1,4 @@
+import "./bound.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -11,7 +12,8 @@ import { modelLimits } from "../src/pi/host.ts";
 import { TOKEN, iso, line, user, assistant, toolResult, setup } from "./pi-host-fixtures.ts";
 
 test("pi host: 96-hour eviction respects open/live pins, removes copied payloads, preserves locators, and tracks a changed source again", async (t) => {
- const { f, browser, hub } = await setup(t);
+ // Discovery faster than the index write delay: the pending write must still land.
+ const { f, browser, hub } = await setup(t, { agent: { discoverMs: 40 } });
  const threads = browser.sub("devbox", { kind: "threads" });
  await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.live);
  const thread = browser.sub("devbox", { kind: "thread", threadId: "pi:sess-a" });

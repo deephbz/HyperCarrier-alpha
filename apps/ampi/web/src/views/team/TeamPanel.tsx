@@ -118,18 +118,19 @@ function Tasks({ team, host }: { team: Team; host: string }) {
 }
 
 export function TeamPanel({ host, threadId }: { host: string; threadId: string }) {
-	const { value, stale, error } = useTopic<TeamValue>(host, { kind: "view", view: "team", threadId });
+	const { value, stale, error } = useTopic(host, { kind: "view", view: "team", threadId });
 	const { hosts } = useHosts();
 	const away = hosts.find(h => h.id === host)?.status !== "connected";
 	const failed = value && "error" in value;
-	const availability = value?.availability;
+	const team = value && !("error" in value) ? value : undefined;
+	const availability = team?.availability;
 	return <div className="ptb">
 		{error || failed ? <p className="ptb-notice">Team view could not load. Reconnect this Host and reopen the panel.</p>
 			: !value || availability === "loading" ? <p className="ptb-hint">Reading the Team…</p>
 			: availability === "absent" ? <p className="ptb-notice">Pi Team Bright is not installed on {host}. Install it on that Host to read the Team.</p>
 			: stale || away || !["available", "partial"].includes(availability!) ? <p className="ptb-notice">{away ? `${host} is away.` : "Pi Team Bright is unavailable."} Showing the last observation, not current state. Reconnect the Host or check Pi Team Bright there.</p>
 			: availability === "partial" ? <p className="ptb-notice">Pi Team Bright returned an incomplete observation. Check the Team’s diagnostics on {host}.</p> : null}
-		{value?.teams?.map(team => <section key={team.name}>
+		{team?.teams?.map(team => <section key={team.name}>
 			<h2 title={team.name}>{team.name}</h2>
 			<h3>Members <span>{team.members.length}</span></h3>
 			<ul className="ptb-members">{team.members.map((m, i) => <li key={`${m.member}/${i}`}>
@@ -141,6 +142,6 @@ export function TeamPanel({ host, threadId }: { host: string; threadId: string }
 			<Tasks team={team} host={host} />
 			{team.issues.length > 0 && <details className="ptb-diagnostics"><summary>Read diagnostics</summary><ul>{team.issues.map(issue => <li key={issue}>{issue.replaceAll("_", " ")}</li>)}</ul></details>}
 		</section>)}
-		{value && availability === "available" && !value.teams?.length && <p className="ptb-hint">This Session has no recorded Team. Open a Team member’s Session.</p>}
+		{team && availability === "available" && !team.teams?.length && <p className="ptb-hint">This Session has no recorded Team. Open a Team member’s Session.</p>}
 	</div>;
 }

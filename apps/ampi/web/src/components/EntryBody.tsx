@@ -1,23 +1,23 @@
 import { type ReactNode, useState } from "react";
-import type { UiEntry } from "../../../src/node/projection.ts";
+import type { PiEntry } from "../../../src/shared/protocol.ts";
 import { hub } from "../client.ts";
 
 /** "Output shortened · 9 KB": what a card's preview cut, and the source size when known. */
 export const shortenedLabel = (what: string, bytes?: number) => bytes ? `${what} shortened · ${Math.max(1, Math.round(bytes / 1024))} KB` : `${what} shortened`;
 
 /** The full projected entry, joined from its pages of one version. The hub sends only its allowed keys, never the native record. */
-export async function fetchEntry(host: string, threadId: string, entry: string): Promise<UiEntry> {
+export async function fetchEntry(host: string, threadId: string, entry: string): Promise<PiEntry> {
  let text = "", offset = 0, version: string | undefined, page;
  do {
-  page = await hub.request<{ text: string; next: number; more: boolean; version: string }>(host, "thread.entry", { threadId, entry, offset, version });
+  page = await hub.request(host, "thread.entry", { threadId, entry, offset, version });
   text += page.text; offset = page.next; version = page.version;
  } while (page.more);
  return JSON.parse(text);
 }
 
 /** A card's shortened part, read in full on open. `show` draws that part of the full entry. */
-export function EntryBody({ host, threadId, entry, label = "Preview shortened", show }: { host: string; threadId: string; entry: string; label?: string; show: (entry: UiEntry) => ReactNode }) {
- const [full, setFull] = useState<UiEntry>();
+export function EntryBody({ host, threadId, entry, label = "Preview shortened", show }: { host: string; threadId: string; entry: string; label?: string; show: (entry: PiEntry) => ReactNode }) {
+ const [full, setFull] = useState<PiEntry>();
  const [error, setError] = useState("");
  const [busy, setBusy] = useState(false);
  const load = async () => {

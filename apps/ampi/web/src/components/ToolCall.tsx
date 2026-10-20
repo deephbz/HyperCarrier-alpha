@@ -1,42 +1,9 @@
 import { type ReactNode, useState } from "react";
+import type { ToolArgsPreview } from "../../../src/shared/protocol.ts";
 import { toolCallState } from "../../../src/shared/tool-state.ts";
 
-export type ToolResult = { text: string; isError: boolean; truncated?: boolean; details?: unknown };
-export type LiveSlot = { status: "pending" | "running" | "done"; output?: string; details?: unknown };
-
-// biome-ignore lint: tool arguments are free-form JSON
-type Args = Record<string, any>;
-
-function one(value: unknown, max = 160): string {
-	const text = typeof value === "string" ? value : JSON.stringify(value);
-	const flat = (text ?? "").replace(/\s+/g, " ").trim();
-	return flat.length > max ? `${flat.slice(0, max)}…` : flat;
-}
-
-export function argSummary(name: string, args: Args): string {
-	switch (name) {
-		case "bash":
-			return one(args.command);
-		case "read":
-			return `${args.path ?? ""}${args.offset ? ` :${args.offset}` : ""}${args.limit ? `+${args.limit}` : ""}`;
-		case "write":
-			return `${args.path ?? ""}${typeof args.content === "string" ? ` · ${args.content.replace(/\n$/, "").split("\n").length} lines` : ""}`;
-		case "edit":
-			return `${args.path ?? ""}${Array.isArray(args.edits) ? ` · ${args.edits.length} edit(s)` : ""}`;
-		case "task_update":
-			return `${args.task_id ?? ""}${args.transition ? ` → ${args.transition}` : ""}${args.current_context ? " · context" : ""}`;
-		case "task_graph_apply":
-			return `${Array.isArray(args.tasks) ? args.tasks.length : 0} task(s) · ${args.operation_id ?? ""}`;
-		case "ensure_worker":
-			return `${args.name ?? ""} — ${one(args.scope, 80)}`;
-		case "alert_send":
-			return `${args.to ? `${args.to} · ` : ""}${args.kind ?? ""}: ${one(args.text, 100)}`;
-		case "team_create":
-			return `${args.name ?? ""} — ${one(args.purpose, 80)}`;
-		default:
-			return one(args);
-	}
-}
+export type ToolResult = { text: string; isError: boolean; truncated?: boolean };
+export type LiveSlot = { status: "pending" | "running" | "done"; output?: string };
 
 export function Diff({ patch }: { patch: string }) {
 	const lines = patch.split("\n").filter((line) => !line.startsWith("Index:") && !line.startsWith("===="));
@@ -64,14 +31,27 @@ export function Diff({ patch }: { patch: string }) {
 	);
 }
 
-export function editPatch(args: Args): string {
+export function editPatch(edits: NonNullable<ToolArgsPreview["edits"]>): string {
 	const out: string[] = [];
-	for (const edit of Array.isArray(args.edits) ? args.edits : []) {
+	for (const edit of edits) {
 		out.push("@@");
-		for (const line of String(edit.oldText ?? "").split("\n")) out.push(`-${line}`);
-		for (const line of String(edit.newText ?? "").split("\n")) out.push(`+${line}`);
+		for (const line of edit.oldText.split("\n")) out.push(`-${line}`);
+		for (const line of edit.newText.split("\n")) out.push(`+${line}`);
 	}
 	return out.join("\n");
+}
+
+/** A tool call's whole arguments, as the source entry holds them: the targets, then the change as JSON, then the rest as-is. */
+export function ToolArgs({ args }: { args: ToolArgsPreview }) {
+	const targets = [args.command, args.path, ...(args.paths ?? [])].filter((x) => x !== undefined).join("\n");
+	const change = args.edits || args.content !== undefined ? JSON.stringify({ edits: args.edits, content: args.content }, null, 2) : undefined;
+	return (
+		<>
+			{targets !== "" && <pre>{targets}</pre>}
+			{change !== undefined && <pre>{change}</pre>}
+			{args.text !== undefined && <pre>{args.text}</pre>}
+		</>
+	);
 }
 
 export function ToolCall({
@@ -79,60 +59,63 @@ export function ToolCall({
 	args,
 	result,
 	live,
-	onOpenThread,
 	source,
 	outputSource,
 	callOpen = false,
 	active = false,
 }: {
 	name: string;
-	args: Args | null;
+	/** Null when the source entry alone has the arguments. */
+	args: ToolArgsPreview | null;
 	/** Shown in the body when the preview dropped some arguments. */
 	source?: ReactNode;
 	/** Shown after the output when the preview shortened it; replaces the generic hint. */
 	outputSource?: ReactNode;
 	result?: ToolResult;
 	live?: LiveSlot;
-	onOpenThread?: (conversationId: string) => void;
 	/** Evidence for toolCallState: the call is still open in the transcript, and the Session runs a turn. */
 	callOpen?: boolean;
 	active?: boolean;
 }) {
 	const state = toolCallState({ result, open: callOpen, active });
 	const running = state === "running";
-	const details = (result?.details ?? live?.details) as Args | undefined;
 	const isEdit = name === "edit" || name === "write";
 	const [open, setOpen] = useState<boolean | undefined>(undefined);
 	const expanded = open ?? (running || result?.isError === true || (isEdit && name === "edit"));
-	const childConversation = details && typeof details.conversationId !== "undefined" ? String(details.conversationId) : undefined;
 	const output = result?.text ?? live?.output ?? "";
 	// A running call with no output yet shows what it runs; bash and read otherwise show only their output.
 	const waiting = running && output === "";
-	const showArgs = args && name !== "edit" && name !== "write" && (waiting || (name !== "bash" && name !== "read"));
+	const cut = args?.omitted;
+	const shown =
+		args && name !== "edit" && name !== "write" && (waiting || (name !== "bash" && name !== "read"))
+			? [
+					args.command,
+					cut?.command && "…command shortened",
+					args.path,
+					...(args.paths ?? []),
+					cut?.paths && `+${cut.paths} more paths`,
+					args.text,
+				]
+					.filter((x) => typeof x === "string")
+					.join("\n")
+			: "";
 	return (
 		<div className="tool">
 			<div className={`tool-head disclosure${running ? " busy" : ""}`} onClick={() => setOpen(!expanded)} role="button" aria-expanded={expanded}>
 				{running && <span className="spinner" />}
 				<span className="name">{name}</span>
-				<span className="arg">{args ? argSummary(name, args) : "Arguments available in source entry"}</span>
+				<span className="arg">{args ? args.summary : "Arguments available in source entry"}</span>
 				<span className={`state ${result?.isError ? "err" : result ? "ok" : ""}`}>{state}</span>
 			</div>
-			{childConversation && onOpenThread && (
-				<div className="subthread-link" onClick={() => onOpenThread(childConversation)}>
-					↳ Open subthread
-				</div>
-			)}
 			{expanded && (
 				<div className="tool-body">
 					{source}
-					{name === "edit" && args && (details?.patch ? <Diff patch={String(details.patch)} /> : Array.isArray(args.edits) && <Diff patch={editPatch(args)} />)}
-					{name === "write" && typeof args?.content === "string" && (
-						<pre>{String(args.content ?? "").split("\n").slice(0, 80).join("\n")}</pre>
-					)}
-					{showArgs && (
+					{name === "edit" && args?.edits && <Diff patch={editPatch(args.edits)} />}
+					{name === "write" && args?.content !== undefined && <pre>{args.content.split("\n").slice(0, 80).join("\n")}</pre>}
+					{shown !== "" && (
 						<>
 							<div className="label">arguments</div>
-							<pre>{JSON.stringify(args, null, 2)}</pre>
+							<pre>{shown}</pre>
 						</>
 					)}
 					{(name !== "edit" || result?.isError) && output !== "" && (
