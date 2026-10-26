@@ -1,11 +1,13 @@
 import type { PiTeamTask, PiTeamsFrame, PiView, PiViewContext } from "./types.ts";
 
+import type { TeamMessages } from "../../shared/team-messages.ts";
+
 export type { PiTeamTask };
 type TeamFrame = Omit<PiTeamsFrame, "t">;
 
 export type TeamValue = {
 	availability: string;
-	teams: { name: string; members: { member: string; role: string; threadId?: string; ref?: string; pane?: string; live: boolean; status: string }[]; tasks: PiTeamTask[]; issues: string[] }[];
+	teams: { name: string; members: { member: string; role: string; threadId?: string; ref?: string; pane?: string; live: boolean; status: string }[]; tasks: PiTeamTask[]; messages: TeamMessages; issues: string[] }[];
 };
 
 function project(ctx: PiViewContext, snapshot: TeamFrame, threadId?: string): TeamValue {
@@ -28,6 +30,7 @@ function project(ctx: PiViewContext, snapshot: TeamFrame, threadId?: string): Te
 					...(member.pane ? { pane: member.pane } : {}), live,
 					status: !live ? "not running" : summary?.attention?.some(a => a.source === "Herdr") ? "needs you" : summary?.activity === "idle" ? "idle" : summary?.activity ?? "running" };
 			}),
+			messages: snapshot.messages?.[name] ?? { availability: "unavailable", reason: "Messages unavailable for Pi Teams: this Host publishes membership and Tasks only." },
 			tasks: snapshot.tasks?.[name]?.availability === "available" ? snapshot.tasks[name]!.tasks : [],
 			issues: [...new Set([...(snapshot.codes ?? []), ...(snapshot.tasks?.[name]?.issues ?? ["task_reader_missing"]), ...(snapshot.tasks?.[name]?.availability === "unavailable" ? ["task_authority_unavailable"] : [])])],
 		})),

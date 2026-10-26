@@ -4,6 +4,7 @@
 
 import type { AssistantMessage, Message, ToolCall } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxProvider, fauxText, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
+import { PLAN_PROMPT_PREFIX } from "@hypercarrier/auto-compact-durable";
 
 type Step = { tool: string; args: ToolCall["arguments"] } | ((results: ToolOutcome[]) => Step | undefined);
 type ToolOutcome = { name: string; text: string; isError: boolean };
@@ -65,11 +66,12 @@ export function planFor(input: string): Plan {
 		}
 	}
 	// A delivered Team task: claim it, do visible work, then report the outcome with evidence (PTB worker contract).
-	const task = /AMPI-TEAM-TASK task_id=(\S+) version=(\S+)/.exec(input);
+	const notice = parseJson(input) as {kind?:string; task?:{id:string;version:string;goal:string}};
+ const task = notice.kind === 'task' ? notice.task : undefined;
 	if (task) {
-		const [, taskId, version] = task;
-		const fail = /goal: .*\bfail\b/i.test(input);
-		steps.push({ tool: "task_update", args: { task_id: taskId, expected_version: version, transition: "claim" } });
+		const { id: taskId, version } = task;
+		const fail = /\bfail\b/i.test(task.goal);
+		steps.push({ tool: "task_update", args: { task_id: taskId, operation_id:`claim-${taskId}-${version}`, expected_version: version, transition: "claim" } });
 		steps.push({ tool: "bash", args: { command: `echo "worker evidence for ${taskId}: $(date -u +%H:%M:%S)"` } });
 		steps.push((results) => {
 			const claimed = results.find((r) => r.name === "task_update");
@@ -79,6 +81,7 @@ export function planFor(input: string): Plan {
 				tool: "task_update",
 				args: {
 					task_id: taskId,
+                    operation_id:`finish-${taskId}-${next}`,
 					expected_version: next,
 					transition: fail ? "goal_failed" : "goal_achieved",
 					evidence: results.find((r) => r.name === "bash")?.text.trim() ?? "no output",
@@ -105,7 +108,7 @@ export function planFor(input: string): Plan {
 		});
 		final = () => "Team **demo** is running: alice owns `api`; bob owns `docs` and `release` after it. I'll wait for updates.";
 	}
-	if (/AMPI-TEAM-UPDATE/.test(input)) {
+	if (notice.kind === 'team_update') {
 		steps.push({ tool: "team_sync", args: { view: "snapshot" } });
 		final = (results) => {
 			const snapshot = results[0]?.text ?? "";
@@ -134,24 +137,8 @@ function answerFor(input: string): string {
 	].join("\n");
 }
 
-/** One-shot derivation prompts (Rarebit Summary and Title) get deterministic, contract-shaped answers. */
+/** Compaction and Title prompts get deterministic, contract-shaped answers. */
 function derivation(prompt: string): string | undefined {
-	if (prompt.startsWith("You are the HyperCarrier Rarebit summarizer.")) {
-		const body = /BEGIN_RAREBIT_MESSAGES_JSONL\n([\s\S]*?)\nEND_RAREBIT_MESSAGES_JSONL/.exec(prompt)?.[1] ?? "";
-		const messages = body
-			.split("\n")
-			.map((line) => parseJson(line) as { role?: string; outcome?: string; text?: string })
-			.filter((m) => typeof m.text === "string");
-		const users = messages.filter((m) => m.role === "user");
-		const last = messages.at(-1);
-		const request = (users.at(-1)?.text ?? "").replace(/^\/sim .*$/gm, "").trim().replace(/\s+/g, " ").slice(0, 140);
-		const asks = /\?\s*$|needs? (your|a) decision|\/sim attention/i.test(last?.text ?? "") || /\/sim attention/.test(users.at(-1)?.text ?? "");
-		return JSON.stringify(
-			asks
-				? { summary: `The agent is waiting on the owner. Latest request: ${request || "(directive only)"}. ${users.length} user message(s) so far.`, sessionStatus: "needs_attention", statusReason: "input" }
-				: { summary: `${users.length} user request(s); the latest (${request || "a directive"}) appears answered by the final handoff.`, sessionStatus: "finished", statusReason: "all_requests_accomplished" },
-		);
-	}
 	if (prompt.startsWith("You are compacting a coding-agent conversation.")) {
 		const users = [...prompt.matchAll(/\[User\]\n([^\n]*)/g)].map((m) => m[1]!.trim()).filter(Boolean);
 		return [
@@ -173,14 +160,36 @@ function derivation(prompt: string): string | undefined {
 	return undefined;
 }
 
+/**
+ * The keepset planner's answer: keep the two newest outputs. In the planned range, `/sim keep-unknown` names an
+ * unknown label, `/sim keep-all` keeps every output, `/sim plan-huge` writes a 10k-token summary, and `/sim compact-error`
+ * or `/sim compact-fail` fails the request.
+ */
+function planAnswer(messages: readonly Message[], prompt: string): AssistantMessage {
+	const said = (knob: string) => messages.some((m) => m.role === "user" && text(m).includes(knob));
+	if (said("/sim compact-error") || said("/sim compact-fail")) return fauxAssistantMessage([], { stopReason: "error", errorMessage: "Simulated summarizer outage" });
+	const labels = [...prompt.matchAll(/^(t\d+) \|/gm)].map((m) => m[1]!);
+	const keep = said("/sim keep-unknown") ? ["t999"] : said("/sim keep-all") ? labels : labels.slice(-2);
+	const users = messages.filter((m) => m.role === "user" && !text(m).startsWith(PLAN_PROMPT_PREFIX)).map((m) => text(m).trim().slice(0, 120));
+	const summary = ["## Goal", `- ${users[0] ?? "(unknown)"}`, "## Next steps", "1. Continue from the latest request (simulated keepset plan).", ...(said("/sim plan-huge") ? ["filler ".repeat(5_000)] : [])].join("\n");
+	return fauxAssistantMessage([fauxText(JSON.stringify({ summary, keep }))], { stopReason: "stop" });
+}
+
 function respond(messages: readonly Message[]): AssistantMessage {
 	const first = messages.find((m) => m.role === "user");
 	const prompt = messages.length === 1 && first ? text(first) : "";
+	const lastUser = [...messages].reverse().find((m) => m.role === "user");
+	const planning = lastUser !== undefined && text(lastUser).startsWith(PLAN_PROMPT_PREFIX);
+	if (planning) return planAnswer(messages, text(lastUser));
 	if (prompt.startsWith("You are compacting") && prompt.includes("/sim compact-error"))
 		return fauxAssistantMessage([], { stopReason: "error", errorMessage: "Simulated summarizer outage" });
 	const oneShot = prompt ? derivation(prompt) : undefined;
 	// Durable's native compaction summarizer (system prompt + one request): answer with a plain summary, never directives.
-	if (messages[0]?.role === ("system" as never) && /summariz/i.test(text(messages[0]!)))
+	const native = messages[0]?.role === ("system" as never) && /summariz/i.test(text(messages[0]!));
+	// `/sim compact-fail` in the summarized range fails both summarizers, so the compaction task fails.
+	if ((native || prompt.startsWith("You are compacting")) && messages.some((m) => text(m).includes("/sim compact-fail")))
+		return fauxAssistantMessage([], { stopReason: "error", errorMessage: "Simulated summarizer and native outage" });
+	if (native)
 		return fauxAssistantMessage([fauxText("## Goal\n- (native summary from the simulated model)\n## Next Steps\n1. Continue.")], { stopReason: "stop" });
 	if (oneShot !== undefined) return fauxAssistantMessage([fauxText(oneShot)], { stopReason: "stop" });
 	let runStart = messages.length - 1;
@@ -238,8 +247,21 @@ export function simProvider(options: { tokensPerSecond?: number; contextWindow?:
 			},
 		],
 	});
-	const step = (context: { messages: readonly Message[] }) => {
+	let slowed = false;
+	const step = async (context: { messages: readonly Message[] }, options?: { signal?: AbortSignal }) => {
 		handle.appendResponses([step]);
+		// A slow HC summarizer: `/sim compact-slow <ms>` in the summarized range delays this provider's first
+		// working-state summary or keepset plan; later ones answer at once.
+		const first = context.messages.length === 1 && context.messages[0]!.role === "user" ? text(context.messages[0]!) : "";
+		const lastUser = [...context.messages].reverse().find((m) => m.role === "user");
+		const planning = lastUser !== undefined && text(lastUser).startsWith(PLAN_PROMPT_PREFIX);
+		const source = planning ? context.messages.map(text).join("\n") : first;
+		const slow = !slowed && (planning || first.startsWith("You are compacting")) ? /\/sim compact-slow (\d+)/.exec(source) : null;
+		if (slow) slowed = true;
+		if (slow) await new Promise<void>((resolve) => {
+			const timer = setTimeout(resolve, Number(slow[1]));
+			options?.signal?.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
+		});
 		return respond(context.messages);
 	};
 	// Keep a deep queue so concurrent requests (parallel workers) never find it empty; each call refills one.

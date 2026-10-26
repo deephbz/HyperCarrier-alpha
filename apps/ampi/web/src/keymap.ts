@@ -5,7 +5,7 @@ import { carrier } from "./nav.ts";
 export type KeyAction =
 	| "sidebar.toggle" | "panel.toggle" | "focus.composer"
 	| "session.palette" | "command.palette" | "help" | "find"
-	| "overview" | "new" | "shell" | "display" | "zoom.in" | "zoom.out" | "zoom.reset"
+	| "overview" | "new" | "archive" | "display" | "transcript.mode" | "zoom.in" | "zoom.out" | "zoom.reset"
 	| "history.back" | "history.forward";
 
 export type KeyBinding = {
@@ -43,9 +43,10 @@ export const KEYMAP: readonly KeyBinding[] = [
 	{ id: "find", code: "KeyF", meta: true, label: "Find in this Session", region: "global", context: "in a Pi Session" },
 	{ id: "overview", code: "Digit0", meta: true, label: "Overview", region: "global", palette: true },
 	{ id: "new", code: "KeyN", meta: true, label: "New Session", region: "global", palette: true },
+	{ id: "transcript.mode", code: "KeyT", meta: true, label: "Toggle conversation-only transcript", region: "global", palette: true, note: "⌘T (Ctrl+T in a browser), L outside an input", appNote: "⌘T switches transcript mode in AmPi.app" },
+	{ id: "archive", code: "KeyA", meta: true, shift: true, label: "Archive or unarchive this thread", region: "global", palette: true, browserOwned: true, context: "in a durable thread", note: "⌘⇧A in AmPi.app; in a browser, use the command palette (Chrome owns ⌘⇧A)" },
 	{ id: "history.back", code: "BracketLeft", meta: true, label: "Back", region: "global", palette: true, browserOwned: true, note: HISTORY_NOTE, appNote: "does nothing at the first AmPi page" },
 	{ id: "history.forward", code: "BracketRight", meta: true, label: "Forward", region: "global", palette: true, browserOwned: true },
-	{ id: "shell", code: "KeyJ", meta: true, label: "Toggle shell", region: "global", palette: true, context: "on a Host page, or in a Session with a shell" },
 	{ id: "zoom.in", code: "Equal", meta: true, shift: true, label: "Increase display size", region: "global", palette: true },
 	{ id: "zoom.out", code: "Minus", meta: true, shift: true, label: "Decrease display size", region: "global", palette: true },
 	{ id: "zoom.reset", code: "Digit0", meta: true, shift: true, label: "Reset display size", region: "global", palette: true },
@@ -129,7 +130,7 @@ export function installKeymapDispatcher(target: Window = window) {
 
 /** Editable controls suppress unmodified region keys; modifier bindings remain active there. */
 export function isEditableTarget(target: EventTarget | null): boolean {
-	return target instanceof HTMLElement && Boolean(target.closest("input, textarea, select, [contenteditable], .xterm"));
+	return target instanceof HTMLElement && Boolean(target.closest("input, textarea, select, [contenteditable]"));
 }
 
 /** Focus the region root when no navigable row exists. */

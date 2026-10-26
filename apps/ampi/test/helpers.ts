@@ -1,14 +1,61 @@
+import "./isolate.ts";
 import { mkdtempSync } from "node:fs";
 import { createConnection, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyImmutable } from "@earendil-works/chord/delta";
+import { createModels } from "@earendil-works/pi-ai/models";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
 import WebSocket from "ws";
+import { simProvider } from "../src/node/sim.ts";
 import { encodeFrame, lineReader } from "../src/shared/framing.ts";
 import type { NodeFrame, Topic } from "../src/shared/protocol.ts";
 
 export function tempHome(): string {
 	return mkdtempSync(join(tmpdir(), "ampi-test-"));
+}
+
+/**
+ * A sim provider that holds the next summary request after `arm()`. A cooperative hold ends on its abort signal; an
+ * uncooperative one ignores it. `release(n)` lets the n-th held request (1-based) answer as the sim does.
+ */
+export function heldSummaries(contextWindow?: number) {
+	const models = createModels(), sim = simProvider({ tokensPerSecond: 1e9, ...(contextWindow ? { contextWindow } : {}) });
+	const releases: (() => void)[] = [];
+	let armed: "cooperative" | "uncooperative" | undefined;
+	const state = {
+		held: 0,
+		aborted: 0,
+		arm(mode: "cooperative" | "uncooperative" = "cooperative") { armed = mode; },
+		release(n: number) { releases[n - 1]?.(); },
+		releaseAll() { for (const release of releases) release(); },
+	};
+	models.setProvider({ ...sim, streamSimple(model, context, options) {
+		const system = context.messages.find((message) => message.role === "system");
+		const text = typeof system?.content === "string" ? system.content : system?.content?.filter((part) => part.type === "text").map((part) => part.text).join("\n") ?? "";
+		if (!armed || !/summariz/i.test(text)) return sim.streamSimple(model, context, options);
+		const mode = armed;
+		armed = undefined;
+		state.held++;
+		const stream = createAssistantMessageEventStream();
+		let ended = false;
+		releases.push(() => {
+			if (ended) return;
+			ended = true;
+			void (async () => { for await (const event of sim.streamSimple(model, context, options)) stream.push(event); })();
+		});
+		const abort = () => {
+			if (ended || mode === "uncooperative") return;
+			ended = true;
+			state.aborted++;
+			stream.push({ type: "error", reason: "aborted", error: fauxAssistantMessage("compaction aborted", { stopReason: "aborted" }) });
+		};
+		if (options?.signal?.aborted) abort();
+		else options?.signal?.addEventListener("abort", abort, { once: true });
+		return stream;
+	} });
+	return { models, state };
 }
 
 /** A minimal ampi/1 client over the unix socket, for tests. */
@@ -20,6 +67,10 @@ export class TestClient {
 	values = new Map<number, unknown>();
 	seq = new Map<number, number>();
 	gaps: string[] = [];
+	/** Every frame after `hello`, encoded as received: canary scans read it. */
+	lines: string[] = [];
+	/** The `end` reason of each closed subscription. */
+	ended = new Map<number, string>();
 	#listeners = new Set<() => void>();
 
 	static async connect(path: string): Promise<TestClient> {
@@ -33,10 +84,17 @@ export class TestClient {
 				"data",
 				lineReader((line) => {
 					const frame = JSON.parse(line) as NodeFrame;
+					if (frame.t !== "hello") client.lines.push(line);
+					if (frame.t === "end") client.ended.set(frame.sid, frame.reason);
 					if (frame.t === "hello") {
 						client.hello = frame;
 						resolve();
-					} else if (frame.t === "res") client.#waiters.get(frame.id)?.(frame);
+					} else if (frame.t === "res") {
+						// A settled waiter would keep its response alive for the client's lifetime.
+						const waiter = client.#waiters.get(frame.id);
+						client.#waiters.delete(frame.id);
+						waiter?.(frame);
+					}
 					else if (frame.t === "snap") {
 						client.values.set(frame.sid, frame.value);
 						client.seq.set(frame.sid, 0);

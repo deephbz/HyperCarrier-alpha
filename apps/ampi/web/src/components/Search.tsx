@@ -3,6 +3,7 @@ import type { SearchResult } from "../../../src/pi/search.ts";
 import { hub, type HostState } from "../client.ts";
 import { findSteps, navigate } from "../nav.ts";
 import { href } from "../util.ts";
+import { hostLabel } from "./host-label.ts";
 
 export function SessionFind({ host, threadId, onClose, onGo }: { host: string; threadId: string; onClose: () => void; onGo?: () => void }) {
  const [query, setQuery] = useState("");
@@ -43,7 +44,7 @@ export function FleetSearch({ hosts }: { hosts: HostState[] }) {
  const run = async () => {
   setBusy(true); setResults([]);
   const rows = await Promise.all(hosts.map(async (host) => {
-   try { return { host, value: await hub.request(host.id, "sessions.search", { query }) }; }
+   try { return { host, value: await hub.request(host.link, "sessions.search", { query }) }; }
    catch (e) { return { host, error: String(e) }; }
   }));
   setResults(rows); setBusy(false);
@@ -52,11 +53,11 @@ export function FleetSearch({ hosts }: { hosts: HostState[] }) {
   <summary>Search copied prose</summary>
   <form onSubmit={(e) => { e.preventDefault(); void run(); }}><input className="search" aria-label="Search copied prose" placeholder="Words or 2+ CJK characters…" value={query} maxLength={500} onChange={(e) => setQuery(e.target.value)} /><button className="btn small" disabled={busy || !query.trim()}>{busy ? "Searching…" : "Search"}</button></form>
   <p className="hint">Retained Pi copies · human turns, replies and compaction · excludes thinking and tools. Older history: K5 tools (not full-transcript search).</p>
-  {results.map(({ host, value, error }) => <section key={host.id}><strong>{host.label}</strong><span className="hint"> · {host.status === "connected" ? "copied evidence" : "Host away · last copy"}</span>
+  {results.map(({ host, value, error }) => <section key={host.link}><strong>{hostLabel(host, hosts)}</strong><span className="hint"> · {host.status === "connected" ? "copied evidence" : "Host away · last copy"}</span>
    {error && <p role="alert">Not searched: {error}</p>}
    {value && <><p role="status">{value.hits.length} results{value.more ? " · limit reached; narrow the query" : ""}{value.asOf ? ` · indexed ${new Date(value.asOf).toLocaleString()}` : ""}</p>
     {value.coverage && <p className="hint">{value.coverage.indexed} indexed copies · {value.coverage.notIndexed} not indexed · {value.coverage.stale} behind source or unavailable · {value.coverage.invalidLines} invalid records excluded</p>}
-    {value.hits.map((hit) => <p key={hit.ref}><a href={href.thread(host.id, hit.threadId, { entry: hit.entry })}>{hit.title}<br />{hit.snippet}</a><small className="hint"> · prose in retained copies · tools/thinking excluded</small></p>)}
+    {value.hits.map((hit) => <p key={hit.ref}><a href={href.thread(host.link, hit.threadId, { entry: hit.entry })}>{hit.title}<br />{hit.snippet}</a><small className="hint"> · prose in retained copies · tools/thinking excluded</small></p>)}
     <p className="hint">{value.scope}</p></>}
   </section>)}
  </details>;

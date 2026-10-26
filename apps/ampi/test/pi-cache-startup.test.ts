@@ -45,7 +45,7 @@ test("startup: health and page answer while metadata waits; unsubscribe and repl
  }
  if (createdIndex) t.after(() => rmSync(indexPath, { force: true }));
  const hub = new Hub({ hosts: [config], backend: "pi" }, { token: "c".repeat(64) });
- const host = hub.links.get(config.id) as PiHost;
+ const host = hub.link(config.id) as PiHost;
  mkdirSync(host.cacheDir, { recursive: true });
  const index = join(host.cacheDir, "index.json");
  execFileSync("mkfifo", [index]);

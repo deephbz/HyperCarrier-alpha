@@ -1,0 +1,525 @@
+{
+	"source": {
+		"pi": "1.4.0",
+		"piTeamBright": "0.24.0-rc.7"
+	},
+	"request": {
+		"betas": [
+			"interleaved-thinking-2025-05-14"
+		],
+		"body": {
+			"model": "claude/claude-opus-5-5",
+			"messages": [
+				{
+					"role": "user",
+					"content": [
+						{
+							"type": "text",
+							"text": "Reply with OK.",
+							"cache_control": {
+								"type": "ephemeral",
+								"ttl": "5m"
+							}
+						}
+					]
+				}
+			],
+			"max_tokens": 32000,
+			"stream": true,
+			"system": [
+				{
+					"type": "text",
+					"text": "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.\n\n<tools>\n- read: Read file contents\n- bash: Execute bash commands (ls, grep, find, etc.)\n- edit: Make precise file edits with exact text replacement, including multiple disjoint edits in one call\n- write: Create or overwrite files\n- codemode: Run JavaScript that calls other tools\n\nIn addition to the tools above, you may have access to other custom tools depending on the project.\n</tools>\n\n<rules>\n- Use bash for file operations like ls, rg, find\n- Use read to examine files instead of cat or sed.\n- You can inspect PI_* environment variables for current model and session details.\n- Use edit for precise changes (edits[].oldText must match exactly)\n- When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls\n- Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.\n- Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions.\n- Use write only for new files or complete rewrites.\n- Use codemode to batch independent tool calls (Promise.allSettled), chain them, or filter large output, instead of many separate calls.\n- Be concise in your responses\n- Show file paths clearly when working with files\n</rules>\n\n<docs>\nPi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):\n- Main documentation: <PI_PACKAGE>/README.md\n- Additional docs: <PI_PACKAGE>/docs\n- Examples: <PI_PACKAGE>/examples (extensions, custom tools, SDK)\n- When reading pi docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory\n- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), pi packages (docs/packages.md), environment variables (docs/environment-variables.md), MCP servers (docs/mcp.md), codemode scripts and non-LLM models such as classifiers and image models (docs/codemode.md)\n- When working on pi topics, read the docs and examples, and follow .md cross-references before implementing\n- Always read pi .md files completely and follow links to related docs (e.g., tui.md for TUI API details)\n</docs>\n\n<project_context>\nProject-specific instructions and guidelines:\n\n<project_instructions path=\"<FIXTURE>/user/.pi/agent/AGENTS.md\">\nFixture global instructions.\n\n</project_instructions>",
+					"cache_control": {
+						"type": "ephemeral",
+						"ttl": "1h"
+					}
+				},
+				{
+					"type": "text",
+					"text": "\n\n<project_instructions path=\"<FIXTURE>/project/AGENTS.md\">\nFixture project instructions.\n\n</project_instructions>\n</project_context>\n\n<skills>\nThe following skills provide specialized instructions for specific tasks.\nUse the read tool to load a skill's file when the task matches its description.\nWhen a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n<available_skills>\n  <skill>\n    <name>fixture-skill</name>\n    <description>A synthetic skill for the request parity check.</description>\n    <location><FIXTURE>/user/.agents/skills/fixture-skill/SKILL.md</location>\n  </skill>\n</available_skills>\n</skills>\n\n<cwd>\n<FIXTURE>/project\n</cwd>",
+					"cache_control": {
+						"type": "ephemeral",
+						"ttl": "1h"
+					}
+				}
+			],
+			"tools": [
+				{
+					"name": "read",
+					"description": "Read the contents of a file. Supports text files and images (jpg, png, gif, webp, bmp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.\n\nCodemode: `tools.read(args)` resolves to `string | { data: string; mimeType: string; note: string; type: \"image\"; }`.",
+					"eager_input_streaming": true,
+					"input_schema": {
+						"type": "object",
+						"properties": {
+							"path": {
+								"type": "string",
+								"description": "Path to the file to read (relative or absolute)"
+							},
+							"offset": {
+								"type": "number",
+								"description": "Line number to start reading from (1-indexed)"
+							},
+							"limit": {
+								"type": "number",
+								"description": "Maximum number of lines to read"
+							}
+						},
+						"required": [
+							"path"
+						]
+					}
+				},
+				{
+					"name": "bash",
+					"description": "Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.\n\nCodemode: `tools.bash(args)` resolves to `{ output, truncated, full_output_path?, exit_code, wall_time_seconds }`.",
+					"eager_input_streaming": true,
+					"input_schema": {
+						"type": "object",
+						"properties": {
+							"command": {
+								"type": "string",
+								"description": "Shell command to execute"
+							},
+							"timeout": {
+								"type": "number",
+								"description": "Timeout in seconds (optional, no default timeout)"
+							}
+						},
+						"required": [
+							"command"
+						]
+					}
+				},
+				{
+					"name": "edit",
+					"description": "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.\n\nCodemode: `tools.edit(args)` resolves to a string.",
+					"eager_input_streaming": true,
+					"input_schema": {
+						"type": "object",
+						"properties": {
+							"path": {
+								"type": "string",
+								"description": "Path to the file to edit (relative or absolute)"
+							},
+							"edits": {
+								"type": "array",
+								"items": {
+									"type": "object",
+									"required": [
+										"oldText",
+										"newText"
+									],
+									"properties": {
+										"oldText": {
+											"type": "string",
+											"description": "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call."
+										},
+										"newText": {
+											"type": "string",
+											"description": "Replacement text for this targeted edit."
+										}
+									}
+								},
+								"description": "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead."
+							}
+						},
+						"required": [
+							"path",
+							"edits"
+						]
+					}
+				},
+				{
+					"name": "write",
+					"description": "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.\n\nCodemode: `tools.write(args)` resolves to a string.",
+					"eager_input_streaming": true,
+					"input_schema": {
+						"type": "object",
+						"properties": {
+							"path": {
+								"type": "string",
+								"description": "Path to the file to write (relative or absolute)"
+							},
+							"content": {
+								"type": "string",
+								"description": "Content to write to the file"
+							}
+						},
+						"required": [
+							"path",
+							"content"
+						]
+					}
+				},
+				{
+					"name": "codemode",
+					"description": "Run JavaScript that calls other tools. The input is raw JavaScript (not JSON, no code fence), run as an async function body in a QuickJS sandbox: top-level `await` and `return` work. No Node, file system, network, or timers.\n- `await tools.<name>({ ...args })` resolves to a string, or an object if the tool's declaration says so, and rejects with an Error on failure. A tool whose declaration returns an object resolves on failure too when it returned that object; check its fields. Calls still running when the script ends are cancelled.\n- Optional first line: `// @options: {\"max_output_tokens\": 10000, \"timeout_ms\": 60000}`\n\nGlobals:\n- `text(value)`, `image(dataUrlOrImageBlock)`, `console.log(...)`, and top-level `return` add output; `exit()` ends the script. With several text items, each starts with a `==> text N/M <==` line, and `console` lines follow the other output in one `<console_output>` block. `image()` also saves the image to a temp file and the result names its path.\n- `store(key, value)` and `load(key)` keep JSON values across codemode calls.\n- `ALL_TOOLS`, `await searchTools(query, { limit?, namespace? })`, `await describeTool(name)`, `await describeNamespace(name)`: find unlisted tools, such as MCP tools.\n- `models`: classifiers and image generation. Read <PI_PACKAGE>/docs/codemode.md first.",
+					"eager_input_streaming": true,
+					"input_schema": {
+						"type": "object",
+						"properties": {
+							"code": {
+								"type": "string",
+								"description": "Raw JavaScript source."
+							}
+						},
+						"required": [
+							"code"
+						]
+					}
+				},
+				{
+					"name": "team_create",
+					"description": "Create and bind one active Team for this leader Session. Does not create Workers or Tasks.\n\nCodemode: `tools.team_create(args)` resolves to a string.",
+					"eager_input_streaming": true,
+					"input_schema": {
+						"type": "object",
+						"properties": {
+							"name": {
+								"type": "string",
+								"minLength": 1,
+								"maxLength": 64
+							},
+							"purpose": {
+								"type": "string",
+								"minLength": 1,
+								"description": "The long-lived Team outcome and operating boundary."
+							},
+							"pane_layout": {
+								"type": "object",
+								"required": [
+									"leader_share",
+									"worker_tiling"
+								],
+								"properties": {
+									"leader_share": {
+										"type": "number",
+										"exclusiveMinimum": 0.1,
+										"exclusiveMaximum": 1
+									},
+									"worker_tiling": {
+										"enum": [
+											"linear",
+											"adaptive",
+											"grid"
+										]
+									},
+									"columns_per_row": {
+										"type": "integer",
+										"minimum": 1
+									},
+									"worker_limit": {
+										"type": "integer",
+										"minimum": 1
+									}
+								},
+								"additionalProperties": false
+							}
+						},
+						"required": [
+							"name",
+							"purpose"
+						]
+					}
+				},
+				{
+					"name": "team_sync",
+					"description": "Return a whole-Team snapshot or incremental coordination updates. Use task_read for selected complete Task cards. Snapshots also list recent received Alerts; recent is not unresolved.\n\nCodemode: `tools.team_sync(args)` resolves to a string.",
+					"eager_input_streaming": true,
+					"input_schema": {
+						"type": "object",
+						"properties": {
+							"view": {
+								"enum": [
+									"snapshot",
+									"updates"
+								],
+								"description": "Snapshot restores context; updates returns one available page immediately."
+							}
+						},
+						"required": [
+							"view"
+						]
+					}
+				},
+				{
+					"name": "ensure_worker",
+					"description": "Create or reuse a Worker for a standing area. Assign work with task_graph_apply.\n\nCodemode: `tools.ensure_worker(args)` resolves to a string.",
+					"eager_input_streaming": true,
+					"input_schema": {
+						"type": "object",
+						"properties": {
+							"name": {
+								"type": "string",
+								"minLength": 1,
+								"maxLength": 64
+							},
+							"scope": {
+								"type": "string",
+								"minLength": 1,
+								"description": "Standing area, not a Task."
+							},
+							"model_role": {
+								"type": "string",
+								"minLength": 1,
+								"maxLength": 64,
+								"description": "Model role name; omit for the configured default on new Workers."
+							}
+						},
+						"required": [
+							"name",
+							"scope"
+						]
+					}
+				},
+				{
+					"name": "task_graph_apply",
+					"description": "Atomically apply the complete assigned Task graph revision. Task authority then derives readiness and bounded failure routing.\n\nCodemode: `tools.task_graph_apply(args)` resolves to a string.",
+					"eager_input_streaming": true,
+					"input_schema": {
+						"type": "object",
+						"properties": {
+							"operation_id": {
+								"type": "string",
+								"minLength": 1,
+								"maxLength": 128
+							},
+							"expected_graph_version": {
+								"type": "string",
+								"pattern": "^g_[0-9a-f]{16}$",
+								"minLength": 18,
+								"maxLength": 18
+							},
+							"tasks": {
+								"type": "array",
+								"items": {
+									"type": "object",
+									"required": [
+										"key",
+										"title",
+										"goal",
+										"assignee"
+									],
+									"properties": {
+										"key": {
+											"type": "string",
+											"minLength": 1,
+											"maxLength": 64,
+											"pattern": "^[A-Za-z0-9_-]+$"
+										},
+										"title": {
+											"type": "string",
+											"minLength": 1,
+											"maxLength": 80
+										},
+										"goal": {
+											"type": "string",
+											"minLength": 1,
+											"maxLength": 1600,
+											"description": "Desired outcome and external success signal."
+										},
+										"assignee": {
+											"type": "string",
+											"minLength": 1,
+											"maxLength": 64
+										},
+										"needs": {
+											"type": "array",
+											"items": {
+												"type": "string",
+												"minLength": 1,
+												"maxLength": 64,
+												"pattern": "^[A-Za-z0-9_-]+$"
+											},
+											"uniqueItems": true
+										},
+										"on_goal_failed": {
+											"type": "object",
+											"required": [
+												"target",
+												"max_traversals"
+											],
+											"properties": {
+												"target": {
+													"type": "string",
+													"minLength": 1,
+													"maxLength": 64,
+													"pattern": "^[A-Za-z0-9_-]+$"
+												},
+												"max_traversals": {
+													"type": "integer",
+													"minimum": 1,
+													"maximum": 8
+												}
+											},
+											"additionalProperties": false
+										}
+									},
+									"additionalProperties": false
+								},
+								"minItems": 1
+							}
+						},
+						"required": [
+							"operation_id",
+							"tasks"
+						]
+					}
+				},
+				{
+					"name": "task_read",
+					"description": "Read complete current cards for selected Tasks. Use team_sync for whole-Team observation.\n\nCodemode: `tools.task_read(args)` resolves to a string.",
+					"eager_input_streaming": true,
+					"input_schema": {
+						"type": "object",
+						"properties": {
+							"task_ids": {
+								"type": "array",
+								"items": {
+									"type": "string",
+									"minLength": 1,
+									"maxLength": 128
+								},
+								"minItems": 1
+							}
+						},
+						"required": [
+							"task_ids"
+						]
+					}
+				},
+				{
+					"name": "task_update",
+					"description": "Apply one exact-version Task transition or context update. Waiting and ready remain derived.\n\nCodemode: `tools.task_update(args)` resolves to a string.",
+					"eager_input_streaming": true,
+					"input_schema": {
+						"type": "object",
+						"properties": {
+							"task_id": {
+								"type": "string",
+								"minLength": 1,
+								"maxLength": 128
+							},
+							"operation_id": {
+								"type": "string",
+								"minLength": 1,
+								"maxLength": 128
+							},
+							"expected_version": {
+								"type": "string",
+								"pattern": "^v_[0-9a-f]{16}$",
+								"minLength": 18,
+								"maxLength": 18
+							},
+							"transition": {
+								"enum": [
+									"claim",
+									"block",
+									"resume",
+									"goal_achieved",
+									"goal_failed",
+									"cancel"
+								]
+							},
+							"current_context": {
+								"type": "string",
+								"minLength": 1,
+								"maxLength": 2000
+							},
+							"evidence": {
+								"type": "string",
+								"minLength": 1
+							}
+						},
+						"required": [
+							"task_id",
+							"operation_id",
+							"expected_version"
+						]
+					}
+				},
+				{
+					"name": "worker_stop",
+					"description": "Stop one Worker after its nonterminal assigned Tasks resolve. Does not change Tasks.\n\nCodemode: `tools.worker_stop(args)` resolves to a string.",
+					"eager_input_streaming": true,
+					"input_schema": {
+						"type": "object",
+						"properties": {
+							"worker": {
+								"type": "string",
+								"minLength": 1,
+								"maxLength": 64
+							}
+						},
+						"required": [
+							"worker"
+						]
+					}
+				},
+				{
+					"name": "team_shutdown",
+					"description": "Stop remaining Workers and close the Team. A partial failure leaves it active for retry.\n\nCodemode: `tools.team_shutdown(args)` resolves to a string.",
+					"eager_input_streaming": true,
+					"input_schema": {
+						"type": "object",
+						"properties": {},
+						"required": []
+					}
+				},
+				{
+					"name": "alert_send",
+					"description": "Send exceptional Alerts to a Worker or announce to *. Accepted means stored, not presented or processed. Task state stays unchanged.\n\nCodemode: `tools.alert_send(args)` resolves to a string.",
+					"eager_input_streaming": true,
+					"input_schema": {
+						"type": "object",
+						"properties": {
+							"to": {
+								"type": "string",
+								"minLength": 1,
+								"maxLength": 64,
+								"description": "Worker name, or * for a Team announcement."
+							},
+							"kind": {
+								"enum": [
+									"clarification",
+									"attention",
+									"announcement"
+								]
+							},
+							"text": {
+								"type": "string",
+								"minLength": 1
+							},
+							"task_id": {
+								"type": "string",
+								"minLength": 1,
+								"maxLength": 128
+							},
+							"task_version": {
+								"type": "string",
+								"pattern": "^v_[0-9a-f]{16}$",
+								"minLength": 18,
+								"maxLength": 18
+							},
+							"interrupt": {
+								"type": "boolean",
+								"description": "Abort the recipient's current run first."
+							}
+						},
+						"required": [
+							"to",
+							"kind",
+							"text"
+						]
+					}
+				}
+			],
+			"thinking": {
+				"type": "enabled",
+				"budget_tokens": 8192,
+				"display": "summarized"
+			}
+		}
+	}
+}

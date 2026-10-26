@@ -30,10 +30,24 @@ test("crash: a node killed mid-delivery delivers every Team notice exactly once 
 		for (const worker of done.workers) {
 			const view = client.sub({ kind: "thread", threadId: worker.threadId });
 			const transcript = await client.until<any>(view, (v) => v.entries.length > 0);
-			const notices = transcript.entries.filter((e: any) => e.kind === "custom" && e.entryKind === "team.notice" && /AMPI-TEAM-TASK/.test(e.text));
-			const ids = notices.map((e: any) => /task_id=(\S+)/.exec(e.text)![1]);
 			const assigned = done.tasks.filter((t: any) => t.assignee === worker.name).map((t: any) => t.key);
-			assert.deepEqual([...ids].sort(), [...assigned].sort(), `${worker.name} got each Task notice once`);
+			const assertNotices = (entries: any[]) => {
+				// rc.7 canonical-task-cutover.acceptance.test.ts preserves the whole Task card in delivery.
+				const notices = entries
+					.filter((e: any) => e.kind === "custom" && e.entryKind === "team.notice")
+					.map((e: any) => JSON.parse(e.text))
+					.filter((notice: any) => notice.kind === "task");
+				const ids = notices.map(({ task }: any) => {
+					assert.equal(task.assignee, worker.name);
+					assert.match(task.version, /^v_[0-9a-f]{16}$/);
+					return task.id;
+				});
+				assert.deepEqual([...ids].sort(), [...assigned].sort(), `${worker.name} got each Task notice once`);
+			};
+			assertNotices(transcript.entries);
+			const firstNotice = transcript.entries.find((e: any) => e.kind === "custom" && e.entryKind === "team.notice" && JSON.parse(e.text).kind === "task");
+			assert.ok(firstNotice);
+			assert.throws(() => assertNotices([...transcript.entries, firstNotice]), { code: "ERR_ASSERTION" }, "a duplicate Task notice must fail the same receiving-end check");
 		}
 		assert.deepEqual(client.gaps, []);
 		client.close();

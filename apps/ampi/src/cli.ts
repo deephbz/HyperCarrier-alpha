@@ -1,13 +1,10 @@
 // `ampi [hub] | open | doctor | status | stop | version | node | bridge`
-import { instant, nameProcess, span, spanAsync } from "./trace.ts";
-import { localTime, startLoopWatch } from "./loop-watch.ts";
-import { connectSocket, runBridge, runDaemon, socketPath } from "./node/daemon.ts";
-import { existsSync, fchmodSync, fstatSync, readFileSync, writeFileSync } from "node:fs";
+// This module and its static imports are node code: `ampi node` loads them, and the node build hashes them
+// (shared/build.ts). The hub-side commands live in commands.ts, which `ampi node` never loads.
+import { ampiHome, connectSocket, lock, runBridge, runDaemon, socketPath } from "./node/daemon.ts";
+import { RESTART_EXIT } from "./node/supervisor.ts";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { format } from "node:util";
-import { spawn } from "node:child_process";
-import { hubConfigPath, Hub, hubProof, hubToken, loadHubConfig, newHubToken, saveHubToken } from "./hub/hub.ts";
-import { ampiHome, doctor, hubPort, versionLine } from "./doctor.ts";
 
 const USAGE = `usage: ampi [command]
 
@@ -21,77 +18,49 @@ const USAGE = `usage: ampi [command]
   status                    show this machine's node
   stop                      stop this machine's node (running work resumes on the next start)
   version                   print the version and build
+  node backup [STORE]       copy every thread store, or one, under ~/.ampi/backups (safe while the node runs)
+  node restore STORE FILE   replace a thread store with a backup; stop the node first
+  node install-service      run the node under launchd (Mac) or systemd (Linux); it restarts after a failure
+  node uninstall-service [--no-autostart]
+                            remove that service; the node then starts on demand again.
+                            --no-autostart: no connection starts it until install-service or \`ampi node\`
+  node inventory [--expect-stopped]
+                            the node owner and each thread store, read only; never starts a node.
+                            Exit 1 when a store does not read, or with --expect-stopped when a node owns the home
   node | bridge             internal: the node daemon, and the SSH bridge to it`;
 
 const [command = "hub", ...rest] = process.argv.slice(2);
 
-function flag(name: string): string | undefined {
-	const index = rest.indexOf(`--${name}`);
-	return index >= 0 ? rest[index + 1] : undefined;
-}
-
 switch (command) {
 	case "node": {
+		if (rest[0] && !rest[0].startsWith("-")) {
+			await nodeCommand(rest[0], rest.slice(1));
+			break;
+		}
 		const { hydrate } = await import("./plugins.ts");
 		process.env.AMPI_NODE_PROCESS = "1";
 		const tps = Number(process.env.AMPI_SIM_TPS);
 		const daemon = await runDaemon({ plugins: await hydrate(), ...(tps > 0 ? { simTokensPerSecond: tps } : {}) });
 		console.error(`[ampi node] ${daemon.runtime.info.nodeId} listening on ${daemon.socket} (pid ${process.pid})`);
-		const stop = async () => {
+		const stop = async (code: number) => {
 			await daemon.stop();
-			process.exit(0);
+			process.exit(code);
 		};
-		process.on("SIGTERM", stop);
-		process.on("SIGINT", stop);
+		process.on("SIGTERM", () => stop(0));
+		process.on("SIGINT", () => stop(0));
+		// `node.restart`: a clean stop with RESTART_EXIT, which a supervisor restarts and a clean exit 0 would not.
+		process.on("SIGUSR2", () => stop(RESTART_EXIT));
 		break;
 	}
 	case "bridge":
 		await runBridge();
 		break;
-	case "hub": {
-		nameProcess("hub");
-		instant("modules-loaded");
-		// hub.log is this output: each line carries its local time with offset, and long event-loop blocks are named (loop-watch.ts).
-		if (!process.stdout.isTTY) for (const name of ["log", "info", "warn", "error"] as const) {
-			const write = console[name].bind(console);
-			console[name] = (...args: unknown[]) => write(`${localTime()} ${format(...args)}`);
-		}
-		startLoopWatch();
-		keepOutputPrivate();
-		const configPath = flag("config") ?? hubConfigPath();
-		const rotated = rest.includes("--rotate-key") ? newHubToken() : undefined;
-		const config = span("config-load", "startup", () => loadHubConfig(configPath));
-		const hub = span("hub-construct", "startup", () => new Hub(config, { configPath, token: rotated ?? hubToken(ampiHome()), ...(rest.includes("--persistent-cookie") ? { persistentCookie: true } : {}) }));
-		const wanted = hubPort(flag("port"));
-		const port = await spanAsync("listen", "startup", () => hub.listen(wanted)).catch((error: NodeJS.ErrnoException) => {
-			if (error.code === "EADDRINUSE") {
-				console.error(`Port ${wanted} is in use. If AmPi already runs there, use: ampi open. Otherwise pick another port: ampi hub --port 7879`);
-				process.exit(1);
-			}
-			throw error;
-		});
-		// Saved only once this hub owns the port: a refused start must not strand a running hub's key.
-		if (rotated) saveHubToken(ampiHome(), rotated);
-		// Remembered so `ampi open` and `ampi doctor` find this hub without being told the port again.
-		writeFileSync(join(ampiHome(), "hub.port"), `${port}\n`, { mode: 0o600 });
-		const url = `http://127.0.0.1:${port}/?k=${hub.token}`;
-		// Only a terminal sees the key. Redirected output becomes a log that outlives the hub and the key's secrecy.
-		console.log(
-			process.stdout.isTTY
-				? `AmPi is running. Open this link (it carries this machine's access key):\n\n  ${url}\n\nAgents keep working after you close the window or stop the hub. Stop with Ctrl-C.`
-				: `AmPi is running: http://127.0.0.1:${port}/?k=… (ampi open prints the full link). Agents keep working after the hub stops.`,
-		);
-		if (rest.includes("--open") || rest.includes("--launch")) launch(url);
-		const stop = async () => {
-			instant("stop-requested");
-			await spanAsync("hub-close", "startup", () => hub.close());
-			instant("stopped");
-			process.exit(0);
-		};
-		process.on("SIGTERM", stop);
-		process.on("SIGINT", stop);
+	case "hub":
+	case "open":
+	case "doctor":
+	case "version":
+		await (await import("./commands.ts")).hubCommand(command, rest);
 		break;
-	}
 	case "status": {
 		// Reports the running node only; never starts one.
 		try {
@@ -106,33 +75,6 @@ switch (command) {
 		}
 		break;
 	}
-	case "open": {
-		// The link to a running hub, with the access key; --launch opens it in the default browser.
-		const port = hubPort(flag("port"));
-		const token = existsSync(join(ampiHome(), "hub.token")) ? hubToken() : "";
-		let proof = "";
-		try {
-			proof = ((await (await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(2000) })).json()) as { proof?: string }).proof ?? "";
-		} catch {}
-		if (!token || proof !== hubProof(token)) {
-			console.error(
-				proof
-					? `Port ${port} answers, but it is not this user's AmPi hub. If yours runs on another port: ampi open --port N`
-					: `No AmPi hub on port ${port}. Start one with: ampi hub`,
-			);
-			process.exit(1);
-		}
-		const url = `http://127.0.0.1:${port}/?k=${token}`;
-		console.log(url);
-		if (rest.includes("--launch") || rest.includes("--open")) launch(url);
-		break;
-	}
-	case "doctor":
-		process.exitCode = await doctor();
-		break;
-	case "version":
-		console.log(versionLine());
-		break;
 	case "stop": {
 		// Stops this machine's node. Running work resumes when it starts again (the hub or an SSH connection starts it).
 		const pidFile = join(ampiHome(), "node.pid");
@@ -159,19 +101,91 @@ switch (command) {
 		process.exit(2);
 }
 
-/** A launcher that sends the hub's output to a file makes that file the hub's log: keep it owner-only. */
-function keepOutputPrivate(): void {
-	for (const fd of [1, 2]) {
-		try {
-			const stat = fstatSync(fd);
-			if (stat.isFile() && stat.uid === process.getuid?.() && (stat.mode & 0o077) !== 0) fchmodSync(fd, 0o600);
-		} catch {}
+/** `ampi node <sub>`: store backups and the OS service. These never start a node. */
+async function nodeCommand(sub: string, args: string[]): Promise<void> {
+	const home = ampiHome();
+	const store = await import("./node/store-file.ts");
+	const supervisor = await import("./node/supervisor.ts");
+	switch (sub) {
+		case "backup": {
+			// SQLite's backup API copies a consistent state even while the node writes, so no lock is needed.
+			const { existsSync: exists, readdirSync } = await import("node:fs");
+			const threads = join(home, "threads");
+			const ids = args[0] ? [args[0]] : exists(threads) ? readdirSync(threads).filter((name) => exists(join(threads, name, "harness.sqlite"))).sort() : [];
+			for (const id of ids) console.log(await store.backupStore(home, id, "manual"));
+			if (ids.length === 0) console.log("No thread stores to back up.");
+			return;
+		}
+		case "restore": {
+			const [storeId, file] = args;
+			if (!storeId || !file) {
+				console.error("usage: ampi node restore STORE FILE");
+				process.exit(2);
+			}
+			const held = lock(home);
+			if ("owner" in held) {
+				console.error(`The node runs (pid ${held.owner}). Stop it first: ampi stop`);
+				process.exit(1);
+			}
+			try {
+				const result = await store.restoreStore(home, storeId, file);
+				console.log(`Restored ${storeId} from ${result.restored}.${result.previous ? ` The replaced store is in ${result.previous}.` : ""}`);
+			} finally {
+				held.release();
+			}
+			return;
+		}
+		case "install-service": {
+			const marker = supervisor.installService(home);
+			console.log(`Installed ${marker.unitPath}. ${marker.platform === "launchd" ? "launchd restarts a failed node every 10 s without a limit." : "systemd restarts a failed node at most 5 times in 5 minutes."}`);
+			return;
+		}
+		case "uninstall-service": {
+			const autostartOff = args.includes("--no-autostart");
+			let removed: boolean;
+			try {
+				removed = supervisor.uninstallService(home, { autostartOff });
+			} catch (error) {
+				if (!(error instanceof supervisor.UninstallError)) throw error;
+				console.error(error.message);
+				if (autostartOff) console.error(`Autostart stays off: ${supervisor.autostartOffPath(home)}`);
+				process.exit(1);
+			}
+			console.log(removed ? "Removed the node service." : "No node service is installed for this home.");
+			if (autostartOff) console.log(`Autostart is off: ${supervisor.autostartOffPath(home)}`);
+			return;
+		}
+		case "inventory": {
+			// One line for the owner, one per store.
+			const { existsSync: exists, readdirSync } = await import("node:fs");
+			const held = lock(home);
+			const owner = "owner" in held ? held.owner || "unknown" : undefined;
+			if (!("owner" in held)) held.release();
+			let answers = false;
+			try {
+				(await connectSocket(socketPath(home))).destroy();
+				answers = true;
+			} catch {}
+			console.log(`home ${home} · owner ${owner === undefined ? "none" : `pid ${owner}`} · socket ${answers ? "answers" : "silent"} · autostart ${exists(supervisor.autostartOffPath(home)) ? "off" : "on"}`);
+			let failed = args.includes("--expect-stopped") && (owner !== undefined || answers);
+			const threads = join(home, "threads");
+			const ids = exists(threads) ? readdirSync(threads).filter((name) => exists(join(threads, name, "harness.sqlite"))).sort() : [];
+			for (const id of ids) {
+				try {
+					const s = store.inventoryStore(home, id);
+					const last = s.last ? `last ${s.last.id} (conversation ${s.last.conversation}, commit ${s.last.commitSeq}${s.last.type ? `, ${s.last.type}` : ""})` : "no entries";
+					console.log(`store ${s.storeId} · pi-durable ${s.piDurable ?? "unknown"} · schema ${s.schemaVersion} · threads ${s.threads} · entries ${s.entries} · ${last}`);
+				} catch (error) {
+					failed = true;
+					console.log(`store ${id} · unreadable: ${(error as Error).message}`);
+				}
+			}
+			console.log(`stores ${ids.length}`);
+			if (failed) process.exitCode = 1;
+			return;
+		}
+		default:
+			console.error(USAGE);
+			process.exit(2);
 	}
-}
-
-function launch(url: string): void {
-	const opener = process.platform === "darwin" ? "open" : "xdg-open";
-	spawn(opener, [url], { stdio: "ignore", detached: true })
-		.on("error", () => console.error(`Could not run ${opener}; open the link yourself.`))
-		.unref();
 }

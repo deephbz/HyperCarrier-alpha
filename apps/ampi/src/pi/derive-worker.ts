@@ -2,14 +2,14 @@
 import { createHash } from "node:crypto";
 import { parentPort } from "node:worker_threads";
 import { setImmediate as yieldLoop } from "node:timers/promises";
-import { selectRarebits, measureRarebits } from "@hypercarrier/rarebit/core";
+import { contextTokensOf } from "@hypercarrier/auto-compact-durable/budget";
 import { getImportedRarebitEntryIds } from "@hypercarrier/rarebit/fork-lineage";
-// @ts-ignore: shared reader is plain ESM.
-import { openPiSessionRange } from "../../../trace-analytics/src/sources/transcript-range.mjs";
+import { openCopyReader, sourceVersionOf } from "./copy-reader.ts";
 import { indexProse, forgetSearch, forgetSearchBatch, findInSession, backfillSearch } from "./search.ts";
 import { openWorkingSet } from "./working-set-db.ts";
-import { derivedVersion, sameIndex, SUMMARY_VERSION, PROSE_CHARS, MESSAGE_CHARS, TOOL_CHARS, TOOL_ARGS_CHARS, indexFile, type Source, type Derived, type WorkerJob } from "./working-set-types.ts";
+import { derivedVersion, sameIndex, SUMMARY_VERSION, PROSE_CHARS, MESSAGE_CHARS, TOOL_CHARS, TOOL_ARGS_CHARS, type Source, type Derived, type WorkerJob } from "./working-set-types.ts";
 import { projectEntry } from "./projection.ts";
+import { emptyKinds as kinds, inheritedBefore, rarebitSelectorVersion, visitIngestItems, type LineageRecord } from "./reader-item.ts";
 import { boundToolArgs, clipInjected } from "../shared/entry-shapes.ts";
 import type { ToolArgsPreview } from "../shared/protocol.ts";
 import { OpenCalls } from "../shared/tool-state.ts";
@@ -18,10 +18,10 @@ import type { PiReaderEntry } from "./views/types.ts";
 import type { Kinds, RarebitItem } from "./views/rarebit.ts";
 import { complete, flushTrace, nameThread, nowUs, tracing } from "../trace.ts";
 
-const kinds = (): Kinds => ({ user: 0, continuation: 0, stop: 0, toolCalls: 0, toolResults: 0, thinking: 0, summary: 0, other: 0 });
 const positive = (n: unknown) => typeof n === "number" && Number.isFinite(n) && n > 0 ? n : 0;
 // The reader sets a missing price to null; a cost object or number may also arrive, and totals skip anything else.
 const costOf = (u: PiReaderEntry["usage"]) => positive(typeof u?.cost === "number" ? u.cost : u?.cost?.total);
+/** Whether an entry reported a price at all; $0 is a price, a missing cost is not. */
 const hasPrice = (u: PiReaderEntry["usage"]) => { const c = typeof u?.cost === "number" ? u.cost : u?.cost?.total; return typeof c === "number" && Number.isFinite(c); };
 const parse = <T,>(x: unknown): T => JSON.parse(String(x));
 const body = (e: PiReaderEntry) => e.blocks?.filter((b) => b.type === "text").map((b) => b.text ?? "").join("\n") ?? e.text ?? "";
@@ -52,8 +52,8 @@ const OWN_BOUND: Record<string, [key: string, limit: number]> = { "tool-result":
 
 // The entry disclosure means visible prose was cut. Tool arguments, thinking and
 // own-bound cards shorten in place and mark themselves, so the UI offers the source there.
-function preview(e: PiReaderEntry) {
- const p = projectEntry(e as never);
+function preview(e: PiReaderEntry, rawExport?: string, data?: unknown) {
+ const p = projectEntry(e as never, { rawExport, data });
  if (!p) return null;
  if (p.kind === "custom") {
   const { message, clipped } = clipInjected(p.message, PROSE_CHARS);
@@ -89,7 +89,7 @@ function preview(e: PiReaderEntry) {
 
 function derive(source: Source, reader: any, db: ReturnType<typeof openWorkingSet>, version: string, started: number): Derived {
  const session = reader.session();
- const records: PiReaderEntry[] = [], nativeMeta: any[] = [], occurrences: any[] = [], rarebitChars = new Map<string, number>();
+ const records: PiReaderEntry[] = [], lineage: LineageRecord[] = [], occurrences: any[] = [], rarebitChars = new Map<string, number>();
  const buckets = new Map<number, [number, number, number]>(), hints: [number, string][] = [], marks: [number, string, "stop" | "error"][] = [];
  let whole = kinds(), live = kinds(), totalChars = 0, rareChars = 0, count = 0, cost = 0, staleItems = 0, priced = false;
  const rarebitHash = createHash("sha256");
@@ -99,10 +99,10 @@ function derive(source: Source, reader: any, db: ReturnType<typeof openWorkingSe
  const counts = { user: 0, continuation: 0, stop: 0, compactions: 0 };
  for (const row of db.prepare('SELECT * FROM entries WHERE path=? ORDER BY position').iterate(source.path)) {
   const e = parse<PiReaderEntry>(row.feature), occurrence = row.occurrence ? parse<any>(row.occurrence) : null;
-  const meta = parse<{ type?: string; model?: string }>(row.native_meta);
-  records.push(e); nativeMeta.push(meta); count++;
-  // Pi's setModel (`/model`) writes model_change before any turn uses it; the latest of either names the model.
-  if (meta.type === "model_change" && meta.model) model = meta.model;
+  const meta = parse<LineageRecord>(row.native_meta);
+  records.push(e); lineage.push(meta); count++;
+  // A model change (Pi's `/model`) can precede any turn that uses it; the latest of either names the model.
+  if (meta.model) model = meta.model;
   if (occurrence) {
    occurrences.push(occurrence);
    if (occurrence.outcome === "user") lastUser = count;
@@ -128,7 +128,7 @@ function derive(source: Source, reader: any, db: ReturnType<typeof openWorkingSe
    // Provider-qualified, as the pi-durable projection and hc-hud's alias keys name a model.
    if (e.model) model = e.provider ? `${e.provider}/${e.model}` : e.model;
    if (e.usage) {
-    contextTokens = positive(e.usage.input) + positive(e.usage.output) + positive(e.usage.cacheRead) + positive(e.usage.cacheWrite);
+    contextTokens = contextTokensOf(e.usage);
     const prompt = positive(e.usage.input) + positive(e.usage.cacheRead) + positive(e.usage.cacheWrite);
     cacheHit = prompt > 0 ? 100 * positive(e.usage.cacheRead) / prompt : undefined;
    }
@@ -144,11 +144,9 @@ function derive(source: Source, reader: any, db: ReturnType<typeof openWorkingSe
    if (e.role === "assistant" && e.stop === "error") marks.push([t, e.id, "error"]);
   }
  }
- // The published selector decides occurrence semantics; this probe supplies its version.
- selector = String(selectRarebits([]).manifest.selectorVersion);
- const imported = getImportedRarebitEntryIds(nativeMeta);
- const inheritedBefore = session.header?.parentSession ? Date.parse(session.header.timestamp ?? "") - 1000 : NaN;
- const arc = chunkSession(records, { selection: { occurrences }, imported, inheritedBefore, rarebitChars }, session.cwd ?? "");
+ selector = rarebitSelectorVersion();
+ const imported = getImportedRarebitEntryIds(lineage);
+ const arc = chunkSession(records, { selection: { occurrences }, imported, inheritedBefore: inheritedBefore(session), rarebitChars }, session.cwd ?? "");
  db.prepare('DELETE FROM arc_evidence WHERE path=?').run(source.path);
  const putEvidence = db.prepare('INSERT INTO arc_evidence VALUES (?,?,?)');
  let inputChars = 0;
@@ -158,7 +156,7 @@ function derive(source: Source, reader: any, db: ReturnType<typeof openWorkingSe
  const tokens = (value: Kinds) => Object.fromEntries(Object.entries(value).map(([key, n]) => [key, Math.ceil(n / 4)])) as Kinds;
  return {
   version, summaryVersion: SUMMARY_VERSION, bytes: reader.info().bytes, asOf: Date.now(), invalidLines: reader.info().invalidLines, count, tip: session.tip,
-  session: { id: session.id, session: session.id.slice(3), ref: session.ref, cwd: session.cwd, started: session.started, updated: session.updated, title },
+  session: { id: session.id, session: session.id.slice(session.id.indexOf(":") + 1), ref: session.ref, cwd: session.cwd, started: session.started, updated: session.updated, title },
   cost, priced, ...(model ? { model } : {}), ...(contextTokens ? { contextTokens } : {}), ...(cacheHit !== undefined ? { cacheHit } : {}), ...(lastPreview ? { preview: lastPreview } : {}),
   ...(open.ids.size ? { openCalls: open.ids.size } : {}),
   timeline: { start: hints[0]?.[0] ?? 0, end: hints.at(-1)?.[0] ?? 0, entries: sampled, entryCount: count,
@@ -172,7 +170,7 @@ function derive(source: Source, reader: any, db: ReturnType<typeof openWorkingSe
 }
 
 export async function materialize(source: Source): Promise<Derived | null> {
- const started = performance.now(), reader = openPiSessionRange(source.file, { host: source.host, indexPath: indexFile(source) });
+ const started = performance.now(), reader = openCopyReader(source);
  const db = openWorkingSet(source.cacheDir);
  try {
   const previousRow = db.prepare('SELECT data FROM sessions WHERE path=?').get(source.path);
@@ -181,38 +179,18 @@ export async function materialize(source: Source): Promise<Derived | null> {
   if (!reader.session()) return null;
   const version = derivedVersion(change.version);
   if (previous?.version === version && previous.summaryVersion === SUMMARY_VERSION) return previous;
-  const rebuild = change.reset || !previous || !sameIndex(previous.version);
+  // A durable copy rebuilt under a new generation does not continue the stored version.
+ const rebuild = change.reset || !previous || !sameIndex(previous.version) || Boolean(reader.continues && !reader.continues(sourceVersionOf(previous.version)));
   db.exec('BEGIN IMMEDIATE');
   try {
    if (rebuild) { db.prepare('DELETE FROM entries WHERE path=?').run(source.path); forgetSearch(db, source.path); }
    const put = db.prepare('INSERT OR REPLACE INTO entries VALUES (?,?,?,?,?,?,?,?,?,?,?,?)');
-   reader.visit(({ native, entry: e, position }: { native: any; entry: PiReaderEntry; position: number }) => {
+   visitIngestItems(reader, ({ entry: e, position, data, semantics: { rarebit, proseCounts, lineage } }) => {
     indexProse(db, source.path, e);
-    const selection = selectRarebits([native]);
-    const occurrence = selection.occurrences[0];
-    if (occurrence?.outcome === "user" && e.kind !== "human") selection.occurrences = [];
-    const chosen = selection.occurrences[0];
-    const measurement = measureRarebits([native], selection) as { totalMessageProseChars: number; rarebitChars: number };
-    let item: RarebitItem | null = chosen?.sourceEntryId ? { id: chosen.sourceEntryId, kind: chosen.outcome, t: chosen.timestamp, text: chosen.text } as RarebitItem : null;
-    if (e.kind === "compaction") item = { id: e.id, kind: "compaction", t: native.timestamp ?? null, text: "Context restarts here" };
-    if (e.role === "assistant" && e.stop === "error") item = { id: e.id, kind: "error", t: native.timestamp ?? null, text: e.error || "The agent reported a terminal error." };
-    const chars = kinds();
-    if (native.type === "compaction") chars.summary += String(native.summary ?? "").length;
-    const m = native.message;
-    for (const b of typeof m?.content === "string" ? [{ type: "text", text: m.content }] : m?.content ?? []) {
-     if (b.type === "thinking") chars.thinking += String(b.thinking ?? b.text ?? "").length;
-     else if (b.type === "toolCall") chars.toolCalls += JSON.stringify(b.arguments ?? b.args ?? {}).length + String(b.name ?? "").length;
-     else if (b.type === "text") chars[m.role === "toolResult" ? "toolResults" : chosen?.outcome as keyof Kinds ?? "other"] += String(b.text ?? "").length;
-    }
-    const metadata = { id: native.id, type: native.type,
-     ...(native.type === "model_change" && native.modelId ? { model: native.provider ? `${native.provider}/${native.modelId}` : String(native.modelId) } : {}),
-     ...(native.rarebitFork ? { rarebitFork: { version: native.rarebitFork.version, kind: native.rarebitFork.kind } } : {}),
-     ...(native.type === "custom" ? { customType: native.customType, data: { schemaVersion: native.data?.schemaVersion,
-      opening: { seedEntryId: native.data?.opening?.seedEntryId }, importedEntryIds: native.data?.importedEntryIds } } : {}) };
-    put.run(source.path, e.id, position, e.t, JSON.stringify(preview(e)), JSON.stringify(compact(e)),
-     occurrence ? JSON.stringify({ sourceEntryId: occurrence.sourceEntryId, outcome: occurrence.outcome, timestamp: occurrence.timestamp, text: occurrence.text.slice(0, 700) }) : null,
-     JSON.stringify(metadata), item ? JSON.stringify(item) : null, measurement.totalMessageProseChars, measurement.rarebitChars, JSON.stringify(chars));
-   }, rebuild ? {} : { after: previous.tip });
+    put.run(source.path, e.id, position, e.t, JSON.stringify(preview(e, source.rawExport, data)), JSON.stringify(compact(e)),
+     rarebit.occurrence ? JSON.stringify(rarebit.occurrence) : null, JSON.stringify(lineage), rarebit.item ? JSON.stringify(rarebit.item) : null,
+     rarebit.totalMessageProseChars, rarebit.rarebitChars, JSON.stringify(proseCounts));
+   }, rebuild ? {} : { after: previous!.tip });
    const derived = derive(source, reader, db, version, started);
    db.prepare('DELETE FROM evicted WHERE path=?').run(source.path);
    db.prepare('INSERT OR REPLACE INTO sessions VALUES (?,?)').run(source.path, JSON.stringify(derived));

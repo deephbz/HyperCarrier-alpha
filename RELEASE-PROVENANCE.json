@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "sourceRepository": "HyperCarrier",
-  "sourceCommit": "0385705eb8141f6a1402cd5f28ce9177a5e29792",
-  "sourceTree": "3e82c15d9c88cb74c2887fdede86232c0fd00ce1",
+  "sourceCommit": "26741202f3b1687262f965ef789083f6051dbd2c",
+  "sourceTree": "67886b18ca7ef3fdc65a36183bb07b3173228362",
   "sourceWorktreeDirty": false,
-  "exportContentSha256": "b8732fdc152bbef4363caa0e4fc06c8aa945fd567b585de699fb3b26d9bec38c",
-  "exportManifestSha256": "c299b87ec9cee4ace160ed608760952d4a1aa865615bf894649c35c2995e8fda",
+  "exportContentSha256": "13a23eaf2f7c4e6baaac55047bc5faf476082133a770c8b10fae1a923110adcc",
+  "exportManifestSha256": "117dd3ec27caa4725a528a22eee75794b0d6471c2b81b6dff9b7176f5504cca1",
   "dependencies": [],
   "submodules": [
     {
@@ -66,6 +66,42 @@
         "kind": "npm-package",
         "name": "trace-analytics",
         "version": "0.2.0"
+      }
+    },
+    {
+      "name": "packages/rarebit-durable",
+      "path": "packages/rarebit-durable",
+      "repository": "https://github.com/deephbz/rarebit-durable.git",
+      "commit": "857d73072c8d9238f1279c722fb0549b4c36191d",
+      "tree": "c2c40e58e75af285dd91aa18ef6c16aaa3ca1ad7",
+      "identity": {
+        "kind": "npm-package",
+        "name": "@hypercarrier/rarebit-durable",
+        "version": "0.1.1"
+      }
+    },
+    {
+      "name": "packages/auto-compact-durable",
+      "path": "packages/auto-compact-durable",
+      "repository": "https://github.com/deephbz/auto-compact-durable.git",
+      "commit": "b7be5923b45167d6c258af230f4366ac04352a16",
+      "tree": "bd4bebce1add559dcd406174b6954b8c695976e6",
+      "identity": {
+        "kind": "npm-package",
+        "name": "@hypercarrier/auto-compact-durable",
+        "version": "0.1.1"
+      }
+    },
+    {
+      "name": "packages/pi-team-durable",
+      "path": "packages/pi-team-durable",
+      "repository": "https://github.com/deephbz/pi-team-durable.git",
+      "commit": "c6ca466f82accd1b2073c3819390b104b3617ad9",
+      "tree": "c9d313dcf2815385270077125261b7b274700eae",
+      "identity": {
+        "kind": "npm-package",
+        "name": "@hypercarrier/pi-team-durable",
+        "version": "0.1.0-rc.3"
       }
     }
   ],

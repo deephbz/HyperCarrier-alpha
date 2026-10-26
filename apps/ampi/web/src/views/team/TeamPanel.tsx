@@ -1,8 +1,10 @@
 import { useMemo, useState } from "react";
 import type { PiTeamTask, TeamValue } from "../../../../src/pi/views/team.ts";
-import { useHosts, useTopic } from "../../client.ts";
+import { findHost, useHosts, useTopic } from "../../client.ts";
 import { href } from "../../util.ts";
+import { hostLabelFor } from "../../components/host-label.ts";
 import "./team.css";
+import { Messages } from "./Messages.tsx";
 
 type Team = TeamValue["teams"][number];
 const LABELS: Record<string, string> = { ready: "Ready", in_progress: "In progress", blocked: "Blocked", dependency_waiting: "Waiting on dependencies", goal_failed: "Goal failed", goal_achieved: "Goal achieved", cancelled: "Cancelled", legacy_completed: "Completed (legacy)" };
@@ -117,19 +119,32 @@ function Tasks({ team, host }: { team: Team; host: string }) {
 	</section>;
 }
 
+function TeamContent({ team, host }: { team: Team; host: string }) {
+ const [mode, setMode] = useState("tasks");
+ const messages = team.messages ?? { availability: "unavailable" as const, reason: "Messages unavailable: this Host does not publish message records." };
+ return <>
+  <div className="ptb-toggle ptb-view-toggle" role="group" aria-label="Team view">
+   <button aria-pressed={mode === "tasks"} onClick={() => setMode("tasks")}>Tasks</button>
+   <button aria-pressed={mode === "messages"} onClick={() => setMode("messages")}>Messages</button>
+  </div>
+  {mode === "messages" ? <Messages key={messages.availability === "available" ? JSON.stringify([messages.source, messages.epoch]) : "unavailable"} value={messages} /> : <Tasks team={team} host={host} />}
+ </>;
+}
+
 export function TeamPanel({ host, threadId }: { host: string; threadId: string }) {
 	const { value, stale, error } = useTopic(host, { kind: "view", view: "team", threadId });
 	const { hosts } = useHosts();
-	const away = hosts.find(h => h.id === host)?.status !== "connected";
+	const away = findHost(hosts, host)?.status !== "connected";
+	const label = hostLabelFor(host, hosts);
 	const failed = value && "error" in value;
 	const team = value && !("error" in value) ? value : undefined;
 	const availability = team?.availability;
 	return <div className="ptb">
 		{error || failed ? <p className="ptb-notice">Team view could not load. Reconnect this Host and reopen the panel.</p>
 			: !value || availability === "loading" ? <p className="ptb-hint">Reading the Team…</p>
-			: availability === "absent" ? <p className="ptb-notice">Pi Team Bright is not installed on {host}. Install it on that Host to read the Team.</p>
-			: stale || away || !["available", "partial"].includes(availability!) ? <p className="ptb-notice">{away ? `${host} is away.` : "Pi Team Bright is unavailable."} Showing the last observation, not current state. Reconnect the Host or check Pi Team Bright there.</p>
-			: availability === "partial" ? <p className="ptb-notice">Pi Team Bright returned an incomplete observation. Check the Team’s diagnostics on {host}.</p> : null}
+			: availability === "absent" ? <p className="ptb-notice">Pi Team Bright is not installed on {label}. Install it on that Host to read the Team.</p>
+			: stale || away || !["available", "partial"].includes(availability!) ? <p className="ptb-notice">{away ? `${label} is away.` : "Pi Team Bright is unavailable."} Showing the last observation, not current state. Reconnect the Host or check Pi Team Bright there.</p>
+			: availability === "partial" ? <p className="ptb-notice">Pi Team Bright returned an incomplete observation. Check the Team’s diagnostics on {label}.</p> : null}
 		{team?.teams?.map(team => <section key={team.name}>
 			<h2 title={team.name}>{team.name}</h2>
 			<h3>Members <span>{team.members.length}</span></h3>
@@ -139,7 +154,7 @@ export function TeamPanel({ host, threadId }: { host: string; threadId: string }
 				<span className="ptb-role">{m.role === "lead" ? "lead" : "worker"}</span>
 				<span className="ptb-live">{m.status === "streaming" ? "working" : m.status === "tools" ? "running tools" : m.status}</span>
 			</li>)}</ul>
-			<Tasks team={team} host={host} />
+			<TeamContent team={team} host={host} />
 			{team.issues.length > 0 && <details className="ptb-diagnostics"><summary>Read diagnostics</summary><ul>{team.issues.map(issue => <li key={issue}>{issue.replaceAll("_", " ")}</li>)}</ul></details>}
 		</section>)}
 		{team && availability === "available" && !team.teams?.length && <p className="ptb-hint">This Session has no recorded Team. Open a Team member’s Session.</p>}

@@ -93,13 +93,11 @@ add('S09.e', 'Models · OAuth prompt (synthetic)', 'Settings', '#/v/overview', {
 add('S10.a', 'Node UI · Info panel', 'Frozen node UI', thread('worker-gui', 'info'), { node: true });
 add('S10.b', 'Node UI · Changes panel', 'Frozen node UI', thread('worker-gui', 'changes'), { node: true });
 add('S10.c', 'Node UI · Changes error', 'Frozen node UI', thread('worker-gui', 'changes'), { node: true, reject: true });
-add('S10.d', 'Node UI · Shell panel', 'Frozen node UI', thread('worker-gui', 'shell'), { node: true });
 add('S10.e', 'Node UI · Rarebit panel', 'Frozen node UI', thread('worker-gui', 'rarebit'), { node: true });
 add('S10.f', 'Node UI · Team panel', 'Frozen node UI', thread('lead', 'team'), { node: true });
 add('S10.g', 'Node UI · new thread dialog', 'Frozen node UI', '#/v/overview', { node: true, setup: 'new-agent' });
 add('S10.h', 'Node UI · composer slash menu', 'Frozen node UI', thread('worker-gui'), { node: true, setup: 'slash' });
 add('S10.i', 'Node UI · image attachment', 'Frozen node UI', thread('worker-gui'), { node: true, setup: 'image' });
-add('S10.j', 'Node UI · full terminal', 'Frozen node UI', '#/h/devbox/x/ux-terminal', { node: true });
 add('S11.a', 'Unknown page · recovery', 'Recovery', '#/v/unknown-synthetic-page');
 add('S01.h', 'Timeline · zoomed range', 'Timeline', timeline, { setup: 'zoom' });
 add('S01.i', 'Timeline · stream inspector', 'Timeline', timeline, { setup: 'hover-stream' });

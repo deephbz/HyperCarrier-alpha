@@ -1,0 +1,105 @@
+[
+	{
+		"id": "base-prompt",
+		"reason": "The node keeps the AmPi preamble instead of Pi's built-in base prompt (its tool list, rules, and docs), and its environment section replaces Pi's <cwd>.",
+		"cite": "apps/ampi/docs/durable/node-design.md, Pi parity table, 'System prompt' row",
+		"edits": [
+			{
+				"systemBlock": 0,
+				"preamble": "You are an expert coding agent running inside AmPi, a durable agent harness. You help the user by reading files, running commands, editing code, and writing new files. Your work is committed to durable storage as it happens, so a crash or restart resumes where you stopped.\n\nRules:\n- Read before you edit. Prefer small, exact edits over rewriting whole files.\n- Use bash for searching (rg, find), building, and testing. Keep command output focused.\n- When the task is done, say plainly what changed and how you verified it. Say when something is not verified.\n- Ask the user only when a decision is genuinely theirs; otherwise make a reasonable choice and state it."
+			},
+			{
+				"systemBlock": 0,
+				"section": "tools",
+				"remove": true
+			},
+			{
+				"systemBlock": 0,
+				"section": "rules",
+				"remove": true
+			},
+			{
+				"systemBlock": 0,
+				"section": "docs",
+				"remove": true
+			},
+			{
+				"systemBlock": 1,
+				"section": "cwd",
+				"replace": "<environment>\nWorking directory: <FIXTURE>/project\nPlatform: <PLATFORM>\n</environment>"
+			}
+		]
+	},
+	{
+		"id": "codemode-section",
+		"reason": "pi-durable code mode lists the tools scripts can call in its <codemode> section, with their declarations; Pi appends one 'Codemode: tools.<name>(args) resolves to ...' paragraph to each tool description instead. The codemode description says scripts survive a restart and describes the models API.",
+		"cite": "apps/ampi/docs/durable/node-design.md, Pi parity table, 'Coding tools' row",
+		"edits": [
+			{
+				"stripDescriptionSuffix": "\\n\\nCodemode: `tools\\.[A-Za-z_$][\\w$]*\\(args\\)` resolves to [^\\n]*\\.$"
+			},
+			{
+				"tool": "codemode",
+				"description": "Run JavaScript that calls other tools. The input is raw JavaScript (not JSON, no code fence), run as an async function body in a QuickJS sandbox: top-level `await` and `return` work. No Node, file system, network, or timers.\n- `await tools.<name>({ ...args })` resolves to a string, or an object if the tool's declaration says so, and rejects with an Error on failure. A tool whose declaration returns an object resolves on failure too when it returned that object; check its fields. Calls still running when the script ends are cancelled.\n- The script survives a restart: it resumes where it was, without running finished calls again.\n- Optional first line: `// @options: {\"max_output_tokens\": 10000, \"timeout_ms\": 60000}`\n\nGlobals:\n- `text(value)`, `image(dataUrlOrImageBlock)`, `console.log(...)`, and top-level `return` add output; `exit()` ends the script. With several text items, each starts with a `==> text N/M <==` line, and `console` lines follow the other output in one `<console_output>` block. `image()` also saves the image to a temp file and the result names its path.\n- `store(key, value)` and `load(key)` keep JSON values across codemode calls.\n- `ALL_TOOLS`, `await searchTools(query, { limit?, namespace? })`, `await describeTool(name)`, `await describeNamespace(name)`: find tools the `codemode` section does not list.\n\n`models` (all functions return promises):\n- `models.getModelsOfType(type, provider?)`, `models.getAvailableOfType(type, provider?)` (configured auth only), `models.getModelOfType(type, provider, id)`: the catalog; `type` is \"chat\", \"image\", or \"classifier\".\n- `models.classify(model, { state: { ... }, images?: [{ type: \"image\", data, mimeType }], questions: { <id>: { type: \"choice\", instructions, criteria: { <label>: <meaning> } } | { type: \"score\", instructions, criteria: [<lowest level>, ..., <highest level>] } | { type: \"bool\", instructions, criteria: { true: <meaning>, false: <meaning> } } } })` resolves to `{ answers: { <id>: ... }, stopReason, errorMessage?, usage? }`.\n- `models.generateImages(model, { input: [{ type: \"text\", text: <prompt> }, ...optional { type: \"image\", data, mimeType }] })` resolves to `{ output: [image blocks], stopReason, errorMessage?, usage? }`; show each image with `image(block)`.\nAt most 4 classify/generateImages calls run at once; more wait.\n\nThe `codemode` section of the system prompt lists the tools scripts can call, by namespace, as far as space allows."
+			},
+			{
+				"systemBlock": 1,
+				"section": "codemode",
+				"insertAfter": "environment",
+				"text": "<codemode>\nTools scripts can call (`await tools.<name>(args)`):\n\n### `read`\nRead the contents of a file. Supports text files and images (jpg, png, gif, webp, bmp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.\n\ncodemode tool declaration:\n```ts\ndeclare const tools: { read(args: {\n  // Maximum number of lines to read\n  limit?: number;\n  // Line number to start reading from (1-indexed)\n  offset?: number;\n  // Path to the file to read (relative or absolute)\n  path: string;\n}): Promise<string>; };\n```\n\n### `bash`\nExecute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.\n\ncodemode tool declaration:\n```ts\ndeclare const tools: { bash(args: {\n  // Shell command to execute\n  command: string;\n  // Timeout in seconds (optional, no default timeout)\n  timeout?: number;\n}): Promise<{\n  exitCode: number;\n  // File with the complete output, when it was spilled\n  fullOutputPath?: string;\n  // Combined stdout and stderr: the retained tail, as the model sees it\n  output: string;\n  // Whether earlier output was dropped\n  truncated: boolean;\n}>; };\n```\n\n### `edit`\nEdit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.\n\ncodemode tool declaration:\n```ts\ndeclare const tools: { edit(args: {\n  // One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.\n  edits: Array<{\n    // Replacement text for this targeted edit.\n    newText: string;\n    // Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call.\n    oldText: string;\n  }>;\n  // Path to the file to edit (relative or absolute)\n  path: string;\n}): Promise<string>; };\n```\n\n### `write`\nWrite content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.\n\ncodemode tool declaration:\n```ts\ndeclare const tools: { write(args: {\n  // Content to write to the file\n  content: string;\n  // Path to the file to write (relative or absolute)\n  path: string;\n}): Promise<string>; };\n```\n\n### `rarebit_recall`\nReread exact earlier user messages and assistant prose from this conversation's full durable history, including parts compaction removed from your context. Tool calls and results are not included.\n\ncodemode tool declaration:\n```ts\ndeclare const tools: { rarebit_recall(args: {\n  // Most recent matches to return (default 12, max 50).\n  limit?: number;\n  // Case-insensitive words; every word must appear.\n  query?: string;\n  role?: \"user\" | \"assistant\" | \"any\";\n}): Promise<string>; };\n```\n\n### `team_create`\nCreate and bind one active Team for this leader Session. Does not create Workers or Tasks.\n\ncodemode tool declaration:\n```ts\ndeclare const tools: { team_create(args: {\n  // @minLength 1 @maxLength 64\n  name: string;\n  pane_layout?: {\n    // @integer @minimum 1\n    columns_per_row?: number;\n    // @exclusiveMinimum 0.1 @exclusiveMaximum 1\n    leader_share: number;\n    // @integer @minimum 1\n    worker_limit?: number;\n    worker_tiling: \"linear\" | \"adaptive\" | \"grid\";\n  };\n  // The long-lived Team outcome and operating boundary.\n  // @minLength 1\n  purpose: string;\n}): Promise<string>; };\n```\n\n### `team_sync`\nReturn a whole-Team snapshot or incremental coordination updates. Use task_read for selected complete Task cards. Snapshots also list recent received Alerts; recent is not unresolved.\n\ncodemode tool declaration:\n```ts\ndeclare const tools: { team_sync(args: {\n  // Snapshot restores context; updates returns one available page immediately.\n  view: \"snapshot\" | \"updates\";\n}): Promise<string>; };\n```\n\n### `ensure_worker`\nCreate or reuse a Worker for a standing area. Assign work with task_graph_apply.\n\ncodemode tool declaration:\n```ts\ndeclare const tools: { ensure_worker(args: {\n  // Model role name; omit for the configured default on new Workers.\n  // @minLength 1 @maxLength 64\n  model_role?: string;\n  // @minLength 1 @maxLength 64\n  name: string;\n  // Standing area, not a Task.\n  // @minLength 1\n  scope: string;\n}): Promise<string>; };\n```\n\n### `task_graph_apply`\nAtomically apply the complete assigned Task graph revision. Task authority then derives readiness and bounded failure routing.\n\ncodemode tool declaration:\n```ts\ndeclare const tools: { task_graph_apply(args: {\n  // @minLength 18 @maxLength 18 @pattern ^g_[0-9a-f]{16}$\n  expected_graph_version?: string;\n  // @minLength 1 @maxLength 128\n  operation_id: string;\n  // @minItems 1\n  tasks: Array<{\n    // @minLength 1 @maxLength 64\n    assignee: string;\n    // Desired outcome and external success signal.\n    // @minLength 1 @maxLength 1600\n    goal: string;\n    // @minLength 1 @maxLength 64 @pattern ^[A-Za-z0-9_-]+$\n    key: string;\n    // @uniqueItems\n    needs?: Array<string>;\n    on_goal_failed?: {\n      // @integer @minimum 1 @maximum 8\n      max_traversals: number;\n      // @minLength 1 @maxLength 64 @pattern ^[A-Za-z0-9_-]+$\n      target: string;\n    };\n    // @minLength 1 @maxLength 80\n    title: string;\n  }>;\n}): Promise<string>; };\n```\n\n### `task_read`\nRead complete current cards for selected Tasks. Use team_sync for whole-Team observation.\n\ncodemode tool declaration:\n```ts\ndeclare const tools: { task_read(args: {\n  // @minItems 1\n  task_ids: Array<string>;\n}): Promise<string>; };\n```\n\n### `task_update`\nApply one exact-version Task transition or context update. Waiting and ready remain derived.\n\ncodemode tool declaration:\n```ts\ndeclare const tools: { task_update(args: {\n  // @minLength 1 @maxLength 2000\n  current_context?: string;\n  // @minLength 1\n  evidence?: string;\n  // @minLength 18 @maxLength 18 @pattern ^v_[0-9a-f]{16}$\n  expected_version: string;\n  // @minLength 1 @maxLength 128\n  operation_id: string;\n  // @minLength 1 @maxLength 128\n  task_id: string;\n  transition?: \"claim\" | \"block\" | \"resume\" | \"goal_achieved\" | \"goal_failed\" | \"cancel\";\n}): Promise<string>; };\n```\n\n### `worker_stop`\nStop one Worker after its nonterminal assigned Tasks resolve. Does not change Tasks.\n\ncodemode tool declaration:\n```ts\ndeclare const tools: { worker_stop(args: {\n  // @minLength 1 @maxLength 64\n  worker: string;\n}): Promise<string>; };\n```\n\n### `team_shutdown`\nStop remaining Workers and close the Team. A partial failure leaves it active for retry.\n\ncodemode tool declaration:\n```ts\ndeclare const tools: { team_shutdown(args: {}): Promise<string>; };\n```\n\n### `alert_send`\nSend exceptional Alerts to a Worker or announce to *. Accepted means stored, not presented or processed. Task state stays unchanged.\n\ncodemode tool declaration:\n```ts\ndeclare const tools: { alert_send(args: {\n  // Abort the recipient's current run first.\n  interrupt?: boolean;\n  kind: \"clarification\" | \"attention\" | \"announcement\";\n  // @minLength 1 @maxLength 128\n  task_id?: string;\n  // @minLength 18 @maxLength 18 @pattern ^v_[0-9a-f]{16}$\n  task_version?: string;\n  // @minLength 1\n  text: string;\n  // Worker name, or * for a Team announcement.\n  // @minLength 1 @maxLength 64\n  to: string;\n}): Promise<string>; };\n```\n</codemode>"
+			}
+		]
+	},
+	{
+		"id": "rarebit",
+		"reason": "Durable Rarebit offers recall from the full durable history from the first request; Pi's Rarebit adds nothing to it.",
+		"cite": "docs/current/ampi-durable.md R4 Extensions (Rarebit); docs/decisions.md D13",
+		"edits": [
+			{
+				"tool": "rarebit_recall",
+				"insertAfter": "codemode",
+				"value": {
+					"name": "rarebit_recall",
+					"description": "Reread exact earlier user messages and assistant prose from this conversation's full durable history, including parts compaction removed from your context. Tool calls and results are not included.",
+					"eager_input_streaming": true,
+					"input_schema": {
+						"type": "object",
+						"properties": {
+							"query": {
+								"type": "string",
+								"description": "Case-insensitive words; every word must appear."
+							},
+							"role": {
+								"anyOf": [
+									{
+										"type": "string",
+										"const": "user"
+									},
+									{
+										"type": "string",
+										"const": "assistant"
+									},
+									{
+										"type": "string",
+										"const": "any"
+									}
+								]
+							},
+							"limit": {
+								"type": "number",
+								"description": "Most recent matches to return (default 12, max 50)."
+							}
+						},
+						"required": []
+					}
+				}
+			},
+			{
+				"systemBlock": 1,
+				"section": "rarebit",
+				"insertAfter": "codemode",
+				"text": "<rarebit>\nRarebit recall: your context may have been compacted. The user's exact earlier words and your own earlier prose answers are still in the durable record. Call rarebit_recall to reread them (filter with query) before relying on a summary for a precise requirement, name, number, or decision.\n</rarebit>"
+			}
+		]
+	}
+]

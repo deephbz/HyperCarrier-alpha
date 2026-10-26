@@ -18,6 +18,7 @@ let vite: ViteDevServer;
 let util: typeof import("../web/src/util.ts");
 let badges: (props: object) => unknown;
 let notices: (before: Map<string, ThreadSummary>, data: never, current: undefined, away: boolean) => Notice[];
+let feedback: (props: object) => unknown;
 
 before(async () => {
 	// client.ts opens its hub WebSocket at import; this stub never connects. attention.ts installs window.ampiOpen.
@@ -26,6 +27,8 @@ before(async () => {
 	util = (await vite.ssrLoadModule("/src/util.ts")) as typeof util;
 	badges = (await vite.ssrLoadModule("/src/components/Sidebar.tsx")).ThreadBadges;
 	notices = (await vite.ssrLoadModule("/src/attention.ts")).notices;
+	// The Composer itself uses client-only stores; Composer.tsx renders this note for a closed durable thread.
+	feedback = (await vite.ssrLoadModule("/src/components/Composer.tsx")).ClosedFeedback;
 });
 after(async () => { await vite?.close(); });
 
@@ -34,7 +37,7 @@ const ERROR = "R2_FAILED_REASON: 529 overloaded";
 const open = (over: Partial<ThreadSummary> = {}): ThreadSummary => ({ id: "tree-a.7", title: "Lead", updatedAt: 1, activity: "idle", queued: 0, control: true, live: true, ...over }) as ThreadSummary;
 const flagged = (over: Partial<ThreadSummary> = {}) => open({ attention: [{ source: "node", reason: PARKED }], lastError: ERROR, rarebit: { status: "needs_attention", fresh: true, reason: "blocked on review" } as ThreadSummary["rarebit"], ...over });
 const closed = (over: Partial<ThreadSummary> = {}) => flagged({ live: false, closed: { at: 2, by: "owner" }, ...over });
-const host = { id: "devbox", link: "devbox", kind: "durable" } as unknown as HostState;
+const host = { id: "devbox", link: "devbox#durable", kind: "durable" } as unknown as HostState;
 const html = (t: ThreadSummary, compact: boolean) => renderToStaticMarkup(createElement(badges as never, { t, compact }));
 
 test("closed attention: a closed thread has no Needs-you signal from attention, lastError or Rarebit; an open control keeps error and node signals", () => {
@@ -54,10 +57,18 @@ test("closed attention: the compact sidebar never badges attention; noncompact c
 });
 
 test("closed attention: the Close transition raises no notification; an open thread that starts needing the owner still does", () => {
-	const before = new Map([["devbox|tree-a.7", flagged({ attention: undefined, lastError: undefined, rarebit: undefined, activity: "streaming" })]]);
+	const before = new Map([["devbox#durable|tree-a.7", flagged({ attention: undefined, lastError: undefined, rarebit: undefined, activity: "streaming" })]]);
 	const data = (t: ThreadSummary) => [{ host, threads: [t], stale: false }] as never;
 	assert.deepEqual(notices(before, data(closed()), undefined, true), [], "Close carries the parked reason and last error into a closed row, and ends the run without a Finished");
 	const raised = notices(before, data(flagged()), undefined, true);
 	assert.deepEqual(raised.map((n) => n.title), ["Needs you: Lead"]);
 });
 
+test("legacy closed attention: archive feedback keeps the last state as history", () => {
+	const render = (summary: ThreadSummary) => renderToStaticMarkup(createElement(feedback as never, { summary }));
+	assert.match(render(closed({ lastError: undefined, rarebit: undefined })), new RegExp(`>Archived\\. Last state: ${PARKED}\\. Unarchive to continue\\.<`));
+	assert.match(render(closed({ attention: undefined, rarebit: undefined })), new RegExp(`>Archived\\. Last state: ${ERROR}\\. Unarchive to continue\\.<`));
+	assert.match(render(closed({ attention: undefined, lastError: undefined, rarebit: undefined })), />Archived\. Unarchive to continue\.</);
+	assert.match(render(closed({ attention: [{ source: "node", reason: "stopped." }] })), />Archived\. Last state: stopped\. Unarchive/, "a reason's own full stop is not doubled");
+	assert.match(render(closed({ closed: { at: 2, by: "lead" }, attention: undefined, lastError: undefined, rarebit: undefined })), />Archived\. Unarchive to continue\.</);
+});

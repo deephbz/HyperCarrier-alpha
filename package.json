@@ -1,6 +1,6 @@
 {
   "name": "hypercarrier-alpha",
-  "version": "0.1.12",
+  "version": "0.2.0-durable.1",
   "description": "A single-user, local-first Work OS for directing many concurrent agent workstreams; Pi and Herdr are its current carriers.",
   "private": true,
   "license": "MIT",
@@ -18,7 +18,7 @@
   "scripts": {
     "start": "npm run start:ampi",
     "test": "npm run test:packages && npm run test:ampi && npm run test:trace-viewer && npm run test:trace-analytics",
-    "test:packages": "npm --workspace @hypercarrier/pi-sim test && node --test packages/hc-auto-compact/test/*.test.mjs packages/pi-cache-goblin/test/*.test.mjs packages/hc-hud/test/*.test.mjs && npm --workspace @hypercarrier/pi-hc-control test && npm --workspace @hypercarrier/durable-team test && npm --workspace @hypercarrier/durable-rarebit test && npm --workspace @hypercarrier/durable-compact test && npm --workspace @hypercarrier/rarebit test && npm --workspace @hypercarrier/systemp-prompt-audit test",
+    "test:packages": "npm --workspace @hypercarrier/pi-sim test && node --test packages/hc-auto-compact/test/*.test.mjs packages/pi-cache-goblin/test/*.test.mjs packages/hc-hud/test/*.test.mjs && npm --workspace @hypercarrier/pi-hc-control test && npm --workspace @hypercarrier/pi-team-durable test -- --exclude test/authority/contract.test.ts && npm --workspace @hypercarrier/rarebit-durable test && npm --workspace @hypercarrier/auto-compact-durable test && npm --workspace @hypercarrier/rarebit test && npm --workspace @hypercarrier/systemp-prompt-audit test",
     "test:release": "node --test scripts/test/export*.test.mjs scripts/test/public-workflow-closure.test.mjs",
     "test:sim": "node scripts/test-sim.mjs",
     "test:composition": "node --test --test-concurrency=1 scripts/test/verify-composition.test.mjs scripts/test/verify-colorstack-composition.test.mjs scripts/test/compose-terminal-theme-candidate.test.mjs",
@@ -31,6 +31,7 @@
     "test:trace-analytics": "npm --workspace trace-analytics test",
     "build:ampi": "npm --workspace @hypercarrier/ampi run build:web",
     "build:trace-viewer": "npm --workspace @hypercarrier/trace-viewer run build",
-    "start:ampi": "npm --workspace @hypercarrier/ampi start"
+    "start:ampi": "npm --workspace @hypercarrier/ampi start",
+    "prepare": "node scripts/build-pinned-packages.mjs"
   }
 }

@@ -681,6 +681,10 @@ kbd {
  min-height: 0;
  min-width: 0;
 }
+/* The transcript's one strip (CompanionScrollbar): dashes at full-branch ordinals. Where it shows, the transcript
+   hides its native bar and keeps no gutter; wheel and keys still scroll the transcript. */
+.transcript-frame.strip > .scroll { scrollbar-width: none; }
+.transcript-frame.strip > .scroll::-webkit-scrollbar { display: none; }
 .companion-scrollbar {
  margin-block: 4px;
  position: relative;
@@ -701,8 +705,11 @@ kbd {
  pointer-events: none;
  width: 8px;
  height: 2px;
- background: var(--text-3);
+ background: var(--border-strong);
 }
+/* Dashes kept from an older outline take no hover or click until the current outline replaces them, and look dimmer. */
+.companion-scrollbar[aria-busy="true"] a { pointer-events: none; }
+.companion-scrollbar[aria-busy="true"] a span { background: var(--border); opacity: 0.6; }
 .companion-scrollbar a:hover span, .companion-scrollbar a:focus-visible span {
  background: var(--accent);
  height: 3px;
@@ -831,7 +838,8 @@ kbd {
 	border: 1px solid var(--border);
 	padding: 4px 8px;
 }
-.md a {
+.md a,
+.notice-raw {
 	color: var(--accent);
 }
 .md blockquote {
@@ -1027,6 +1035,16 @@ details[open] > .disclosure::before,
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
 }
+/* An error box the reader can put away. */
+.err-box.dismissible {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
+.err-box.dismissible > span {
+	flex: 1;
+	min-width: 0;
+}
 .status-line {
 	display: flex;
 	align-items: center;
@@ -1118,7 +1136,10 @@ details[open] > .disclosure::before,
 	padding: 4px 8px;
 	color: var(--text-2);
 }
+.queue-item .queue-edit { flex: 1; min-width: 0; resize: none; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; }
+.queue-hint { font-size: 12px; color: var(--text-3); padding: 0 8px; }
 .queue-item .outcome { font-size: 12px; white-space: nowrap; color: var(--text-3); }
+.queue-item.team .notice-sender { flex: 0 1 auto; max-width: 30%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .queue-item .text {
 	flex: 1;
 	min-width: 0;
@@ -1265,19 +1286,12 @@ details[open] > .disclosure::before,
 	background: var(--bg-elev);
 	font-size: 13px;
 }
-.rb-summary.needs_attention {
-	border-color: var(--attn);
-	background: var(--attn-soft);
-}
 .rb-status {
 	font-weight: 500;
 	display: flex;
 	gap: 6px;
 	align-items: center;
 	margin-bottom: 4px;
-}
-.rb-status.needs_attention {
-	color: var(--attn);
 }
 .rb-sep {
 	font-size: 11px;
@@ -1293,7 +1307,7 @@ details[open] > .disclosure::before,
 	animation: clear-entry-mark 0s 1.6s forwards !important;
 }
 @keyframes clear-entry-mark { to { background: transparent; } }
-/* A linked entry that is not on the current branch. */
+/* The transcript's notice slot: a linked entry that is not on the current branch, or a history read still pending. */
 .entry-missing {
 	display: flex;
 	align-items: center;
@@ -1587,27 +1601,17 @@ details[open] > .disclosure::before,
 	z-index: 20;
 	max-width: 420px;
 }
+.link-button {
+	background: none;
+	border: 0;
+	padding: 0;
+	color: inherit;
+	font: inherit;
+	text-decoration: underline;
+	cursor: pointer;
+}
 .hint {
 	color: var(--text-3);
-	font-size: 12px;
-}
-/* Terminals */
-.term-box {
-	flex: 1;
-	min-height: 0;
-	padding: 8px 10px;
-	background: #fbfbfa;
-}
-:root[data-theme="dark"] .term-box {
-	background: #16181d;
-}
-@media (prefers-color-scheme: dark) {
-	:root:not([data-theme="light"]) .term-box {
-		background: #16181d;
-	}
-}
-.term-row .title {
-	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 	font-size: 12px;
 }
 .side-head .add {
@@ -1644,27 +1648,9 @@ details[open] > .disclosure::before,
 .host-note.warn {
 	color: var(--attn);
 }
-/* Wide panel: the docked shell and the change list */
+/* Wide panel: the change list */
 .panel.wide {
 	width: min(46vw, 760px);
-}
-.panel-body.flush {
-	padding: 0;
-	display: flex;
-	flex-direction: column;
-}
-.term-dock {
-	flex: 1;
-	display: flex;
-	flex-direction: column;
-	min-height: 0;
-}
-.term-dock-head {
-	display: flex;
-	align-items: center;
-	gap: 6px;
-	padding: 4px 10px;
-	border-bottom: 1px solid var(--border);
 }
 /* Slash commands */
 .composer-wrap {
@@ -1790,9 +1776,6 @@ details[open] > .disclosure::before,
 }
 .composer-bar > .btn:last-child {
 	margin-left: auto;
-}
-.term-dock-head .grow {
-	flex: 1;
 }
 /* Model accounts and onboarding */
 .attn-box,

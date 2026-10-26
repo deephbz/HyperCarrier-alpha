@@ -24,9 +24,9 @@ fail() { printf '\n\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 
 step "1/4 Node"
 NODE="$(command -v node || true)"
-[ -n "$NODE" ] || fail "Node is not installed. Install Node 22.19 or newer (https://nodejs.org, brew install node, or nvm), then run this again."
-"$NODE" -e 'const [a,b]=process.versions.node.split(".").map(Number); process.exit(a>22||(a===22&&b>=19)?0:1)' ||
-	fail "Node $("$NODE" -v) is too old. AmPi needs Node 22.19 or newer."
+[ -n "$NODE" ] || fail "Node is not installed. Install Node 22.23.4+, 24.22.1+, or 26.12.1+ (https://nodejs.org or fnm), then run this again."
+"$NODE" --input-type=module -e "import { nodeIsPatched } from '$(cd "$(dirname "$0")/../bin" && pwd)/node-floor.mjs'; process.exit(nodeIsPatched(process.versions.node) ? 0 : 1)" ||
+	fail "Node $("$NODE" -v) is not supported. AmPi needs Node 22.23.4+, 24.22.1+, or 26.12.1+ (CVE-2026-111497 fixes)."
 echo "✓ $("$NODE" -v) at $NODE"
 
 step "2/4 Dependencies"

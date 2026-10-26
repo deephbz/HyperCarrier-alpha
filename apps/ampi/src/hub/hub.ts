@@ -10,7 +10,8 @@ import { basename, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { HostsFrame, HubOps, NodeFrame, Topic } from "../shared/protocol.ts";
-import { type HostConfig, HostLink, type HostState } from "./hosts.ts";
+import { DurableHost } from "./durable-host.ts";
+import { type HostConfig, type HostState, linkKey } from "./hosts.ts";
 import { PiHost, type PiHostConfig } from "../pi/host.ts";
 import { buildQueue, deriveQueue } from "../pi/derive-queue.ts";
 import { sweepAskScratch } from "../pi/ask.ts";
@@ -31,6 +32,7 @@ type BrowserFrame =
 	| { t: "unsub"; sid: number }
 	| { t: "hub"; id: number; op: string; args?: Record<string, unknown> };
 
+/** `host` is the link key the subscription resolved to. */
 type BrowserSub = { sid: number; host: string; topic: Topic; hostSid?: number };
 
 const WEB_DIST = fileURLToPath(new URL("../../web/dist/", import.meta.url));
@@ -170,7 +172,7 @@ class BrowserClient {
 }
 
 export class Hub {
-	readonly links = new Map<string, HostLink | PiHost>();
+	readonly links = new Map<string, DurableHost | PiHost>();
 	readonly clients = new Set<BrowserClient>();
 	readonly config: HubConfig;
 	readonly configPath: string | undefined;
@@ -203,20 +205,44 @@ export class Hub {
 		instant(name);
 	}
 
-	#addLink(config: HostConfig | PiHostConfig): HostLink | PiHost {
-		const link = config.kind === "pi-local" || config.kind === "pi-ssh" ? new PiHost(config as PiHostConfig) : new HostLink(config as HostConfig);
-		this.links.set(config.id, link);
-		this.#hostSubs.set(config.id, new Map());
-		this.#hostReqs.set(config.id, new Map());
+	#addLink(config: HostConfig | PiHostConfig): DurableHost | PiHost {
+		const link = config.kind === "pi-local" || config.kind === "pi-ssh" ? new PiHost(config as PiHostConfig) : new DurableHost(config as HostConfig);
+		const key = linkKey(config);
+		this.links.set(key, link);
+		this.#hostSubs.set(key, new Map());
+		this.#hostReqs.set(key, new Map());
 		link.on("state", () => this.#broadcastHosts());
-		link.on("frame", (frame: NodeFrame) => this.#fromHost(config.id, frame));
-		link.on("connected", () => this.#resubscribe(config.id));
-		link.on("disconnected", () => this.#failPending(config.id));
+		link.on("frame", (frame: NodeFrame) => this.#fromHost(key, frame));
+		link.on("connected", () => this.#resubscribe(key));
+		link.on("disconnected", () => this.#failPending(key));
 		return link;
 	}
 
+	/**
+	 * The link key a browser frame names: a link key (`<id>#pi`, `<id>#durable`), or a Host ID that one source serves.
+	 * When two sources serve the Host ID, a thread ID names the source: `pi:` for Pi, any other for durable. Without
+	 * a thread ID, the Host ID is not a route.
+	 */
+	route(host: string, thread?: string): { key: string } | { error: { code: string; message: string } } {
+		if (this.links.has(host)) return { key: host };
+		const keys = [...this.links.keys()].filter((key) => key.slice(0, key.lastIndexOf("#")) === host);
+		if (keys.length === 1) return { key: keys[0]! };
+		if (keys.length > 1 && thread !== undefined) {
+			const key = `${host}#${thread.startsWith("pi:") ? "pi" : "durable"}`;
+			if (this.links.has(key)) return { key };
+		}
+		if (keys.length === 0) return { error: { code: "host_unavailable", message: `Host ${host} is unknown` } };
+		return { error: { code: "ambiguous_host", message: `Host ${host} has two sources; name ${keys.join(" or ")}` } };
+	}
+
+	/** The link a Host ID or link key names, if exactly one. */
+	link(host: string): DurableHost | PiHost | undefined {
+		const route = this.route(host);
+		return "key" in route ? this.links.get(route.key) : undefined;
+	}
+
 	hostStates(): HostState[] {
-		return [...this.links.values()].map((link) => link.state);
+		return [...this.links].map(([key, link]) => ({ ...link.state, link: key }));
 	}
 
 	#broadcastHosts(): void {
@@ -279,26 +305,25 @@ export class Hub {
 			}
 			return;
 		}
-		const link = this.links.get(frame.host);
+		const thread = (frame.t === "req" ? (frame.args as { threadId?: unknown } | undefined) : (frame.topic as { threadId?: unknown }))?.threadId;
+		const route = this.route(frame.host, typeof thread === "string" ? thread : undefined);
+		const key = "key" in route ? route.key : undefined;
+		const link = key === undefined ? undefined : this.links.get(key);
 		if (frame.t === "req") {
-			// A Pi Host answers from its local copies even while the Host is away; it refuses actions itself.
-			if (!link || (link.state.status !== "connected" && !(link instanceof PiHost))) {
-				client.send({
-					t: "res",
-					id: frame.id,
-					ok: false,
-					error: { code: "host_unavailable", message: `Host ${frame.host} is ${link?.state.status ?? "unknown"}` },
-				});
+			// Both host kinds answer reads from their hub copies while the host is away, and refuse actions themselves.
+			if (!link || key === undefined) {
+				client.send({ t: "res", id: frame.id, ok: false, error: "error" in route ? route.error : { code: "host_unavailable", message: `Host ${frame.host} is unknown` } });
 				return;
 			}
 			const hostId = this.#nextHostId++;
-			this.#hostReqs.get(frame.host)!.set(hostId, { client, id: frame.id });
+			this.#hostReqs.get(key)!.set(hostId, { client, id: frame.id });
 			link.send({ t: "req", id: hostId, op: frame.op, args: frame.args });
 			return;
 		}
 		if (frame.t === "sub") {
-			if (!link) {
-				client.send({ t: "end", sid: frame.sid, reason: `Unknown host ${frame.host}` });
+			// The page shows an end reason as its state: an unknown Host reads "Unknown host <id>", as before link keys.
+			if (!link || key === undefined) {
+				client.send({ t: "end", sid: frame.sid, reason: "error" in route && route.error.code !== "host_unavailable" ? route.error.message : `Unknown host ${frame.host}` });
 				return;
 			}
 			// A repeated sub for the same browser sid replaces the earlier one, so two node streams never feed one replica.
@@ -307,11 +332,11 @@ export class Hub {
 				this.#hostSubs.get(prior.host)?.delete(prior.hostSid);
 				this.links.get(prior.host)?.send({ t: "unsub", sid: prior.hostSid });
 			}
-			const sub: BrowserSub = { sid: frame.sid, host: frame.host, topic: frame.topic };
+			const sub: BrowserSub = { sid: frame.sid, host: key, topic: frame.topic };
 			client.subs.set(frame.sid, sub);
 			const hostSid = this.#nextHostId++;
 			sub.hostSid = hostSid;
-			this.#hostSubs.get(frame.host)!.set(hostSid, { client, sid: frame.sid });
+			this.#hostSubs.get(key)!.set(hostSid, { client, sid: frame.sid });
 			if (!link.send({ t: "sub", sid: hostSid, topic: frame.topic })) client.send({ t: "stale", sid: frame.sid });
 		}
 	}
@@ -325,8 +350,8 @@ export class Hub {
 					if (!/^[A-Za-z0-9_.@:-]+$/.test(target)) throw new Error("Enter an ssh destination like me@devbox");
 					if (this.config.backend === "pi") {
 						// The SSH alias is the Host's identity (D15): one link per alias.
-						if (this.links.has(target)) throw new Error(`${target} is already added`);
 						const pi: PiHostConfig = { id: target, label: String(args.label || target), kind: "pi-ssh", target };
+						if (this.links.has(linkKey(pi))) throw new Error(`${target} is already added`);
 						if (this.configPath) updateHubHosts<HostConfig | PiHostConfig>(this.configPath, (hosts) => [...hosts, pi]);
 						this.config.hosts.push(pi);
 						this.#addLink(pi).start();
@@ -348,11 +373,13 @@ export class Hub {
 					break;
 				}
 				case "hosts.remove": {
-					const hostId = String(args.id);
+					const route = this.route(String(args.id));
+					if ("error" in route) throw new Error(route.error.message);
+					const hostId = route.key;
 					const link = this.links.get(hostId);
 					if (!link || link.config.kind === "local" || link.config.kind === "pi-local") throw new Error("Cannot remove this host");
 					// The file changes first: a refused write leaves the Host connected and listed.
-					if (this.configPath) updateHubHosts<HostConfig | PiHostConfig>(this.configPath, (hosts) => hosts.filter((h) => h.id !== hostId));
+					if (this.configPath) updateHubHosts<HostConfig | PiHostConfig>(this.configPath, (hosts) => hosts.filter((h) => linkKey(h) !== hostId));
 					await link.stop();
 					this.links.delete(hostId);
 					// Fail what was in flight and end open views instead of leaving them pending forever.
@@ -360,12 +387,12 @@ export class Hub {
 					for (const { client, sid } of this.#hostSubs.get(hostId)?.values() ?? []) client.send({ t: "end", sid, reason: "host removed" });
 					this.#hostSubs.delete(hostId);
 					this.#hostReqs.delete(hostId);
-					this.config.hosts.splice(this.config.hosts.findIndex((h) => h.id === hostId), 1);
+					this.config.hosts.splice(this.config.hosts.findIndex((h) => linkKey(h) === hostId), 1);
 					value = {} satisfies HubOps["hosts.remove"]["result"];
 					break;
 				}
 				case "hosts.reconnect":
-					this.links.get(String(args.id))?.reconnect();
+					this.link(String(args.id))?.reconnect();
 					value = {} satisfies HubOps["hosts.reconnect"]["result"];
 					break;
 				default:
@@ -493,6 +520,23 @@ export class Hub {
 		return stale.map(expiredCookie);
 	}
 
+	/** `GET /raw/pi-durable:<id>?host=<link>`: a durable thread's records as JSONL, read from its node (DurableHost.rawExport). */
+	#raw(req: IncomingMessage, res: ServerResponse, url: URL): void {
+		if (!this.#authorized(req)) {
+			res.writeHead(401, { "content-type": "text/plain" }).end("Sign in to this hub first: run `ampi open`.");
+			return;
+		}
+		const id = decodeURIComponent(url.pathname.slice("/raw/".length));
+		const threadId = id.startsWith("pi-durable:") ? id.slice("pi-durable:".length) : "";
+		const route = this.route(url.searchParams.get("host") ?? "", id);
+		const link = "key" in route ? this.links.get(route.key) : undefined;
+		if (req.method !== "GET" || !threadId || !(link instanceof DurableHost)) {
+			res.writeHead(404, { "content-type": "text/plain" }).end("No durable thread here. Open the link from its thread in AmPi.");
+			return;
+		}
+		void link.rawExport(threadId, res);
+	}
+
 	#serve(req: IncomingMessage, res: ServerResponse, _port: number): void {
 		const stale = this.#staleCookies(req);
 		if (stale.length) res.setHeader("set-cookie", stale);
@@ -517,6 +561,10 @@ export class Hub {
 			// the key only to the real hub, never to another process that took the port.
 			const body = this.#authorized(req) ? { ok: true, proof: hubProof(this.token), hosts: this.hostStates(), derive: deriveQueue(), builds: buildQueue(), loop: loopWindow() ?? null, missedInputs: [...this.links.values()].reduce((n, l) => n + (l instanceof PiHost ? l.missedInputs : 0), 0) } : { ok: true, proof: hubProof(this.token) };
 			res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(body));
+			return;
+		}
+		if (url.pathname.startsWith("/raw/")) {
+			this.#raw(req, res, url);
 			return;
 		}
 		let path = normalize(decodeURIComponent(url.pathname)).replace(/^(\.\.[/\\])+/, "");

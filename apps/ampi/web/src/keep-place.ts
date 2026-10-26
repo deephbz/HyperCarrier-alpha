@@ -3,7 +3,9 @@ import { scaleOf, toCss } from "./display.ts";
 
 // DOM references belong only to the mounted reader; history stores entry IDs and offsets separately.
 // `fragment` names one rendered part of an entry (FRAGMENT), so a remounted fragment is found again.
-type Anchor = { id: string; top: number; offset: number; node?: HTMLElement; unique?: boolean; fragment?: string };
+// `offset`: the anchor's top below the scroller's top, in the scroller's CSS px. The scroller can move on screen and its
+// display size can change (a zoom step) between capture and restore; the CSS offset from its own top still holds.
+type Anchor = { id: string; offset: number; node?: HTMLElement; unique?: boolean; fragment?: string };
 export type ReadingPlace = { bottom: boolean; anchors: Anchor[] };
 type Options = { anchor?: HTMLElement | null; accept?: (node: HTMLElement) => boolean };
 
@@ -13,6 +15,7 @@ export const FRAGMENT = "data-fragment";
 /** Keep surviving content at its screen height; a bottom-pinned reader follows the bottom. Never moves focus. */
 export function capturePlace(el: HTMLElement, selector: string, attribute: string, bottom: boolean, options: Options = {}): ReadingPlace {
 	const bounds = el.getBoundingClientRect();
+	const scale = scaleOf(el);
 	const visible = [...el.querySelectorAll<HTMLElement>(selector)].filter((node) => node.getBoundingClientRect().height > 0);
 	const counts = new Map<string | null, number>();
 	for (const node of visible) { const id = node.getAttribute(attribute); counts.set(id, (counts.get(id) ?? 0) + 1); }
@@ -22,14 +25,13 @@ export function capturePlace(el: HTMLElement, selector: string, attribute: strin
 	if (options.anchor) ordered.unshift(options.anchor);
 	return { bottom, anchors: ordered.flatMap((node) => {
 		const id = node.getAttribute(attribute);
-		const top = node.getBoundingClientRect().top;
-		return id ? [{ id, top, offset: top - bounds.top, node, unique: counts.get(id) === 1, fragment: node.getAttribute(FRAGMENT) ?? undefined }] : [];
+		return id ? [{ id, offset: (node.getBoundingClientRect().top - bounds.top) / scale, node, unique: counts.get(id) === 1, fragment: node.getAttribute(FRAGMENT) ?? undefined }] : [];
 	}) };
 }
 
 /**
  * `shift`: how far the reader scrolled down since the capture, in scrollTop's CSS px; the anchor lands that much higher,
- * so the scroll stays. Anchor tops are screen px; the correction converts them at `el` (display zoom).
+ * so the scroll stays. Rects are screen px; the anchor's CSS offset converts at `el`'s display size now.
  */
 export function restorePlace(el: HTMLElement, selector: string, attribute: string, place: ReadingPlace, shift = 0) {
 	if (place.bottom) { el.scrollTop = el.scrollHeight; return; }
@@ -44,7 +46,7 @@ export function restorePlace(el: HTMLElement, selector: string, attribute: strin
 			: named.length === 1 ? named[0]
 			: anchor.unique !== false && matches.length === 1 ? matches[0] : undefined;
 		if (!node) continue;
-		const target = anchor.top - shift * scaleOf(el);
+		const target = el.getBoundingClientRect().top + (anchor.offset - shift) * scaleOf(el);
 		const off = () => node.getBoundingClientRect().top - target;
 		const delta = toCss(off(), el);
 		// Ignore subpixel rounding within half a CSS pixel.

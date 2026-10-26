@@ -7,6 +7,7 @@ import { hasRealModel, useModels } from "../models.ts";
 import { openAccounts } from "./Accounts.tsx";
 import { ONBOARDING_KEY } from "./Dialogs.tsx";
 import { awayLine } from "./host-fold.ts";
+import { hostLabel } from "./host-label.ts";
 import { ActivityIcon, type HostThreads, ThreadBadges, isPiHost } from "./Sidebar.tsx";
 import { emptyNote, reading, unavailable } from "../host-lists.ts";
 import { KIND_LABEL, arcCoverage, arcFinished, asksByKind, coverageNote } from "../views/cos/needs.ts";
@@ -32,7 +33,7 @@ function Onboarding({ data, onNew, onAddHost, onHelp }: { data: HostThreads[]; o
 	const [hidden, setHidden] = useState(() => localStorage.getItem(ONBOARDING_KEY) === "1");
 	const local = data.find((d) => d.host.kind === "local") ?? data[0];
 	const connected = local?.host.status === "connected";
-	const real = hasRealModel(useModels(local?.host.id, connected));
+	const real = hasRealModel(useModels(local?.host.link, connected));
 	const anyThread = data.some((d) => d.threads.some((t) => t.kind === "thread"));
 	const remote = data.find((d) => d.host.kind === "ssh");
 	const required = connected && real === true && anyThread;
@@ -65,7 +66,7 @@ function Onboarding({ data, onNew, onAddHost, onHelp }: { data: HostThreads[]; o
 				title="Sign in to a model"
 				action={
 					connected && (
-						<button className="btn primary small" onClick={() => openAccounts(local!.host.id)}>
+						<button className="btn primary small" onClick={() => openAccounts(local!.host.link)}>
 							Set up models
 						</button>
 					)
@@ -96,7 +97,7 @@ function Onboarding({ data, onNew, onAddHost, onHelp }: { data: HostThreads[]; o
 				}
 			>
 				{remote
-					? `${remote.host.label} is added.`
+					? `${hostLabel(remote.host, data.map((d) => d.host))} is added.`
 					: "It needs key-based SSH, Node 22.19 or newer, and AmPi installed there (ampi doctor on that machine checks it). Sign in to models per host."}
 			</Step>
 		</div>
@@ -156,7 +157,7 @@ export function Overview({ data, onNew, onAddHost, onHelp }: { data: HostThreads
 	// The Host decides which Sessions are in scope (it keeps unknown-age and source-loss copies); count what it lists.
 	const inScope = (t: ThreadSummary) => !t.archived;
 	const hosts = data.map((d) => d.host);
-	const rows: Row[] = data.flatMap((d) => d.threads.filter(inScope).map((t) => ({ host: d.host.id, hostLabel: d.host.label, t })));
+	const rows: Row[] = data.flatMap((d) => d.threads.filter(inScope).map((t) => ({ host: d.host.link, hostLabel: hostLabel(d.host, hosts), t })));
 	const byRecent = (a: Row, b: Row) => b.t.updatedAt - a.t.updatedAt;
 	// Live signals (errors, Herdr, node Summaries) first; then Pi Sessions' open tier-2 asks by kind (D16).
 	const signals = rows.filter((r) => attentionOf(r.t).length).sort(byRecent);
@@ -208,12 +209,12 @@ export function Overview({ data, onNew, onAddHost, onHelp }: { data: HostThreads
 					</section>
 					<div className="ov-hosts">
 						{data.map((d) => { const { host, threads } = d; return (
-							<div className="ov-host" key={host.id} data-host={host.id}>
+							<div className="ov-host" key={host.link} data-host={host.id}>
 								<span className={`dot ${host.status}`} />
-								<b>{host.label}</b>
+								<b>{hostLabel(host, hosts)}</b>
 								<span className="hint">
 									{host.status === "connected"
-										? reading(d) ? "Reading Sessions…" : d.error ? d.error : `${host.node?.hostname ? `${host.node.hostname} · ` : ""}${rows.filter((r) => r.host === host.id && isBusyT(r.t)).length} running · ${rows.filter((r) => r.host === host.id).length.toLocaleString()} Sessions in scope`
+										? reading(d) ? "Reading Sessions…" : d.error ? d.error : `${host.node?.hostname ? `${host.node.hostname} · ` : ""}${rows.filter((r) => r.host === host.link && isBusyT(r.t)).length} running · ${rows.filter((r) => r.host === host.link).length.toLocaleString()} Sessions in scope`
 										: host.status === "connecting"
 											? "connecting…"
 											: awayLine(host)}

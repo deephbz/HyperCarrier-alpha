@@ -137,6 +137,37 @@ for (const engine of Object.keys(ENGINES) as Engine[]) {
 	});
 
 	for (const display of DISPLAYS) {
+		test(`display units (${engine}, ${display.name}): the quote pill sits at the selection's end`, { skip: engineSkip(engine) }, async (t) => {
+			const page = await open(t, engine, "thread", display, "transcript");
+			await page.evaluate(() => {
+				const range = document.createRange(); range.selectNodeContents(document.querySelector('[data-entry="e0"] .md p')!);
+				document.querySelector<HTMLElement>('[data-region="transcript"]')!.focus();
+				const selection = window.getSelection()!; selection.removeAllRanges(); selection.addRange(range);
+			});
+			await page.getByRole("button", { name: "Quote q" }).waitFor();
+			await frames(page);
+			const got = await page.evaluate(() => {
+				const { scaleOf } = (window as unknown as { display: typeof import("../web/src/display.ts") }).display;
+				const pill = document.querySelector<HTMLElement>(".quote-selection")!;
+				const end = [...window.getSelection()!.getRangeAt(0).getClientRects()].at(-1)!;
+				return { pill: pill.getBoundingClientRect().toJSON() as DOMRect, right: end.right, bottom: end.bottom, scale: scaleOf(pill) };
+			});
+			near(got.pill.left, got.right, "pill left at the selection's right");
+			near(got.pill.top, got.bottom + 4 * got.scale, "pill top 4 px below the selection");
+		});
+
+		test(`display units (${engine}, ${display.name}): the Composer grows to its wrapped text`, { skip: engineSkip(engine) }, async (t) => {
+			const page = await open(t, engine, "thread", display, "composer");
+			const draft = page.locator('[data-region="composer"] textarea');
+			for (const words of [30, 50, 70, 90, 110]) {
+				await draft.fill(Array.from({ length: words }, (_, i) => `word${i}`).join(" "));
+				await frames(page);
+				const { scroll, client, max } = await draft.evaluate((el) => ({ scroll: el.scrollHeight, client: el.clientHeight, max: parseFloat(getComputedStyle(el).maxHeight) }));
+				// At its CSS max-height the box scrolls; below it, the box holds all the text.
+				if (client < max - 1) assert.ok(scroll <= client + 1, `${words} words: the text is ${scroll} px tall in a ${client} px box`);
+				else assert.ok(words > 30, `${words} words already reach the ${max} px max-height`);
+			}
+		});
 
 		test(`display units (${engine}, ${display.name}): Rarebit Prev and Next put the user message 12 px below the top`, { skip: engineSkip(engine) }, async (t) => {
 			const page = await open(t, engine, "rarebit", display, "panel");

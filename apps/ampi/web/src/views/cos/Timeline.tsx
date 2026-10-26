@@ -2,7 +2,7 @@ import { Fragment, memo, useEffect, useMemo, useRef, useState, type ReactNode } 
 import type { TimelineSession, TimelineValue } from "../../../../src/pi/views/cos-timeline.ts";
 import { isSessionInScope, SESSION_SCOPE_MS } from "../../../../src/shared/session-scope.ts";
 import { navigate } from "../../nav.ts";
-import { href, isAttentionEligible, money, needsYou, tokens, type Route } from "../../util.ts";
+import { href, isAttentionEligible, money, needsYou, threadRef, tokens, type Route } from "../../util.ts";
 import { historySpend, spendLabel, spendSuffix } from "../../../../src/shared/spend.ts";
 import { dateTime, FeedStatus, useFleet } from "./data.tsx";
 import { seenAt } from "../../seen.ts";
@@ -129,7 +129,7 @@ export function Timeline({ route }: { route: Route }) {
 }
 
 export function TimelinePanel({ host, threadId, summary }: { host: string; threadId: string; summary?: { team?: { teamId: string } } }) {
-	const route: Route = { page: "timeline", rest: [], query: new URLSearchParams({ focus: `${host}/${threadId}`, all: "1" }) };
+	const route: Route = { page: "timeline", rest: [], query: new URLSearchParams({ focus: threadRef(host, threadId), all: "1" }) };
 	return <TimelineView route={route} selected={{ host, threadId, teamId: summary?.team?.teamId }} />;
 }
 
@@ -163,9 +163,9 @@ function TimelineView({ route, selected }: { route: Route; selected?: PanelSelec
 	const merged = queryParams.get("teams") !== "separate";
 	const sessions = useMemo(() => feeds.flatMap((f) => (f.value?.sessions ?? []).filter((s) => {
 		// The panel keeps only its Session and Team; open Sessions are always in scope.
-		if (selected) return s.entries.length > 0 && inPanel({ ...s, host: f.host.id }, selected);
+		if (selected) return s.entries.length > 0 && inPanel({ ...s, host: f.host.link }, selected);
 		return s.entries.length > 0 && isSessionInScope({ activityAt: s.end, live: s.live, open: false });
-	} ).map((s) => ({ ...s, host: f.host.id, live: connected && !f.stale && f.host.status === "connected" && s.live }))), [feeds, connected, selected]);
+	} ).map((s) => ({ ...s, host: f.host.link, live: connected && !f.stale && f.host.status === "connected" && s.live }))), [feeds, connected, selected]);
 	const focus = queryParams.get("focus");
 	const focused = sessions.find((s) => s.ref === focus);
 	const min = Math.min(...sessions.map((s) => s.start)), max = Math.max(...sessions.map((s) => s.end));
@@ -181,7 +181,7 @@ function TimelineView({ route, selected }: { route: Route; selected?: PanelSelec
 	const to = preview?.[1] ?? (validRange ? Math.min(fullTo, Math.max(requestedTo, from + 60_000)) : selected ? (queryParams.has("all") ? fullTo : now) : moment !== undefined ? Math.max(from + 60_000, Math.min(fullTo, moment + 2 * 3600_000)) : focused ? Math.max(from + 60_000, Math.min(fullTo, focused.end + 900_000)) : fullTo);
 	const window = timelineWindow(validRange ? requestedFrom : undefined, validRange ? requestedTo : undefined, Boolean(selected && queryParams.has("all")));
 	const bands = useMemo(() => group(sessions, merged).filter((band) => band.members.some((s) => s.live) || (band.end >= from && band.start <= to)).sort((a, b) => Number(b.members.some((s) => s.ref === focus)) - Number(a.members.some((s) => s.ref === focus)) || rank(b, seen) - rank(a, seen) || a.start - b.start || a.key.localeCompare(b.key)), [sessions, merged, focus, from, to]);
-	const unreadable = feeds.flatMap((f) => (f.value?.unreadable ?? []).filter((u) => !selected || (f.host.id === selected.host && u.threadId === selected.threadId)));
+	const unreadable = feeds.flatMap((f) => (f.value?.unreadable ?? []).filter((u) => !selected || (f.host.link === selected.host && u.threadId === selected.threadId)));
 	const waitingOutside = sessions.filter((s) => attention(s, seen) && (s.end < from || s.start > to)).length;
 	const bucketMs = feeds.find((f) => f.value)?.value?.bucketMs ?? 900_000;
 	const overview = useMemo(() => {
@@ -227,7 +227,7 @@ function TimelineView({ route, selected }: { route: Route; selected?: PanelSelec
 	const first = Math.max(0, Math.min(bands.length - 1, Math.floor(scroll / ROW) - 3)), visible = bands.slice(first, first + 28);
 	return <main className={`main cos-page${selected ? " cos-panel" : ""}`}>
 		{readers}
-		<header className="cos-header"><h1>Timeline</h1><span className="cos-meta">{sessions.length} Sessions · {bands.length} streams · {unit === 2 ? spendLabel(laneSpend(sessions, rangeTotal)) : amount(unit, rangeTotal)} in range</span>{selected ? <a href={href.page("timeline", [], { focus: `${selected.host}/${selected.threadId}` })}>Open Timeline page ↗</a> : <a href={href.page("arcs")}>Arcs</a>}</header>
+		<header className="cos-header"><h1>Timeline</h1><span className="cos-meta">{sessions.length} Sessions · {bands.length} streams · {unit === 2 ? spendLabel(laneSpend(sessions, rangeTotal)) : amount(unit, rangeTotal)} in range</span>{selected ? <a href={href.page("timeline", [], { focus: threadRef(selected.host, selected.threadId) })}>Open Timeline page ↗</a> : <a href={href.page("arcs")}>Arcs</a>}</header>
 		<nav className="cos-toolbar" aria-label="Timeline controls">
 			<span>Width</span>
 			{selected ? <>

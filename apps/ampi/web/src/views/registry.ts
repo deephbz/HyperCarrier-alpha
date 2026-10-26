@@ -10,6 +10,8 @@ import { RarebitBand } from "./rarebit/Lens.tsx";
 import { Timeline, TimelinePanel } from "./cos/Timeline.tsx";
 import { Arcs } from "./cos/Arcs.tsx";
 import { ArcPanel } from "./cos/ArcPanel.tsx";
+import { ChangesPanel } from "../components/ChangesPanel.tsx";
+import { InfoPanel } from "../components/Panel.tsx";
 
 /** A side panel beside a Pi Session's transcript (Rarebit, Team, Arc). */
 export type PanelView = {
@@ -18,6 +20,8 @@ export type PanelView = {
 	/** Shown in the panel's tabs only when this returns true for the open Session. */
 	available?: (summary: ThreadSummary | undefined) => boolean;
 	component: ComponentType<{ host: string; threadId: string; summary?: ThreadSummary; entry?: string }>;
+	/** The panel takes the wide width (a diff). */
+	wide?: true;
 };
 
 /** A top-level page with its own address, `#/v/<name>/…` (Chief of Staff pages). */
@@ -34,6 +38,11 @@ export const PI_PANELS: PanelView[] = [
 	{ name: "team", label: "Team", available: (summary) => Boolean(summary?.team), component: TeamPanel },
 	{ name: "timeline", label: "Timeline", component: TimelinePanel },
 	{ name: "arc", label: "Arc", component: ArcPanel },
+];
+/** Panels a durable thread adds after the Pi panels: its working-tree changes and its node facts. */
+export const DURABLE_PANELS: PanelView[] = [
+	{ name: "changes", label: "Changes", component: ChangesPanel, wide: true },
+	{ name: "info", label: "Info", component: InfoPanel },
 ];
 export const PI_BANDS = [RarebitBand];
 export const PAGES: PageView[] = [{ name: "timeline", label: "Timeline", section: "Chief of Staff", component: Timeline }, { name: "arcs", label: "Arcs", section: "Chief of Staff", component: Arcs }];

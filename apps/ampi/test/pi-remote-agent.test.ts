@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { createServer } from "node:net";
+import { createConnection, createServer } from "node:net";
 import { join } from "node:path";
 import { test } from "node:test";
 import { AGENT, Agent, control, type Fixture, fixture, type Frame } from "./pi-fixtures.ts";
@@ -70,6 +70,28 @@ test("pi remote agent: default discovery includes 95-hour sources and excludes 9
  assert.ok(!frame.agents.some((a: Frame) => a.session === f.sessionB));
 });
 
+test("pi fixtures: the fake control survives a client that closes with its reply unread, as the real endpoint does (failure: read ECONNRESET failed pi-host-c on hosted Linux)", async (t) => {
+	const f = fixture();
+	const ctl = await control(f, f.sessionA);
+	t.after(() => ctl.close());
+	const socket = join(f.agentDir, "hc-control", "sess-a.sock");
+	// The client stops reading, lets the reply arrive, then closes: on Linux the server's next read is ECONNRESET.
+	// Pause inside the connect listener: net starts reading right after it, and a read reply cannot reset.
+	const quitter = createConnection(socket);
+	await new Promise<void>((r) => quitter.once("connect", () => { quitter.pause(); r(); }));
+	quitter.write(`${JSON.stringify({ id: "q1", op: "status" })}\n`);
+	while (!ctl.requests.length) await new Promise((r) => setTimeout(r, 10));
+	await new Promise((r) => setTimeout(r, 100));
+	quitter.destroy();
+	await new Promise((r) => setTimeout(r, 200));
+	const next = createConnection(socket);
+	next.setEncoding("utf8");
+	next.write(`${JSON.stringify({ id: "q2", op: "status" })}\n`);
+	const reply = await new Promise<string>((r) => next.once("data", r));
+	next.destroy();
+	assert.equal(JSON.parse(reply).id, "q2");
+});
+
 test("pi remote agent: submit and abort go to a live control socket and forward its evidence", async (t) => {
 	const f = fixture();
 	const ctl = await control(f, f.sessionA);
@@ -118,7 +140,7 @@ test("pi remote agent: without a live descriptor, submit uses Herdr keys after t
 	// No descriptor at all, busy agent: steer is a prompt; follow-up types the text, then alt+enter.
 	const busySteer = await agent.request({ t: "submit", id: 2, session: f.sessionA, text: "steer me", deliverAs: "steer" });
 	assert.equal(busySteer.evidence, "sent");
-	const follow = await agent.request({ t: "submit", id: 3, session: f.sessionA, pane: "w1:p2", text: "after this", deliverAs: "followUp" });
+	const follow = await agent.request({ t: "submit", id: 3, session: f.sessionA, pane: "w1:p2", text: "> quote\n\nreply", deliverAs: "followUp" });
 	assert.deepEqual([follow.ok, follow.via, follow.evidence], [true, "keys", "sent"]);
 	const stop = await agent.request({ t: "abort", id: 4, session: f.sessionA, pane: "w1:p2" });
 	assert.deepEqual([stop.ok, stop.evidence], [true, "sent"]);
@@ -127,7 +149,7 @@ test("pi remote agent: without a live descriptor, submit uses Herdr keys after t
 	assert.deepEqual(f.herdrCalls(), [
 		["agent", "prompt", "w1:p1", "hello"],
 		["agent", "prompt", "w1:p2", "steer me"],
-		["pane", "send-text", "w1:p2", "after this"],
+		["pane", "send-text", "w1:p2", "> quote\n\nreply"],
 		["agent", "send-keys", "w1:p2", "alt+enter"],
 		["agent", "send-keys", "w1:p2", "esc"],
 	]);

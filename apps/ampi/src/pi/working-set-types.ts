@@ -4,7 +4,7 @@ import { CHUNKER_VERSION, EXCERPT_VERSION, type Chunk } from "./views/cos-arc-ch
 import type { Kinds, RarebitItem } from "./views/rarebit.ts";
 
 /** Bump when the entry index changes; every Session then rebuilds its entries. */
-export const DERIVATION_VERSION = 7;
+export const DERIVATION_VERSION = 8;
 /**
  * A derived Session version: the index rules, the chunk and excerpt rules, then the reader's source version. A chunker
  * or excerpt change gives an unchanged Session a new version, so its next derive re-chunks it without an index rebuild.
@@ -24,7 +24,9 @@ export const MESSAGE_CHARS = 16 * 1024;
 export const TOOL_CHARS = 256;
 /** Tool-call arguments up to this JSON size stay whole in a preview; larger ones keep only path and command keys. */
 export const TOOL_ARGS_CHARS = 2048;
-export type Source = { host: string; cacheDir: string; file: string; path: string };
+/** A copy to derive. `harness: "pi-durable"` marks a hub cache of a node conversation (copy-reader.ts); absent means Pi JSONL. */
+/** `rawExport`: the raw export URL of a durable Session, linked from entries the copy holds only as stubs. */
+export type Source = { host: string; cacheDir: string; file: string; path: string; harness?: "pi-durable"; rawExport?: string };
 export type WorkerJob =
  | { op: "init"; cacheDir: string }
  | { op: "derive"; source: Source; urgent?: boolean }

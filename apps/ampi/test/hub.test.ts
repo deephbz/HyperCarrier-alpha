@@ -67,7 +67,7 @@ test("hub: replicas stay exact through compaction, a repeated sub never doubles 
 		assert.deepEqual(browser.gaps, []);
 		const index = browser.values.get(threads) as any;
 		assert.equal(Object.values(index.threads).filter((t: any) => t.kind === "thread").length, 1, "one thread, not three");
-		const history = await browser.req("local", "thread.history", { threadId, before: "1000000", limit: 500 });
+		const history = await browser.req("local", "thread.history", { threadId, limit: 500 });
 		assert.equal(history.entries.filter((e: any) => e.kind === "user" && e.text.startsWith("first")).length, 1, "the prompt ran once");
 		browser.ws.close();
 	} finally {

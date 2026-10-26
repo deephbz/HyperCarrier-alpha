@@ -25,6 +25,11 @@ test("crash: a node killed after admitting its compaction does not compact again
 		assert.equal(history.entries.filter((e: any) => e.kind === "compaction").length, 1, "the pending decision ran once");
 		const { records } = await client.req("compact.records", { threadId });
 		assert.equal(records.length, 1, "one compaction record");
+		// The HC trigger guard reads live tasks, so it holds nothing after the restarted task finished: a new crossing compacts.
+		await client.req("thread.submit", { threadId, content: "Next part\n/sim long 10" });
+		const deadline = Date.now() + 20_000;
+		while ((await client.req("compact.records", { threadId })).records.length < 2 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+		assert.equal((await client.req("compact.records", { threadId })).records.length, 2, "after crash and restart, the next crossing compacts again");
 		client.close();
 	} finally {
 		await kill(child);

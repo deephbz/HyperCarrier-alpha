@@ -56,10 +56,10 @@ consolidation remains deferred. It does not write to Session history.
 ## Supporting packages
 
 - HC Control owns the local Session socket and evidence-backed acknowledgments.
-- `@hypercarrier/durable-team` adapts Pi Team Bright Task graph semantics to
+- `@hypercarrier/pi-team-durable` adapts Pi Team Bright Task graph semantics to
   pi-durable.
-- `@hypercarrier/durable-rarebit` uses Rarebit selection on durable entries.
-- `@hypercarrier/durable-compact` maps the Auto Compact budget and summary to
+- `@hypercarrier/rarebit-durable` uses Rarebit selection on durable entries.
+- `@hypercarrier/auto-compact-durable` maps the Auto Compact budget and summary to
   pi-durable.
 - Auto Compact, Cache Goblin, and System Prompt Audit remain independent Pi
   packages.

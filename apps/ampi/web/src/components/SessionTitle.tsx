@@ -1,21 +1,26 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { ThreadSummary } from "../../../src/shared/protocol.ts";
+import { useHosts } from "../client.ts";
 import { money } from "../util.ts";
+import { hostLabelFor } from "./host-label.ts";
 import { useHoverCard } from "./hover-card.tsx";
 
 export function SessionTitle({ children, title, summary, host, parent }: { children: ReactNode; title: string; summary?: ThreadSummary; host: string; parent?: ReactNode }) {
 	const { id, open, setOpen, anchorProps, render } = useHoverCard<HTMLDivElement>({ deps: [title, summary] });
 	const [copied, setCopied] = useState<"ok" | "error">();
+	const { hosts } = useHosts();
 	useEffect(() => { setCopied(undefined); setOpen(false); }, [summary?.id, host]);
 	const date = (value?: number) => value === undefined ? "Unknown" : new Date(value).toLocaleString(undefined, { hour12: false });
 	const location = summary?.location;
+	// A durable thread has a tab and no pane (node-design.md, "Tabs and placement").
+	const durable = summary !== undefined && !summary.id.startsWith("pi:");
 	const rows = [
 		["Title", title], ["Directory", summary?.cwd || "Unknown"], ["Cost", summary ? summary.spendLabel ?? money(summary.costUsd) : "Unknown"],
 		["Workspace", location?.workspaceLabel || location?.workspace || "Unknown"],
-		["Tab", location?.tabLabel || location?.tab || "Unknown"], ["Pane", location?.pane || "Unknown"],
+		["Tab", location?.tabLabel || location?.tab || "Unknown"], ["Pane", durable ? undefined : location?.pane || "Unknown"],
 		["Kind", summary?.kind || "Unknown"], ["Team", summary?.team?.teamId],
 		["Role", summary?.team ? [summary.team.role, summary.team.worker].filter(Boolean).join(" · ") : undefined],
-		["Host", host], ["Session", summary?.id || "Unknown"], ["Reference", summary?.ref || "Unknown"],
+		["Host", hostLabelFor(host, hosts)], ["Session", summary?.id || "Unknown"], ["Reference", summary?.ref || "Unknown"],
 		["Model", summary?.model || "Unknown"], ["Started", date(summary?.createdAt)], ["Updated", date(summary?.updatedAt)],
 		["Live", summary?.live === undefined ? "Unknown" : summary.live ? "Running" : "Not running"],
 		["Control", summary?.control ? "Control extension" : summary?.live ? "typed into Herdr pane" : "Not running"],

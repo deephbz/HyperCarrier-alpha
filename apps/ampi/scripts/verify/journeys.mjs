@@ -13,7 +13,11 @@ import { fileURLToPath } from 'node:url';
 import { thread, timeline, arc } from '../ux/recipes.mjs';
 import { threadsSnapshot, topicSnapshot, paneCoverage, agentWatch } from './live-rows.mjs';
 import { app, checkout } from './hub.mjs';
+import { readingPlace } from './reading-place.mjs';
+import { teamQueue } from './team-queue.mjs';
 import { arcFloor } from '../../src/pi/views/cos-arc-rules.ts';
+import { fixtureSocket } from '../ux/fixtures.mjs';
+import { messageFixture, checkMessageFilters } from './team-messages.mjs';
 
 const num = text => Number(String(text).replace(/[^\d]/g, ''));
 const sideScroll = p => p.locator('.side-scroll');
@@ -1009,6 +1013,27 @@ export const journeys = [
     },
   },
   {
+    id: 'T3tm', feature: 't3-open-session.md', title: 'Read Team messages with exact sender and recipient filters',
+    async run(j) {
+      const p=j.page;
+      await j.step('pi-source-unavailable','Open Messages for a Pi Team',async()=>{
+        await j.goto(thread('lead','team'));
+        await p.getByRole('button',{name:'Messages',exact:true}).click();
+        const region=p.getByRole('region',{name:'Messages',exact:true});
+        await region.getByText(/Messages unavailable for Pi Teams/).waitFor();
+        assert.doesNotMatch(await region.innerText(),/No messages/);
+        return {state:'unavailable',runtime:'Pi'};
+      });
+      await j.step('bounded-exact-filters','Filter a synthetic durable Team message projection',async()=>{
+        const audit={requests:[]};
+        await p.routeWebSocket('**/ws',ws=>fixtureSocket(ws,{teamMessages:messageFixture()},audit));
+        await p.reload();
+        const result=await checkMessageFilters(p);
+        return {...result,requests:audit.requests};
+      });
+    },
+  },
+  {
     id: 'T0t', feature: 't0-open-ampi.md', title: 'Choose System, Light or Dark in the sidebar (A22)',
     async run(j) {
       const p = j.page;
@@ -1312,6 +1337,15 @@ export const journeys = [
         return {};
       });
     },
+  },
+  {
+    id: 'D-team-owner', feature: 'd-team-coexist.md', title: 'Read queued Team work and owner command reports',
+    run: teamQueue,
+  },
+  {
+    id: 'T3place', feature: 't3place-reading-place.md', title: 'Keep the reading place while Pi and durable Sessions grow',
+    budgetMs: 180_000, // Includes two ten-second no-arrival holds and bounded-source eviction on both carriers.
+    run: readingPlace,
   },
   {
     id: 'T3r', feature: 't3-open-session.md', title: 'Open a direct Session route before the Host lists the Session',
@@ -1822,9 +1856,9 @@ export const journeys = [
         await p.waitForURL(/\/t\/pi%3Asess-big\?e=/);
         return { status: text, target };
       }, { expectSide: s => assert.equal(s.askCalls, 0, 'search called the model') });
-      await j.step('find-in-session', 'Choose Find in the Session toolbar and search a tool-call phrase', async () => {
+      await j.step('find-in-session', 'Choose the Find icon in the Session toolbar and search a tool-call phrase', async () => {
         await p.locator('.composer').waitFor();
-        await p.getByRole('button', { name: 'Find', exact: true }).click();
+        await p.getByRole('button', { name: 'Find in this Session', exact: true }).click();
         const find = p.getByRole('region', { name: 'Find in this Session' });
         const input = find.getByRole('textbox', { name: 'Find in Session' });
         await input.fill('step 570');
@@ -1941,17 +1975,17 @@ export const journeys = [
           return first && { entry: first.dataset.entry, y: Math.round(first.getBoundingClientRect().top - box.top) };
         });
         const before = await mark();
-        await p.getByRole('button', { name: 'Transcript lens: full transcript', exact: true }).click();
-        await p.getByRole('button', { name: 'Transcript lens: conversation only', exact: true }).waitFor();
-        await p.getByRole('button', { name: 'Transcript lens: conversation only', exact: true }).click();
-        await p.getByRole('button', { name: 'Transcript lens: full transcript', exact: true }).waitFor();
+        await p.getByRole('button', { name: 'Transcript mode: full transcript', exact: true }).click();
+        await p.getByRole('button', { name: 'Transcript mode: conversation only', exact: true }).waitFor();
+        await p.getByRole('button', { name: 'Transcript mode: conversation only', exact: true }).click();
+        await p.getByRole('button', { name: 'Transcript mode: full transcript', exact: true }).waitFor();
         await j.settle();
         const after = await scroll.evaluate((e, id) => { const el = e.querySelector(`[data-entry="${CSS.escape(id)}"]`); return el && Math.round(el.getBoundingClientRect().top - e.getBoundingClientRect().top); }, before.entry);
         assert(after !== null && Math.abs(after - before.y) <= 4, `entry ${before.entry} moved ${before.y} → ${after}`);
         return { entry: before.entry, before: before.y, after };
       });
       await j.step('tool-run-line', 'Turn on the conversation lens and read a folded tool run', async () => {
-        await p.getByRole('button', { name: 'Transcript lens: full transcript', exact: true }).click();
+        await p.getByRole('button', { name: 'Transcript mode: full transcript', exact: true }).click();
         // Thinking-only runs fold as "thinking · 20s · …"; read the first run that has tool calls.
         const summary = p.locator('.rb-tools summary').filter({ hasText: /^\d+ tool calls?\b/ }).first();
         await summary.waitFor();
@@ -1984,7 +2018,7 @@ export const journeys = [
         await assertEventually(async () => (await threadsOf(j.state)).some(t => t.id === thread), `the hub does not list ${thread}`, 20_000);
         await j.goto(`#/h/devbox/t/${encodeURIComponent(thread)}`);
         await p.getByText('A26b-after', { exact: false }).first().waitFor({ timeout: 20_000 });
-        await p.getByRole('button', { name: 'Transcript lens: full transcript', exact: true }).waitFor();
+        await p.getByRole('button', { name: 'Transcript mode: full transcript', exact: true }).waitFor();
         const notices = await p.locator('.msg.notice').count();
         assert.equal(notices, 4, `the full transcript shows ${notices} extension messages`);
         return { thread, notices };
@@ -1992,8 +2026,8 @@ export const journeys = [
       // Outside a run, nothing but user and assistant text renders.
       const loose = () => p.locator('.msg.notice, .compaction, .tool').evaluateAll(els => els.filter(e => !e.closest('.rb-tools')).map(e => e.textContent.slice(0, 60)));
       await j.step('one-run', 'Turn on the conversation lens and read the folded run', async () => {
-        await p.getByRole('button', { name: 'Transcript lens: full transcript', exact: true }).click();
-        await p.getByRole('button', { name: 'Transcript lens: conversation only', exact: true }).waitFor();
+        await p.getByRole('button', { name: 'Transcript mode: full transcript', exact: true }).click();
+        await p.getByRole('button', { name: 'Transcript mode: conversation only', exact: true }).waitFor();
         await j.settle();
         const summaries = (await p.locator('.rb-tools summary').allInnerTexts()).map(t => t.replace(/\s+/g, ' '));
         assert.equal(summaries.length, 1, `runs: ${JSON.stringify(summaries)}`);
@@ -2127,12 +2161,12 @@ export const journeys = [
         }
         return { rounds: 20 };
       });
-      await j.step('shell-unavailable', 'In a Pi Session (no shell panel), help names where Toggle shell works, the command palette omits it, and ⌘J opens nothing', async () => {
+      await j.step('shell-removed', 'Terminals are removed: help and the command palette list no Toggle shell, and ⌘J opens nothing', async () => {
         await focusTranscript();
         await p.keyboard.press('Shift+Slash');
         const help = p.getByRole('dialog', { name: 'Keys and help' });
         await help.waitFor({ timeout: 10_000 });
-        assert.match(await help.innerText(), /Toggle shell · on a Host page/, 'help does not name the context of Toggle shell in a Pi Session');
+        assert.doesNotMatch(await help.innerText(), /Toggle shell/, 'help still lists Toggle shell');
         await p.keyboard.press('Escape');
         await help.waitFor({ state: 'detached', timeout: 10_000 });
         await p.keyboard.press('ControlOrMeta+Shift+k');
@@ -2146,7 +2180,7 @@ export const journeys = [
         await p.waitForTimeout(300);
         assert.equal(await p.locator('[data-region="panel"]').count(), 0, '⌘J opened a panel in a Pi Session');
         await regionIs('transcript', '⌘J moved focus');
-        return { help: 'Toggle shell with context', palette: 'no Toggle shell' };
+        return { help: 'no Toggle shell', palette: 'no Toggle shell' };
       });
       await j.step('panel', 'From the transcript press ⌘L twice: open and focus the Arc panel, then close it and return', async () => {
         await focusTranscript();

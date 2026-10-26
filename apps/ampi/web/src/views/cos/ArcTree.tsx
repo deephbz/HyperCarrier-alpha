@@ -8,9 +8,9 @@ import { ago, href } from "../../util.ts";
 const FOLD_AFTER = 15;
 const when = (t: string) => new Date(t).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
+/** A citation names its Session by ref; href.ref turns it into the typed route of its Host source (Pi or durable). */
 function cite(c: Citation, label = `#${c.entryId}`) {
-	const slash = c.session.indexOf("/");
-	return <a key={`${c.session}#${c.entryId}`} href={href.thread(c.session.slice(0, slash), c.session.slice(slash + 1), { entry: c.entryId })} title={`${c.session} · entry ${c.entryId}`}>[{label}]</a>;
+	return <a key={`${c.session}#${c.entryId}`} href={href.ref(`${c.session}#${c.entryId}`)} title={`${c.session} · entry ${c.entryId}`}>[{label}]</a>;
 }
 
 /** One line: the short title, an ask's kind badge, citations and age. The longer text and the cited quote show on expand. */

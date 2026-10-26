@@ -1,12 +1,10 @@
 // Search owns extraction, tokenizer policy, and scope labels. The hub retains no
-// text corpus. Fleet reads FTS; in-Session find scans one native entry at a time.
+// text corpus. Fleet reads FTS; in-Session find scans one ReaderItem at a time.
 import type { DatabaseSync } from "node:sqlite";
-// @ts-ignore shared reader is plain ESM
-import { openPiSessionRange } from "../../../trace-analytics/src/sources/transcript-range.mjs";
-// @ts-ignore shared native extraction is plain ESM
-import { mirrorEntryText } from "../../../trace-analytics/src/sources/transcript.mjs";
-import { derivedVersion, indexFile, type Source } from "./working-set-types.ts";
+import { openCopyReader } from "./copy-reader.ts";
+import { derivedVersion, type Source } from "./working-set-types.ts";
 import type { PiReaderEntry } from "./views/types.ts";
+import { visitFindItems } from "./reader-item.ts";
 
 export const PROSE_KINDS = ["human", "assistant", "compaction"] as const;
 export const FLEET_SCOPE = "Indexed active branches retained by this hub (96 h by default, plus live/open Sessions). Unindexed copies and invalid records are not searched. Searches human turns, agent replies and compaction summaries. Excludes thinking, tools, injected messages, branch summaries and uncopied history. Word matching; indexed CJK bigrams. Use K5 tools for older history; K5 search is not full-transcript search.";
@@ -112,14 +110,14 @@ export function fleetSearch(db: DatabaseSync, query: string): SearchResult {
  return { hits, more: rows.length > 100, scope: FLEET_SCOPE, asOf, coverage: { indexed: Number(coverage.indexed), notIndexed: 0, stale: 0, invalidLines: Number(coverage.invalid) } };
 }
 export function findInSession(source: Source, query: string, version: string): SearchResult {
- const q = queryText(query).toLowerCase(), reader = openPiSessionRange(source.file, { host: source.host, indexPath: indexFile(source) });
+ const q = queryText(query).toLowerCase(), reader = openCopyReader(source);
  try {
   const info = reader.info();
   if (derivedVersion(info.version) !== version) throw new Error("Session changed. Retry Find on the current copy.");
   const hits: SearchHit[] = []; let total = 0, scanned = 0;
-  reader.visit(({ native, entry }: { native: unknown; entry: PiReaderEntry }) => {
+  visitFindItems(reader, ({ entry, semantics: { findText: text } }) => {
    scanned++;
-   const text: string = mirrorEntryText(native), at = text.toLowerCase().indexOf(q);
+   const at = text.toLowerCase().indexOf(q);
    if (at < 0) return;
    total++;
    if (hits.length < 200) hits.push({ entry: entry.id, threadId: reader.session().id, ref: entry.ref, snippet: text.slice(Math.max(0, at - 80), at + q.length + 160), kind: entry.kind, version });

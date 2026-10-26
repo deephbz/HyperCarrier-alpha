@@ -10,7 +10,7 @@ import { promisify } from "node:util";
 import { hubConfigPath, hubProof, hubToken, loadHubConfig } from "./hub/hub.ts";
 import type { HostConfig } from "./hub/hosts.ts";
 import { connectSocket, socketPath } from "./node/daemon.ts";
-import { buildId } from "./shared/build.ts";
+import { buildId, sameBuild } from "./shared/build.ts";
 
 const run = promisify(execFile);
 const WEB_INDEX = fileURLToPath(new URL("../web/dist/index.html", import.meta.url));
@@ -77,20 +77,13 @@ export async function doctor(): Promise<number> {
 	if (existsSync(WEB_INDEX)) report("ok", "Window built");
 	else report("fail", "The window (web UI) is not built", "npm run build:web -w @hypercarrier/ampi (from the repository root), or run apps/ampi/scripts/setup.sh");
 
-	try {
-		await import("node-pty");
-		report("ok", "Terminals available (node-pty)");
-	} catch {
-		report("warn", "Terminals unavailable: node-pty did not load", "Install build tools (python3, make, a C++ compiler), then npm install again. Everything else works without it.");
-	}
-
 	const node = await nodeHello();
 	if (!node) report("ok", "No node running yet; the hub or the first SSH connection starts it");
-	else if (node.build && node.build !== buildId())
+	else if (!sameBuild(node.build))
 		report("warn", `The running node (pid ${node.pid}) is an older build (${node.build})`, "ampi stop; it restarts on the next connection, and running work resumes.");
 	else report("ok", `Node running (pid ${node.pid})`);
 
-	const models = (await listModels(openModels())).filter((m) => m.provider !== "ampi-sim");
+	const models = (await listModels(openModels({ home: ampiHome() }))).filter((m) => m.provider !== "ampi-sim");
 	if (models.length) report("ok", `Models signed in: ${[...new Set(models.map((m) => m.provider))].join(", ")} (${models.length} models)`);
 	else
 		report(
@@ -134,7 +127,7 @@ export async function doctor(): Promise<number> {
 			try {
 				const { stdout } = await run("ssh", ["-o", "BatchMode=yes", "-o", "ConnectTimeout=8", ...(host.sshArgs ?? []), "--", host.target!, ...words], { timeout: 15_000 });
 				const remoteBuild = /build (\S+)/.exec(stdout)?.[1];
-				if (remoteBuild && remoteBuild !== buildId())
+				if (!sameBuild(remoteBuild))
 					report("warn", `${host.label}: ${stdout.trim()} differs from this build`, `Update AmPi on ${host.target} (git pull && apps/ampi/scripts/setup.sh), then restart its node from the window.`);
 				else report("ok", `${host.label}: ${stdout.trim()}`);
 			} catch (error) {

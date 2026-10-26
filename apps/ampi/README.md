@@ -6,7 +6,7 @@ AmPi has live Herdr integration paths, but full UX acceptance remains open. Open
 
 ## Requirements
 
-- Node.js 22.19 or newer.
+- Node.js 22.23.4+, 24.22.1+, or 26.12.1+.
 - macOS or a compatible Unix environment for local process and tmux discovery.
 - Optional: Pi, Herdr, SSH, and tmux for live Session discovery and control.
 
@@ -47,6 +47,6 @@ The shell uses the same local hub as the CLI. It owns the window, menu bar, noti
 
 - [Pi backend and control contract](docs/pi-backend.md)
 - [HC Control package](../../packages/pi-hc-control/README.md)
-- [Durable Team package](../../packages/durable-team/README.md)
-- [Durable Rarebit package](../../packages/durable-rarebit/README.md)
-- [Durable Compact package](../../packages/durable-compact/README.md)
+- [Durable Team package](../../packages/pi-team-durable/README.md)
+- [Durable Rarebit package](../../packages/rarebit-durable/README.md)
+- [Durable Compact package](../../packages/auto-compact-durable/README.md)

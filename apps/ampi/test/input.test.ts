@@ -1,7 +1,7 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { runDaemon } from "../src/node/daemon.ts";
@@ -52,11 +52,15 @@ test("input: the owner's pi skills and prompt templates are found, nearest first
 	write(join(project, ".pi/skills/deploy/SKILL.md"), "---\nname: deploy\ndescription: Outer deploy\n---\nouter");
 	write(join(sub, ".pi/skills/deploy/SKILL.md"), "---\nname: deploy\ndescription: Inner deploy\n---\ninner");
 	write(join(project, ".agents/skills/no-desc/SKILL.md"), "---\nname: no-desc\n---\nskipped: no description");
-	write(join(project, ".pi/prompts/review.md"), "---\ndescription: Review a change\n---\nReview $1 for $ARGUMENTS");
+	// As in Pi, prompt templates come from the working directory's own .pi only.
+	write(join(sub, ".pi/prompts/review.md"), "---\ndescription: Review a change\n---\nReview $1 for $ARGUMENTS");
 	mkdirSync(join(project, ".git"));
 	// Above the repository root (a shared directory such as /tmp): never offered.
 	write(join(home, ".pi/skills/planted/SKILL.md"), "---\nname: planted\ndescription: From a shared parent directory\n---\nx");
-	const daemon = await runDaemon({ home, simTokensPerSecond: 20000, plugins: await hydrate() });
+	// Project skills load only in a trusted project, as in Pi's RPC mode: the owner saved trust for this one.
+	const agentDir = join(home, "agent");
+	write(join(agentDir, "trust.json"), JSON.stringify({ [realpathSync(project)]: true }));
+	const daemon = await runDaemon({ home, agentDir, simTokensPerSecond: 20000, plugins: await hydrate() });
 	try {
 		const client = await TestClient.connect(daemon.socket);
 		const found = await client.req("prompts.list", { cwd: sub });

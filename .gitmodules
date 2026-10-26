@@ -13,3 +13,12 @@
 [submodule "apps/trace-analytics"]
 	path = apps/trace-analytics
 	url = https://github.com/deephbz/trace-analytics.git
+[submodule "packages/rarebit-durable"]
+	path = packages/rarebit-durable
+	url = https://github.com/deephbz/rarebit-durable.git
+[submodule "packages/auto-compact-durable"]
+	path = packages/auto-compact-durable
+	url = https://github.com/deephbz/auto-compact-durable.git
+[submodule "packages/pi-team-durable"]
+	path = packages/pi-team-durable
+	url = https://github.com/deephbz/pi-team-durable.git

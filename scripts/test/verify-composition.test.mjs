@@ -53,6 +53,9 @@ test("verifies native package submodule, workspace, and lock facts", () => {
     "packages/pi-team-bright",
     "packages/pi-openai-blackmagic-compact",
     "packages/hc-rarebit",
+    "packages/rarebit-durable",
+    "packages/auto-compact-durable",
+    "packages/pi-team-durable",
   ]);
   assert.equal(result.submodules.find(({ path: value }) => value === "packages/pi-team-bright").workspace, "included");
   assert.equal(result.submodules.find(({ path: value }) => value === "packages/hc-rarebit").workspace, "included");

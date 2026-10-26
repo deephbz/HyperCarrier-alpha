@@ -4,11 +4,48 @@
 import { native } from "./native.ts";
 import { applyImmutable, type Op } from "@earendil-works/chord/delta";
 import { useSyncExternalStore } from "react";
-import type { HostState } from "../../src/hub/hosts.ts";
-import type { ClientOps, HubOps, Topic, TopicValue } from "../../src/shared/protocol.ts";
+import type { HostState as HubHostState } from "../../src/hub/hosts.ts";
+import { STALE_VERSION, type ClientOps, type HubOps, type Topic, type TopicValue } from "../../src/shared/protocol.ts";
 import { perfMark, perfMarkOnce } from "./perf.ts";
 
-export type { HostState };
+/** The wire code of a refused request (protocol.ts STALE_VERSION, NOT_FOUND, ...). */
+export const refusal = (error: unknown) => (error as { code?: string } | undefined)?.code;
+
+/** Reads of one versioned request before the caller's refresh: the first, then two at the version `next` returns. */
+export const STALE_READS = 3;
+/**
+ * A read pinned to a source version. A `stale_version` refusal reads again at the version `next` returns, at most
+ * STALE_READS reads. Then `refresh`, when given, replaces the caller's view once, and one last read follows it. Every
+ * other refusal, and the last stale one, reach the caller.
+ */
+export async function readVersioned<T>(read: (version: string | undefined) => Promise<T>, version: string | undefined, next: (stale: string | undefined) => Promise<string | undefined>, refresh?: () => void): Promise<T> {
+	for (let attempt = 1; ; attempt++) {
+		try { return await read(version); }
+		catch (error) {
+			if (refusal(error) !== STALE_VERSION || attempt > STALE_READS || (attempt === STALE_READS && !refresh)) throw error;
+			if (attempt === STALE_READS) refresh!();
+			version = await next(version);
+		}
+	}
+}
+
+/** A Host source as the web sees it: `link` (`<id>#pi`, `<id>#durable`) names it in routes, requests and subscriptions. */
+export type HostState = HubHostState & { link: string };
+
+/**
+ * The Host source a route names: its link key, or a Host ID that one source serves. When two sources serve the Host
+ * ID, a thread ID names the source: `pi:` for Pi, any other for durable.
+ */
+export function findHost(hosts: HostState[], key: string | undefined, thread?: string): HostState | undefined {
+	if (key === undefined) return undefined;
+	const exact = hosts.find((h) => h.link === key);
+	if (exact) return exact;
+	const byId = hosts.filter((h) => h.id === key);
+	if (byId.length === 1) return byId[0];
+	if (thread === undefined) return undefined;
+	const source = thread.startsWith("pi:") ? "pi" : "durable";
+	return byId.find((h) => h.link === `${key}#${source}`);
+}
 /** An op's arguments as a rest tuple: optional when every field is. */
 type Args<A> = {} extends A ? [args?: A] : [args: A];
 
@@ -87,7 +124,7 @@ export class HubClient {
 	#frame(frame: any): void {
 		switch (frame.t) {
 			case "hosts":
-				this.hosts = frame.hosts;
+				this.hosts = (frame.hosts as HubHostState[]).map((h) => ({ ...h, link: h.link ?? h.id }));
 				this.#emit();
 				return;
 			case "res": {
@@ -110,13 +147,8 @@ export class HubClient {
 			case "ops": {
 				const sub = this.#bySid.get(frame.sid);
 				if (!sub || sub.value === undefined || sub.n === -1) return;
-				if (frame.n !== sub.n + 1) {
-					// A gap or a duplicate stream: this replica no longer matches the node. Start over from a snapshot.
-					sub.n = -1;
-					this.#send({ t: "unsub", sid: sub.sid });
-					this.#send({ t: "sub", sid: sub.sid, host: sub.host, topic: sub.topic });
-					return;
-				}
+				// A gap or a duplicate stream: this replica no longer matches the node. Start over from a snapshot.
+				if (frame.n !== sub.n + 1) return this.#restart(sub);
 				sub.n = frame.n;
 				this.#update(sub, { value: applyImmutable(sub.value, frame.ops as Op[]) });
 				return;
@@ -134,6 +166,19 @@ export class HubClient {
 				return;
 			}
 		}
+	}
+
+	#restart(sub: Sub): void {
+		sub.n = -1;
+		this.#send({ t: "unsub", sid: sub.sid });
+		this.#send({ t: "sub", sid: sub.sid, host: sub.host, topic: sub.topic });
+	}
+
+	/** Replaces an open replica with a fresh snapshot, as after a stream gap. False when no one holds the topic. */
+	refresh(host: string, topic: Topic): boolean {
+		const sub = this.subsByKey.get(`${host}|${JSON.stringify(topic)}`);
+		if (sub) this.#restart(sub);
+		return Boolean(sub);
 	}
 
 	#update(sub: Sub, change: Partial<Pick<Sub, "value" | "stale" | "error">>): void {

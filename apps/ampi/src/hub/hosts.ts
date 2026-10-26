@@ -7,7 +7,7 @@ import type { Socket } from "node:net";
 import { encodeFrame, lineReader } from "../shared/framing.ts";
 import { type ClientFrame, type NodeFrame, type NodeInfo, PROTOCOL } from "../shared/protocol.ts";
 import { connectOrStart } from "../node/daemon.ts";
-import { buildId } from "../shared/build.ts";
+import { sameBuild } from "../shared/build.ts";
 
 export type HostConfig = {
 	id: string;
@@ -21,6 +21,8 @@ export type HostConfig = {
 	sshArgs?: string[];
 	/** AMPI_HOME of a local node (tests run several). */
 	home?: string;
+	/** Durable kinds: replaces Pi for views' model calls on the hub (src/pi/ask.ts), as `PiHostConfig.askCommand`. */
+	askCommand?: string[];
 };
 
 export type HostState = {
@@ -39,7 +41,14 @@ export type HostState = {
 	buildMismatch?: boolean;
 	/** A Pi Host's working-set init failed: the Host serves no copies until the hub restarts; `error` says why. */
 	cacheFailed?: true;
+	/** The hub's route to this Host's source, `<id>#pi` or `<id>#durable`. Set by the hub; the web names a link by it. */
+	link?: string;
 };
+
+/** The route key of one source on one Host. One Host ID can carry a Pi source and a durable source. */
+export function linkKey(config: { id: string; kind: HostConfig["kind"] }): string {
+	return `${config.id}#${config.kind === "pi-local" || config.kind === "pi-ssh" ? "pi" : "durable"}`;
+}
 
 type Pipe = { write(text: string): void; close(): void };
 
@@ -109,7 +118,7 @@ export class HostLink extends EventEmitter {
 					connectedAt: Date.now(),
 					error: undefined,
 					attempts: 0,
-					buildMismatch: frame.node.build !== buildId() ? true : undefined,
+					buildMismatch: sameBuild(frame.node.build) ? undefined : true,
 				});
 				this.emit("connected");
 				return;

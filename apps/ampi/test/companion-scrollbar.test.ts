@@ -47,7 +47,7 @@ let bundle:Promise<string>|undefined;
 let chrome:ReturnType<typeof chromium.launch>|undefined;
 after(async()=>{await(await chrome)?.close();});
 
-for(const kind of ['pi-local']) test('companion '+kind+': whole-branch jump, idle cache, place hold and stale-reply fence',async t=>{
+for(const kind of ['pi-local','local']) test('companion '+kind+': whole-branch jump, idle cache, place hold and stale-reply fence',async t=>{
  const script=await(bundle??=componentScript());
  const browser=await(chrome??=chromium.launch({headless:true,executablePath:findChrome()}));
  const page=await browser.newPage({viewport:{width:1000,height:700}});t.after(()=>page.context().close());page.setDefaultTimeout(3000);
@@ -84,7 +84,10 @@ for(const kind of ['pi-local']) test('companion '+kind+': whole-branch jump, idl
  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
  assert.equal(requests,1,'paint growth and idle do not refetch');
  publish(402);
- await page.waitForFunction(()=>document.querySelector('[data-outline-version="v400"]')===null);
+ // The old outline stays in place, marked busy, until a current one replaces it.
+ await page.waitForFunction(()=>document.querySelector('.companion-scrollbar')?.getAttribute('aria-busy')==='true');
+ assert.equal(await page.locator('[data-outline-version="v400"]').count(),1);
+ assert.equal(await marks.count(),200);
  // The second version answers first; a late old response must never replace it.
  publish(404);
  await page.locator('[data-outline-version="v404"]').waitFor();

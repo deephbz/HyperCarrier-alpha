@@ -42,7 +42,7 @@ export async function readObservationSnapshot() { const data = read(); readTaskS
 	assert.deepEqual(first, { availability: "available", teams: [{ name: "alpha", members: [
 		{ member: "lead", role: "lead", threadId: "pi:sess-a", ref: "devbox/pi:sess-a", pane: "w1:p2", live: true, status: "streaming" },
 		{ member: "worker", role: "teammate", threadId: "pi:sess-b", ref: "devbox/pi:sess-b", pane: "w1:p1", live: true, status: "idle" },
-	], tasks: data.tasks.alpha.tasks, issues: [] }] });
+	], tasks: data.tasks.alpha.tasks, messages: { availability: "unavailable", reason: "Messages unavailable for Pi Teams: this Host publishes membership and Tasks only." }, issues: [] }] });
 	assert.equal((await browser.until<TeamValue>(all, v => v.teams.length === 2)).teams[1]!.name, "beta");
 	// A Task-only authority update must reach both subscriptions, with no Session append.
 	data.tasks.alpha.tasks[0]!.status = "blocked"; data.tasks.alpha.tasks[0]!.ready = false;

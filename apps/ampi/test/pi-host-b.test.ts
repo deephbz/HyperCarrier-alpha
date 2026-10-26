@@ -37,7 +37,7 @@ test("pi host: 96-hour eviction respects open/live pins, removes copied payloads
  assert.ok(index()[f.sessionB], "live old Session stays copied");
  const expired = browser.sub("devbox", { kind: "thread", threadId: "pi:sess-a" });
  await browser.until<any>(expired, (v) => /outside retained scope/.test(v.agent.readError ?? ""));
- hub.links.get("devbox")!.reconnect();
+ hub.link("devbox")!.reconnect();
  await new Promise((resolve) => setTimeout(resolve, 1600));
  assert.equal(index()[f.sessionA], undefined, "reconnect cannot recopy an unchanged expired source");
  appendFileSync(f.sessionA, line({ type: "message", id: "new", parentId: "r1", timestamp: new Date().toISOString(), message: { role: "user", content: "fresh again" } }));

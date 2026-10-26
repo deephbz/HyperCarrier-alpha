@@ -31,7 +31,7 @@ export async function setup(p, r) {
   if (s === 'rb-models') await button(p, 'Models').click();
   if (s === 'diagnosis') await p.getByRole('button', { name: /^Diagnosis/ }).click();
   if (s === 'lens' || s === 'lens-tools') {
-    await p.getByRole('button', { name: 'Transcript lens: full transcript', exact: true }).click();
+    await p.getByRole('button', { name: 'Transcript mode: full transcript', exact: true }).click();
     await p.locator('.rb-tools summary').first().waitFor();
     if (s === 'lens-tools') await p.locator('.rb-tools summary').first().click();
   }

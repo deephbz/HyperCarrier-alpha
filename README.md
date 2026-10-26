@@ -50,6 +50,10 @@ access URL private.
 The app tests use synthetic fixtures. A live receipt, successful build, or
 passing test does not establish full UX acceptance.
 
+`npm test` skips Pi Team Durable's installed-contract test, which reads its
+standalone package layout; a later Pi Team Durable release resolves Pi Team
+Bright through Node resolution.
+
 ## Source and package identity
 
 The exporter preserves selected source files, child Git links, package

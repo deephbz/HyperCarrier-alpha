@@ -1,12 +1,13 @@
 import type { JsonValue } from "../node/durable-types.ts";
 import { injectedMessage, toolArgsPreview } from "../shared/entry-shapes.ts";
 import type { PiBlock, PiEntry } from "../shared/protocol.ts";
+import { noticeMessage } from "../shared/team-origin.ts";
 type ReaderEntry = {
 	ref: string;
 	id: string;
 	parent: string | null;
 	t: number | null;
-	kind: "human" | "injected" | "assistant" | "tool" | "compaction" | "branch-summary" | "other";
+	kind: "human" | "injected" | "assistant" | "tool" | "compaction" | "branch-summary" | "reset" | "other";
 	name?: string | null;
 	role?: string;
 	model?: string;
@@ -18,6 +19,7 @@ type ReaderEntry = {
 	text?: string;
 	stop?: string;
 	error?: string;
+	oversized?: { bytes: number; sha256: string; kind: string };
 };
 
 const TOOL_TEXT_LIMIT = 48_000;
@@ -52,9 +54,23 @@ export function wireEntry(e: PiEntry): PiEntry {
 	return out;
 }
 
-/** Projects one reader entry into the GUI's entry shape. Returns undefined for entries the transcript does not draw. */
-export function projectEntry(e: ReaderEntry): PiEntry | undefined {
+const size = (bytes: number) => bytes < 1 << 20 ? `${Math.ceil(bytes / 1024)} KiB` : `${(bytes / (1 << 20)).toFixed(1)} MiB`;
+
+/** The placeholder for an entry whose body stays on the node: its size, and the raw export when `rawExport` names it. */
+function oversizedEntry(e: ReaderEntry & { oversized: NonNullable<ReaderEntry["oversized"]> }, ts: number | undefined, rawExport?: string): PiEntry {
+	const where = rawExport ? `Open the raw export to read it.` : `The Trace Viewer raw export has it.`;
+	const text = `This ${size(e.oversized.bytes)} \`${e.oversized.kind}\` entry is too large for the hub copy and stays on the node. ${where}`;
+	return { id: e.id, kind: "custom", entryKind: e.oversized.kind, ...(ts ? { ts } : {}), message: { kind: "other", label: "not copied", text }, ...(rawExport ? { rawExport } : {}) };
+}
+
+/**
+ * Projects one reader entry into the GUI's entry shape. Returns undefined for entries the transcript does not draw.
+ * `rawExport` is the raw export URL of the entry's Session, for entries whose body is not in the copy. `data` is the
+ * entry's structured data (a ReaderItem's `source.data`); a delivered Team input reads its origin from it.
+ */
+export function projectEntry(e: ReaderEntry, { rawExport, data }: { rawExport?: string; data?: unknown } = {}): PiEntry | undefined {
 	const ts = e.t ?? undefined;
+	if (e.oversized) return oversizedEntry(e as Parameters<typeof oversizedEntry>[0], ts, rawExport);
 	switch (e.kind) {
 		case "human": {
 			const text = (e.blocks ?? []).filter((b) => b.type === "text").map((b) => (b as { text: string }).text).join("\n") || e.text || "";
@@ -65,7 +81,7 @@ export function projectEntry(e: ReaderEntry): PiEntry | undefined {
 		{
 			const entryKind = e.customType ?? "message";
 			const text = e.text ?? (e.blocks ?? []).map((b) => ("text" in b ? b.text : "")).join("\n");
-			return { id: e.id, kind: "custom", entryKind, ...(ts ? { ts } : {}), message: injectedMessage(entryKind, text) };
+			return { id: e.id, kind: "custom", entryKind, ...(ts ? { ts } : {}), message: noticeMessage(entryKind, data, text) };
 		}
 		case "assistant": {
 			const blocks: PiBlock[] = [];
@@ -92,6 +108,9 @@ export function projectEntry(e: ReaderEntry): PiEntry | undefined {
 			return { id: e.id, kind: "compaction", summary: e.summary ?? e.text ?? "", ...(ts ? { ts } : {}) };
 		case "branch-summary":
 			return { id: e.id, kind: "compaction", summary: e.summary ?? e.text ?? "", reason: "branch", ...(ts ? { ts } : {}) };
+		case "reset":
+			// A durable context reset, as the node projects it (node/projection.ts): the handoff is its message, if any.
+			return { id: e.id, kind: "reset", ...(ts ? { ts } : {}), ...(e.text !== undefined ? { handoff: e.text } : {}) };
 		default:
 		{
 			if (!e.text) return undefined;

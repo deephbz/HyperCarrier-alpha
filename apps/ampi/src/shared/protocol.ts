@@ -2,11 +2,16 @@
 // render-only clients. Frames are JSON objects, one per line on byte streams (unix socket, SSH stdio) and one per
 // message on WebSockets. The node is the only authority; clients send requests and apply view deltas.
 
-import type { Spend } from "./spend.ts";
+import type { JsonValue } from "@earendil-works/chord";
 import type { Op } from "@earendil-works/chord/delta";
 import type { HostState } from "../hub/hosts.ts";
+import type { CompactRecord } from "@hypercarrier/auto-compact-durable";
+import type { LoginState, ProviderStatus } from "../node/accounts.ts";
 import type { ModelChoice } from "../node/models.ts";
+import type { PromptAuditSnapshot } from "../plugins/prompt-audit.ts";
+import type { UiEntry } from "../node/projection.ts";
 import type { SearchResult } from "../pi/search.ts";
+import type { Spend } from "./spend.ts";
 import type { ArcListValue, ArcValue } from "../pi/views/cos-arc.ts";
 import type { TimelineValue } from "../pi/views/cos-timeline.ts";
 import type { RarebitSide, RarebitValue } from "../pi/views/rarebit.ts";
@@ -40,15 +45,23 @@ export type SubscriptionPendingFrame = { t: "pending"; sid: number; reason: stri
 /** Sent by the node first on every connection. */
 export type HelloFrame = { t: "hello"; protocol: string; node: NodeInfo };
 
+/** The thread topic fields a subscriber can ask for alone. */
+export const THREAD_FIELDS = ["live", "inbox"] as const;
+export type ThreadField = (typeof THREAD_FIELDS)[number];
+
 export type Topic =
 	| { kind: "threads" }
-	| { kind: "thread"; threadId: string }
+	/**
+	 * `fields` limits the value to those fields, and the node then projects no entries. A hub that draws entries from
+	 * its own copy asks for `live` and `inbox` only. A node that predates `fields` ignores it and sends the full value.
+	 */
+	| { kind: "thread"; threadId: string; fields?: ThreadField[] }
 	| { kind: "team"; teamId: string }
 	| { kind: "rarebit"; threadId: string }
-	| { kind: "terms" }
-	| { kind: "term"; termId: string }
 	| { kind: "login"; loginId: string }
 	| { kind: "node" }
+	/** The reader watch of one handle this connection opened (`reader.open`): each frame is a WatchFrame. */
+	| { kind: "reader"; handle: string }
 	/** A hub-side view of a Pi Host (src/pi/views): `view` names it; `threadId` scopes it to one Session. */
 	| ViewTopic;
 
@@ -62,7 +75,7 @@ export type HostFrame<R = unknown, V = unknown> =
 	| SubscriptionEndFrame
 	| SubscriptionPendingFrame
 	| { t: "pong" };
-/** The frozen node backend's frames: outside the typed contract (docs/wire-boundary.md). */
+/** A durable node's frames: every value is a declared node op result or topic value. */
 export type NodeFrame = HostFrame;
 /** A Pi Host's frames: every value is a declared op result or topic value. */
 export type PiHostFrame = HostFrame<OpResult, PiTopicValue>;
@@ -75,7 +88,7 @@ export type NodeInfo = {
 	user: string;
 	home: string;
 	version: string;
-	/** Source fingerprint; differs from the hub's when the host runs an older or newer build. */
+	/** The node build the node booted with (shared/build.ts): a fingerprint of the node inputs, or `unknown`. */
 	build: string;
 	pid: number;
 	startedAt: number;
@@ -102,7 +115,7 @@ export type ThreadSummary = {
 	queued: number;
 	/** Last generation failure that ended a run; cleared by the next successful answer. */
 	lastError?: string;
-	/** Rarebit Summary status projection (C4), node Sessions only; undefined means unknown. */
+	/** Rarebit Summary status projection (C4), node Sessions only; undefined means unknown. Legacy needs_attention is tolerated, but is not a Needs-you signal. */
 	rarebit?: { status: string; reason?: string; asOf: number; fresh: boolean };
 	/**
 	 * Pi backend: the tier-2 Arc context head (C4, D16); undefined means not built. `asks` lists open Needs-you asks
@@ -110,8 +123,7 @@ export type ThreadSummary = {
 	 * nothing is open. An Assessment, never runtime, Task, or Project truth.
 	 */
 	arc?: { builtAt: string; stale: boolean; newMessages: number; finished: boolean; asks: { kind: "decision" | "approval" | "input" | "blocker"; n: number; since: number | null }[]; overtaken?: number };
-	/** Positive evidence from other authorities that the owner is needed (for example a blocked or failed Task). */
-	closed?: { at: number; by: string };
+	/** Live owner-attention signals. Legacy Team and Rarebit sources are tolerated but deprecated and ignored by Needs-you views. */
 	attention?: { source: string; reason: string }[];
 	costUsd: number;
 	/** The cost figure with what it leaves out under the one spend rule (trace-analytics spend.mjs spendLabel). */
@@ -127,12 +139,17 @@ export type ThreadSummary = {
 	preview?: string;
 	/** Pi backend: Host-qualified citation of the Session (`<host>/pi:<id>`). */
 	ref?: string;
-	/** Pi backend: where Herdr shows this Session. Auxiliary layout, not identity. */
+	/** Where the Session shows: a Herdr pane on a Pi Host, a tab (no pane) on a durable node. Layout, not identity. */
 	location?: { workspace?: string; workspaceLabel?: string; tab?: string; tabLabel?: string; pane?: string };
-	/** Pi backend: a pane or the control extension runs this Session now. */
+	/** Pi backend: a pane or the control extension runs this Session now. Durable node: the thread is open (not closed). */
 	live?: boolean;
-	/** Pi backend: actions go through the control extension (admission evidence), not keys. */
+	/** Actions go through typed control (the Pi control extension or the durable node) with admission evidence, not keys. */
 	control?: boolean;
+	/**
+	 * Durable node: the owner closed the thread (`by: "owner"`), or a thread that owns it (`lead` for a Team Worker,
+	 * `owner thread` otherwise); it is read-only and has no Resume. A fork continues it.
+	 */
+	closed?: { at: number; by: string };
 };
 
 /** Herdr's workspace → tab → pane order on a Pi Host. */
@@ -146,7 +163,7 @@ export const isPiThreadId = (id: string): id is PiThreadId => id.startsWith("pi:
  * state only and an empty list proves no absence. `listing`: no agents list since the Host connected, so no row has
  * liveness or a pane yet. `updating`: the startup refresh of saved copies still runs.
  */
-export type ThreadsState = { threads: { [id: PiThreadId]: ThreadSummary }; layout?: HerdrLayout; backend?: "pi"; indexing?: true; listing?: true; updating?: true };
+export type ThreadsState = { threads: { [id: PiThreadId]: ThreadSummary }; layout?: HerdrLayout; backend?: "pi" | "durable"; indexing?: true; listing?: true; updating?: true };
 
 // ---- Pi entry shapes (docs/wire-boundary.md, design 4 and 5) ----
 // The projection (src/pi/projection.ts) and the versioned index rows are their only constructors. They carry no
@@ -187,13 +204,25 @@ export type PiEntry = { bodyAvailable?: boolean } & (
 	| { id: string; kind: "user"; ts?: number; text: string; images: number }
 	| { id: string; kind: "assistant"; ts?: number; blocks: PiBlock[]; stop?: string; error?: string }
 	| ({ id: string; kind: "tool-result"; ts?: number; callId: string; name: string; isError: boolean; text: string; truncated: boolean } & PiClipped)
-	| ({ id: string; kind: "compaction"; summary: string; reason?: string; ts?: number } & PiClipped)
+	| ({ id: string; kind: "compaction"; summary: string; reason?: string; ts?: number; byTaskId?: string } & PiClipped)
 	| { id: string; kind: "reset"; handoff?: string; ts?: number }
 	| { id: string; kind: "system"; changed: string[] }
-	| ({ id: string; kind: "custom"; entryKind: string; ts?: number; message: InjectedMessage } & PiClipped)
+	// `rawExport`: the hub's URL for a body the hub copy holds only as a stub. The hub builds it, so the card links it
+	// directly; model-authored markdown never carries it.
+	| ({ id: string; kind: "custom"; entryKind: string; ts?: number; message: InjectedMessage; rawExport?: string } & PiClipped)
 );
+/** The outcome of `thread.editQueued`. */
+export type EditQueuedResult = { edited: true } | { edited: false; reason: "taken" | "changed" | "unknown" };
+/**
+ * Who queued an input other than the owner, from the input's structured entry data, never from its text. A Team input
+ * names its delivery kind (`notice` when an older producer did not record it), its author when the producer recorded
+ * one, a one-line readable summary, and the exact Task ID a Task or stop names (absent when the ID is invalid or over
+ * durable-team's limit). `interrupt` marks an Alert sent to interrupt the recipient's run. Absent: owner input, a Pi
+ * Session (Pi records no origin), or an older node.
+ */
+export type QueueOrigin = { kind: "team"; delivery: "task" | "alert" | "stop" | "update" | "notice"; interrupt?: true; sender?: string; summary: string; taskId?: string };
 /** One undelivered submission as the composer shows it. */
-export type PiQueuedItem = { id: string; mode: string; content: string; state: ControlSubmission["state"] | "unknown"; truncated?: boolean };
+export type PiQueuedItem = { id: string; mode: string; content: string; state: ControlSubmission["state"] | "unknown"; truncated?: boolean; origin?: QueueOrigin };
 /** A Pi Session's thread topic. `live.run` is present while the Session runs a turn. */
 export type PiThreadView = {
 	/** Content key for bounded Pi pages and body reads. */
@@ -206,8 +235,12 @@ export type PiThreadView = {
 	inbox: { items?: PiQueuedItem[] };
 	/** `model`: the Session's latest model, as the threads list shows it. */
 	agent: { cwd?: string; asOf?: number | null; readError?: string | null; model?: string };
-	usage: { costUsd?: number };
+	/** `models`: a durable thread's pi.usage model buckets, keyed `provider/modelId`, which its Info panel lists. A Pi Session has none. */
+	usage: { costUsd?: number; models?: { [model: `${string}/${string}`]: UsageBucket } };
 };
+
+/** One pi.usage bucket: summed token counters and cost of the requests keyed by one model or tool. */
+export type UsageBucket = { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cacheWrite1h?: number; totalTokens?: number; cost?: { total?: number } };
 
 // ---- The hub → browser contract (docs/wire-boundary.md) ----
 // One registry declares every op and topic a Pi Host, its views and the hub serve, with their arguments and values.
@@ -226,12 +259,18 @@ export type None = {};
  * `returned`: it left the queue undelivered and Pi's editor draft holds it (abort, dequeue). `dropped`: it left
  * undelivered and the draft does not hold it. Delivered ones carry no text: the Session file has it.
  */
-export type ControlSubmission = { submission: string; deliverAs: "steer" | "followUp"; state: "queued" | "delivered" | "returned" | "dropped"; at: number; entryId?: string; text?: string; truncated?: boolean };
+export type ControlSubmission = { submission: string; deliverAs: "steer" | "followUp"; state: "queued" | "delivered" | "returned" | "dropped"; at: number; entryId?: string; text?: string; truncated?: boolean; origin?: QueueOrigin };
 /**
  * An action's reply: how it was delivered, its evidence, the Session entry it made when the Host names one, the
  * queued submission it made, and, for abort, what became of each queued submission.
  */
-export type ActionAck = { via?: string; evidence?: string; entryId?: string; submission?: string; submissions?: ControlSubmission[] };
+/**
+ * A compaction Esc acted on. `outcome`: its task's final status (`aborted`, `completed`, `failed`), or `unknown` when
+ * Esc's bounded wait ended first. `summary`, for a completed one: `placed`, `pending` (placed at the turn boundary),
+ * `stale` (cut before the current context), or `none` (nothing to summarize).
+ */
+export type ControlCompaction = { taskId: string; reason: string; outcome: string; summary?: "placed" | "pending" | "stale" | "none" };
+export type ActionAck = { via?: string; evidence?: string; entryId?: string; submission?: string; submissions?: ControlSubmission[]; compactions?: ControlCompaction[] };
 /**
  * A Pi Session's slash commands, from its live control (packages/pi-hc-control README, Slash commands).
  * `supported: false`: a TUI-only built-in that runs only in the Pi pane.
@@ -247,6 +286,10 @@ export type CommandAck = {
 	via?: string;
 	disposition: "handled" | "started" | "queued" | "dispatched";
 	notice?: string;
+	/** Read-only command output; the Composer keeps it outside model context. */
+	body?: string;
+	/** One-shot navigation hint, omitted when a keyed reply is replayed. */
+	panel?: "team" | "rarebit";
 	/** `/thinking`: `thinking` is the level Pi applied after clamping, `requested` the level asked for. */
 	effect?: { model?: string; thinking?: string; requested?: string; changed?: boolean; name?: string };
 	evidence?: string;
@@ -258,12 +301,20 @@ export type Placement = { beside: string; direction?: "right" | "down" } | { wor
 /** What became of a create's first prompt: typed into the pane, or the reason it was not. */
 export type SubmittedPrompt = { via?: string; evidence?: string; error?: { code: string; message: string } };
 /** `pending`: Pi has not written the Session file yet; the thread is listed from the create. */
-export type ThreadCreated = { threadId: string; pane: string; evidence?: string; submitted?: SubmittedPrompt; warning?: string; pending?: true };
-export type ThreadResumed = { threadId: string; pane: string; evidence?: string; warning?: string };
+/** `pane`: the Herdr pane of a Pi Session. `tab`: the tab a durable thread joined; a durable thread has no pane. */
+export type ThreadCreated = { threadId: string; pane?: string; tab?: { id: string; label: string }; evidence?: string; submitted?: SubmittedPrompt; warning?: string; pending?: true };
+export type ThreadResumed = { threadId: string; pane?: string; evidence?: string; warning?: string };
 /** Compact navigation over the whole current branch. Ordinals are zero-based among projectable entries (non-null ui) on that branch. */
 export type ThreadOutline = { version: string; totalEntries: number; users: { id: string; ordinal: number; firstLine: string }[]; truncated: boolean };
 
 export type HistoryPage = { entries: PiEntry[]; more: boolean; version?: string };
+/**
+ * A read pinned to a `version` (`thread.history`, `thread.entry`) refuses with one of two codes:
+ * - `stale_version`: the Session moved past that version. The read can succeed again at the newer version.
+ * - `not_found`: the entry is not on the Session's current branch.
+ */
+export const STALE_VERSION = "stale_version";
+export const NOT_FOUND = "not_found";
 /** One page of an entry's projected text; `next` is the offset of the following page. */
 export type EntryPage = { text: string; next: number; more: boolean; version: string };
 export type FleetSearchResult = SearchResult & { hostStatus: HostState["status"] };
@@ -305,7 +356,6 @@ export type ViewTopics = {
 		value: RarebitValue;
 		ops: {
 			ask: OpSpec<RarebitAskArgs, RarebitAskResult>;
-			/** `cachedOnly` answers from the cache, or null, and never starts a model call. */
 		};
 	};
 	team: { params: { threadId?: string }; value: TeamValue; ops: None };
@@ -339,35 +389,98 @@ export type PiTopicValues = { threads: ThreadsState; thread: PiThreadView; node:
 export type PiTopicValue = PiTopicValues[keyof PiTopicValues] | ViewValue;
 
 /**
- * The frozen pi-durable node backend (src/node/server.ts) declares no wire types: it is outside rule 1 until its
- * revival adopts this contract (docs/wire-boundary.md). The browser reads its values as it always has.
+ * Topics only the durable node serves. `team` and `rarebit` keep their native node shapes until the reader carries
+ * them to the hub views (node-design.md, R4; ptb-design.md).
  */
-// biome-ignore lint: the frozen node backend has no declared wire types
+// biome-ignore lint: the Team and Rarebit node topics move to hub views; their shapes are not declared here
 export type NodeUntyped = any;
-/** Topics only the node backend serves. */
-export type NodeTopicValues = { terms: NodeUntyped; term: NodeUntyped; team: NodeUntyped; login: NodeUntyped; rarebit: NodeUntyped };
-/** Ops only the node backend serves, and node arguments of ops both serve (results stay the Pi Host's). */
+export type NodeTopicValues = { team: NodeUntyped; login: LoginState; rarebit: NodeUntyped; reader: ReaderWatchFrame | null };
+export type ModelRef = { provider: string; modelId: string };
+/** The node's native transcript page. The Pi-shaped `HistoryPage` replaces it with the reader (node-design.md step 8). */
+export type NodeHistoryPage = { entries: UiEntry[]; more: boolean };
+export type GitChanges =
+	| { repo: false }
+	| { repo: true; root: string; branch: string; files: { status: string; path: string }[]; patch: string; truncated: boolean };
+/** The node's own state for diagnosis: every open store and its live tasks, as `harness.inspect()` reports them. */
+/** Every store's live tasks; a store whose storage failed lists no tasks and names the failure in `unavailable`. */
+export type NodeHealth = { stores: { id: string; tasks: { id: string; kind: string; conversation: string; state: string; reason?: string }[]; unavailable?: string; gaveUp?: true }[] };
+export type CompactRecords = { records: CompactRecord[]; workingBudget: number | null; contextWindow: number | null };
+/**
+ * Every op the durable node serves (src/node/server.ts and its plugins), with its arguments and result. Ops a Pi Host
+ * also serves keep the Pi Host's result, except `thread.history` (see NodeHistoryPage). The node refuses every other
+ * name with `unsupported`.
+ */
 export type NodeOps = {
-	"thread.create": OpSpec<{ requestId: string; cwd: string; model?: { provider: string; modelId: string }; prompt?: string }, { threadId: string }>;
-	"thread.compact": OpSpec<{ threadId: string }, NodeUntyped>;
-	"thread.configure": OpSpec<{ threadId: string; model?: { provider: string; modelId: string }; thinkingLevel?: string }, NodeUntyped>;
-	"thread.rename": OpSpec<{ threadId: string; title: string }, NodeUntyped>;
+	"node.info": OpSpec<Done, NodeInfo>;
+	"node.restart": OpSpec<Done, { restarting: true }>;
+	"node.health": OpSpec<Done, NodeHealth>;
+	/** The thread's effective system prompt and tools at an entry (default: now), as the audit renderer's snapshot. */
+	"audit.snapshot": OpSpec<{ threadId: string; entryId?: string }, PromptAuditSnapshot>;
+	/** Consistent copies under `backups/<storeId>/` through SQLite's backup API; every store when `storeId` is absent. */
+	"node.backup": OpSpec<{ storeId?: string }, { store: string; path: string }[]>;
+	/**
+	 * Replaces the text of one queued steer or follow-up in place, if it still shows `expected` (its `inbox` content).
+	 * Each answer proves one thing, and none sends anything. An answer comes from one of two sources: a receipt, kept
+	 * from the commit that answered this `editId` first, or an observation of the item at this commit.
+	 * - `edited` from a receipt: the item held `text` at that earlier commit. Its text may have changed since.
+	 * - `edited` from an observation: the item holds `text` now, or its placed entry carries `text`.
+	 * - `taken`: this edit never saved; the item had left the queue when it arrived.
+	 * - `changed`: this edit never saved; the item showed neither `expected` nor `text`.
+	 * - `unknown`: a retry (`retry: true`) without a receipt. Its first attempt may have saved and been overwritten.
+	 * The node keeps the receipts of the newest 50 edits per thread; a retry gets its receipt unchanged.
+	 */
+	"thread.editQueued": OpSpec<{ threadId: string; submissionId: string; editId: string; expected: string; text: string; retry?: boolean }, EditQueuedResult>;
+	/** One reopen attempt of a failed storage now; a store still in its backoff answers `reopening`. */
+	"store.reopen": OpSpec<{ storeId: string }, { store: string; state: "open" | "reopening" | "unavailable"; error?: string }>;
+	"models.list": OpSpec<Done, ModelChoice[]>;
+	"prompts.list": OpSpec<{ cwd?: string }, PromptList>;
+	"accounts.list": OpSpec<Done, ProviderStatus[]>;
+	"accounts.login": OpSpec<{ providerId: string; type: string }, LoginState>;
+	"accounts.answer": OpSpec<{ loginId: string; promptId: string; value: string }, Done>;
+	"accounts.cancel": OpSpec<{ loginId: string }, Done>;
+	"accounts.logout": OpSpec<{ providerId: string }, Done>;
+	"thread.create": OpSpec<{ requestId: string; cwd: string; place?: Placement; name?: string; model?: ModelRef; thinkingLevel?: string; prompt?: string }, ThreadCreated>;
+	"thread.submit": HostOps["thread.submit"];
+	"thread.abort": HostOps["thread.abort"];
+	"thread.withdraw": HostOps["thread.withdraw"];
+	"thread.close": OpSpec<{ threadId: string }, ActionAck>;
+	"thread.commands": HostOps["thread.commands"];
+	"thread.command": HostOps["thread.command"];
+	"thread.compact": OpSpec<{ threadId: string; instructions?: string }, { taskId: string }>;
+	"thread.configure": OpSpec<{ threadId: string; model?: ModelRef; thinkingLevel?: string; cwd?: string }, Done>;
+	"thread.rename": OpSpec<{ threadId: string; title: string }, Done>;
+	"thread.archive": OpSpec<{ threadId: string; archived?: boolean }, Done>;
 	"thread.fork": OpSpec<{ threadId: string; entryId: string }, { threadId: string }>;
-	"thread.images": OpSpec<{ threadId: string; entryId: string; index: number }, { image?: { data: string; mimeType: string } }>;
-	"compact.records": OpSpec<{ threadId: string }, { records: NodeUntyped[] }>;
-	"rarebit.summarize": OpSpec<{ threadId: string }, NodeUntyped>;
-	"git.changes": OpSpec<{ cwd?: string }, NodeUntyped>;
+	"thread.history": OpSpec<{ threadId: string; before: string; limit?: number }, NodeHistoryPage>;
+	"thread.images": OpSpec<{ threadId: string; entryId: string; index: number }, { count: number; image?: { data: string; mimeType: string } }>;
+	"compact.records": OpSpec<{ threadId: string }, CompactRecords>;
+	"git.changes": OpSpec<{ cwd?: string }, GitChanges>;
 	"fs.dirs": OpSpec<{ path: string; hidden?: boolean }, { path: string; parent: string; dirs: string[] }>;
-	"node.restart": OpSpec<Done, NodeUntyped>;
-	"accounts.list": OpSpec<Done, NodeUntyped[]>;
-	"accounts.login": OpSpec<{ providerId: string; type: string }, { id: string }>;
-	"accounts.answer": OpSpec<{ loginId: string; promptId: string; value: string }, NodeUntyped>;
-	"accounts.cancel": OpSpec<{ loginId: string }, NodeUntyped>;
-	"accounts.logout": OpSpec<{ providerId: string }, NodeUntyped>;
-	"term.open": OpSpec<{ cwd?: string; cols?: number; rows?: number; title?: string }, { id: string }>;
-	"term.input": OpSpec<{ termId: string; data: string }, NodeUntyped>;
-	"term.resize": OpSpec<{ termId: string; cols: number; rows: number }, NodeUntyped>;
-	"term.close": OpSpec<{ termId: string }, NodeUntyped>;
+	/**
+	 * The reader wire (reader-design.md "Node read API"). A handle belongs to the connection that opened it and pins its
+	 * conversation's watch in node memory until `reader.close` or disconnect.
+	 */
+	"reader.open": OpSpec<{ threadId: string }, { handle: string; epoch: number; frame: ReaderWatchFrame }>;
+	"reader.entries": OpSpec<{ handle: string; order: "ascending" | "descending"; minEntryId?: number; maxEntryId?: number; limit: number }, { items: ReaderPageItem[]; more: boolean; last: number | null }>;
+	"reader.fence": OpSpec<{ handle: string }, { upper: number | null; watchRevision: number }>;
+	"reader.raw": OpSpec<{ handle: string; id: number; exportId?: string; offset: number }, { exportId: string; offset: number; encoding: "base64"; data: string; bytes: number; sha256: string; done: boolean }>;
+	"reader.cancel": OpSpec<{ handle: string; exportId: string }, Done>;
+	"reader.close": OpSpec<{ handle: string }, Done>;
+};
+export type NodeOpName = keyof NodeOps;
+/** One reader page item: a whole pi-durable record, or the size and digest of a record past the page's entry cap. */
+export type ReaderPageItem =
+	| { type: "entry"; record: { id: number; conversationId: number; kind: string } & Record<string, JsonValue> }
+	| { type: "oversized"; id: number; conversationId: number; kind: string; bytes: number; sha256: string };
+/** One bounded reader watch frame. `docs` are pi-durable documents, forwarded as the node stores them. */
+export type ReaderWatchFrame = {
+	epoch: number;
+	watchRevision: number;
+	conversation: Record<string, JsonValue> | null;
+	active: { count: number; ranges: [number, number][]; complete: boolean };
+	docs: Partial<Record<"pi.live" | "pi.inbox" | "pi.agent" | "pi.usage", JsonValue>>;
+	clipped?: Record<string, { strings: number; bytes: number; items: number; stringBytes?: number; whole?: boolean }>;
+	omittedDocs?: string[];
 };
 
 /** What the browser may request of a host: the Pi Host's ops and the node backend's, merged by name. */

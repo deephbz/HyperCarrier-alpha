@@ -28,6 +28,7 @@ function LoginFlow({ host, loginId, onEnd }: { host: string; loginId: string; on
 	}, [value?.status]);
 	if (!value) return <div className="hint">Starting…</div>;
 	const send = async (text: string) => {
+		if (!value.prompt) return;
 		setError(undefined);
 		try {
 			await hub.request(host, "accounts.answer", { loginId, promptId: value.prompt.id, value: text });

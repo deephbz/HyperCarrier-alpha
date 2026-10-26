@@ -9,14 +9,19 @@ export function rarebitState(host: string, threadId: string) {
 	const key = `${host}|${threadId}`;
 	let store = stores.get(key);
 	if (!store) {
-		store = { value: { lens: false, hide: false, diagnosis: false, window: 60, draft: "", model: "" }, listeners: new Set() };
+		const lens = localStorage.getItem("ampi.transcript.mode") === "conversation";
+		store = { value: { lens, hide: false, diagnosis: false, window: 60, draft: "", model: "" }, listeners: new Set() };
 		stores.set(key, store);
 	}
 	const current = store;
 	return {
 		get: () => current.value,
 		subscribe: (listener: () => void) => { current.listeners.add(listener); return () => { current.listeners.delete(listener); }; },
-		set: (patch: Partial<State>) => { current.value = { ...current.value, ...patch }; for (const listener of current.listeners) listener(); },
+		set: (patch: Partial<State>) => {
+			current.value = { ...current.value, ...patch };
+			if (patch.lens !== undefined) localStorage.setItem("ampi.transcript.mode", patch.lens ? "conversation" : "full");
+			for (const listener of current.listeners) listener();
+		},
 	};
 }
 

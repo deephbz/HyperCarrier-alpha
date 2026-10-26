@@ -16,11 +16,11 @@ fixtureSocket({
 }, {}, { requests: [] });
 receive(JSON.stringify({ t: 'sub', sid: 'test', topic: { kind: 'threads' } }));
 receive(JSON.stringify({ t: 'unsub', sid: 'test' }));
-for (const t of ['req', 'hub']) for (const op of ['thread.submit', 'thread.create', 'thread.resume', 'thread.close', 'host.add', 'term.input', 'accounts.login', 'unexpected.operation']) {
+for (const t of ['req', 'hub']) for (const op of ['thread.submit', 'thread.create', 'thread.resume', 'thread.close', 'host.add', 'accounts.login', 'unexpected.operation']) {
   receive(JSON.stringify({ t, id: t + op, host: 'devbox', op, args: {} }));
 }
 assert.deepEqual(forwarded.map(f => f.t), ['sub', 'unsub']);
-assert.equal(replies.length, 16);
+assert.equal(replies.length, 14);
 assert.throws(() => receive(JSON.stringify({ t: 'unknown' })), /Unexpected client frame/);
 const out = resolve(dirname(fileURLToPath(import.meta.url)), '../../docs/ux');
 const map = JSON.parse(await readFile(join(out, 'map.json'), 'utf8'));
@@ -69,8 +69,8 @@ const has = (id, name) => map.nodes.find(n => n.id === id).elements.some(e => e.
 assert(has('S04.a', 'Previous user message'));
 assert(has('S04.a', 'Next user message'));
 assert(!has('S04.a', 'Refresh'));
-assert(has('S04.a', 'Transcript lens: full transcript'));
-assert(has('S04.l', 'Transcript lens: conversation only'));
+assert(has('S04.a', 'Transcript mode: full transcript'));
+assert(has('S04.l', 'Transcript mode: conversation only'));
 assert(!has('S04.s', 'Dismiss recap'));
 assert(has('S04.t', 'Dismiss recap'));
 assert(map.nodes.find(n => n.id === 'S04.l').elements.some(e => e.selector.includes('details') && e.tag === 'summary' && /tool call/.test(e.name)));

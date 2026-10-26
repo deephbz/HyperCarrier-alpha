@@ -6,6 +6,12 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { openWorkingSet } from "../src/pi/working-set-db.ts";
 import { WorkingSet } from "../src/pi/working-set.ts";
+import { DurableViews } from "../src/durable/reader-side.ts";
+import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+// @ts-ignore: real synthetic durable store fixture.
+import { ask, buildFixture, openFixtureStore } from "../../trace-analytics/test/fixtures/durable-store.mjs";
+// @ts-ignore: reader service over a JSON wire round-trip.
+import { serviceNode } from "../../trace-analytics/test/fixtures/durable-node.mjs";
 
 test("outline: whole-branch ordinals, bounded newest users, version replacement and cache", async t => {
  const dir=mkdtempSync(join(tmpdir(),'ampi-outline-'));
@@ -49,3 +55,21 @@ test("outline: Pi covers users beyond the tail and replaces the selected branch"
  assert.deepEqual(branch.users.map(x=>x.id),['e0','e700']);
 });
 
+test("outline: durable fork includes inherited prefix once and excludes suffix and siblings", async t => {
+ const dir=mkdtempSync(join(tmpdir(),'ampi-outline-durable-'));
+ const {harness,root}=await openFixtureStore(join(dir,'store.sqlite'));
+ const {fork,cutoff}=await buildFixture(harness,root);
+ const sibling=await root.fork(cutoff,{ownership:{kind:'ownerless'}},context);
+ await ask(sibling,'sibling only');
+ const node=serviceNode(harness);
+ const views=new DurableViews({host:'demo',cacheDir:join(dir,'cache'),node:()=>node as never});
+ t.after(async()=>{await views.close();await harness.close(context);rmSync(dir,{recursive:true,force:true});});
+ const threadId=`tree-a.${fork.id}`;
+ await views.track(threadId);
+ const outline=await views.ops['thread.outline']({threadId});
+ const entries=views.threadValue(threadId)!.entries;
+ assert.equal(outline.totalEntries,entries.length);
+ assert.deepEqual(outline.users,entries.flatMap((e,ordinal)=>e.kind==='user'?[{id:e.id,ordinal,firstLine:e.text.split('\n')[0]}]:[]));
+ assert.deepEqual(outline.users.map(x=>x.firstLine),['use echo please','fork question']);
+ assert.equal(outline.version,views.threadValue(threadId)!.sourceVersion);
+});

@@ -1,17 +1,9 @@
 import { useEffect, useState } from "react";
+import { fallbackRun, recordLine } from "../../../src/shared/compact-record.ts";
 import type { ThreadSummary } from "../../../src/shared/protocol.ts";
-import { hub, useTopic } from "../client.ts";
+import { hub, useHosts, useTopic } from "../client.ts";
+import { hostLabelFor } from "./host-label.ts";
 import { clock, money, tokens } from "../util.ts";
-import { TeamPanel } from "./TeamPanel.tsx";
-import { ChangesPanel } from "./ChangesPanel.tsx";
-import { ShellDock } from "./ShellDock.tsx";
-
-export const PANELS: [string, string][] = [
-	["team", "Team"],
-	["changes", "Changes"],
-	["shell", "Shell"],
-	["info", "Info"],
-];
 
 // biome-ignore lint: usage docs are loosely typed JSON
 type Any = any;
@@ -38,8 +30,10 @@ function PromptInputs({ host, cwd }: { host: string; cwd?: string }) {
 	);
 }
 
-function InfoPanel({ host, threadId, summary }: { host: string; threadId: string; summary?: ThreadSummary }) {
+/** A durable thread's Info panel: its model, usage, and the prompt inputs of its directory. */
+export function InfoPanel({ host, threadId, summary }: { host: string; threadId: string; summary?: ThreadSummary }) {
 	const { value: view } = useTopic(host, { kind: "thread", threadId });
+	const { hosts } = useHosts();
 	const agent = (view?.agent ?? {}) as Any;
 	const usage = (view?.usage ?? { models: {}, tools: {} }) as Any;
 	const [compactions, setCompactions] = useState<Any[]>([]);
@@ -54,13 +48,13 @@ function InfoPanel({ host, threadId, summary }: { host: string; threadId: string
 				<dt>id</dt>
 				<dd>{threadId}</dd>
 				<dt>host</dt>
-				<dd>{host}</dd>
+				<dd>{hostLabelFor(host, hosts)}</dd>
 				<dt>kind</dt>
 				<dd>{summary?.kind}</dd>
 				<dt>cwd</dt>
 				<dd>{agent.cwd ?? summary?.cwd}</dd>
 				<dt>model</dt>
-				<dd>{agent.model ? `${agent.model.provider}/${agent.model.modelId}` : "host default"}</dd>
+				<dd>{agent.model ?? summary?.model ?? "host default"}</dd>
 				<dt>thinking</dt>
 				<dd>{agent.thinkingLevel ?? "default"}</dd>
 				<dt>context</dt>
@@ -74,13 +68,12 @@ function InfoPanel({ host, threadId, summary }: { host: string; threadId: string
 			<PromptInputs host={host} cwd={agent.cwd ?? summary?.cwd} />
 			<h3>Compactions</h3>
 			{compactions.length === 0 && <div className="hint">None yet. A compaction starts when a response crosses the working budget.</div>}
+			{fallbackRun(compactions) >= 2 && <div className="err-box">Planner failing; summary only: {fallbackRun(compactions)} fallbacks in a row.</div>}
 			{[...compactions].reverse().map((c: Any) => (
 				<div key={c.at} className="hint" style={{ marginBottom: 6 }} data-compaction={c.method}>
-					{clock(c.at)} · <b>{c.method === "hc-summary" ? "HC summary" : "native fallback"}</b> ·{" "}
-					{c.reason === "working_budget" ? `crossed W (${tokens(c.trigger?.tokens)} > ${tokens(c.trigger?.workingBudget)})` : c.reason} · replaced {c.replacedEntries} entries
+					{clock(c.at)} · {c.reason === "working_budget" ? `crossed W (${tokens(c.trigger?.tokens)} > ${tokens(c.trigger?.workingBudget)})` : c.reason} · <b>{recordLine(c)}</b>
 					{c.conversationRecord ? ` · record ${c.conversationRecord.count} msgs${c.conversationRecord.omitted ? ` (+${c.conversationRecord.omitted} omitted)` : ""}` : ""}
-					{c.droppedTools ? ` · ${c.droppedTools} tool results indexed` : ""}
-					{c.error ? <div className="err-box">HC summary failed: {c.error}</div> : null}
+					{c.method === "hc-summary" && c.droppedTools ? ` · ${c.droppedTools} tool results indexed` : ""}
 				</div>
 			))}
 			<h3>Usage by model</h3>
@@ -102,31 +95,5 @@ function InfoPanel({ host, threadId, summary }: { host: string; threadId: string
 				</dl>
 			))}
 		</>
-	);
-}
-
-export function Panel({ name, host, threadId, summary, setPanel }: { name: string; host: string; threadId: string; summary?: ThreadSummary; setPanel: (p?: string) => void }) {
-	return (
-		<aside className={`panel ${name === "shell" || name === "changes" ? "wide" : ""}`} data-panel-name={name}>
-			<div className="panel-tabs">
-				<div className="seg">
-					{PANELS.map(([tab, label]) => (
-						<button key={tab} className={tab === name ? "on" : ""} onClick={() => setPanel(tab)}>
-							{label}
-						</button>
-					))}
-				</div>
-				<span style={{ flex: 1 }} />
-				<button className="btn ghost small" onClick={() => setPanel(undefined)} title="Close panel">
-					✕
-				</button>
-			</div>
-			<div className={`panel-body ${name === "shell" ? "flush" : ""}`}>
-				{name === "info" && <InfoPanel host={host} threadId={threadId} summary={summary} />}
-				{name === "team" && <TeamPanel host={host} threadId={threadId} summary={summary} />}
-				{name === "changes" && <ChangesPanel host={host} threadId={threadId} />}
-				{name === "shell" && <ShellDock host={host} threadId={threadId} cwd={summary?.cwd} title={summary?.title} />}
-			</div>
-		</aside>
 	);
 }

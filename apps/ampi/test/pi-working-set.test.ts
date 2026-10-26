@@ -91,9 +91,11 @@ test("working set: fork/reset invalidates old pages, prose hits and body referen
  appendFileSync(source.file, line(msg("e2", "e0", "newneedle")));
  const fork = (await store.refresh(source))!;
  assert.equal(fork.count, 2); assert.equal(store.search("discardedneedle").hits.length, 0);
- assert.throws(() => store.page(source.path, { version: original.version }), /changed/);
- assert.throws(() => store.entry(source, "e1"), /current branch/);
- assert.throws(() => store.entry(source, "e2", 0, original.version), /changed/);
+ // A moved version is retryable and an entry off the branch is final; the wire carries the code (protocol.ts).
+ assert.throws(() => store.page(source.path, { version: original.version }), { code: "stale_version", message: /changed/ });
+ assert.throws(() => store.page(source.path, { around: "e1", version: fork.version }), { code: "not_found", message: /current branch/ });
+ assert.throws(() => store.entry(source, "e1"), { code: "not_found", message: /current branch/ });
+ assert.throws(() => store.entry(source, "e2", 0, original.version), { code: "stale_version", message: /changed/ });
  const page = store.entry(source, "e2", 0, fork.version);
  assert.equal(page.more, false); assert.equal(JSON.parse(page.text).text, "newneedle");
  writeFileSync(source.file, line({ type: "session", id: "fixture-session" }) + line(msg("e3", null, "samelengthA")));
@@ -222,6 +224,22 @@ test("working set: user and assistant prose up to 16 KiB stay whole in the previ
  assert.equal(user.text.length, 13_616); assert.ok(!user.bodyAvailable, "a 13,616-char user message is whole");
  assert.equal(assistant.blocks[0].text.length, 13_616); assert.ok(!assistant.bodyAvailable, "a 13,616-char reply is whole");
  assert.equal(long.blocks[0].text.length, 16 * 1024); assert.equal(long.bodyAvailable, true);
+});
+
+test("working set: a Rarebit page cuts long texts in SQLite and equals the whole-row parse; fullText keeps them whole", async (t) => {
+ // Astral characters make the SQLite cut (code points) and the page cut (UTF-16 units) differ.
+ const astral = "é🙂".repeat(6000) + "z".repeat(100), plain = "p".repeat(9000), short = "short";
+ const records = [msg("e0", null, astral), msg("e1", "e0", plain, "assistant"), msg("e2", "e1", short)];
+ const { source, store } = setup(t, records);
+ await store.refresh(source);
+ const db = new DatabaseSync(join(source.cacheDir, "working-set.sqlite"), { readOnly: true });
+ t.after(() => db.close());
+ const whole = db.prepare("SELECT rarebit FROM entries WHERE path=? AND rarebit IS NOT NULL ORDER BY position").all(source.path).map((row: any) => JSON.parse(String(row.rarebit)));
+ const expected = whole.map((item: any) => item.text.length > 8192 ? { ...item, text: item.text.slice(0, 8192), truncated: true } : item);
+ const page = store.rarebits(source.path, 1);
+ assert.deepEqual(page.items.map((i) => i.text.length), [8192, 8192, short.length]);
+ assert.deepEqual(page.items, expected, "the page equals the old JS cut of each whole row");
+ assert.deepEqual(store.rarebits(source.path, 1, undefined, true).items, whole, "fullText keeps every text whole");
 });
 
 test("working set: saved heads are readable before the derive Worker initializes, so a restart lists Sessions sooner", async (t) => {

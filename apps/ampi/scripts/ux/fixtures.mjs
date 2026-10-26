@@ -4,14 +4,11 @@ export function fixtureSocket(ws, recipe, audit) {
   const server = ws.connectToServer();
   const topics = new Map();
   const providers = [{ id: 'demo', name: 'Synthetic provider', signedIn: false, models: 1, methods: [{ type: 'api_key', label: 'Synthetic API key' }, { type: 'oauth', label: 'Synthetic subscription', subscription: true }] }];
-  const term = { id: 'ux-terminal', title: 'Synthetic shell · no process', cwd: '/work/demo', chunks: [{ n: 1, d: 'Synthetic terminal fixture. No shell process exists.\r\n$ ' }] };
   const snap = (sid, value) => ws.send(JSON.stringify({ t: 'snap', sid, value }));
   ws.onMessage(raw => {
     const f = JSON.parse(String(raw));
     if (f.t === 'sub') {
       topics.set(f.sid, f.topic);
-      if (f.topic.kind === 'terms') return snap(f.sid, { terms: { 'ux-terminal': term } });
-      if (f.topic.kind === 'term') return snap(f.sid, term);
       if (f.topic.kind === 'login') return snap(f.sid, { status: 'running', events: recipe.setup === 'oauth' ? [{ type: 'auth_url', url: 'https://example.invalid/synthetic-login', instructions: 'Synthetic URL. Do not sign in.' }] : [], prompt: { id: 'synthetic-prompt', type: recipe.setup === 'oauth' ? 'manual_code' : 'secret', message: recipe.setup === 'oauth' ? 'Paste the synthetic confirmation code' : 'Enter a synthetic API key', placeholder: 'Demo only; never enter a real credential' } });
       if (f.topic.kind === 'rarebit') return snap(f.sid, { items: [], count: 0, state: {}, fresh: true });
       if (f.topic.kind === 'team') return snap(f.sid, { team: null, tasks: [], workers: [], deliveries: [], events: [] });
@@ -34,7 +31,6 @@ export function fixtureSocket(ws, recipe, audit) {
       case 'thread.history': return respond({ entries: [], more: false });
       case 'fs.dirs': return respond({ path: '/work/demo', parent: '/work', dirs: ['src', 'test'] });
       case 'git.changes': return respond({ repo: true, root: '/work/demo', branch: 'synthetic', files: [{ status: 'M', path: 'src/demo.ts' }], patch: 'diff --git a/src/demo.ts b/src/demo.ts\n--- a/src/demo.ts\n+++ b/src/demo.ts\n@@ -1 +1 @@\n-export const demo = false;\n+export const demo = true;\n', truncated: false });
-      case 'term.open': return respond({ id: term.id });
       case 'view.rarebit.ask': return respond(f.args.end ? {} : { side: { id: 'synthetic-side', at: new Date().toISOString(), count: 12, included: 12, omittedChars: 0, revision: 1, model: 'synthetic/offline', turns: [{ question: f.args.question, answer: 'Synthetic answer: the reader and GUI fixtures are ready for review.' }] } });
 
       case 'thread.submit': return respond({ via: 'synthetic', evidence: 'sent' });
@@ -72,6 +68,7 @@ export function fixtureSocket(ws, recipe, audit) {
     if (topic.kind === 'view') {
       if (v === 'empty' && value.sessions) value.sessions = [];
       if (topic.view === 'team' && value.teams) {
+        if (recipe.teamMessages) value.teams.forEach(t => { t.messages = recipe.teamMessages; });
         if (v === 'empty-view') value.teams.forEach(t => { t.tasks = []; });
         if (['tasks-unavailable', 'reader-missing'].includes(v)) value.teams.forEach(t => { t.tasks = []; t.issues = [v === 'reader-missing' ? 'task_reader_missing' : 'task_authority_unavailable']; });
         if (v === 'absent') { value.availability = 'absent'; value.teams = []; }

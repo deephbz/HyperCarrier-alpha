@@ -12,8 +12,10 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     # Linux WebKit is not an AmPi target; the webkit job runs the WebKit cases.
+    # ubuntu-latest has 4 cores; the default pool of 8 overloads it.
     env:
       AMPI_TEST_ENGINES: chromium
+      AMPI_TEST_CONCURRENCY: 4
     steps:
       - uses: actions/checkout@v4
         with:
@@ -22,8 +24,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          # The runner's cached Node 22 can be older than AmPi's floor; take the newest patch.
+          check-latest: true
           cache: npm
       - run: npm ci --ignore-scripts
+      # Scripts stay off for dependencies; the pinned package checkouts build and stamp their dist here.
+      - run: npm run prepare
       - run: npm run verify:composition -- --debug
       - run: npm run verify:colorstack -- --debug
       - run: npm run test:composition
@@ -47,7 +53,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          # The runner's cached Node 22 can be older than AmPi's floor; take the newest patch.
+          check-latest: true
           cache: npm
       - run: npm ci --ignore-scripts
+      # Scripts stay off for dependencies; the pinned package checkouts build and stamp their dist here.
+      - run: npm run prepare
       - run: npx playwright install webkit
       - run: npm --workspace @hypercarrier/ampi test

@@ -3,9 +3,18 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { runDaemon } from "../src/node/daemon.ts";
 import { hydrate } from "../src/plugins.ts";
+import { planFor } from "../src/node/sim.ts";
 import { TestClient, tempHome } from "./helpers.ts";
 
 const SIM = { provider: "ampi-sim", modelId: "sim-1" };
+
+test("the simulator acts on structured Team notices, not retired text markers", () => {
+	assert.equal(planFor("AMPI-TEAM-TASK task_id=api version=v_0000000000000000\ngoal: Works").steps.length, 0);
+	assert.equal(planFor("AMPI-TEAM-UPDATE").steps.length, 0);
+	const task = planFor(JSON.stringify({ kind: "task", task: { id: "api", version: "v_0000000000000000", goal: "Works" } }));
+	assert.equal(task.steps.length, 3);
+	assert.deepEqual(task.steps[0], { tool: "task_update", args: { task_id: "api", operation_id: "claim-api-v_0000000000000000", expected_version: "v_0000000000000000", transition: "claim" } });
+});
 
 test("a lead plans a Team; Workers claim and finish their Tasks in dependency order", async () => {
 	const home = tempHome();

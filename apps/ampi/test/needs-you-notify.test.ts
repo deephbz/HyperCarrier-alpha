@@ -39,12 +39,12 @@ before(async () => {
 });
 after(async () => { await vite?.close(); });
 
-const host = { id: "devbox", link: "devbox", kind: "durable" } as unknown as HostState;
+const host = { id: "devbox", link: "devbox#durable", kind: "durable" } as unknown as HostState;
 const thread = (over: Partial<ThreadSummary> = {}): ThreadSummary => ({ id: "tree-a.7", title: "Worker", updatedAt: 1, activity: "idle", queued: 0, control: true, live: true, ...over }) as ThreadSummary;
 const arc = (asks: NonNullable<ThreadSummary["arc"]>["asks"], stale = false): ThreadSummary["arc"] => ({ builtAt: "2026-10-25T00:00:00Z", stale, newMessages: 0, finished: false, asks });
 const decision = [{ kind: "decision" as const, n: 1, since: 1000 }];
 const step = (from: ThreadSummary, to: ThreadSummary, away = true) =>
-	notices(new Map([[`devbox|${from.id}`, from]]), [{ host, threads: [to], stale: false }] as never, undefined, away);
+	notices(new Map([[`devbox#durable|${from.id}`, from]]), [{ host, threads: [to], stale: false }] as never, undefined, away);
 
 test("needs you: retired Team and Rarebit sources from old nodes do not ask the owner", () => {
  const retired = thread({ attention: [{ source: "Team", reason: "Task api blocked" }, { source: "Rarebit", reason: "review" }, { source: "rarebit", reason: "old spelling" }], rarebit: { status: "needs_attention", fresh: true, reason: "review" } as ThreadSummary["rarebit"] });
@@ -89,7 +89,7 @@ test("needs you: away, an agent that asks raises exactly one Needs-you notificat
 	const settled = thread({ preview: "Decision needed: A or B?" });
 	const asked = thread({ preview: "Decision needed: A or B?", arc: arc(decision) });
 	const raised = step(settled, asked);
-	assert.deepEqual(raised.map(({ title, host, threadId }) => ({ title, host, threadId })), [{ title: "Needs you: Worker", host: "devbox", threadId: "tree-a.7" }]);
+	assert.deepEqual(raised.map(({ title, host, threadId }) => ({ title, host, threadId })), [{ title: "Needs you: Worker", host: "devbox#durable", threadId: "tree-a.7" }]);
 	assert.match(raised[0]!.body, / · Arc: 1 open decision$/);
 	assert.deepEqual(step(asked, thread({ ...asked, arc: arc(decision, true) })), [], "a stale head with the same asks is no new transition");
 	assert.deepEqual(step(thread({ activity: "streaming" }), asked).map((n) => n.title), ["Needs you: Worker"], "a run that ends with its ask published raises Needs you, never Finished as well");
@@ -102,6 +102,16 @@ test("needs you: away, a run that only ends raises Finished; a later Arc ask rep
 	const asked = step(ended, thread({ ...ended, arc: arc(decision) }));
 	assert.deepEqual(asked.map((n) => n.title), ["Needs you: Worker"]);
 	assert.equal(`${asked[0]!.host}|${asked[0]!.threadId}`, `${finished[0]!.host}|${finished[0]!.threadId}`, "one notification tag per thread, so a browser shows only the newer");
+});
+
+test("notice row: an older node's custom entry without a message renders through the notice projection instead of throwing", () => {
+	const row = (data: unknown) => renderToStaticMarkup(createElement(notice as never, { entry: { id: "9", kind: "custom", entryKind: "team.notice", ts: 1000, data, text: "First line\nrest" }, host: "devbox#durable", threadId: "tree-a.7" }));
+	const team = row({ source: "team", deliveryId: "k1", epoch: "e1" });
+	assert.match(team, /<span class="badge ">team notice<\/span>/, "Team data names the origin, as the hub copy's row does");
+	assert.match(team, /<span class="notice-first">Team notice<\/span>/);
+	const generic = row(undefined);
+	assert.match(generic, /<span class="badge ">team\.notice<\/span>/);
+	assert.match(generic, /<span class="notice-first">First line<\/span>/);
 });
 
 test("needs you: away, resolving one of two asks stays silent; a grown count or a new ask kind raises Needs you", () => {
@@ -129,17 +139,17 @@ test("needs you: the macOS shell gets the thread tag, so a later Needs you repla
 	const posted: unknown[] = [];
 	Object.assign(globalThis, { webkit: { messageHandlers: { ampi: { postMessage: (m: unknown) => posted.push(m) } } } });
 	try {
-		notify("Finished: Worker", "devbox · Done.", "devbox", "tree-a.7");
-		notify("Needs you: Worker", "devbox · Arc: 1 open decision", "devbox", "tree-a.7");
+		notify("Finished: Worker", "devbox · Done.", "devbox#durable", "tree-a.7");
+		notify("Needs you: Worker", "devbox · Arc: 1 open decision", "devbox#durable", "tree-a.7");
 	} finally {
 		delete (globalThis as { webkit?: unknown }).webkit;
 	}
-	assert.deepEqual(posted.map((m) => (m as { tag?: string }).tag), ["devbox|tree-a.7", "devbox|tree-a.7"]);
+	assert.deepEqual(posted.map((m) => (m as { tag?: string }).tag), ["devbox#durable|tree-a.7", "devbox#durable|tree-a.7"]);
 });
 
 test("Timeline: current Needs-you agrees with Overview; Team blockers and historical errors stay facts without a waiting flag", () => {
  const row = (summary: ThreadSummary) => {
-  const session = { host: host.id, threadId: summary.id, ref: `${host.id}/${summary.id}`, title: summary.title, start: 0, end: 1000, live: true, blocked: false, waiting: false, marks: [[500, "old-error", "error"]], buckets: [], entries: [[500, "old-error"]], summary };
+  const session = { host: host.link, threadId: summary.id, ref: `${host.link}/${summary.id}`, title: summary.title, start: 0, end: 1000, live: true, blocked: false, waiting: false, marks: [[500, "old-error", "error"]], buckets: [], entries: [[500, "old-error"]], summary };
   return renderToStaticMarkup(createElement(timelineStream as never, { label: "Worker", band: { key: session.ref, title: session.title, members: [session], target: session, team: false, buckets: [], start: 0, end: 1000 }, from: 0, to: 1000, bucketMs: 1000, unit: 1, scale: 0, color: 0, focus: false, now: 1000, onHover() {}, seen: new Map(), total: 0 }));
  };
  const blocked = thread({ attention: [{ source: "Team", reason: "Task api blocked" }] });

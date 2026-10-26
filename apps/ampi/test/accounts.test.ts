@@ -1,11 +1,12 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmdirSync, statSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { envApiKeyAuth } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxProvider, fauxText } from "@earendil-works/pi-ai/providers/faux";
 import { runDaemon } from "../src/node/daemon.ts";
+import { FileCredentialStore } from "../src/node/credentials.ts";
 import { openModels } from "../src/node/models.ts";
 import { hydrate } from "../src/plugins.ts";
 import { TestClient, tempHome } from "./helpers.ts";
@@ -30,7 +31,7 @@ test("accounts: sign-in runs the provider's own flow, is confirmed with the prov
 	process.env.PI_CODING_AGENT_DIR = agentDir;
 	const models = openModels({ sim: { tokensPerSecond: 20000 } });
 	models.setProvider(testProvider() as never);
-	const daemon = await runDaemon({ home, models, plugins: await hydrate() });
+	const daemon = await runDaemon({ home, models, plugins: await hydrate(), testProviders: ["testco"] });
 	const auth = join(agentDir, "auth.json");
 	const signIn = async (client: TestClient, key: string) => {
 		const started = await client.req("accounts.login", { providerId: "testco", type: "api_key" });
@@ -86,4 +87,29 @@ test("accounts: sign-in runs the provider's own flow, is confirmed with the prov
 		if (saved === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = saved;
 	}
+});
+
+test("accounts: a write waits for pi's held auth.json.lock, and breaks a stale one", async () => {
+	const path = join(tempHome(), "agent", "auth.json");
+	const store = new FileCredentialStore(path);
+	const lock = `${path}.lock`;
+	// proper-lockfile, as pi's AuthStorage uses it, holds the lock as this directory.
+	mkdirSync(lock, { recursive: true });
+	let done = false;
+	const write = store.modify("testco", async () => ({ type: "api_key", key: "k1" }) as never).then(() => (done = true));
+	await new Promise((resolve) => setTimeout(resolve, 150));
+	assert.equal(done, false, "the write waits while pi holds the lock");
+	assert.equal(existsSync(path), false, "nothing is written under a held lock");
+	rmdirSync(lock);
+	await write;
+	assert.equal(JSON.parse(readFileSync(path, "utf8")).testco.key, "k1");
+	assert.equal(statSync(path).mode & 0o777, 0o600);
+	assert.equal(existsSync(lock), false, "the node releases its own lock");
+
+	// A lock older than pi's 30 s stale window belongs to a dead writer.
+	mkdirSync(lock);
+	const old = new Date(Date.now() - 60_000);
+	utimesSync(lock, old, old);
+	await store.modify("testco", async () => ({ type: "api_key", key: "k2" }) as never);
+	assert.equal(JSON.parse(readFileSync(path, "utf8")).testco.key, "k2");
 });

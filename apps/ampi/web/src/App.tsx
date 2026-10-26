@@ -1,20 +1,17 @@
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import type { ThreadsState, ThreadSummary } from "../../src/shared/protocol.ts";
-import { type HostState, useHosts, useTopic } from "./client.ts";
+import { findHost, type HostState, useHosts, useTopic } from "./client.ts";
 import { AccountsDialog } from "./components/Accounts.tsx";
-import { AddHostDialog, CommandPalette, DisplayDialog, HelpDialog, NewThreadDialog, Palette } from "./components/Dialogs.tsx";
+import { AddHostDialog, CommandPalette, DisplayDialog, HelpDialog, Palette } from "./components/Dialogs.tsx";
 import { useModels } from "./models.ts";
 import { Overview } from "./components/Overview.tsx";
 import { NewAgentDialog } from "./components/PiDialogs.tsx";
+import { hostLabelFor } from "./components/host-label.ts";
 import { PiPanel, piPanels } from "./views/PiPanel.tsx";
 import { PAGES } from "./views/registry.ts";
-import { Panel } from "./components/Panel.tsx";
-import { type HostThreads, Sidebar, isPiHost } from "./components/Sidebar.tsx";
+import { type HostThreads, Sidebar, isPiHost, servesHostOps } from "./components/Sidebar.tsx";
 import { type ModelChoice, ThreadView } from "./components/ThreadView.tsx";
-// xterm is most of the bundle; it loads the first time a terminal is shown.
-const TerminalView = lazy(() => import("./components/TerminalView.tsx").then((m) => ({ default: m.TerminalView })));
-import { openTerminal } from "./components/Sidebar.tsx";
-import { hashRoute, href, MOD } from "./util.ts";
+import { hashRoute, href, MOD, type Route } from "./util.ts";
 import { FeedsContext, FocusIntentContext } from "./context.ts";
 import { requestNotificationPermission, useAttention } from "./attention.ts";
 import { perfMarkPainted } from "./perf.ts";
@@ -22,7 +19,6 @@ import { focusRegion, handleRegionScrollKey, installKeymapDispatcher, openOverla
 import { remember, transition, type KeyIntent, type Region, type SessionRegion, type Target, type View } from "./focus.ts";
 import { PANEL_DEFAULT_KEY, panelClosed } from "./views/cos/arc-reopen.ts";
 import { arriveEntry, goBack, goForward, installNavLinks, navigate, noteFocus, ROUTE_EVENT } from "./nav.ts";
-
 import { scaleOf } from "./display.ts";
 
 function savedWidth(key: string, fallback: number, min: number, max: number) {
@@ -115,9 +111,9 @@ function ResizeEdge({ side, width, onChange }: { side: "sidebar" | "panel"; widt
 
 /** Subscribes to one host's thread index and reports it upward (hooks cannot loop over a dynamic host list). */
 function HostFeed({ host, onData }: { host: HostState; onData: (id: string, data: HostThreads) => void }) {
-	const { value, stale, error } = useTopic(host.id, { kind: "threads" });
+	const { value, stale, error } = useTopic(host.link, { kind: "threads" });
 	useEffect(() => {
-		onData(host.id, { host, threads: Object.values(value?.threads ?? {}) as ThreadSummary[], stale, ...(value?.layout ? { layout: value.layout } : {}), indexing: value?.indexing, listing: value?.listing, updating: value?.updating, error });
+		onData(host.link, { host, threads: Object.values(value?.threads ?? {}) as ThreadSummary[], stale, ...(value?.layout ? { layout: value.layout } : {}), indexing: value?.indexing, listing: value?.listing, updating: value?.updating, error });
 	}, [host, value, stale, error, onData]);
 	return null;
 }
@@ -133,10 +129,18 @@ function useRoute() {
 	);
 }
 
+/**
+ * A route names a Host source by its link key. An older link or a citation can name the Host ID; it resolves when one
+ * source serves it, or by the thread ID's source.
+ */
+function linkRoute(route: Route, hosts: HostState[]): Route {
+	return route.host ? { ...route, host: findHost(hosts, route.host, route.thread)?.link ?? route.host } : route;
+}
+
 export function App() {
 	const { hosts, connected } = useHosts();
 	const hash = useRoute();
-	const route = hashRoute();
+	const route = linkRoute(hashRoute(), hosts);
 	const [feeds, setFeeds] = useState<Record<string, HostThreads>>({});
 	const [dialog, setDialog] = useState<"new" | "host" | "palette" | "commands" | "display" | "help" | undefined>();
 	const [panel, setPanel] = useState<string | undefined>(() => localStorage.getItem("ampi.panel") ?? undefined);
@@ -170,7 +174,7 @@ export function App() {
 		setFocusRequest(pendingFocus.current);
 		return true;
 	}).current;
-	const sessionView = Boolean(route.host && route.thread && !route.term && !route.page);
+	const sessionView = Boolean(route.host && route.thread && !route.page);
 	useKeyAction("sidebar.toggle", () => { focusIntent("sidebar.toggle"); });
 	useKeyAction("panel.toggle", sessionView ? () => { focusIntent("panel.toggle"); } : undefined);
 	useKeyAction("focus.composer", sessionView ? () => { focusIntent("composer.toggle"); } : undefined);
@@ -302,7 +306,7 @@ export function App() {
 		if (panel) localStorage.setItem("ampi.panel", panel);
 		else localStorage.removeItem("ampi.panel");
 	}, [panel]);
-	const data = hosts.map((host) => ({ ...(feeds[host.id] ?? { threads: [], stale: true }), host }));
+	const data = hosts.map((host) => ({ ...(feeds[host.link] ?? { threads: [], stale: true }), host }));
 	useAttention(data, route);
 	const listed = data.some((d) => d.threads.length > 0);
 	useEffect(() => {
@@ -311,8 +315,11 @@ export function App() {
 	useEffect(() => {
 		window.addEventListener("pointerdown", requestNotificationPermission, { once: true });
 	}, []);
-	const hostConnected = hosts.find((h) => h.id === route.host)?.status === "connected";
-	const piHere = isPiHost(hosts.find((h) => h.id === route.host));
+	const routeHost = findHost(hosts, route.host);
+	const hostConnected = routeHost?.status === "connected";
+	// The panel set of a Host source that serves HostOps; a durable thread adds its own panels after the Pi ones.
+	const piHere = servesHostOps(routeHost);
+	const durableHere = piHere && !isPiHost(routeHost);
 	// A link can open a panel (`?p=`); after that the choice is the owner's and is remembered.
 	useEffect(() => {
 		if (route.panel) setPanel(route.panel);
@@ -335,7 +342,7 @@ export function App() {
 			if (e.key === "Escape" && overlayRef.current && (e.target as HTMLElement)?.closest?.(".panel-slot") && !e.defaultPrevented) {
 				// An overlaid panel closes on Escape, as a sheet should; focus returns to `last`.
 				focusIntent("panel.close");
-			} else if (e.altKey && !mod && (e.key === "ArrowUp" || e.key === "ArrowDown") && !(e.target as HTMLElement)?.closest?.("select, [contenteditable], .xterm") && !((e.target as HTMLInputElement)?.value ?? "")) {
+			} else if (e.altKey && !mod && (e.key === "ArrowUp" || e.key === "ArrowDown") && !(e.target as HTMLElement)?.closest?.("select, [contenteditable]") && !((e.target as HTMLInputElement)?.value ?? "")) {
 				// Works from an empty composer (it autofocuses); never while a draft or another field has text.
 				// Alt+↑/↓: the previous or next Session in the sidebar's order.
 				const rows = [...document.querySelectorAll<HTMLElement>(".side-scroll .row[data-thread]")];
@@ -352,29 +359,23 @@ export function App() {
 	}, []);
 	const summary = route.host && route.thread ? feeds[route.host]?.threads.find((t) => t.id === route.thread) : undefined;
 	// Pi Sessions get the registered panel views (views/registry.ts); node threads keep the node's panels.
-	const panelAvailable = (name: string) => !piHere || piPanels(summary).some((p) => p.name === name);
+	const panelAvailable = (name: string) => !piHere || piPanels(summary, durableHere).some((p) => p.name === name);
 	const showPanel = Boolean(route.thread && panel && panelAvailable(panel));
 	// Every panel writer (✕, tabs, ⌘J, links, the Arc toggle) reports a view change; focus moves only if it was lost (R11).
 	const setPanelTracked = useCallback((next?: string) => { setPanel(next); focusIntent("panel.set"); }, []);
 	const defaultPanel = () => {
 		const saved = localStorage.getItem(PANEL_DEFAULT_KEY) || "arc";
-		return panelAvailable(saved) ? saved : panelAvailable("arc") ? "arc" : piHere ? piPanels(summary)[0]?.name : "arc";
+		return panelAvailable(saved) ? saved : panelAvailable("arc") ? "arc" : piHere ? piPanels(summary, durableHere)[0]?.name : "arc";
 	};
 	applyView.current = {
 		sidebar: (show) => (squeezedRef.current ? setSidebarPeek(show) : setSidebarHidden(!show)),
 		panel: (open) => {
 			if (!open && panel) panelClosed(panel);
 			setPanel(open ? defaultPanel() : undefined);
-			const r = hashRoute();
+			const r = linkRoute(hashRoute(), hosts);
 			if (!open && r.panel && r.host && r.thread) navigate(href.thread(r.host, r.thread, r.entry ? { entry: r.entry } : {}), "replace");
 		},
 	};
-	// Where no shell panel exists (a Pi Session), ⌘J is unavailable: it does nothing and help names its context.
-	useKeyAction("shell", route.host && (!route.thread || panelAvailable("shell")) ? () => {
-		const r = hashRoute();
-		if (r.host && r.thread) setPanelTracked(panel === "shell" ? undefined : "shell");
-		else if (r.host) void openTerminal(r.host).catch(() => {});
-	} : undefined);
 	const page = PAGES.find((p) => p.name === (route.page ?? (!route.host ? "timeline" : undefined)));
 	// When a panel would squeeze the main below a usable width, the sidebar gives way first (not saved; ☰ peeks it back),
 	// and only then does the panel overlay the main.
@@ -391,7 +392,7 @@ export function App() {
 		<div className={`app ${sideHidden ? "sidebar-hidden" : ""} ${showPanel ? "has-panel" : ""} ${overlayPanel ? "panel-overlay" : ""}`} style={{ "--side-w": `${sidebarWidth}px`, "--side-visible": sideHidden ? "0px" : "var(--side-w)", "--panel-w": `${panelWidth}px` } as CSSProperties}>
 			{zoomToast && <div className="toast" role="status" aria-live="polite">{zoomToast}</div>}
 			{hosts.map((host) => (
-				<HostFeed key={host.id} host={host} onData={onData} />
+				<HostFeed key={host.link} host={host} onData={onData} />
 			))}
 			<div className="sidebar-slot" data-region="sidebar" tabIndex={-1} inert={sideHidden}>
 				<Sidebar data={data} route={route} hubConnected={connected} onNew={() => setDialog("new")} onAddHost={() => setDialog("host")} onToggle={() => (squeezed ? setSidebarPeek(false) : setSidebarHidden(true))} />
@@ -405,10 +406,6 @@ export function App() {
 				<div className="main">
 					<div className="empty">No page “{route.page}”.</div>
 				</div>
-			) : route.host && route.term ? (
-				<Suspense fallback={<div className="main"><div className="empty">Loading the terminal…</div></div>}>
-					<TerminalView key={`${route.host}|${route.term}`} host={route.host} termId={route.term} />
-				</Suspense>
 			) : route.host && route.thread ? (
 				<ThreadView key={`${route.host}|${route.thread}`} host={route.host} threadId={route.thread} summary={summary} models={models} panel={panel} setPanel={setPanelTracked} entry={route.entry} />
 			) : (
@@ -417,25 +414,16 @@ export function App() {
 			</div>
 			{!page && route.host && route.thread && panel && showPanel && <div className="panel-slot" data-region="panel" tabIndex={-1} onKeyDown={handleRegionScrollKey}>
 				<ResizeEdge side="panel" width={panelWidth} onChange={setPanelWidth} />
-				{(piHere ? (
-					<PiPanel name={panel} host={route.host} threadId={route.thread} summary={summary} entry={route.entry} setPanel={setPanelTracked} />
-				) : (
-					<Panel name={panel} host={route.host} threadId={route.thread} summary={summary} setPanel={setPanelTracked} />
-				))}
+				{piHere && <PiPanel name={panel} host={route.host} threadId={route.thread} summary={summary} entry={route.entry} durable={durableHere} setPanel={setPanelTracked} />}
 			</div>}
-			{dialog === "new" &&
-				// On a Pi Host (or when every Host is one) a new agent is started in Herdr (D15 stage 2).
-				(isPiHost(hosts.find((h) => h.id === route.host)) || (hosts.length > 0 && hosts.every(isPiHost)) ? (
-					<NewAgentDialog hosts={hosts.filter(isPiHost)} defaultHost={route.host} beside={summary} onClose={closeDialog} />
-				) : (
-					<NewThreadDialog hosts={hosts} defaultHost={route.host} onClose={closeDialog} />
-				))}
+			{/* One dialog for every Host source; the chosen Host decides Herdr placement or a durable tab. */}
+			{dialog === "new" && <NewAgentDialog hosts={hosts} defaultHost={route.host} beside={summary} onClose={closeDialog} />}
 			{dialog === "host" && <AddHostDialog onClose={() => setDialog(undefined)} />}
 			{dialog === "palette" && <Palette data={data} query={paletteQuery.current} onQuery={(query) => { paletteQuery.current = query; }} onClose={() => setDialog(undefined)} />}
 			{dialog === "commands" && <CommandPalette query={paletteQuery.current} onQuery={(query) => { paletteQuery.current = query; }} onClose={() => setDialog(undefined)} />}
 			{dialog === "display" && <DisplayDialog onClose={() => setDialog(undefined)} />}
 			{dialog === "help" && <HelpDialog onClose={() => setDialog(undefined)} />}
-			{accounts && <AccountsDialog host={accounts} hostLabel={hosts.find((h) => h.id === accounts)?.label ?? accounts} onClose={() => setAccounts(undefined)} />}
+			{accounts && <AccountsDialog host={accounts} hostLabel={hostLabelFor(accounts, hosts)} onClose={() => setAccounts(undefined)} />}
 		</div>
 		</FocusIntentContext.Provider>
 		</FeedsContext.Provider>

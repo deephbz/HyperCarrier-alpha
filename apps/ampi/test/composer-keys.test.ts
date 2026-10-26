@@ -21,7 +21,7 @@ function evaluate(expression: ts.Node, bindings: Record<string, unknown>) {
 
 test("composer help and busy hint match submission keys; newline and IME input never submit", () => {
 	const composer = source("Composer"), dialogs = source("Dialogs");
-	const textarea = find(composer, (n) => ts.isJsxSelfClosingElement(n) && n.tagName.getText() === "textarea") as ts.JsxSelfClosingElement;
+	const textarea = find(composer, (n) => ts.isJsxSelfClosingElement(n) && n.tagName.getText() === "textarea" && n.attributes.getText().includes('aria-label="Message the agent"')) as ts.JsxSelfClosingElement;
 	assert.ok(textarea, "composer textarea exists");
 	const attribute = (name: string) => {
 		const attr = textarea.attributes.properties.find((n) => ts.isJsxAttribute(n) && n.name.getText() === name) as ts.JsxAttribute;

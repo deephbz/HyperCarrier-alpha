@@ -38,7 +38,7 @@ type IsAny<T> = 0 extends 1 & T ? true : false;
  * The paths below `P` where `T` stops declaring its shape: `any`, `unknown`, the whole `JsonValue` union, or an index
  * signature (whose values are searched too). `Record<string, never>` declares nothing and is no escape.
  */
-type Escapes<T, P extends string, D extends 0[] = []> =
+export type Escapes<T, P extends string, D extends 0[] = []> =
 	D["length"] extends 10 ? never
 	: IsAny<T> extends true ? `${P}: any`
 	: unknown extends T ? `${P}: unknown`

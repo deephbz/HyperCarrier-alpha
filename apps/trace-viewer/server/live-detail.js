@@ -194,6 +194,8 @@ function entryPresentation(entry) {
   if (entry?.type === "custom_message")
     return { kind: "custom_message", lane: "input", label: "Custom message" };
   if (entry?.type === "custom") return { kind: "custom", lane: "input", label: "Custom entry" };
+  if (entry?.type === "durable")
+    return { kind: "durable", lane: "model", label: `Durable: ${entry.kind ?? "entry"}` };
   return {
     kind: "unknown",
     lane: "input",
@@ -646,10 +648,16 @@ function sourceChanged(registry, id, source, version) {
   }
 }
 
+/**
+ * `exactSources` serve Sessions this server does not read from Pi JSONL, such as a durable
+ * node's conversations (durable-trace.js). Each source has owns(id), trace(id) → { status, body },
+ * raw(id, res), and watch(id, onInvalidate) → stop().
+ */
 export function createLiveDetailServer({
   sessionsRoot,
   staticDir = TRACE_STATIC_DIR,
   watchSources = createSourceWatcher,
+  exactSources = [],
 } = {}) {
   const registry = new SessionRegistry({ sessionsRoot }).refresh();
   const clients = new Map();
@@ -745,7 +753,20 @@ export function createLiveDetailServer({
     return null;
   };
 
+  const external = (encoded) => {
+    const route = routeSessionId(encoded);
+    const source = route.error ? null : exactSources.find((s) => s.owns(route.id));
+    return source ? { id: route.id, source } : null;
+  };
+  const failed = (res) => (error) => {
+    if (res.headersSent) res.destroy(error);
+    else json(res, 503, unavailable("trace_source_unavailable", String(error?.message ?? error)));
+  };
+
   const serveTrace = (encoded, res) => {
+    const ext = external(encoded);
+    if (ext)
+      return ext.source.trace(ext.id).then(({ status, body }) => json(res, status, body), failed(res));
     const route = exactRoute(encoded, res);
     if (!route) return;
     const trace = exactTrace(route.id, readerFor(route.id, route.source));
@@ -753,6 +774,8 @@ export function createLiveDetailServer({
   };
 
   const serveRaw = (encoded, res) => {
+    const ext = external(encoded);
+    if (ext) return ext.source.raw(ext.id, res).catch(failed(res));
     const route = exactRoute(encoded, res);
     if (!route) return;
     let version;
@@ -787,6 +810,14 @@ export function createLiveDetailServer({
   };
 
   const serveEvents = (encoded, req, res) => {
+    const ext = external(encoded);
+    if (ext) {
+      res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive" });
+      res.write("event: ready\ndata: {}\n\n");
+      const stop = ext.source.watch(ext.id, (payload) => res.write(`event: invalidate\ndata: ${JSON.stringify(payload)}\n\n`));
+      req.on("close", stop);
+      return;
+    }
     const route = exactRoute(encoded, res);
     if (!route) return;
     readerFor(route.id, route.source);
@@ -806,7 +837,7 @@ export function createLiveDetailServer({
   };
 
   const serveSession = (encoded, req, res) => {
-    if (!exactRoute(encoded, res)) return;
+    if (!external(encoded) && !exactRoute(encoded, res)) return;
     return staticTraceResponse(req, res, staticDir, "/");
   };
 
@@ -832,7 +863,10 @@ export function createLiveDetailServer({
       return staticTraceResponse(req, res, staticDir, url.pathname);
     return json(res, 404, { error: "not_found" });
   });
-  server.on("close", () => watcher.close());
+  server.on("close", () => {
+    watcher.close();
+    for (const source of exactSources) source.close?.();
+  });
   return server;
 }
 

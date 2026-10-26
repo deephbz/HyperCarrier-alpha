@@ -55,7 +55,7 @@ const deadline = async (promise, label, ms = 90_000) => {
 };
 async function elements(p) {
   return p.evaluate(() => {
-    const selector = 'button,a[href],input:not([type=hidden]),textarea,select,summary,[role=button],[role=option],[role=separator],[tabindex],.tool-head,.change-row,.task-card,.rb-item,g[data-task],[data-images] img,.cos-band svg,.subthread-link,.thread-row,.term-row,.worker-row,[data-task],.side-head,.row[data-thread]';
+    const selector = 'button,a[href],input:not([type=hidden]),textarea,select,summary,[role=button],[role=option],[role=separator],[tabindex],.tool-head,.change-row,.task-card,.rb-item,g[data-task],[data-images] img,.cos-band svg,.subthread-link,.thread-row,.worker-row,[data-task],.side-head,.row[data-thread]';
     const result = [], used = new Map();
     for (const el of document.querySelectorAll(selector)) {
       if (el.closest('[inert]') || el.closest('details:not([open])') && el.closest('details:not([open])').querySelector('summary') !== el && !el.closest('summary')) continue;
@@ -158,7 +158,7 @@ function checkedTransitions() { return [
   { from: 'S04.a', to: 'S04.c', matches: /^Models$/ },
   { from: 'S04.a', to: 'S04.d', matches: /^Diagnosis/ },
   { from: 'S04.a', to: 'S04.k', matches: /^Recap$/ },
-  { from: 'S04.a', to: 'S04.l', matches: /^Transcript lens: full transcript$/ },
+  { from: 'S04.a', to: 'S04.l', matches: /^Transcript mode: full transcript$/ },
   { from: 'S04.a', to: 'S04.q', matches: /^Previous user message$/ },
   { from: 'S04.k', to: 'S04.s', matches: /^Recap$/ },
   { from: 'S04.s', to: 'S04.t', matches: /^Recap$/ },
@@ -184,7 +184,7 @@ function makeEdges(nodes) {
       target = panel === 'rarebit' ? 'S04.a' : panel === 'team' ? 'S05.a' : canonical.get(e.href.split('?')[0]) ?? (e.href.includes('/t/') ? 'S03.a' : e.href.includes('/arcs/') ? 'S06.d' : n.id);
       kind = 'navigation'; evidence = 'declared href; representative destination';
     } else {
-      const rules = [[/^More actions$/, 'S03.i'], [/^Models$/, 'S04.c'], [/^Diagnosis/, 'S04.d'], [/^Graph$/, 'S05.c'], [/^List$/, 'S05.a'], [/^New workspace$/, 'S07.b'], [/^\+ New agent|^New agent beside|^New thread|^\+ New thread/, 'S07.a'], [/^Close pane…|^Stop Pi and free/, 'S07.d'], [/^Add host$|^\+ Add host/, 'S08.a'], [/^Hide continuations$/, 'S04.b'], [/^Transcript lens: full transcript$/, 'S04.l'], [/^Recap$/, 'S04.k'], [/^Ask$/, 'S04.i'], [/^End$/, 'S04.a'], [/^Build arc$/, 'S06.e']];
+      const rules = [[/^More actions$/, 'S03.i'], [/^Models$/, 'S04.c'], [/^Diagnosis/, 'S04.d'], [/^Graph$/, 'S05.c'], [/^List$/, 'S05.a'], [/^New workspace$/, 'S07.b'], [/^\+ New agent|^New agent beside|^New thread|^\+ New thread/, 'S07.a'], [/^Close pane…|^Stop Pi and free/, 'S07.d'], [/^Add host$|^\+ Add host/, 'S08.a'], [/^Hide continuations$/, 'S04.b'], [/^Transcript mode: full transcript$/, 'S04.l'], [/^Recap$/, 'S04.k'], [/^Ask$/, 'S04.i'], [/^End$/, 'S04.a'], [/^Build arc$/, 'S06.e']];
       const matched = rules.find(([test]) => test.test(name)); if (matched) target = matched[1];
       if (/^Cancel$|^Close$|^Done$/.test(name)) target = n.family === 'Settings' ? 'S02.d' : n.family.includes('dialogs') ? 'S03.a' : n.id;
     }

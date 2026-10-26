@@ -8,6 +8,7 @@ import type { Derived } from "../working-set-types.ts";
 import type { AskRequest, AskResult } from "../ask.ts";
 import type { RarebitValue } from "./rarebit.ts";
 import type { ModelPurpose } from "../../hub/helper-models.ts";
+import type { TeamMessages } from "../../shared/team-messages.ts";
 
 /** One reader entry, as the trace-analytics transcript reader returns it (pi-backend.md §3). */
 export type PiReaderEntry = {
@@ -84,6 +85,7 @@ export type PiTeamsFrame = {
 	members?: PiTeamMember[];
 	recorded?: PiRecordedMember[];
 	tasks?: Record<string, { availability: string; tasks: PiTeamTask[]; issues: string[] }>;
+	messages?: Record<string, TeamMessages>;
 };
 
 export type PiViewContext = {

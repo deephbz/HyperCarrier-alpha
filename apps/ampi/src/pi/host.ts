@@ -14,10 +14,11 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { diffRevisions } from "@earendil-works/chord/delta";
+import { workingBudget } from "@hypercarrier/auto-compact-durable/budget";
 import type { HostState } from "../hub/hosts.ts";
 import type { ActionAck, ClientFrame, CommandAck, SlashCommands, ControlSubmission, HostOps, OpHandlers, OpName, OpRequest, OpResult, Ops, Placement, PiHostFrame, PiThreadView, PiTopicValue, SubmittedPrompt, ThreadCreated, ThreadResumed, ThreadsState, ThreadSummary, Topic } from "../shared/protocol.ts";
-import { historySpend, spendLabel } from "../shared/spend.ts";
 import { SESSION_SCOPE_MS } from "../shared/session-scope.ts";
+import { historySpend, spendLabel } from "../shared/spend.ts";
 import { ask } from "./ask.ts";
 import { resolveHelperModel } from "../hub/helper-models.ts";
 import { piModelRegistry } from "./model-registry.ts";
@@ -186,23 +187,24 @@ const digest = (value: string) => createHash("sha256").update(value).digest("hex
 export type ModelLimits = { windows: Record<string, number>; budget: { tokens?: number; models?: Record<string, number> } | null };
 
 /**
- * A Session model's context window and working budget, resolved as hc-auto-compact resolves its budget: a
- * per-model `budget_tokens`, else the global one, else the window, clamped to the window. Without Auto Compact
- * settings there is no working budget. A Session's `/auto-compact budget` override is not read.
+ * A Session model's context window and working budget W, by the one W rule the durable node also uses
+ * (durable-compact `workingBudget`, K2.I1): a per-model `budget_tokens`, else the global one, else the window,
+ * never above the window. Without Auto Compact settings there is no working budget. A Session's
+ * `/auto-compact budget` override is not read.
  */
 export function modelLimits(model: string | undefined, limits: ModelLimits | undefined): { contextWindow?: number; workingBudget?: number } {
 	const window = model ? limits?.windows[model] : undefined;
 	if (!window) return {};
 	if (!limits?.budget) return { contextWindow: window };
-	const configured = limits.budget.models?.[model!] ?? limits.budget.tokens ?? window;
-	return { contextWindow: window, workingBudget: Math.min(configured, window) };
+	return { contextWindow: window, workingBudget: workingBudget(window, { budgetTokens: limits.budget.tokens, modelBudgetTokens: limits.budget.models?.[model!] }) };
 }
-function piSpendFields(copy: { cost: number; priced?: boolean }): Pick<ThreadSummary, "spend" | "spendLabel"> {
- const spend = historySpend(copy.priced === false ? null : copy.cost);
- return { spend, spendLabel: spendLabel(spend) };
-}
-
 type Source = { value: unknown; listeners: Set<(value: unknown) => void> };
+
+/** A Pi Session's figure; a copy whose entries reported no price reads "no price reported", as a durable one does. */
+function piSpendFields(copy: { cost: number; priced?: boolean }): Pick<ThreadSummary, "spend" | "spendLabel"> {
+	const spend = historySpend(copy.priced === false ? null : copy.cost);
+	return { spend, spendLabel: spendLabel(spend) };
+}
 
 export class PiHost extends EventEmitter {
 	readonly config: PiHostConfig;
@@ -1039,6 +1041,7 @@ export class PiHost extends EventEmitter {
 			queued: (control?.steer ?? 0) + (control?.followUp ?? 0),
 			...(blocked ? { attention: [{ source: "Herdr", reason: "needs input" }] } : {}),
 			costUsd: copy.cost,
+			// The one spend rule (shared/spend.ts): a Pi log's entries count responses and failed attempts.
 			...piSpendFields(copy),
 			...(copy.readError ? { lastError: copy.readError } : {}),
 			...(copy.contextTokens ? { contextTokens: copy.contextTokens } : {}),

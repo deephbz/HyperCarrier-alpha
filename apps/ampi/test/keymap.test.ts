@@ -14,6 +14,24 @@ test("global bindings have unique physical keys per modifier set and scope", () 
 	}
 });
 
+test("Cmd+T and browser Ctrl+T share the transcript mode action and command surfaces", () => {
+	const binding = KEYMAP.find((entry) => entry.id === "transcript.mode")!;
+	assert.equal(binding.code, "KeyT");
+	assert.equal(binding.meta, true);
+	assert.equal(binding.browserOwned, undefined, "Ctrl+T can reach the app when Chrome reserves Cmd+T");
+	assert.match(binding.note ?? "", /Ctrl\+T in a browser/);
+	assert.equal(binding.palette, true);
+	assert.match(binding.appNote ?? "", /AmPi\.app/);
+});
+
+test("Cmd+Shift+A archives in AmPi.app; a browser keeps Chrome's tab search, and the palette keeps Archive", () => {
+	const binding = KEYMAP.find((entry) => entry.id === "archive")!;
+	assert.deepEqual([binding.code, binding.meta, binding.shift], ["KeyA", true, true]);
+	assert.equal(binding.browserOwned, true, "Chrome reserves Cmd+Shift+A for tab search");
+	assert.equal(binding.palette, true, "the command palette offers Archive in a browser");
+	assert.match(binding.note ?? "", /command palette/);
+});
+
 test("focus toggle distinguishes hidden, visible-unfocused, and focused regions", () => {
 	assert.equal(regionToggle(true, false), "show-and-focus");
 	assert.equal(regionToggle(false, false), "focus");
@@ -35,21 +53,21 @@ test("Cmd+L hide is an explicit close: hiding Arc stops a wide Session from reop
 });
 
 test("a global binding without a handler is unavailable: it does not fire, the palette omits it, help names its context", () => {
-	const shell = KEYMAP.find((binding) => binding.id === "shell")!;
+	const find = KEYMAP.find((binding) => binding.id === "find")!;
 	const key = () => {
-		const event = { code: "KeyJ", metaKey: true, ctrlKey: false, shiftKey: false, altKey: false, defaultPrevented: false, target: null, preventDefault() { event.defaultPrevented = true; } };
+		const event = { code: "KeyF", metaKey: true, ctrlKey: false, shiftKey: false, altKey: false, defaultPrevented: false, target: null, preventDefault() { event.defaultPrevented = true; } };
 		dispatchGlobalKey(event as unknown as KeyboardEvent);
 		return event.defaultPrevented;
 	};
-	assert.equal(keyAvailable(shell), false);
+	assert.equal(keyAvailable(find), false);
 	assert.equal(key(), false);
 	let fired = 0;
-	const unregister = registerKeyAction("shell", () => { fired += 1; });
-	assert.equal(keyAvailable(shell), true);
+	const unregister = registerKeyAction("find", () => { fired += 1; });
+	assert.equal(keyAvailable(find), true);
 	assert.equal(key(), true);
 	assert.equal(fired, 1);
 	unregister();
-	assert.equal(keyAvailable(shell), false);
+	assert.equal(keyAvailable(find), false);
 	assert.equal(keyAvailable(KEYMAP.find((binding) => binding.region === "transcript")!), true);
 });
 

@@ -7,13 +7,12 @@ import { join } from "node:path";
 import { getCompileCacheDir } from "node:module";
 import { Worker } from "node:worker_threads";
 import type { StatementSync } from "node:sqlite";
-// @ts-ignore: shared reader is plain ESM.
-import { openPiSessionRange } from "../../../trace-analytics/src/sources/transcript-range.mjs";
+import { openCopyReader } from "./copy-reader.ts";
 import { readWorkingSet } from "./working-set-db.ts";
 import { counter, tracing } from "../trace.ts";
 import { trackDerive } from "./derive-queue.ts";
 import { derivedVersion, WINDOW_BYTES, WINDOW_ENTRIES, ENTRY_PAGE_BYTES, type Source, type Derived, type WorkerJob } from "./working-set-types.ts";
-import type { PiEntry, ThreadOutline } from "../shared/protocol.ts";
+import { NOT_FOUND, STALE_VERSION, type PiEntry, type ThreadOutline } from "../shared/protocol.ts";
 import { projectEntry, wireEntry } from "./projection.ts";
 import type { RarebitItem, RarebitValue } from "./views/rarebit.ts";
 
@@ -21,6 +20,8 @@ let worker: Worker | undefined, owners = 0, serial = 0, ingestions = 0;
 const pending = new Map<number, { job: WorkerJob | { op: "close"; cacheDir: string }; started?: boolean; resolve: (value: any) => void; reject: (error: Error) => void; onStart?: () => void }>();
 // Open stores per cache directory. The last one to close tells the Worker to stop writing there.
 const opened = new Map<string, number>();
+/** A versioned read's typed refusal; the wire carries `code` to the client (protocol.ts STALE_VERSION). */
+const refusal = (code: string, message: string) => Object.assign(new Error(message), { code });
 const jobDir = (job: WorkerJob | { op: "close"; cacheDir: string }) => "cacheDir" in job ? job.cacheDir : job.source.cacheDir;
 function ensureWorker() {
  if (worker) return;
@@ -66,6 +67,8 @@ async function release() {
 type Window = { value: { entries: PiEntry[]; more: boolean; version: string }; bytes: number; live: boolean };
 const windows = new Map<string, Window>();
 const LIVE_BYTES = 64 * 1024 * 1024, LRU_BYTES = 64 * 1024 * 1024, LRU_SLOTS = 20;
+/** UTF-16 units of one Rarebit text in a page; a fullText read keeps it whole. */
+const RAREBIT_PAGE_CHARS = 8192;
 const cacheKey = (s: Source) => `${s.host}\0${s.path}`;
 function trim() {
  let live = 0, lru = 0, slots = 0;
@@ -150,11 +153,11 @@ export class WorkingSet {
  #page(path: string, { before, around, limit = WINDOW_ENTRIES, version }: { before?: string; around?: string; limit?: number; version?: string } = {}) {
   const data = this.load(path);
   if (!data) throw new Error("This Session is not indexed yet");
-  if (version && version !== data.version) throw new Error("History changed; refresh this Session");
+  if (version && version !== data.version) throw refusal(STALE_VERSION, "History changed; refresh this Session");
   let end = Number.MAX_SAFE_INTEGER;
   if (before || around) {
    const row = this.db.prepare('SELECT position FROM entries WHERE path=? AND id=?').get(path, (before ?? around)!);
-   if (!row) throw new Error("Entry is not on the current branch");
+   if (!row) throw refusal(NOT_FOUND, "Entry is not on the current branch");
    end = Number(row.position) + (around ? 21 : 0);
   }
   limit = Math.max(1, Math.min(WINDOW_ENTRIES, limit));
@@ -197,10 +200,13 @@ export class WorkingSet {
   if (data.invalidLines) throw new Error("The local Session copy could not be read. Reconnect the Host to receive new Session bytes.");
   const position = before ? this.db.prepare('SELECT position FROM entries WHERE path=? AND id=?').get(path, before)?.position : undefined;
   const items: RarebitItem[] = []; let chars = 0;
-  for (const row of this.db.prepare('SELECT rarebit FROM entries WHERE path=? AND position < ? AND rarebit IS NOT NULL ORDER BY position DESC LIMIT 401').iterate(path, position ?? Number.MAX_SAFE_INTEGER)) {
+  // SQLite cuts a long text to RAREBIT_PAGE_CHARS code points before JS sees the row, so a large body is never parsed whole;
+  // the JS cut below then applies the UTF-16 bound exactly as before.
+  const cut = fullText ? "rarebit" : `CASE WHEN coalesce(length(json_extract(rarebit,'$.text')),0) <= ${RAREBIT_PAGE_CHARS} THEN rarebit ELSE json_set(rarebit,'$.text',substr(json_extract(rarebit,'$.text'),1,${RAREBIT_PAGE_CHARS}),'$.truncated',json('true')) END`;
+  for (const row of this.db.prepare(`SELECT ${cut} AS rarebit FROM entries WHERE path=? AND position < ? AND rarebit IS NOT NULL ORDER BY position DESC LIMIT 401`).iterate(path, position ?? Number.MAX_SAFE_INTEGER)) {
    if (items.length >= 400 || chars >= 200_000) break;
    const item = JSON.parse(String(row.rarebit)) as RarebitItem;
-   if (!fullText && item.text.length > 8192) { item.text = item.text.slice(0, 8192); item.truncated = true; }
+   if (!fullText && item.text.length > RAREBIT_PAGE_CHARS) { item.text = item.text.slice(0, RAREBIT_PAGE_CHARS); item.truncated = true; }
    items.push(item); chars += item.text.length;
   }
   items.reverse();
@@ -244,13 +250,15 @@ export class WorkingSet {
   // The reader below writes the copy's index file in this cache, so a closed store must not reach it.
   if (this.#closed) throw new Error("Working set stopped");
   const data = this.load(source.path); if (!data) throw new Error("Session unavailable");
-  if (version && version !== data.version) throw new Error("Entry changed; refresh this Session");
+  if (version && version !== data.version) throw refusal(STALE_VERSION, "Entry changed; refresh this Session");
   const row = this.db.prepare('SELECT id FROM entries WHERE path=? AND id=?').get(source.path, id);
-  if (!row) throw new Error("Entry is not on the current branch");
-  const reader = openPiSessionRange(source.file, { host: source.host, indexPath: `${source.file}.index.sqlite` });
+  if (!row) throw refusal(NOT_FOUND, "Entry is not on the current branch");
+  const reader = openCopyReader(source);
   try {
-   if (derivedVersion(reader.info().version) !== data.version) throw new Error("Source changed; retry after indexing completes");
-   const projected = projectEntry(reader.entry(id, { full: true }));
+   if (derivedVersion(reader.info().version) !== data.version) throw refusal(STALE_VERSION, "Source changed; retry after indexing completes");
+   // A durable copy serves the whole ReaderItem, so a delivered Team input keeps the origin its entry data names.
+   const item = reader.item ? reader.item(id) : { entry: reader.entry(id, { full: true }) };
+   const projected = item?.entry && projectEntry(item.entry, { rawExport: source.rawExport, data: item.source?.data });
    if (!projected) throw new Error("Entry has no transcript view");
    const bytes = Buffer.from(JSON.stringify(wireEntry(projected)));
    let start = Math.min(bytes.length, Math.max(0, Math.floor(offset))), end = Math.min(bytes.length, start + ENTRY_PAGE_BYTES);

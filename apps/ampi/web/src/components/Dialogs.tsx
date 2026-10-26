@@ -1,5 +1,5 @@
-import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { hub, type HostState } from "../client.ts";
+import { Fragment, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { hub } from "../client.ts";
 import { MOD, go } from "../util.ts";
 import { COMPOSER_KEYS } from "../composer-keys.ts";
 import { dispatchKeyAction, keyAvailable, KEYMAP, registerOverlay, type KeyBinding } from "../keymap.ts";
@@ -8,7 +8,6 @@ import { PAGES } from "../views/registry.ts";
 import { carrier, navigate } from "../nav.ts";
 import { href } from "../util.ts";
 import type { HostThreads } from "./Sidebar.tsx";
-import type { ModelChoice } from "./ThreadView.tsx";
 
 /** The opener of the open Modal. A Modal opened from inside another (palette switching) inherits it. */
 let modalOpener: HTMLElement | null = null;
@@ -64,129 +63,6 @@ export function Modal({ children, onClose, label = "AmPi dialog", overlay = "dia
 				{children}
 			</div>
 		</div>
-	);
-}
-
-const LAST_KEY = "ampi.newThread";
-
-export function NewThreadDialog({
-	hosts,
-	defaultHost,
-	onClose,
-}: {
-	hosts: HostState[];
-	defaultHost?: string;
-	onClose: () => void;
-}) {
-	const last = JSON.parse(localStorage.getItem(LAST_KEY) ?? "{}") as { host?: string; cwd?: Record<string, string>; model?: Record<string, string> };
-	const connected = hosts.filter((h) => h.status === "connected");
-	const [host, setHost] = useState(defaultHost ?? last.host ?? connected[0]?.id ?? "local");
-	const [cwd, setCwd] = useState(last.cwd?.[host] ?? "");
-	const [dirs, setDirs] = useState<{ path: string; parent: string; dirs: string[] }>();
-	const [models, setModels] = useState<ModelChoice[]>([]);
-	const [model, setModel] = useState(last.model?.[host] ?? "");
-	const [prompt, setPrompt] = useState("");
-	const [error, setError] = useState<string>();
-	const [busy, setBusy] = useState(false);
-	// One ID per dialog: a double submit or a retry after a lost response finds the same thread.
-	const [requestId] = useState(() => crypto.randomUUID());
-	useEffect(() => {
-		setCwd(last.cwd?.[host] ?? "");
-		setModel(last.model?.[host] ?? "");
-		hub.request(host, "models.list").then(setModels, () => setModels([]));
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [host]);
-	useEffect(() => {
-		const timer = setTimeout(() => {
-			hub.request(host, "fs.dirs", { path: cwd }).then(setDirs, () => setDirs(undefined));
-		}, 150);
-		return () => clearTimeout(timer);
-	}, [host, cwd]);
-	const create = async () => {
-		setBusy(true);
-		setError(undefined);
-		try {
-			const [provider, ...id] = model.split("/");
-			const { threadId } = await hub.request(host, "thread.create", {
-				cwd: dirs?.path ?? cwd,
-				...(model ? { model: { provider, modelId: id.join("/") } } : {}),
-				requestId,
-				...(prompt.trim() ? { prompt: prompt.trim() } : {}),
-			});
-			localStorage.setItem(
-				LAST_KEY,
-				JSON.stringify({ host, cwd: { ...last.cwd, [host]: dirs?.path ?? cwd }, model: { ...last.model, [host]: model } }),
-			);
-			onClose();
-			go(host, threadId);
-		} catch (e) {
-			setError((e as Error).message);
-			setBusy(false);
-		}
-	};
-	return (
-		<Modal onClose={onClose}>
-			<h2>New thread</h2>
-			<div className="field">
-				Host
-				<select value={host} onChange={(e) => setHost(e.target.value)} aria-label="Host">
-					{hosts.map((h) => (
-						<option key={h.id} value={h.id} disabled={h.status !== "connected"}>
-							{h.label} {h.node ? `(${h.node.hostname})` : `— ${h.status}`}
-						</option>
-					))}
-				</select>
-			</div>
-			<div className="field">
-				Working directory
-				<input value={cwd} placeholder={dirs?.path ?? "~"} onChange={(e) => setCwd(e.target.value)} aria-label="Working directory" />
-				{dirs && (
-					<div className="dirlist">
-						<button onClick={() => setCwd(dirs.parent)}>..</button>
-						{dirs.dirs.map((d) => (
-							<button key={d} onClick={() => setCwd(`${dirs.path.replace(/\/$/, "")}/${d}`)}>
-								{d}/
-							</button>
-						))}
-					</div>
-				)}
-			</div>
-			<div className="field">
-				Model
-				<select value={model} onChange={(e) => setModel(e.target.value)} aria-label="Model">
-					<option value="">Host default</option>
-					{models.map((m) => (
-						<option key={`${m.provider}/${m.id}`} value={`${m.provider}/${m.id}`}>
-							{m.provider}/{m.id} {m.name !== m.id ? `— ${m.name}` : ""}
-						</option>
-					))}
-				</select>
-			</div>
-			<div className="field">
-				First message (optional)
-				<textarea
-					rows={3}
-					value={prompt}
-					onChange={(e) => setPrompt(e.target.value)}
-					aria-label="First message"
-					onKeyDown={(e) => {
-						if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void create();
-					}}
-				/>
-			</div>
-			{error && <div className="err-box" role="alert">{error} Check the Host and directory, then retry. Your message is kept here.</div>}
-			<div className="actions">
-				<span className="hint" style={{ marginRight: "auto" }}>
-					Runs on {hosts.find((h) => h.id === host)?.node?.hostname ?? host}; nothing leaves that host but the view.
-				</span>
-				<button className="btn" onClick={onClose}>
-					Cancel
-				</button>
-				<button className="btn primary" disabled={busy} onClick={() => void create()}>
-					{busy ? "Creating…" : <>Create {MOD}↵</>}
-				</button>
-			</div>
-		</Modal>
 	);
 }
 
@@ -257,7 +133,7 @@ export function Palette({ data, onClose, query = "", onQuery }: { data: HostThre
 		const row = rows[i];
 		if (!row) return;
 		onClose();
-		go(row.host.id, row.t.id);
+		go(row.host.link, row.t.id);
 	};
 	return (
 		<Modal onClose={onClose} label="Jump to a Session" overlay="palette">
@@ -280,7 +156,7 @@ export function Palette({ data, onClose, query = "", onQuery }: { data: HostThre
 			/>
 			<div className="quiet-scroll" style={{ marginTop: 8, maxHeight: "50vh", overflowY: "auto" }}>
 				{rows.map(({ host, t }, i) => (
-					<button key={`${host.id}|${t.id}`} className={`palette-item ${i === index ? "on" : ""}`} onMouseEnter={() => setIndex(i)} onClick={() => pick(i)} title={t.title || "Untitled Session"}>
+					<button key={`${host.link}|${t.id}`} className={`palette-item ${i === index ? "on" : ""}`} onMouseEnter={() => setIndex(i)} onClick={() => pick(i)} title={t.title || "Untitled Session"}>
 						<span className="palette-title" dir="auto">{t.team?.teamId ? `${t.team.teamId} / ${t.team.worker ?? "Lead"}` : t.title || "Untitled Session"}</span>
 					</button>
 				))}

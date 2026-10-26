@@ -124,7 +124,7 @@ export function ChangesPanel({ host, threadId }: { host: string; threadId: strin
 		let live = true;
 		(async () => {
 			const all: PiEntry[] = [];
-			let before = String(Number(lastId ?? 0) + 1);
+			let before: string | undefined;
 			for (let page = 0; page < 40; page++) {
 				const r = await hub.request(host, "thread.history", { threadId, before, limit: 500 });
 				all.unshift(...r.entries);

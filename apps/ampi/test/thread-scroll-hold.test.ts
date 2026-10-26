@@ -306,6 +306,53 @@ for (const engine of ENGINES) for (const move of ["find", "link", "focus", "step
 	}
 });
 
+// A reply that completes while the reader is away: the live reply becomes its committed entry. The read fragment, in an
+// older entry or in the reply itself, keeps its screen height; the reader is not pinned again and nothing jumps.
+for (const engine of ENGINES) for (const where of ["above the reply", "inside the reply"] as const) test(`scroll hold (${engine}): a reply that completes while the reader is away ${where} keeps the read place`, { skip: engineSkip(engine) }, async (t) => {
+	const { page, send } = await open(t, 201, "durable", engine);
+	const frame = (lines: number) => ({ ...view(201), live: { run: { activity: "streaming" }, generation: { message: { role: "assistant", content: [{ type: "text", text: grown(lines) }] } } } });
+	const grow = async (lines: number) => {
+		send(frame(lines));
+		await page.waitForFunction((lines) => [...document.querySelectorAll("[data-region=transcript] p")].some((p) => p.textContent?.includes(`line ${lines} `)), lines);
+		await frames(page);
+	};
+	for (let lines = 1; lines <= 30; lines += 3) await grow(lines);
+	const box = (await page.locator("[data-region=transcript]").boundingBox())!;
+	await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+	await page.mouse.wheel(0, where === "inside the reply" ? -400 : -2600);
+	for (let i = 0; i < 10; i++) await frames(page);
+	// The read fragment: the first paragraph whose bottom is below the transcript's top, found again by its text.
+	const place = () => page.evaluate(() => {
+		const el = document.querySelector<HTMLElement>("[data-region=transcript]")!;
+		const top = el.getBoundingClientRect().top;
+		const p = [...el.querySelectorAll<HTMLElement>("p")].find((node) => node.getBoundingClientRect().bottom > top + 40)!;
+		return { text: p.textContent!, entry: p.closest<HTMLElement>("[data-entry]")?.dataset.entry };
+	});
+	const offset = (text: string) => page.evaluate((text) => {
+		const el = document.querySelector<HTMLElement>("[data-region=transcript]")!;
+		const p = [...el.querySelectorAll<HTMLElement>("p")].filter((node) => node.textContent === text);
+		return p.length === 1 ? p[0]!.getBoundingClientRect().top - el.getBoundingClientRect().top : null;
+	}, text);
+	const read = await place();
+	assert.ok(where === "inside the reply" ? /^Streamed line/.test(read.text) : !/^Streamed line/.test(read.text), `the reader reads ${where}; ${JSON.stringify(read)}`);
+	const before = where === "inside the reply" ? await offset(read.text) : (await anchor(page)).offset;
+	const id = where === "inside the reply" ? undefined : (await anchor(page)).id;
+	const now = async () => id ? offsetOf(page, id) : offset(read.text);
+	assert.ok(before !== null && await gap(page) > 60, `the reader is away; gap ${await gap(page)}`);
+	for (let lines = 31; lines <= 34; lines++) await grow(lines);
+	let at = await now();
+	assert.ok(at !== null && Math.abs(at - before!) <= 2, `while streaming the read place moved from ${before} to ${at}`);
+	// The reply completes: the live reply becomes entry e201.
+	send(view(202, grown(34)));
+	await page.locator('[data-entry="e201"], [data-region=transcript] [role=status] button').first().waitFor({ state: "attached" });
+	for (let i = 0; i < 6; i++) {
+		await frames(page);
+		at = await now();
+		assert.ok(at !== null && Math.abs(at - before!) <= 2, `frame ${i} after completion: the read place moved from ${before} to ${at}`);
+	}
+	assert.ok(await gap(page) > 60, `the reader stays away after completion; gap ${await gap(page)}`);
+});
+
 // Reader input during a stream leaves the end at once, in both engines; G follows again.
 for (const engine of ENGINES) test(`scroll hold (${engine}): a wheel up during a stream keeps the read place; G follows again`, { skip: engineSkip(engine) }, async (t) => {
 	const { page, send } = await open(t, 201, "pi", engine);
@@ -389,8 +436,8 @@ for (const engine of ENGINES) for (const step of [20, 40]) test(`scroll hold (${
 // Owner incident (AmPi macOS app): a reader away from the end scrolls down with the trackpad while a reply streams. The
 // reader's own scroll wins over the saved place: no step snaps back, the end band resumes follow, and the reply's end
 // (a live reply replaced by its entry) does not jump.
-for (const engine of ENGINES) for (const shape of ["same entry"] as const) test(`scroll hold (${engine}): ${shape}, a reader wheeling down through a stream moves with the wheel and follows at the end`, { skip: engineSkip(engine) }, async (t) => {
-	const live = false;
+for (const engine of ENGINES) for (const shape of ["same entry", "live reply"] as const) test(`scroll hold (${engine}): ${shape}, a reader wheeling down through a stream moves with the wheel and follows at the end`, { skip: engineSkip(engine) }, async (t) => {
+	const live = shape === "live reply";
 	const { page, send } = await open(t, 201, live ? "durable" : "pi", engine);
 	const frame = (lines: number) => live
 		? { ...view(201), live: { run: { activity: "streaming" }, generation: { message: { role: "assistant", content: [{ type: "text", text: grown(lines) }] } } } }
@@ -545,9 +592,9 @@ const traffic = (k: number) => k % 3 === 2
 
 test("scroll hold: conversation-only folds arriving tool calls and Team messages without moving a reader one or two screens up", async (t) => {
 	const { page, send } = await open(t, 200);
-	await page.getByRole("button", { name: "Transcript lens: full transcript" }).click();
+	await page.getByRole("button", { name: "Transcript mode: full transcript" }).click();
 	await frames(page);
-	await page.locator('[aria-label="Transcript lens: conversation only"]').waitFor({state:"attached"});
+	await page.locator('[aria-label="Transcript mode: conversation only"]').waitFor({state:"attached"});
 	await page.locator("[data-region=transcript]").hover();
 	await page.mouse.wheel(0, -1000);
 	await frames(page);
@@ -579,7 +626,7 @@ for (const operation of ["open fold growth", "lens round trip"] as const) test(`
 	if (operation === "open fold growth") for (let i=192;i<240;i++) mixed[i]={id:`e${i}`,kind:'compaction',summary:'Context kept'};
 	const publish = () => send({...view(200),entries:mixed,live:{run:{startedAt:1}}});
 	publish(); await frames(page);
-	await page.getByRole("button", {name:"Transcript lens: full transcript"}).click(); await frames(page);
+	await page.getByRole("button", {name:"Transcript mode: full transcript"}).click(); await frames(page);
 	if (operation === "open fold growth") { await page.locator('.rb-tools').last().locator(':scope > summary').click(); await frames(page); }
 	const fragment = page.locator('.md').filter({hasText:operation === "open fold growth" ? "Answer 191." : "After tool 191."});
 	const position = () => fragment.evaluate(node=>node.getBoundingClientRect().top-document.querySelector('[data-region=transcript]')!.getBoundingClientRect().top);
@@ -598,8 +645,8 @@ for (const operation of ["open fold growth", "lens round trip"] as const) test(`
 		assert.ok(Math.abs(await position()-before)<=2,`growth between the fragment and next unique entry moved the fragment ${before} -> ${await position()}`);
 	} else {
 		const before=await position();
-		await page.getByRole('button',{name:'Transcript lens: conversation only'}).click(); await frames(page);
-		await page.getByRole('button',{name:'Transcript lens: full transcript'}).click(); await frames(page);
+		await page.getByRole('button',{name:'Transcript mode: conversation only'}).click(); await frames(page);
+		await page.getByRole('button',{name:'Transcript mode: full transcript'}).click(); await frames(page);
 		assert.ok(Math.abs(await position()-before)<=2,`lens round trip moved split prose from ${before} to ${await position()}`);
 	}
 });
@@ -624,7 +671,7 @@ test("scroll hold: Back restores the saved entry place without persisting DOM re
 test("scroll hold: Back to a split entry restores the after-tool fragment", async (t) => {
 	const {page, send} = await open(t, 200);
 	send({...view(200),entries:splitEntries()}); await frames(page);
-	await page.getByRole('button',{name:'Transcript lens: full transcript'}).click(); await frames(page);
+	await page.getByRole('button',{name:'Transcript mode: full transcript'}).click(); await frames(page);
 	const fragment=page.locator('.msg.assistant[data-entry=e191]').last();
 	assert.ok((await fragment.textContent())?.includes('After tool 191.'));
 	await fragment.evaluate(node=>{const el=document.querySelector<HTMLElement>('[data-region=transcript]')!;el.scrollTop+=node.getBoundingClientRect().top-el.getBoundingClientRect().top+10;});
@@ -662,9 +709,9 @@ test("scroll hold: conversation-only stays still for ten seconds with a running 
 	await page.locator("[data-region=transcript]").hover();
 	await page.mouse.wheel(0, -1000);
 	await frames(page);
-	await page.getByRole("button", { name: "Transcript lens: full transcript" }).click();
+	await page.getByRole("button", { name: "Transcript mode: full transcript" }).click();
 	await frames(page);
-	await page.locator('[aria-label="Transcript lens: conversation only"]').waitFor({state:"attached"});
+	await page.locator('[aria-label="Transcript mode: conversation only"]').waitFor({state:"attached"});
 	// A mode toggle may change geometry. Once it settles, no new source data or reader action occurs.
 	const read = () => page.evaluate(() => { const el = document.querySelector<HTMLElement>("[data-region=transcript]")!; return {top:el.scrollTop,height:el.scrollHeight,rows:el.querySelectorAll("[data-entry]").length}; });
 	const before = await read();
@@ -695,11 +742,11 @@ const arrivals = () => {
 	return steps;
 };
 const CAP = 400;
-for (const [backend, lens] of [["pi", false], ["pi", true]] as const) {
+for (const [backend, lens] of [["pi", false], ["pi", true], ["durable", false]] as const) {
 	for (const place of ["one or two screens up", "mid-thread"] as const) {
 		test(`scroll hold: at the ${CAP}-entry source cap, ${backend}${lens ? " conversation-only" : ""}, each arrival evicts the oldest entry and a reader ${place} stays in place`, async (t) => {
 			const { page, send } = await open(t, CAP, backend);
-			if (lens) { await page.getByRole("button", { name: "Transcript lens: full transcript" }).click(); await frames(page); }
+			if (lens) { await page.getByRole("button", { name: "Transcript mode: full transcript" }).click(); await frames(page); }
 			if (place === "mid-thread") {
 				// The reader scrolls up until the paint window holds the whole served window: its held first entry is the oldest.
 				await page.waitForFunction(async () => {
@@ -730,10 +777,10 @@ for (const [backend, lens] of [["pi", false], ["pi", true]] as const) {
 		});
 	}
 }
-for (const [backend, lens] of [["pi", false], ["pi", true]] as const) {
+for (const [backend, lens] of [["pi", false], ["pi", true], ["durable", false]] as const) {
 	test(`scroll hold: at the ${CAP}-entry source cap, ${backend}${lens ? " conversation-only" : ""}, batches of 120 that evict the held first entry keep a reader near the window top in place`, async (t) => {
 		const { page, send } = await open(t, CAP, backend);
-		if (lens) { await page.getByRole("button", { name: "Transcript lens: full transcript" }).click(); await frames(page); }
+		if (lens) { await page.getByRole("button", { name: "Transcript mode: full transcript" }).click(); await frames(page); }
 		await page.evaluate(() => { document.querySelector<HTMLElement>("[data-region=transcript]")!.scrollTop = 300; });
 		await frames(page);
 		await page.waitForTimeout(100);
@@ -755,7 +802,7 @@ const rows = (page: Page, from: number) => page.evaluate((from) => {
 	const ids = [...document.querySelectorAll<HTMLElement>("[data-region=transcript] [data-entry]")].map((n) => n.dataset.entry!);
 	return { painted: ids.length, retained: ids.filter((id) => /^e\d+$/.test(id) && Number(id.slice(1)) < from).length };
 }, from);
-for (const backend of ["pi"] as const) {
+for (const backend of ["pi", "durable"] as const) {
 	test(`scroll hold: ${backend}, thousands of arrivals while the reader is away paint nothing past the frozen window; G cleans up`, async (t) => {
 		const { page, send } = await open(t, CAP, backend);
 		await page.locator("[data-region=transcript]").hover();
@@ -952,7 +999,7 @@ const splitWindow = (n: number, from: number) => ({ ...view(n, "", from), hidden
 		{ type: "text", text: `After tool ${id}. ${"More details. ".repeat(4 + (k % 3) * 6)}` },
 	] };
 }) });
-for (const [backend, lens] of [["pi", false], ["pi", true]] as const) {
+for (const [backend, lens] of [["pi", false], ["pi", true], ["durable", false]] as const) {
 	for (const place of ["at the clamped bottom", "inside the extension band"] as const) {
 		test(`scroll hold: ${backend}${lens ? " conversation-only" : ""}, a downward extension keeps a read after-tool fragment ${place} in place`, async (t) => {
 			const { page, send } = await open(t, CAP, backend);
@@ -960,8 +1007,8 @@ for (const [backend, lens] of [["pi", false], ["pi", true]] as const) {
 			await page.locator("[data-region=transcript] .md", { hasText: `After tool e${CAP - 1}.` }).waitFor({ state: "attached" });
 			await frames(page);
 			if (lens) {
-				await page.getByRole("button", { name: "Transcript lens: full transcript" }).click();
-				await page.locator('[aria-label="Transcript lens: conversation only"]').waitFor({ state: "attached" });
+				await page.getByRole("button", { name: "Transcript mode: full transcript" }).click();
+				await page.locator('[aria-label="Transcript mode: conversation only"]').waitFor({ state: "attached" });
 				await frames(page);
 			}
 			await page.evaluate(() => { document.querySelector<HTMLElement>("[data-region=transcript]")!.scrollTop = 300; });
@@ -996,15 +1043,15 @@ for (const [backend, lens] of [["pi", false], ["pi", true]] as const) {
 		});
 	}
 }
-for (const [backend, lens] of [["pi", false], ["pi", true]] as const) {
+for (const [backend, lens] of [["pi", false], ["pi", true], ["durable", false]] as const) {
 	test(`scroll hold: ${backend}${lens ? " conversation-only" : ""}, a trim that drops the whole first segment keeps the read fragment`, async (t) => {
 		const { page, send } = await open(t, CAP, backend);
 		send(splitWindow(CAP, 0));
 		await page.locator("[data-region=transcript] .md", { hasText: `After tool e${CAP - 1}.` }).waitFor({ state: "attached" });
 		await frames(page);
 		if (lens) {
-			await page.getByRole("button", { name: "Transcript lens: full transcript" }).click();
-			await page.locator('[aria-label="Transcript lens: conversation only"]').waitFor({ state: "attached" });
+			await page.getByRole("button", { name: "Transcript mode: full transcript" }).click();
+			await page.locator('[aria-label="Transcript mode: conversation only"]').waitFor({ state: "attached" });
 			await frames(page);
 		}
 		await page.evaluate(() => { document.querySelector<HTMLElement>("[data-region=transcript]")!.scrollTop = 300; });

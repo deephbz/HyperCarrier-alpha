@@ -32,7 +32,7 @@ const KEY = "ampi.sidebar.hostCollapsed.devbox";
 const NOW = Date.now(), WENT_AWAY = NOW - 3_600_000;
 type Host = { id: string; label: string; kind: string; status: string; error?: string; lastSeen?: number; attempts: number };
 const away = (over: Partial<Host> = {}): Host => ({ id: "devbox", label: "devbox", kind: "ssh", status: "disconnected", error: ERROR, lastSeen: WENT_AWAY, attempts: 3, ...over });
-const render = (host: Host) => renderToStaticMarkup(createElement(section as never, { data: { host, threads: [], stale: false }, route: {}, filter: "" } as never));
+const render = (host: Host) => renderToStaticMarkup(createElement(section as never, { data: { host, threads: [], stale: false }, hosts: [host], route: {}, filter: "" } as never));
 const head = (html: string) => /<div class="side-head">[\s\S]*?<\/button>/.exec(html)?.[0] ?? "";
 /** What a sighted reader sees: the markup without visually hidden text. */
 const visible = (html: string) => html.replace(/<span class="visually-hidden">[\s\S]*?<\/span>/g, "");
