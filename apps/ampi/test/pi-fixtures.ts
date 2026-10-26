@@ -229,7 +229,7 @@ export class Agent {
 
 // A tiny hc-control server (contract section 1) plus its descriptor.
 // With `queue`, it tracks submissions as pi-hc-control does: submit queues one, abort returns all to the editor.
-export async function control(f: Fixture, session: string, opts: { nonce?: string; descriptorNonce?: string; idle?: boolean; queue?: boolean; commands?: boolean } = {}) {
+export async function control(f: Fixture, session: string, opts: { nonce?: string; descriptorNonce?: string; idle?: boolean; queue?: boolean; commands?: boolean; trackPending?: boolean; settleOnAbort?: boolean } = {}) {
 	const dir = join(f.agentDir, "hc-control");
 	mkdirSync(dir, { recursive: true, mode: 0o700 });
 	const nonce = opts.nonce ?? "n-live";
@@ -237,9 +237,20 @@ export async function control(f: Fixture, session: string, opts: { nonce?: strin
 	const socket = join(dir, `${sessionId}.sock`);
 	const requests: Frame[] = [];
 	const submissions: { submission: string; deliverAs: string; state: string; at: number; text: string }[] = [];
+	let idle = opts.idle ?? false;
+	// Mirrors pi-hc-control/src/control.mjs abort(): it waits for isIdle before replying; status() reports it.
+	const settleAfterAbort = () => {
+		if (!opts.settleOnAbort) return;
+		idle = true;
+		const state = f.state;
+		for (const agent of state.agents) if (agent.agent_session?.value === session) agent.agent_status = "idle";
+		f.setState(state);
+	};
 	const server: Server = createServer((c) => {
 		let buf = "";
 		c.setEncoding("utf8");
+		// Like the real endpoint (pi-hc-control endpoint.mjs): a client that closes with a reply unread resets the socket.
+		c.on("error", () => {});
 		c.on("data", (d: string) => {
 			buf += d;
 			let i: number;
@@ -248,7 +259,7 @@ export async function control(f: Fixture, session: string, opts: { nonce?: strin
 				buf = buf.slice(i + 1);
 				requests.push(req);
 				const reply =
-					req.op === "status" ? { id: req.id, ok: true, value: { sessionId, sessionFile: session, nonce, idle: opts.idle ?? false, compacting: false, pending: { steer: 0, followUp: 1 }, ...(opts.queue ? { submissions } : {}), ...(opts.commands ? { commands: 1 } : {}) } }
+					req.op === "status" ? { id: req.id, ok: true, value: { sessionId, sessionFile: session, nonce, idle, compacting: false, pending: opts.trackPending ? { steer: submissions.filter(s => s.state === "queued" && s.deliverAs === "steer").length, followUp: submissions.filter(s => s.state === "queued" && s.deliverAs === "followUp").length } : { steer: 0, followUp: 1 }, ...(opts.queue ? { submissions } : {}), ...(opts.commands ? { commands: 1 } : {}) } }
 					: req.op === "commands" && opts.commands ? { id: req.id, ok: true, value: { commands: [{ name: "model", source: "builtin", supported: true }, { name: "reload", source: "builtin", supported: false }], models: [{ ref: "p/m2" }], model: "p/m1", thinkingLevels: ["off"], thinking: "off" } }
 					: req.op === "command" && opts.commands && req.name === "model" && req.args === "m2" ? { id: req.id, ok: true, disposition: "handled", notice: "Model: p/m2", effect: { model: "p/m2" } }
 					: req.op === "command" && opts.commands && req.name === "model" ? { id: req.id, ok: false, error: { code: "bad_args", message: "ambiguous", matches: ["p/x", "q/x"] } }
@@ -261,9 +272,10 @@ export async function control(f: Fixture, session: string, opts: { nonce?: strin
 					: req.op === "abort" && opts.queue ? (() => {
 						const queued = submissions.filter((r) => r.state === "queued");
 						for (const r of queued) r.state = "returned";
+						settleAfterAbort();
 						return { id: req.id, ok: true, evidence: "aborted", submissions: queued };
 					})()
-					: req.op === "abort" ? { id: req.id, ok: true, evidence: "aborted" }
+					: req.op === "abort" ? (() => { settleAfterAbort(); return { id: req.id, ok: true, evidence: "aborted" }; })()
 					: { id: req.id, ok: false, error: { code: "bad_op", message: "?" } };
 				c.write(`${JSON.stringify(reply)}\n`);
 			}

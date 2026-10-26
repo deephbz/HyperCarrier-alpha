@@ -46,7 +46,7 @@ test("tool state: a running Pi call without a live slot shows running, expands, 
 	const running = html({ callOpen: true, active: true });
 	assert.match(running, /class="spinner"/);
 	assert.match(running, /class="state ">running</);
-	assert.match(running, /class="tool-body"/, "expanded");
+	assert.match(running, /class="tool-body quiet-scroll"/, "expanded");
 	assert.match(running, /sleep 30/);
 	assert.match(running, /waiting for output/);
 	const streaming = html({ callOpen: true, active: true, live: { status: "running", output: "tick 1" } });

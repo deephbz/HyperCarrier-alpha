@@ -4,6 +4,8 @@ export type ToolRun = {
 	kind: "run";
 	id: string;
 	entries: PiEntry[];
+	/** The fragment key of each step, beside `entries`: the entry ID and the step's first source block, or its kind. */
+	keys: string[];
 	calls: number;
 	errors: number;
 	start?: number;
@@ -67,8 +69,9 @@ export function toolRuns(entries: PiEntry[], live = false): LensPart[] {
 	};
 	const step = (entry: PiEntry, suffix: string) => {
 		const ts = "ts" in entry ? time(entry.ts) : undefined;
-		run ??= { kind: "run", id: `${entry.id}:${suffix}`, entries: [], calls: 0, errors: 0, label: "", start: previous ?? ts, end: ts, running: false };
+		run ??= { kind: "run", id: `${entry.id}:${suffix}`, entries: [], keys: [], calls: 0, errors: 0, label: "", start: previous ?? ts, end: ts, running: false };
 		run.entries.push(entry);
+		run.keys.push(`${entry.id}:${suffix}`);
 		if (ts !== undefined) run.end = Math.max(run.end ?? ts, ts);
 	};
 	const prose = (entry: PiEntry, key: string) => {

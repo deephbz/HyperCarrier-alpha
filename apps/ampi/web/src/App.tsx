@@ -23,18 +23,54 @@ import { remember, transition, type KeyIntent, type Region, type SessionRegion, 
 import { PANEL_DEFAULT_KEY, panelClosed } from "./views/cos/arc-reopen.ts";
 import { arriveEntry, goBack, goForward, installNavLinks, navigate, noteFocus, ROUTE_EVENT } from "./nav.ts";
 
+import { scaleOf } from "./display.ts";
+
 function savedWidth(key: string, fallback: number, min: number, max: number) {
 	const value = Number(localStorage.getItem(key) ?? fallback);
 	return Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback;
 }
 
-/** Drag updates only the grid, not every Session component. Commit the preference when capture ends. */
+/** Below this many CSS px of main, the sidebar gives way and then the panel overlays the main. */
+const MAIN_MIN = 480;
+/** The layout viewport in CSS px: the unit of the grid widths. `innerWidth` is in viewport px, which display zoom scales. */
+const viewWidth = () => document.documentElement.clientWidth;
+
+type Drag = { app: HTMLElement; pointer: number; x: number; scale: number; start: number; width: number };
+
+/**
+ * One pointer gesture owns the edge from press to release, cancel or lost capture. The width is the start width plus
+ * the pointer's travel, so the grabbed point stays under the cursor. Pointer travel is in viewport px; display zoom
+ * (html `zoom`, a region `zoom`) scales each CSS px of the grid, so the gesture fixes that scale at the press.
+ * The drag writes only the grid, not every Session component; release commits the drawn width; Escape restores the start.
+ */
 function ResizeEdge({ side, width, onChange }: { side: "sidebar" | "panel"; width: number; onChange: (width: number) => void }) {
-	const drag = useRef<number | undefined>(undefined);
+	const drag = useRef<Drag | undefined>(undefined);
+	const edge = useRef<HTMLDivElement>(null);
 	const min = side === "sidebar" ? 220 : 320;
 	const max = side === "sidebar" ? 420 : 720;
 	const clamp = (value: number) => Math.max(min, Math.min(max, value));
+	const show = (app: HTMLElement, next: number) => {
+		app.style.setProperty(side === "sidebar" ? "--side-w" : "--panel-w", `${next}px`);
+		edge.current?.setAttribute("aria-valuenow", String(next));
+		const sidebar = app.classList.contains("sidebar-hidden") ? 0 : parseFloat(app.style.getPropertyValue("--side-w"));
+		app.classList.toggle("panel-overlay", viewWidth() - sidebar - parseFloat(app.style.getPropertyValue("--panel-w")) < MAIN_MIN);
+	};
+	const end = (commit: boolean) => {
+		const gesture = drag.current;
+		if (!gesture) return;
+		drag.current = undefined;
+		if (edge.current?.hasPointerCapture(gesture.pointer)) edge.current.releasePointerCapture(gesture.pointer);
+		if (commit) onChange(gesture.width);
+		else show(gesture.app, gesture.start);
+	};
+	// An edge that unmounts mid-gesture (the panel closed) puts the start width back; the React state never changed.
+	useEffect(() => () => {
+		const gesture = drag.current;
+		drag.current = undefined;
+		if (gesture) gesture.app.style.setProperty(side === "sidebar" ? "--side-w" : "--panel-w", `${gesture.start}px`);
+	}, [side]);
 	return <div
+		ref={edge}
 		className={`resize-edge ${side}-edge`}
 		role="separator"
 		aria-label={side === "sidebar" ? "Sidebar width" : "Side panel width"}
@@ -44,6 +80,10 @@ function ResizeEdge({ side, width, onChange }: { side: "sidebar" | "panel"; widt
 		aria-valuenow={width}
 		tabIndex={0}
 		onKeyDown={(e) => {
+			if (drag.current) {
+				if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); end(false); }
+				return;
+			}
 			const direction = side === "sidebar" ? 1 : -1;
 			const step = e.shiftKey ? 32 : 8;
 			const next = e.key === "Home" ? min : e.key === "End" ? max : e.key === "ArrowLeft" ? width - step * direction : e.key === "ArrowRight" ? width + step * direction : undefined;
@@ -53,25 +93,23 @@ function ResizeEdge({ side, width, onChange }: { side: "sidebar" | "panel"; widt
 			if (e.button !== 0 || !e.isPrimary || drag.current !== undefined) return;
 			e.preventDefault();
 			e.currentTarget.focus();
-			drag.current = width;
+			// The pane's drawn width over its CSS width: viewport px per grid px, fixed for the whole gesture.
+			const scale = scaleOf(e.currentTarget.parentElement!, width);
+			drag.current = { app: e.currentTarget.closest<HTMLElement>(".app")!, pointer: e.pointerId, x: e.clientX, scale, start: width, width };
 			e.currentTarget.setPointerCapture(e.pointerId);
 		}}
 		onPointerMove={(e) => {
-			if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
-			const app = e.currentTarget.closest<HTMLElement>(".app")!;
-			const rect = app.getBoundingClientRect();
-			const next = clamp(side === "sidebar" ? e.clientX - rect.left : rect.right - e.clientX);
-			drag.current = next;
-			app.style.setProperty(side === "sidebar" ? "--side-w" : "--panel-w", `${next}px`);
-			e.currentTarget.setAttribute("aria-valuenow", String(next));
-			const style = getComputedStyle(app);
-			app.classList.toggle("panel-overlay", rect.width - parseFloat(style.getPropertyValue("--side-visible")) - parseFloat(style.getPropertyValue("--panel-w")) < 480);
+			const gesture = drag.current;
+			if (!gesture || e.pointerId !== gesture.pointer) return;
+			const travel = (e.clientX - gesture.x) / gesture.scale;
+			const next = clamp(Math.round(gesture.start + (side === "sidebar" ? travel : -travel)));
+			if (next === gesture.width) return;
+			gesture.width = next;
+			show(gesture.app, next);
 		}}
-		onPointerUp={(e) => { if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId); }}
-		onLostPointerCapture={() => {
-			if (drag.current !== undefined) onChange(drag.current);
-			drag.current = undefined;
-		}}
+		onPointerUp={(e) => { if (e.pointerId === drag.current?.pointer) end(true); }}
+		onPointerCancel={(e) => { if (e.pointerId === drag.current?.pointer) end(false); }}
+		onLostPointerCapture={(e) => { if (e.pointerId === drag.current?.pointer) end(true); }}
 	/>;
 }
 
@@ -108,7 +146,7 @@ export function App() {
 	const overlayRef = useRef(false);
 	const [sidebarWidth, setSidebarWidth] = useState(() => savedWidth("ampi.sidebar.width", 280, 220, 420));
 	const [panelWidth, setPanelWidth] = useState(() => savedWidth("ampi.panel.width", 380, 320, 720));
-	const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
+	const [windowWidth, setWindowWidth] = useState(viewWidth);
 	const [zoomToast, setZoomToast] = useState("");
 	// Focus model adapter (focus.ts). `transition` decides; this adapter snapshots focus at dispatch, applies the view
 	// change, and walks the target chain once per request after commit. `recentRegions` is a ref: focus changes never re-render.
@@ -243,9 +281,15 @@ export function App() {
 		};
 	}, []);
 	useEffect(() => {
-		const resize = () => setWindowWidth(window.innerWidth);
+		// Display zoom changes the CSS width of the window without a resize event.
+		const resize = () => setWindowWidth(viewWidth());
+		resize();
 		window.addEventListener("resize", resize);
-		return () => window.removeEventListener("resize", resize);
+		window.addEventListener("ampi:display", resize);
+		return () => {
+			window.removeEventListener("resize", resize);
+			window.removeEventListener("ampi:display", resize);
+		};
 	}, []);
 	useEffect(() => {
 		localStorage.setItem("ampi.sidebar.hidden", sidebarHidden ? "1" : "0");
@@ -334,10 +378,10 @@ export function App() {
 	const page = PAGES.find((p) => p.name === (route.page ?? (!route.host ? "timeline" : undefined)));
 	// When a panel would squeeze the main below a usable width, the sidebar gives way first (not saved; ☰ peeks it back),
 	// and only then does the panel overlay the main.
-	const squeezed = showPanel && !sidebarHidden && windowWidth - sidebarWidth - panelWidth < 480;
+	const squeezed = showPanel && !sidebarHidden && windowWidth - sidebarWidth - panelWidth < MAIN_MIN;
 	const sideHidden = sidebarHidden || (squeezed && !sidebarPeek);
 	squeezedRef.current = squeezed;
-	const overlayPanel = windowWidth - (sideHidden ? 0 : sidebarWidth) - panelWidth < 480;
+	const overlayPanel = windowWidth - (sideHidden ? 0 : sidebarWidth) - panelWidth < MAIN_MIN;
 	overlayRef.current = overlayPanel && showPanel;
 	viewRef.current = { session: sessionView, sidebarHidden: sideHidden, panelShown: showPanel, modal: false };
 	void hash;

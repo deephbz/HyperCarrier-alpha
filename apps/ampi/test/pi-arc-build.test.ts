@@ -25,7 +25,7 @@ import type { PiViewContext, PiViewSession } from "../src/pi/views/types.ts";
 
 const root = mkdtempSync(join(tmpdir(), "ampi-arc-build-"));
 // Every helper model is explicit; tests that need another set write their own hub.json, then return to this one.
-const MODELS = { arcLabels: "anthropic/claude-haiku-5-5", arcSynthesis: "anthropic/claude-sonnet-5-5", rarebitRecap: "anthropic/claude-haiku-5-5", rarebitAsk: "anthropic/claude-sonnet-5-5" };
+const MODELS = { arcLabels: "anthropic/claude-haiku-5-5", arcSynthesis: "anthropic/claude-sonnet-5-5", rarebitAsk: "anthropic/claude-sonnet-5-5" };
 const HUB = join(root, "models-hub.json");
 writeFileSync(HUB, JSON.stringify({ hosts: [], models: MODELS }));
 useHubConfig(HUB);
@@ -444,14 +444,14 @@ process.stdin.resume(); process.stdin.on("end", () => console.log(JSON.stringify
 
 // Real Pi calls go to a local Anthropic Messages endpoint (models.json sets only baseUrl, so built-in models stay). It
 // records the model of every outgoing request and answers with the offline demo model. A two-chunk Arc Build (labels,
-// step 2), one Rarebit recap and one side ask cover every purpose in four Pi calls. `providers` adds
+// step 2) and one side ask cover every purpose in three Pi calls. `providers` adds
 // models.json providers on the same endpoint; settings.json names magpie as Pi's defaultProvider, which the hub ignores.
 // `hubModels` is the whole hub.json models block. With `fails`, the
 // Build must fail and the Rarebit calls are skipped. `providerRun` keeps the Build's job and log record.
 let providerRun: { job: ArcValue["job"]; build: ReturnType<typeof buildLog>[number] | undefined } | undefined;
 async function providerModels(name: string, hubModels: Record<string, string>, { providers = {}, fails = false }: { providers?: Record<string, object>; fails?: boolean } = {}) {
 	const requests: { purpose: string; model: string }[] = [];
-	const purposeOf = (system: string) => system.startsWith("You label") ? "labels" : system.includes("chief of staff") ? "synthesis" : system.includes("re-entry sentence") ? "rarebitRecap" : "rarebitAsk";
+	const purposeOf = (system: string) => system.startsWith("You label") ? "labels" : system.includes("chief of staff") ? "synthesis" : "rarebitAsk";
 	const text = (v: unknown): string => typeof v === "string" ? v : Array.isArray(v) ? v.map((b: { text?: string }) => b.text ?? "").join("") : "";
 	const server = createServer((req, res) => {
 		let body = "";
@@ -495,10 +495,10 @@ async function providerModels(name: string, hubModels: Record<string, string>, {
 		providerRun = { job: v?.job ?? null, build: buildLog(r.ctx, small.threadId).at(-1) };
 		assert.equal(v?.job?.state, fails ? "error" : "done", JSON.stringify(v?.job?.lastError));
 		if (fails) return { requests: requests.length };
-		assert.ok((await rarebitView.ops!.recap!(r.ctx, { threadId: rarebit.threadId }) as { text: string }).text);
+
 		const side = await rarebitView.ops!.ask!(r.ctx, { threadId: rarebit.threadId, question: "Is the cap set?" }) as { side: { turns: { error?: string }[] } };
 		assert.equal(side.side.turns[0]!.error, undefined);
-		return Object.fromEntries(["labels", "synthesis", "rarebitRecap", "rarebitAsk"].map((p) => [p, [...new Set(requests.filter((q) => q.purpose === p).map((q) => q.model))]]));
+		return Object.fromEntries(["labels", "synthesis", "rarebitAsk"].map((p) => [p, [...new Set(requests.filter((q) => q.purpose === p).map((q) => q.model))]]));
 	} finally {
 		useHubConfig(HUB);
 		server.close();
@@ -507,21 +507,21 @@ async function providerModels(name: string, hubModels: Record<string, string>, {
 }
 
 test("arc build provider model: each purpose's outgoing provider request carries its hub.json model (failure: Arc calls went out on Pi's default model)", async () => {
-	assert.deepEqual(await providerModels("provider-explicit", MODELS), { labels: ["claude-haiku-5-5"], synthesis: ["claude-sonnet-5-5"], rarebitRecap: ["claude-haiku-5-5"], rarebitAsk: ["claude-sonnet-5-5"] });
+	assert.deepEqual(await providerModels("provider-explicit", MODELS), { labels: ["claude-haiku-5-5"], synthesis: ["claude-sonnet-5-5"], rarebitAsk: ["claude-sonnet-5-5"] });
 	assert.deepEqual(providerRun!.build!.models, { labels: "anthropic/claude-haiku-5-5", synthesis: "anthropic/claude-sonnet-5-5" });
 });
 
 test("arc build provider model override: hub.json models.<purpose> changes that purpose's outgoing provider request (failure: a call site lost its purpose)", async () => {
-	assert.deepEqual(await providerModels("provider-hub", { arcLabels: "anthropic/claude-sonnet-5-5", arcSynthesis: "anthropic/claude-sonnet-5-5", rarebitRecap: "anthropic/claude-opus-5-5", rarebitAsk: "anthropic/claude-haiku-5-5" }),
-		{ labels: ["claude-sonnet-5-5"], synthesis: ["claude-sonnet-5-5"], rarebitRecap: ["claude-opus-5-5"], rarebitAsk: ["claude-haiku-5-5"] });
+	assert.deepEqual(await providerModels("provider-hub", { arcLabels: "anthropic/claude-sonnet-5-5", arcSynthesis: "anthropic/claude-sonnet-5-5", rarebitAsk: "anthropic/claude-haiku-5-5" }),
+		{ labels: ["claude-sonnet-5-5"], synthesis: ["claude-sonnet-5-5"], rarebitAsk: ["claude-haiku-5-5"] });
 });
 
 // A local gateway provider, as on the owner's hub: its ids carry a route prefix.
 const MAGPIE = { magpie: { apiKey: "test-key", models: [{ id: "claude/claude-haiku-5-5" }, { id: "claude/claude-sonnet-5-5" }] } };
 
 test("arc build provider alias: a gateway provider/id reaches the provider as configured and the Build log names provider/id per purpose (failure: Pi's fuzzy --model or a custom-model fallback picked the route)", async () => {
-	assert.deepEqual(await providerModels("provider-alias", { ...MODELS, arcLabels: "magpie/claude/claude-haiku-5-5", rarebitRecap: "magpie/claude/claude-haiku-5-5" }, { providers: MAGPIE }),
-		{ labels: ["claude/claude-haiku-5-5"], synthesis: ["claude-sonnet-5-5"], rarebitRecap: ["claude/claude-haiku-5-5"], rarebitAsk: ["claude-sonnet-5-5"] });
+	assert.deepEqual(await providerModels("provider-alias", { ...MODELS, arcLabels: "magpie/claude/claude-haiku-5-5" }, { providers: MAGPIE }),
+		{ labels: ["claude/claude-haiku-5-5"], synthesis: ["claude-sonnet-5-5"], rarebitAsk: ["claude-sonnet-5-5"] });
 	assert.deepEqual(providerRun!.build!.models, { labels: "magpie/claude/claude-haiku-5-5", synthesis: "anthropic/claude-sonnet-5-5" });
 });
 

@@ -554,7 +554,7 @@ function pend(ctx: PiViewContext, threadId: string): Pending {
 	return p;
 }
 
-/** Model calls an automatic Build keeps in flight: one slot of the hub's 3 stays free for Build arc, recaps and asks. */
+/** Model calls an automatic Build keeps in flight: one slot of the hub's 3 stays free for Build arc and side asks. */
 const AUTO_ASK_LIMIT = ARC_ASK_CONCURRENCY - 1;
 /** The longest failure backoff of one Session. */
 const AUTO_BACKOFF_CAP_MS = 120 * 60_000;

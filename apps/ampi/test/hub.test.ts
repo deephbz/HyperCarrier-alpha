@@ -84,23 +84,23 @@ test("hub helper models: the per-call model, else hub.json models.<purpose>, els
 	const saved = [process.env.AMPI_RAREBIT_RECAP_MODEL, process.env.AMPI_RAREBIT_ASK_MODEL], warn = console.warn, warned: string[] = [];
 	console.warn = (m: string) => { warned.push(m); };
 	try {
-		write({ hosts: [], models: { rarebitRecap: "p/hub" } });
-		process.env.AMPI_RAREBIT_RECAP_MODEL = "p/env";
-		assert.equal(helperModel("rarebitRecap", "p/arg", file), "p/arg");
-		assert.equal(helperModel("rarebitRecap", "", file), "p/hub", "an empty per-call model is no choice");
-		assert.equal(helperModel("rarebitRecap", undefined, none), null, "the env var is not read");
-		assert.deepEqual(warned, [`ampi hub: AMPI_RAREBIT_RECAP_MODEL is ignored; set models.rarebitRecap in ${file}.`, `ampi hub: AMPI_RAREBIT_RECAP_MODEL is ignored; set models.rarebitRecap in ${none}.`]);
-		helperModel("rarebitRecap", undefined, none);
+		write({ hosts: [], models: { rarebitAsk: "p/hub" } });
+		process.env.AMPI_RAREBIT_ASK_MODEL = "p/env";
+		assert.equal(helperModel("rarebitAsk", "p/arg", file), "p/arg");
+		assert.equal(helperModel("rarebitAsk", "", file), "p/hub", "an empty per-call model is no choice");
+		assert.equal(helperModel("rarebitAsk", undefined, none), null, "the env var is not read");
+		assert.deepEqual(warned, [`ampi hub: AMPI_RAREBIT_ASK_MODEL is ignored; set models.rarebitAsk in ${file}.`, `ampi hub: AMPI_RAREBIT_ASK_MODEL is ignored; set models.rarebitAsk in ${none}.`]);
+		helperModel("rarebitAsk", undefined, none);
 		assert.equal(warned.length, 2, "a note is logged once until the notes change");
-		delete process.env.AMPI_RAREBIT_RECAP_MODEL;
-		assert.deepEqual((["arcLabels", "arcSynthesis", "rarebitRecap", "rarebitAsk"] as const).map((p) => helperModel(p, undefined, none)), [null, null, null, null], "no built-in default");
-		assert.deepEqual(loadHubConfig(file).models, { rarebitRecap: "p/hub" });
+		delete process.env.AMPI_RAREBIT_ASK_MODEL;
+		assert.deepEqual((["arcLabels", "arcSynthesis", "rarebitAsk"] as const).map((p) => helperModel(p, undefined, none)), [null, null, null], "no built-in default");
+		assert.deepEqual(loadHubConfig(file).models, { rarebitAsk: "p/hub" });
 		// models.arc and a typo are not read, and each is named once.
 		write({ hosts: [], models: { arc: "p/arc", arcLabel: "p/typo", arcSynthesis: "p/synth" } });
 		warned.length = 0;
 		assert.deepEqual([helperModel("arcLabels", undefined, file), helperModel("arcSynthesis", undefined, file)], [null, "p/synth"]);
 		assert.deepEqual(warned, ["ampi hub: models.arc is no longer read; set models.arcLabels and models.arcSynthesis.",
-			"ampi hub: models.arcLabel is not a model key; use models.arcLabels, models.arcSynthesis, models.rarebitRecap, models.rarebitAsk."]);
+			"ampi hub: models.arcLabel is not a model key; use models.arcLabels, models.arcSynthesis, models.rarebitAsk."]);
 		write({ hosts: [], models: { arcLabels: 5 } });
 		assert.throws(() => helperModel("arcLabels", undefined, file), (e: Error & { code?: string }) => e.code === "no_model" && e.message === `${file}: models.arcLabels must be a provider/model-id string from pi --list-models`);
 		write("{");

@@ -232,7 +232,7 @@ export function makeSyntheticFixture({ id = "synthetic", sessions = 40, entries 
 	const home = join(building, "home-cold");
 	mkdirSync(home, { recursive: true, mode: 0o700 });
 	const host = { id: "synthetic", label: "synthetic", kind: "pi-local", herdrSession: "default", agentConfig: { agentDir: join(root, "sources", "0") }, env: { HERDR_BIN: join(root, "herdr", "herdr") } };
-	writeFileSync(join(home, "hub.json"), `${JSON.stringify({ backend: "pi", self: "synthetic", hosts: [host], models: { arcLabels: "anthropic/claude-haiku-5-5", arcSynthesis: "anthropic/claude-sonnet-5-5", rarebitRecap: "anthropic/claude-haiku-5-5", rarebitAsk: "anthropic/claude-sonnet-5-5" } }, null, 2)}\n`, { mode: 0o600 });
+	writeFileSync(join(home, "hub.json"), `${JSON.stringify({ backend: "pi", self: "synthetic", hosts: [host], models: { arcLabels: "anthropic/claude-haiku-5-5", arcSynthesis: "anthropic/claude-sonnet-5-5", rarebitAsk: "anthropic/claude-sonnet-5-5" } }, null, 2)}\n`, { mode: 0o600 });
 	writeFileSync(join(home, "hub.token"), `${randomBytes(32).toString("hex")}\n`, { mode: 0o600 });
 	const manifest = { id, kind: "synthetic", frozenAt, createdAt: new Date(frozenAt).toISOString(), copies: 0, sessions, entries, panes: live, filled: false };
 	writeFileSync(join(building, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);

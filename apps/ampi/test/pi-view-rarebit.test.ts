@@ -4,9 +4,7 @@ import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { Hub } from "../src/hub/hub.ts";
-import { WorkingSet } from "../src/pi/working-set.ts";
-import { rarebitView, type RarebitFailure, type RarebitSide, type RarebitValue } from "../src/pi/views/rarebit.ts";
-import type { PiViewContext, PiViewSession } from "../src/pi/views/types.ts";
+import { type RarebitFailure, type RarebitSide, type RarebitValue } from "../src/pi/views/rarebit.ts";
 import { Browser } from "./helpers.ts";
 import { fixture } from "./pi-fixtures.ts";
 
@@ -41,68 +39,11 @@ async function setup(t: { after: (fn: () => unknown) => void }, text = "Hello") 
 	return { f, browser, sid, first, req };
 }
 
-test("Rarebit recap reuses exact evidence and model, shares in-flight calls, and retries failures", async (t) => {
-	const f = fixture();
-	writeFileSync(f.sessionA, line({ type: "session", version: 3, id: "sess-a", timestamp: "2026-10-18T10:00:00Z", cwd: "/work" }) + row("u1", null, "user", "First question"));
- const source = { host: "synthetic-host", path: f.sessionA, file: f.sessionA, cacheDir: join(f.dir, "recap-cache") };
- const store = new WorkingSet(source.host, source.cacheDir);
- t.after(() => store.close());
- const data = (await store.refresh(source))!;
- const session: PiViewSession = { threadId: "pi:sess-a", ref: "synthetic-host/pi:sess-a", path: f.sessionA, copyFile: f.sessionA, revision: 1, bytes: data.bytes, data, sourceVersion: data.version,
-  window: () => [], rarebits: () => store.rarebits(source.path, session.revision), rarebitSnapshot: (limit) => store.rarebitSnapshot(source.path, limit), arcEvidence: () => new Map(), nearest: () => undefined, entryTimes: () => new Map() };
-	let calls = 0;
-	let finish!: (answer: { text: string }) => void;
-	let reject!: (error: Error) => void;
-	const ctx: PiViewContext = {
-		host: "synthetic-host", stateDir: () => f.dir, sessions: () => [session], session: () => session,
-		teams: () => [], teamsFrame: () => undefined, command: async () => ({}), invalidate: () => {}, lease: () => () => {}, snapshot: (read) => store.snapshot(read), model: async (purpose) => purpose,
-		ask: async () => { calls++; return new Promise((resolve, fail) => { finish = resolve; reject = fail; }); },
-	};
-	const recap = (args = {}) => rarebitView.ops!.recap!(ctx, { threadId: session.threadId, ...args });
-	assert.equal(await recap({ cachedOnly: true }), null);
-	assert.equal(calls, 0);
-	const requests = Array.from({ length: 5 }, () => recap());
-	assert.equal(calls, 1);
-	assert.equal(await recap({ cachedOnly: true }), null);
-	finish({ text: "First recap" });
-	const results = await Promise.all(requests);
-	assert.ok(results.every((result) => result === results[0]));
-	assert.deepEqual(await recap(), results[0]);
-	assert.deepEqual(await recap({ cachedOnly: true }), results[0]);
-	// Changed Session bytes without changed selected evidence must not cause a new call.
-	appendFileSync(f.sessionA, row("tool", "u1", "toolResult", "New tool output"));
- await store.refresh(source);
-	session.revision++;
-	assert.deepEqual(await recap(), results[0]);
-	assert.equal(calls, 1);
-	appendFileSync(f.sessionA, row("a1", "tool", "assistant", "New answer", { stopReason: "stop" }));
- await store.refresh(source);
-	session.revision++;
-	assert.equal(await recap({ cachedOnly: true }), null);
-	const changed = recap();
-	assert.equal(calls, 2);
-	finish({ text: "Changed recap" });
-	assert.equal((await changed as any).text, "Changed recap");
-	const changedModel = recap({ model: "synthetic/other" });
-	assert.equal(calls, 3);
-	reject(new Error("synthetic failure"));
-	await assert.rejects(changedModel, /synthetic failure/);
-	const retry = recap({ model: "synthetic/other" });
-	assert.equal(calls, 4);
-	finish({ text: "Other model recap" });
-	await retry;
-	await recap({ model: "synthetic/other" });
-	assert.equal(calls, 4);
-	// A slow earlier request cannot displace the result of a newer request.
-	const slow = recap({ model: "synthetic/slow" });
-	const finishSlow = finish;
-	const fast = recap({ model: "synthetic/fast" });
-	finish({ text: "Latest request" });
-	const latest = await fast;
-	finishSlow({ text: "Earlier request" });
-	await slow;
-	assert.deepEqual(await recap({ model: "synthetic/fast", cachedOnly: true }), latest);
-	assert.equal(calls, 6);
+test("retired Rarebit recap and summary ops refuse without changing the Session", async t => {
+	const { f, req } = await setup(t);
+	const before = readFileSync(f.sessionA, "utf8");
+	for (const op of ["recap", "summary"]) await assert.rejects(req(op), /unknown|unsupported|not available|not.*supported/i);
+	assert.equal(readFileSync(f.sessionA, "utf8"), before);
 });
 
 test("Rarebit hub value selects published active-branch prose, excludes injected/tool/thinking content, and follows bytes and branch changes", async (t) => {
@@ -156,21 +97,16 @@ test("Rarebit side ask freezes evidence for follow-ups, keeps failures inline, b
 	assert.deepEqual(f.herdrCalls(), []);
 });
 
-test("Rarebit recovers from read failures on the next Session revision without a refresh; recap is bounded, cited, and does not write the Session", async (t) => {
-	const { f, browser, sid, req } = await setup(t);
+test("Rarebit recovers from read failures on the next Session revision without a refresh", async (t) => {
+	const { f, browser, sid, first } = await setup(t);
 	const before = readFileSync(f.sessionA, "utf8");
-	const recap = await req("recap", { model: "synthetic/recap" });
-	assert.ok(recap.text.split(/\s+/).length <= 25);
-	assert.equal(recap.entry, "u2");
-	assert.equal(recap.model, "synthetic/recap");
-	assert.equal(readFileSync(f.sessionA, "utf8"), before);
 	appendFileSync(f.sessionA, row("new", "err", "user", "new bytes") + "{broken synthetic line}\n");
 	const broken = await browser.until<RarebitFailure>(sid, (v) => Boolean(v.error));
 	assert.equal(broken.error.code, "view_failed");
 	assert.match(broken.error.message, /local Session copy/);
 	writeFileSync(f.sessionA, before);
 	const recovered = await browser.until<RarebitValue>(sid, (v) => v.items?.length === 6);
-	assert.ok(recovered.revision > recap.revision);
+	assert.ok(recovered.revision > first.revision);
 	appendFileSync(f.sessionA, row("live-user", "err", "user", "Live question") + row("live-answer", "live-user", "assistant", "Live answer", { stopReason: "stop" }));
 	const live = await browser.until<RarebitValue>(sid, (v) => v.items?.at(-1)?.id === "live-answer");
 	assert.deepEqual(live.items.slice(-2).map((i) => [i.kind, i.text]), [["user", "Live question"], ["stop", "Live answer"]]);

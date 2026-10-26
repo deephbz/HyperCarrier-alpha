@@ -14,7 +14,6 @@ export const PI_VIEWS: HostedView[] = Object.values(VIEWS);
 export function viewOps(ctx: PiViewContext): OpHandlers<keyof ViewOps> {
 	return {
 		"view.rarebit.ask": (args) => VIEWS.rarebit.ops.ask(ctx, args),
-		"view.rarebit.recap": (args) => VIEWS.rarebit.ops.recap(ctx, args),
 		"view.cos.timeline.locate": (args) => VIEWS["cos.timeline"].ops.locate(ctx, args),
 		"view.cos.arc.build": (args) => VIEWS["cos.arc"].ops.build(ctx, args),
 	};

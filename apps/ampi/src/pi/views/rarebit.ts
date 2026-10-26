@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { sourceStatus, type SourceStatus, type PiView, type PiViewContext } from "./types.ts";
@@ -24,10 +24,6 @@ export type RarebitValue = {
 export type RarebitFailure = { error: { code: string; message: string } };
 export type SideTurn = { question: string; answer?: string; error?: string };
 export type RarebitSide = { id: string; at: string; count: number; included: number; omittedChars: number; revision: number; turns: SideTurn[]; model: string };
-export type RarebitRecap = { text: string; at: string; revision: number; model: string; omittedChars: number; entry?: string };
-
-type RecapCache = { requestedKey?: string; last?: { key: string; recap: RarebitRecap }; pending: Map<string, Promise<RarebitRecap>> };
-const recaps = new WeakMap<PiViewContext, Map<string, RecapCache>>();
 const sides = new WeakMap<PiViewContext, Map<string, { threadId: string; file: string; side: RarebitSide; busy: boolean; override?: string }>>();
 
 function value(ctx: PiViewContext, threadId: string, before?: string): RarebitValue | undefined {
@@ -52,7 +48,7 @@ function failure(e: unknown): string {
 export const rarebitView: PiView<"rarebit"> = {
 	name: "rarebit",
 	value: (ctx, topic) => value(ctx, String(topic.threadId ?? ""), typeof topic.before === "string" ? topic.before : undefined),
-	evict(ctx, threadId) { recaps.get(ctx)?.delete(threadId); const map = sides.get(ctx); for (const [id, item] of map ?? []) if (item.threadId === threadId && !item.busy) { rmSync(item.file, { force: true }); map!.delete(id); } },
+	evict(ctx, threadId) { const map = sides.get(ctx); for (const [id, item] of map ?? []) if (item.threadId === threadId && !item.busy) { rmSync(item.file, { force: true }); map!.delete(id); } },
 	ops: {
 		ask: async (ctx, args): Promise<RarebitAskResult> => {
 			const threadId = String(args.threadId ?? "");
@@ -86,40 +82,6 @@ export const rarebitView: PiView<"rarebit"> = {
 			} catch (e) { turn.error = failure(e); }
 			finally { saved.busy = false; release(); }
 			return { side: structuredClone(saved.side) };
-		},
-		recap: async (ctx, args): Promise<RarebitRecap | null> => {
-			const threadId = String(args.threadId ?? "");
-			const s = snapshot(ctx, threadId, 120_000);
-			const override = typeof args.model === "string" && args.model.trim() ? args.model.trim() : undefined;
-			// Revisions also change for tool-only traffic. Reuse depends on exact selected evidence and the owner's model override.
-			const key = createHash("sha256").update(JSON.stringify([s.evidenceHash, override ?? null])).digest("hex");
-			let map = recaps.get(ctx);
-			if (!map) recaps.set(ctx, map = new Map());
-			let saved = map.get(threadId);
-			if (!saved) {
-    for (const [id, item] of map) if (map.size >= 20 && !item.pending.size) map.delete(id);
-    if (map.size >= 20) throw new Error("All recap slots are busy. Wait for an answer.");
-    map.set(threadId, saved = { pending: new Map() });
-   }
-			if (!args.cachedOnly) saved.requestedKey = key;
-			if (saved.last?.key === key) return saved.last.recap;
-			// A cache probe never starts or waits for a model call.
-			if (args.cachedOnly) return null;
-			const pending = saved.pending.get(key);
-			if (pending) return pending;
-			const record = saved;
-			const release = ctx.lease(threadId);
-			const call = (async () => {
-				try {
-					const answer = await ctx.ask({ system: SYSTEM + " Write one re-entry sentence, at most 25 words: where work stands and what waits on the owner. No preamble.", prompt: `Newest Rarebits, oldest first. ${s.omittedChars} leading characters omitted.\nBEGIN EVIDENCE\n${s.context}\nEND EVIDENCE\nWrite the re-entry recap.`, purpose: "rarebitRecap", ...(override ? { model: override } : {}) });
-					const recap = { text: answer.text.trim().split(/\s+/u).slice(0, 25).join(" "), at: new Date().toISOString(), revision: s.current.revision, model: answer.model ?? "model unknown", omittedChars: s.omittedChars, entry: s.entry };
-					if (record.requestedKey === key) record.last = { key, recap };
-					return recap;
-				} catch (e) { throw new Error(failure(e)); }
-			})();
-			record.pending.set(key, call);
-			try { return await call; }
-			finally { record.pending.delete(key); release(); }
 		},
 	},
 };

@@ -188,7 +188,7 @@ test("arc panel split models: a Build row names its label and synthesis models, 
 	const alert = /role="alert">([^<]*)</.exec(failed)![1]!;
 	assert.match(alert, /^No model named anthropic\/claude-nope-9 \(per-Build model, Arc labels and synthesis\) · \d\d:\d\d( [AP]M)?\. Change or clear the per-Build model\. Available: p\/m-0, p\/m-1, \+12 more\.$/);
 	assert.deepEqual([alert.split("claude-nope-9").length - 1, alert.split("Available:").length - 1], [1, 1], "one model mention, one list");
-	assert.match(failed, /<details class="cos-models"><summary>All 14 models Pi lists<\/summary><ul>(<li><code>p\/m-\d+<\/code><\/li>){14}<\/ul><\/details>/);
+	assert.match(failed, /<details class="cos-models"><summary>All 14 models Pi lists<\/summary><ul class="quiet-scroll">(<li><code>p\/m-\d+<\/code><\/li>){14}<\/ul><\/details>/);
 	assert.match(failed, />Last Build · Arc build failed · no model calls · \$0 · anthropic\/claude-nope-9 not found<\/p>/);
 	const checking = renderToStaticMarkup(createElement(panel as never, props(value({ job: { state: "running", done: 0, total: 0, chunks: 2, toLabel: 0, waitingFor: "Checking Pi’s models…", lastError: null, trigger: "manual" } } as Partial<ArcValue>))));
 	assert.match(checking, /Checking Pi’s models…/);

@@ -1,3 +1,4 @@
+import "./isolate.ts";
 // Bounds every test file, including a bare `node --test [--test-name-pattern=…] <file>` run that bypasses
 // scripts/run-tests.cjs (one such run hung for 68 min). A file still running after AMPI_TEST_FILE_TIMEOUT_MS
 // (default 180 s) prints its open handles and exits 1. The timer is unref'd, so it never keeps a file alive.

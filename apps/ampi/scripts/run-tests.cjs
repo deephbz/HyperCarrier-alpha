@@ -61,12 +61,17 @@ try { times = JSON.parse(fs.readFileSync(timesPath, "utf8")); } catch {}
 const queue = [...files].sort((a, b) => (times[name(b)] ?? Infinity) - (times[name(a)] ?? Infinity));
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), "ampi-test-runner-"));
-const env = { ...process.env, PI_CODING_AGENT_DIR: path.join(isolatedHome, ".pi", "agent"), GIT_CONFIG_GLOBAL: "/dev/null" };
+const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null" };
+// Playwright's browser cache holds browser binaries only; a WebKit test needs it under the per-file HOME.
+env.PLAYWRIGHT_BROWSERS_PATH ??= path.join(os.homedir(), process.platform === "darwin" ? "Library/Caches/ms-playwright" : ".cache/ms-playwright");
+// The one thing a test takes from the owner's home: the installed Pi program, the anchor of test/node-prompt-parity.test.ts.
+const piVersion = path.join(os.homedir(), ".pi", "agent", "install", "current-version");
+if (!env.AMPI_PI_DIST && fs.existsSync(piVersion))
+	env.AMPI_PI_DIST = path.join(path.dirname(piVersion), "releases", fs.readFileSync(piVersion, "utf8").trim(), "node_modules", "@earendil-works", "pi-coding-agent", "dist");
 // A runner started from inside a test inherits node:test's context, which makes each child skip its files.
 delete env.NODE_TEST_CONTEXT;
 // test/bound.ts bounds bare runs; here it fires 5 s after the runner, which also ends the file's child processes.
 env.AMPI_TEST_FILE_TIMEOUT_MS = String(fileTimeout + 5000);
-fs.mkdirSync(env.PI_CODING_AGENT_DIR, { recursive: true });
 const running = new Set();
 const killGroup = (child, signal) => { try { process.kill(-child.pid, signal); } catch {} };
 for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => {
@@ -84,10 +89,14 @@ const started = Date.now();
 function runFile(file) {
 	return new Promise((done) => {
 		const fileStarted = Date.now();
+		// Each file gets its own HOME and Pi agent directory: a test never reads the owner's home or another file's.
+		const home = fs.mkdtempSync(path.join(isolatedHome, "home-"));
+		const agentDir = path.join(home, ".pi", "agent");
+		fs.mkdirSync(agentDir, { recursive: true });
 		// detached: the file and every process it spawns share one process group, which a timeout ends together.
 		// Isolation none: this process already is the file's process. Under Node 22 the default isolation also puts
 		// --test-timeout on the whole file, so a file whose tests together outlast one test bound failed in CI.
-		const child = spawn(process.execPath, ["--test", "--experimental-test-isolation=none", `--test-timeout=${testTimeout}`, "--test-reporter=spec", file], { cwd: root, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+		const child = spawn(process.execPath, ["--test", "--experimental-test-isolation=none", `--test-timeout=${testTimeout}`, "--test-reporter=spec", file], { cwd: root, env: { ...env, HOME: home, PI_CODING_AGENT_DIR: agentDir }, detached: true, stdio: ["ignore", "pipe", "pipe"] });
 		running.add(child);
 		let output = "", timeout;
 		child.stdout.on("data", (chunk) => { output += chunk; });

@@ -147,6 +147,26 @@ html[data-input="pointer"] .modal { animation: overlay-enter 160ms cubic-bezier(
 	button:active:not(:disabled) { transform: none; }
 }
 ::placeholder { color: var(--text-3); opacity: 1; }
+/* Quiet scrollbars: one style for every scroll region except the transcript, which owns its strip. A .quiet-scroll
+   region shows a thin, low-contrast thumb only while the pointer or focus is inside it, or about 1 s after it scrolls
+   (quiet-scroll.ts sets data-scrolled). Content that fits shows no bar; only the sidebar list keeps a transparent track, so its rows do not move when it
+   starts to overflow. The reveal changes paint only:
+   the bar keeps its width, so nothing moves. data-scrollbar="none" hides the bar of an input that still scrolls by wheel,
+   keys and caret. Chromium reads scrollbar-color, which inherits, and then ignores ::-webkit-scrollbar: set it only on
+   these regions, never on a transcript ancestor. WebKit (the app's WKWebView) has no scrollbar-color and reads the
+   pseudo-elements. A custom property carries the reveal: both engines repaint a bar when it changes, not on a :hover
+   rule for the pseudo-element. */
+:root { --scrollbar-thumb: color-mix(in srgb, var(--text-3) 40%, transparent); }
+.quiet-scroll { --quiet-thumb: transparent; }
+.quiet-scroll:is(:hover, :focus-within, [data-scrolled]) { --quiet-thumb: var(--scrollbar-thumb); }
+@supports (scrollbar-color: auto) {
+	.quiet-scroll { scrollbar-width: thin; scrollbar-color: var(--quiet-thumb) transparent; }
+}
+.quiet-scroll::-webkit-scrollbar { width: 8px; height: 8px; background: transparent; }
+.quiet-scroll::-webkit-scrollbar-thumb { background: var(--quiet-thumb); background-clip: padding-box; border: 2px solid transparent; border-radius: 4px; }
+.quiet-scroll::-webkit-scrollbar-corner { background: transparent; }
+.quiet-scroll[data-scrollbar="none"] { scrollbar-width: none; }
+.quiet-scroll[data-scrollbar="none"]::-webkit-scrollbar { display: none; }
 input,
 textarea,
 select {
@@ -246,7 +266,6 @@ kbd {
 /* Sidebar */
 .side {
 	background: var(--bg-side);
-	scrollbar-gutter: stable;
 	border-right: 1px solid var(--border);
 	display: flex;
 	flex-direction: column;
@@ -336,7 +355,10 @@ kbd {
 }
 .side-scroll {
 	flex: 1;
-	overflow-y: auto;
+	/* The bar's track stays, transparent, so the rows keep their width when the list starts to overflow (invariant
+	   row a). WebKit reserves no gutter for a styled bar, so the track is always there; the gutter keeps it under
+	   overflow: hidden. */
+	overflow-y: scroll;
 	scrollbar-gutter: stable;
 	min-height: 0;
 	padding: 4px 8px 16px;
@@ -464,9 +486,23 @@ kbd {
 .row.child {
 	padding-left: calc(8px + var(--worker-indent));
 }
-.row.child .title {
-	font-size: 13px;
+.row[data-team-role="worker"] .title {
 	color: var(--text-2);
+	font-weight: 400;
+}
+.row .team-fold {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	padding: 0 2px;
+	border: 0;
+	background: transparent;
+	color: var(--text-3);
+	font: inherit;
+	cursor: pointer;
+}
+.row .team-fold:hover {
+	color: var(--text);
 }
 .row .mark-slot {
 	display: flex;
@@ -639,11 +675,65 @@ kbd {
 	color: var(--text);
 	font-weight: 500;
 }
+.transcript-frame {
+ display: flex;
+ flex: 1;
+ min-height: 0;
+ min-width: 0;
+}
+.companion-scrollbar {
+ margin-block: 4px;
+ position: relative;
+ flex: 0 0 14px;
+ background: var(--bg-side);
+}
+.companion-scrollbar a {
+ position: absolute;
+ left: 0;
+ width: 14px;
+ height: 8px;
+ transform: translateY(-50%);
+ display: flex;
+ align-items: center;
+ justify-content: center;
+}
+.companion-scrollbar a span {
+ pointer-events: none;
+ width: 8px;
+ height: 2px;
+ background: var(--text-3);
+}
+.companion-scrollbar a:hover span, .companion-scrollbar a:focus-visible span {
+ background: var(--accent);
+ height: 3px;
+}
 .scroll {
 	flex: 1;
 	overflow-y: auto;
 	min-height: 0;
 	overscroll-behavior: contain;
+}
+/* "↓ N new" rides the scroller's bottom edge and has no height, so it never moves the transcript or the end band. */
+.new-below {
+	position: sticky;
+	bottom: 12px;
+	z-index: 1;
+	height: 0;
+	display: flex;
+	align-items: flex-start;
+	justify-content: center;
+}
+.new-below > .btn,
+.new-below > .note {
+	translate: 0 -100%; /* not transform: the press scale on every button replaces a transform */
+	background: var(--bg-elev);
+	box-shadow: 0 1px 4px rgb(0 0 0 / 0.2);
+}
+.new-below > .note {
+	padding: 2px 10px;
+	border-radius: var(--radius);
+	font-size: 12px;
+	color: var(--text-2);
 }
 .transcript {
 	max-width: calc(76ch + 48px);
@@ -655,8 +745,16 @@ kbd {
 .msg {
 	margin: 16px 0;
 }
-.msg.user {
+/* A user message, in the transcript and in the Rarebit messages panel: one color style for both. */
+.you {
 	background: var(--bg-user);
+	border: 1px solid var(--rb-user);
+}
+.you .you-label {
+	color: var(--rb-user);
+	font-weight: 500;
+}
+.msg.user {
 	border-radius: 8px;
 	padding: 12px;
 	white-space: pre-wrap;
@@ -892,6 +990,18 @@ details[open] > .disclosure::before,
 	font-size: 12px;
 	margin: 18px 0;
 }
+/* Entries the source window dropped before they painted: the compaction rule, its own label. */
+.omitted {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	color: var(--text-3);
+	font-size: 12px;
+	font-style: italic;
+	margin: 18px 0;
+}
+.omitted::before,
+.omitted::after,
 .compaction::before,
 .compaction::after {
 	content: "";
@@ -1061,7 +1171,7 @@ details[open] > .disclosure::before,
 	border-bottom: 1px solid var(--border);
 	flex: none;
 }
-.panel-tabs > .seg { overflow-x: auto; scrollbar-width: thin; }
+.panel-tabs > .seg { overflow-x: auto; }
 .panel-tabs .seg button { flex: none; }
 .panel-tabs > .btn { flex: none; }
 .panel-body {

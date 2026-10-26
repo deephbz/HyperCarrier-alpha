@@ -10,6 +10,8 @@ export type TimelineSession = {
  /** Rarebit messages, the count the Arc floor (arcFloor) reads. */
  messages: number;
  marks: [number, string, "stop" | "error"][]; buckets: [number, number, number][];
+ /** Whether any entry reported a price; the buckets count history entries (spend.ts HISTORY_COVERS). */
+ priced: boolean;
  entries: [number, string][]; entryCount: number; omittedHints: number; omittedMarks: number;
 };
 export type TimelineValue = { bucketMs: number; sessions: TimelineSession[]; unreadable?: { threadId: string; ref: string; title: string; message: string }[] };

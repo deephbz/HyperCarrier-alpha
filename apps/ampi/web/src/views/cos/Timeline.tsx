@@ -1,22 +1,25 @@
-import { Fragment, memo, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { TimelineSession, TimelineValue } from "../../../../src/pi/views/cos-timeline.ts";
 import { isSessionInScope, SESSION_SCOPE_MS } from "../../../../src/shared/session-scope.ts";
 import { navigate } from "../../nav.ts";
-import { href, money, tokens, type Route } from "../../util.ts";
+import { href, isAttentionEligible, money, needsYou, tokens, type Route } from "../../util.ts";
+import { historySpend, spendLabel, spendSuffix } from "../../../../src/shared/spend.ts";
 import { dateTime, FeedStatus, useFleet } from "./data.tsx";
 import { seenAt } from "../../seen.ts";
 import { RangeBrush } from "./RangeBrush.tsx";
 import type { TimeRange } from "./range.ts";
 import { nextTimelineWindow, timelineWindow, windowRange } from "./window.ts";
 import { inPanel, type PanelSelection } from "./panel.ts";
-import { drawnSpan, laneTotal, mergeBuckets, type Unit } from "./totals.ts";
+import { drawnSpan, laneSpend, laneTotal, mergeBuckets, type Unit } from "./totals.ts";
 import { SessionTitle } from "../../components/SessionTitle.tsx";
 import { useTopic } from "../../client.ts";
-import { isPiThreadId, type ThreadsState } from "../../../../src/shared/protocol.ts";
+import { isPiThreadId, type ThreadSummary } from "../../../../src/shared/protocol.ts";
 import "./cos.css";
 import { hub } from "../../client.ts";
 
-type Session = TimelineSession & { host: string };
+type SummarySession = TimelineSession & { summary?: ThreadSummary };
+type TimelineFeed = Omit<TimelineValue, "sessions"> & { sessions: SummarySession[] };
+type Session = SummarySession & { host: string };
 type Band = { key: string; title: string; members: Session[]; target: Session; team: boolean; buckets: [number, number, number][]; start: number; end: number };
 const ROW = 56;
 const X = 1000;
@@ -29,15 +32,16 @@ export function nearest(entries: [number, string][], t: number): string | undefi
 }
 
 /**
- * "needs you": the same evidence the sidebar's ! uses here — a blocked pane, or a Session whose latest mark is a
- * terminal error. "new": an idle agent's answer that arrived after the owner last opened the Session. Seen times are
+ * "needs you" reads the same current summary as Overview and the Dock. Historical marks stay facts.
+ * "new": an idle agent's answer that arrived after the owner last opened the Session. Seen times are
  * read once per page visit, so rows do not reorder under the pointer after a visit.
  */
 type Attention = "needs" | "new" | undefined;
 const rank = (band: Band, seen: Map<string, number>) => Math.max(0, ...band.members.map((s) => ({ needs: 2, new: 1 })[attention(s, seen) ?? "x" as never] ?? 0));
 function attention(s: Session, seen: Map<string, number>): Attention {
 	const last = s.marks.reduce<Session["marks"][number] | undefined>((a, m) => (!a || m[0] >= a[0] ? m : a), undefined);
-	if (s.blocked || last?.[2] === "error") return "needs";
+	if (s.summary && !isAttentionEligible(s.summary)) return undefined;
+	if (s.summary && needsYou(s.summary)) return "needs";
 	if (!seen.has(s.ref)) seen.set(s.ref, seenAt(s.ref));
 	if (s.waiting && last?.[2] === "stop" && last[0] > seen.get(s.ref)!) return "new";
 	return undefined;
@@ -69,7 +73,9 @@ function LaneTitle({ session, title, team }: { session: Session; title: string; 
 
 const amount = (unit: Unit, n: number) => unit === 2 ? money(n) : tokens(Math.round(n));
 
-const Stream = memo(function Stream({ band, from, to, bucketMs, unit, scale, color, focus, now, moment, onHover, seen, total }: {
+
+export const TimelineStream = memo(function TimelineStream({ band, label, from, to, bucketMs, unit, scale, color, focus, now, moment, onHover, seen, total }: {
+	label?: ReactNode;
 	seen: Map<string, number>;
 	band: Band; from: number; to: number; bucketMs: number; unit: Unit; scale: number; color: number; focus: boolean; total: number;
 	now: number; moment?: number;
@@ -96,11 +102,11 @@ const Stream = memo(function Stream({ band, from, to, bucketMs, unit, scale, col
 		setAt(t);
 		const bucket = Math.floor(t / bucketMs) * bucketMs;
 		const b = band.buckets.find((b) => b[0] === bucket);
-		onHover(`${band.title} · ${dateTime(t)} · ${unit === 2 ? money(b?.[2] ?? 0) : `${tokens(b?.[1] ?? 0)} tokens`} / 15 min${band.team ? ` · opens the lead’s Team panel${needing.length ? ` · needs you: ${needing.map((s) => s.title).join(", ")}` : fresh.length ? ` · new answer: ${fresh.map((s) => s.title).join(", ")}` : ""}` : " · opens nearest entry"}`);
+		onHover(`${band.title} · ${dateTime(t)} · ${unit === 2 ? `${spendLabel(laneSpend(band.members, b?.[2] ?? 0))} / 15 min` : `${tokens(b?.[1] ?? 0)} tokens / 15 min`}${band.team ? ` · opens the lead’s Team panel${needing.length ? ` · needs you: ${needing.map((s) => s.title).join(", ")}` : fresh.length ? ` · new answer: ${fresh.map((s) => s.title).join(", ")}` : ""}` : " · opens nearest entry"}`);
 	};
 	return <div className={`cos-stream-row ${focus ? "cos-focused" : ""} ${needing.length ? "cos-waiting" : ""}`} style={{ height: ROW }}>
-		<div className="cos-band-label"><LaneTitle session={band.target} title={band.title} team={band.team} /><span>{[
-			<span className="cos-total" title={`${band.team ? "Team" : "Session"} total in range: ${unit === 2 ? `$${total.toFixed(4)}` : `${Math.round(total).toLocaleString()} tokens`}`}>{amount(unit, total)}</span>,
+		<div className="cos-band-label">{label ?? <LaneTitle session={band.target} title={band.title} team={band.team} />}<span>{[
+			<span className="cos-total" title={`${band.team ? "Team" : "Session"} total in range: ${unit === 2 ? `$${total.toFixed(4)}${spendSuffix(laneSpend(band.members, total))}` : `${Math.round(total).toLocaleString()} tokens`}`}>{unit === 2 ? spendLabel(laneSpend(band.members, total)) : amount(unit, total)}</span>,
 			band.members.some((s) => s.source && s.source.state !== "ready") && "last indexed copy",
 			band.members.some((s) => s.live) && <span className="cos-live">live</span>,
 			flagged && <a className={needing.length ? "cos-wait-label" : "cos-new-label"} href={href.thread(flagged.host, flagged.threadId, { panel: "rarebit" })} title={`Open ${flagged.title} with its Rarebit panel`} aria-label={`${needing.length ? "Needs you" : "New answer"}: ${flagged.title}`}>{needing.length ? "needs you" : "new answer"}</a>,
@@ -127,13 +133,22 @@ export function TimelinePanel({ host, threadId, summary }: { host: string; threa
 	return <TimelineView route={route} selected={{ host, threadId, teamId: summary?.team?.teamId }} />;
 }
 
-/** One Host's timeline replica, for `useFleet`. */
-const useTimeline = (host: string) => useTopic(host, { kind: "view", view: "cos.timeline" });
+/** Join historical Timeline facts with the Host's current thread summaries; the subscriptions are shared. */
+const useTimeline = (host: string) => {
+	const timeline = useTopic(host, { kind: "view", view: "cos.timeline" });
+	const threads = useTopic(host, { kind: "threads" });
+	const summaries: Record<string, ThreadSummary> | undefined = threads.value?.threads;
+	const value = useMemo(() => !timeline.value || "error" in timeline.value ? timeline.value : {
+		...timeline.value,
+		sessions: timeline.value.sessions.map((session) => ({ ...session, summary: summaries?.[session.threadId] })),
+	}, [timeline.value, summaries]);
+	return { ...timeline, value, stale: timeline.stale || threads.stale };
+};
 
 function TimelineView({ route, selected }: { route: Route; selected?: PanelSelection }) {
 	// Seen times as of this visit: labels and order stay put while the page is open.
 	const seen = useMemo(() => new Map<string, number>(), []);
-	const { feeds, readers, connected } = useFleet<TimelineValue>(useTimeline);
+	const { feeds, readers, connected } = useFleet<TimelineFeed>(useTimeline);
 	const [hover, setHover] = useState("Hover a stream to inspect its bucket. Click to open the nearest entry.");
 	const [scroll, setScroll] = useState(0);
 	const [preview, setPreview] = useState<TimeRange>();
@@ -212,7 +227,7 @@ function TimelineView({ route, selected }: { route: Route; selected?: PanelSelec
 	const first = Math.max(0, Math.min(bands.length - 1, Math.floor(scroll / ROW) - 3)), visible = bands.slice(first, first + 28);
 	return <main className={`main cos-page${selected ? " cos-panel" : ""}`}>
 		{readers}
-		<header className="cos-header"><h1>Timeline</h1><span className="cos-meta">{sessions.length} Sessions · {bands.length} streams · {amount(unit, rangeTotal)} in range</span>{selected ? <a href={href.page("timeline", [], { focus: `${selected.host}/${selected.threadId}` })}>Open Timeline page ↗</a> : <a href={href.page("arcs")}>Arcs</a>}</header>
+		<header className="cos-header"><h1>Timeline</h1><span className="cos-meta">{sessions.length} Sessions · {bands.length} streams · {unit === 2 ? spendLabel(laneSpend(sessions, rangeTotal)) : amount(unit, rangeTotal)} in range</span>{selected ? <a href={href.page("timeline", [], { focus: `${selected.host}/${selected.threadId}` })}>Open Timeline page ↗</a> : <a href={href.page("arcs")}>Arcs</a>}</header>
 		<nav className="cos-toolbar" aria-label="Timeline controls">
 			<span>Width</span>
 			{selected ? <>
@@ -228,14 +243,14 @@ function TimelineView({ route, selected }: { route: Route; selected?: PanelSelec
 			<button aria-label={`Time window: ${typeof window === "number" ? `${window} h` : window}`} title={`Show ${nextTimelineWindow(window, Boolean(selected))}${typeof nextTimelineWindow(window, Boolean(selected)) === "number" ? " h" : ""}`} onClick={cycleWindow}>{typeof window === "number" ? `${window} h` : window}</button>
 		</nav>
 		<FeedStatus feeds={feeds} connected={connected} />
-		<p className="cos-caption">Time → · thickness = {unit === 2 ? "reported dollars" : "tokens (input + output + cache)"} / 15 min · lane number = its total in range · same scale: {unit === 2 ? money(peak) : tokens(peak)} max · needs you = a blocked pane or an error · new answer = an answer since you last opened the Session.</p>
+		<p className="cos-caption">Time → · thickness = {unit === 2 ? `reported dollars${spendSuffix(historySpend(0))}` : "tokens (input + output + cache)"} / 15 min · lane number = its total in range · same scale: {unit === 2 ? money(peak) : tokens(peak)} max · needs you = a current live signal or an open Arc ask · new answer = an answer since you last opened the Session.</p>
 		{unreadable.length > 0 && <p className="cos-caption">{unreadable.length === 1 ? "1 Session could not be read and is left out: " : `${unreadable.length} Sessions could not be read and are left out: `}{unreadable.slice(0, 3).map((u, i) => <Fragment key={u.ref}>{i ? ", " : ""}<a href={href.ref(u.ref)} title={u.message}>{u.title}</a></Fragment>)}{unreadable.length > 3 ? ", …" : ""}. The Session reader rejected {unreadable.length === 1 ? "its file" : "their files"} ({unreadable[0]!.message}); the copy refreshes when the Host sends new bytes.</p>}
 		{waitingOutside > 0 && <p className="cos-caption">{waitingOutside} Sessions that need you are outside this time range.</p>}
 		<div className="cos-axis"><span>Session / Team</span><div>{[0, 1, 2, 3, 4].map((i) => <time key={i}>{i === 4 && Math.abs(to - now) < 120_000 ? "Now · " : ""}{dateTime(from + (to - from) * i / 4)}</time>)}</div></div>
-		<div className="cos-scroll" ref={scrollRef} onScroll={(e) => setScroll(e.currentTarget.scrollTop)}>
+		<div className="cos-scroll quiet-scroll" ref={scrollRef} onScroll={(e) => setScroll(e.currentTarget.scrollTop)}>
 			{!sessions.length && <p className="cos-empty">{feeds.some((f) => !f.value && !f.error) ? "Reading the Sessions…" : "No timestamped Sessions yet. Connect a Pi Host with Session copies to see its spend."}</p>}
 			{sessions.length > 0 && !bands.length && <p className="cos-empty">No Sessions in this range. Adjust the range below.</p>}
-			<div style={{ height: bands.length * ROW, position: "relative" }}><div style={{ position: "absolute", top: first * ROW, width: "100%" }}>{visible.map((band) => <Stream key={band.key} band={band} from={from} to={to} now={now} moment={moment} bucketMs={bucketMs} unit={unit} scale={scale} color={band.key.split("").reduce((n, c) => (n * 31 + c.charCodeAt(0)) >>> 0, 0) % 6} focus={band.members.some((s) => s.ref === focus)} onHover={setHover} seen={seen} total={totals.get(band.key) ?? 0} />)}</div></div>
+			<div style={{ height: bands.length * ROW, position: "relative" }}><div style={{ position: "absolute", top: first * ROW, width: "100%" }}>{visible.map((band) => <TimelineStream key={band.key} band={band} from={from} to={to} now={now} moment={moment} bucketMs={bucketMs} unit={unit} scale={scale} color={band.key.split("").reduce((n, c) => (n * 31 + c.charCodeAt(0)) >>> 0, 0) % 6} focus={band.members.some((s) => s.ref === focus)} onHover={setHover} seen={seen} total={totals.get(band.key) ?? 0} />)}</div></div>
 		</div>
 		<div className="cos-inspector" role="status">{hover}</div>
 		<RangeBrush bounds={[fullFrom, fullTo]} range={[from, to]} overview={overview} onPreview={setPreview} onCommit={(range) => { setPreview(range); update({ from: String(range[0]), to: String(range[1]) }); }} />

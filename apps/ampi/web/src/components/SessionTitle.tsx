@@ -10,7 +10,7 @@ export function SessionTitle({ children, title, summary, host, parent }: { child
 	const date = (value?: number) => value === undefined ? "Unknown" : new Date(value).toLocaleString(undefined, { hour12: false });
 	const location = summary?.location;
 	const rows = [
-		["Title", title], ["Directory", summary?.cwd || "Unknown"], ["Cost", summary ? money(summary.costUsd) : "Unknown"],
+		["Title", title], ["Directory", summary?.cwd || "Unknown"], ["Cost", summary ? summary.spendLabel ?? money(summary.costUsd) : "Unknown"],
 		["Workspace", location?.workspaceLabel || location?.workspace || "Unknown"],
 		["Tab", location?.tabLabel || location?.tab || "Unknown"], ["Pane", location?.pane || "Unknown"],
 		["Kind", summary?.kind || "Unknown"], ["Team", summary?.team?.teamId],

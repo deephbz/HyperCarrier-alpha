@@ -36,7 +36,7 @@ export function fixtureSocket(ws, recipe, audit) {
       case 'git.changes': return respond({ repo: true, root: '/work/demo', branch: 'synthetic', files: [{ status: 'M', path: 'src/demo.ts' }], patch: 'diff --git a/src/demo.ts b/src/demo.ts\n--- a/src/demo.ts\n+++ b/src/demo.ts\n@@ -1 +1 @@\n-export const demo = false;\n+export const demo = true;\n', truncated: false });
       case 'term.open': return respond({ id: term.id });
       case 'view.rarebit.ask': return respond(f.args.end ? {} : { side: { id: 'synthetic-side', at: new Date().toISOString(), count: 12, included: 12, omittedChars: 0, revision: 1, model: 'synthetic/offline', turns: [{ question: f.args.question, answer: 'Synthetic answer: the reader and GUI fixtures are ready for review.' }] } });
-      case 'view.rarebit.recap': return respond({ text: 'Synthetic recap: the reader has changed; the sidebar decision waits for you.', model: 'synthetic/offline', revision: 1, at: new Date().toISOString(), omittedChars: 0 });
+
       case 'thread.submit': return respond({ via: 'synthetic', evidence: 'sent' });
       case 'thread.create': case 'thread.resume': return reject(); // Never create or resume even a fake agent.
       default: return respond({});

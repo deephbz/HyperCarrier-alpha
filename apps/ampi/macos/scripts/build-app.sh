@@ -10,6 +10,14 @@ APP_ID=${AMPI_APP_ID:-dev.hypercarrier.ampi}
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$(swift build -c release --show-bin-path)/AmPi" "$APP/Contents/MacOS/AmPi"
+ICONSET=.build/AppIcon.iconset
+rm -rf "$ICONSET"
+mkdir -p "$ICONSET"
+for s in 16 32 128 256 512; do
+	swift scripts/render-icon.swift Resources/AppIcon.svg "$ICONSET/icon_${s}x${s}.png" "$s"
+	swift scripts/render-icon.swift Resources/AppIcon.svg "$ICONSET/icon_${s}x${s}@2x.png" "$((s * 2))"
+done
+iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -19,6 +27,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 	<key>CFBundleDisplayName</key><string>AmPi</string>
 	<key>CFBundleIdentifier</key><string>$APP_ID</string>
 	<key>CFBundleExecutable</key><string>AmPi</string>
+	<key>CFBundleIconFile</key><string>AppIcon</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
 	<key>CFBundleShortVersionString</key><string>0.1.0</string>
 	<key>CFBundleVersion</key><string>1</string>

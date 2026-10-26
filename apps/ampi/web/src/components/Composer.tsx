@@ -120,7 +120,6 @@ function commands(ctx: {
 				await hub.request(host, "thread.rename", { threadId, title: arg.trim() });
 			},
 		},
-		{ name: "summarize", help: "Write a Rarebit Summary now", run: () => (ctx.actions.openPanel("rarebit"), hub.request(host, "rarebit.summarize", { threadId }).then(() => {})) },
 		{ name: "shell", help: `Open the shell beside this thread (${MOD}J)`, run: () => ctx.actions.openPanel("shell") },
 		{ name: "changes", help: "Show the files this thread changed", run: () => ctx.actions.openPanel("changes") },
 		{ name: "team", help: "Show the Team and its Task graph", run: () => ctx.actions.openPanel("team") },
@@ -456,7 +455,7 @@ export function Composer({
 			}}
 		>
 			{queue.length > 0 && (
-				<div className="queue">
+				<div className="queue quiet-scroll" data-scrollbar="none">
 					{queue.map((item) => {
 						const content = typeof item.content === "string" ? item.content : Array.isArray(item.content) ? item.content.map((p: Any) => (p.type === "text" ? p.text : "[image]")).join(" ") : item.entry?.data?.title ?? item.entry?.kind ?? "…";
 						// A Pi item names its outcome (P7): queued in Pi, or never sent and why.
@@ -482,7 +481,7 @@ export function Composer({
 				</div>
 			)}
 			{(matches.length > 0 || commandsHint) && (
-				<div className="slash-menu" role="listbox" data-slash-menu>
+				<div className="slash-menu quiet-scroll" role="listbox" data-slash-menu>
 					{matches.map((c, i) => (
 						<div
 							key={c.name}
@@ -544,6 +543,8 @@ export function Composer({
 				)}
 				<textarea
 					ref={ref}
+					className="quiet-scroll"
+					data-scrollbar="none"
 					value={text}
 					rows={1}
 					aria-label="Message the agent"

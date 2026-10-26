@@ -1,3 +1,5 @@
+import { historySpend, type Spend } from "../../../../src/shared/spend.ts";
+
 /** `[start, tokens, dollars]`; index 1 or 2 selects the unit. */
 export type Bucket = [number, number, number];
 export type Unit = 1 | 2;
@@ -29,4 +31,12 @@ export function laneTotal(buckets: Bucket[], life: Life, range: [number, number]
 		if (end > start && inside > 0) total += b[unit] * inside / (end - start);
 	}
 	return total;
+}
+
+/**
+ * Dollars of one lane or of several, under the one spend rule. Lanes sum history entries, so every lane counts
+ * the same classes on both backends; members whose entries reported no price read "no price reported".
+ */
+export function laneSpend(members: { priced?: boolean }[], usd: number): Spend {
+	return historySpend(members.some((s) => s.priced !== false) ? usd : null);
 }

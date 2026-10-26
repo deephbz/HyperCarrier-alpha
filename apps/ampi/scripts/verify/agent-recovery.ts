@@ -22,7 +22,7 @@ const agents = names.map((name, i) => ({
 }));
 f.setState({ sessionsDir: dir, workspaces: [{ workspace_id: "w1", label: "HC" }], tabs: [{ tab_id: "w1:tA", workspace_id: "w1", label: "Work" }], agents });
 
-const hub = new Hub({ backend: "pi", models: { arcLabels: "anthropic/claude-haiku-5-5", arcSynthesis: "anthropic/claude-sonnet-5-5", rarebitRecap: "anthropic/claude-haiku-5-5", rarebitAsk: "anthropic/claude-sonnet-5-5" }, hosts: [{ id: "devbox", label: "devbox", kind: "pi-local", cacheDir: join(f.dir, "cache"),
+const hub = new Hub({ backend: "pi", models: { arcLabels: "anthropic/claude-haiku-5-5", arcSynthesis: "anthropic/claude-sonnet-5-5", rarebitAsk: "anthropic/claude-sonnet-5-5" }, hosts: [{ id: "devbox", label: "devbox", kind: "pi-local", cacheDir: join(f.dir, "cache"),
 	agentConfig: { agentDir: f.agentDir, pollMs: 50, discoverMs: 300, teamsMs: 0 },
 	env: { HOME: f.dir, HERDR_BIN: join(f.dir, "herdr"), FAKE_HERDR_STATE: statePath, FAKE_HERDR_LOG: join(f.dir, "calls.jsonl") } }] } as any, { token: TOKEN });
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));

@@ -11,7 +11,7 @@ const duplicates = assigned.filter((file, index) => assigned.indexOf(file) !== i
 const missing = actual.filter((file) => !assigned.includes(file));
 const unknown = assigned.filter((file) => !actual.includes(file));
 // test/bound.ts bounds a bare `node --test <file>` run only when the file imports it.
-const unbounded = actual.filter((file) => !/^import "\.\/bound\.ts";$/m.test(fs.readFileSync(path.join(root, "test", file), "utf8")));
+const unbounded = actual.filter((file) => !/^import (["'])\.\/bound\.ts\1;$/m.test(fs.readFileSync(path.join(root, "test", file), "utf8")));
 if (duplicates.length || missing.length || unknown.length || unbounded.length) {
 	console.error(`Test lane closure failed: ${JSON.stringify({ duplicates, missing, unknown, unbounded })}`);
 	process.exit(1);

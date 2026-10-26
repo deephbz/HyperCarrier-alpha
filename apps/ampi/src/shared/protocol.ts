@@ -2,13 +2,14 @@
 // render-only clients. Frames are JSON objects, one per line on byte streams (unix socket, SSH stdio) and one per
 // message on WebSockets. The node is the only authority; clients send requests and apply view deltas.
 
+import type { Spend } from "./spend.ts";
 import type { Op } from "@earendil-works/chord/delta";
 import type { HostState } from "../hub/hosts.ts";
 import type { ModelChoice } from "../node/models.ts";
 import type { SearchResult } from "../pi/search.ts";
 import type { ArcListValue, ArcValue } from "../pi/views/cos-arc.ts";
 import type { TimelineValue } from "../pi/views/cos-timeline.ts";
-import type { RarebitRecap, RarebitSide, RarebitValue } from "../pi/views/rarebit.ts";
+import type { RarebitSide, RarebitValue } from "../pi/views/rarebit.ts";
 import type { TeamValue } from "../pi/views/team.ts";
 
 export const PROTOCOL = "ampi/1";
@@ -110,8 +111,13 @@ export type ThreadSummary = {
 	 */
 	arc?: { builtAt: string; stale: boolean; newMessages: number; finished: boolean; asks: { kind: "decision" | "approval" | "input" | "blocker"; n: number; since: number | null }[]; overtaken?: number };
 	/** Positive evidence from other authorities that the owner is needed (for example a blocked or failed Task). */
+	closed?: { at: number; by: string };
 	attention?: { source: string; reason: string }[];
 	costUsd: number;
+	/** The cost figure with what it leaves out under the one spend rule (trace-analytics spend.mjs spendLabel). */
+	spendLabel?: string;
+	/** The figure behind `spendLabel` and the classes it counts, so a view can sum Sessions across backends. */
+	spend?: Spend;
 	contextTokens?: number;
 	contextWindow?: number;
 	workingBudget?: number;
@@ -254,6 +260,9 @@ export type SubmittedPrompt = { via?: string; evidence?: string; error?: { code:
 /** `pending`: Pi has not written the Session file yet; the thread is listed from the create. */
 export type ThreadCreated = { threadId: string; pane: string; evidence?: string; submitted?: SubmittedPrompt; warning?: string; pending?: true };
 export type ThreadResumed = { threadId: string; pane: string; evidence?: string; warning?: string };
+/** Compact navigation over the whole current branch. Ordinals are zero-based among projectable entries (non-null ui) on that branch. */
+export type ThreadOutline = { version: string; totalEntries: number; users: { id: string; ordinal: number; firstLine: string }[]; truncated: boolean };
+
 export type HistoryPage = { entries: PiEntry[]; more: boolean; version?: string };
 /** One page of an entry's projected text; `next` is the offset of the following page. */
 export type EntryPage = { text: string; next: number; more: boolean; version: string };
@@ -272,6 +281,7 @@ export type HostOps = {
 	"thread.resume": OpSpec<{ requestId: string; threadId: string; place: Placement; cwd?: string; name?: string }, ThreadResumed>;
 	"thread.close": OpSpec<{ threadId: string; lastPane?: boolean }, ActionAck>;
 	"sessions.search": OpSpec<{ query: string }, FleetSearchResult>;
+	"thread.outline": OpSpec<{ threadId: string }, ThreadOutline>;
 	"thread.find": OpSpec<{ threadId: string; query: string }, SearchResult>;
 	"thread.history": OpSpec<{ threadId: string; limit?: number; before?: string; around?: string; version?: string }, HistoryPage>;
 	"thread.entry": OpSpec<{ threadId: string; entry: string; offset?: number; version?: string }, EntryPage>;
@@ -296,7 +306,6 @@ export type ViewTopics = {
 		ops: {
 			ask: OpSpec<RarebitAskArgs, RarebitAskResult>;
 			/** `cachedOnly` answers from the cache, or null, and never starts a model call. */
-			recap: OpSpec<{ threadId: string; model?: string; cachedOnly?: boolean }, RarebitRecap | null>;
 		};
 	};
 	team: { params: { threadId?: string }; value: TeamValue; ops: None };

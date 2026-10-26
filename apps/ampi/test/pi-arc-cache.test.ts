@@ -24,7 +24,7 @@ const root = mkdtempSync(join(tmpdir(), "ampi-arc-cache-"));
 const TMP = join(root, "tmp"); mkdirSync(TMP);
 process.env.TMPDIR = TMP;
 delete process.env.PI_CACHE_RETENTION;
-const MODELS = { arcLabels: "anthropic/claude-haiku-5-5", arcSynthesis: "anthropic/claude-sonnet-5-5", rarebitRecap: "anthropic/claude-haiku-5-5", rarebitAsk: "anthropic/claude-sonnet-5-5" };
+const MODELS = { arcLabels: "anthropic/claude-haiku-5-5", arcSynthesis: "anthropic/claude-sonnet-5-5", rarebitAsk: "anthropic/claude-sonnet-5-5" };
 const HUB = join(root, "hub.json");
 writeFileSync(HUB, JSON.stringify({ hosts: [], models: MODELS }));
 useHubConfig(HUB);

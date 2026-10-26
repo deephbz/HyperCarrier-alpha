@@ -1,23 +1,23 @@
 {
   "schemaVersion": 1,
   "sourceRepository": "HyperCarrier",
-  "sourceCommit": "30e4a8a6cbc49320adc67b3c23c99a0d389beb64",
-  "sourceTree": "f589badebbb1d105a60065f284a2996f4ae9ecfb",
+  "sourceCommit": "1002944ac2d7aeada5cd3c15704390d044f4ad3c",
+  "sourceTree": "950f8e3ac2a6d282db09dd18c99af8defcb740a4",
   "sourceWorktreeDirty": false,
-  "exportContentSha256": "8665fa26be6381161a7e6c909f1f694d4f2eb4a6e5c8de8cb9d8a5e1706c63b2",
-  "exportManifestSha256": "6b4d4a521c0526a418f827d1c2151628753936b99ef8f2da14ce427fcc3b8ab1",
+  "exportContentSha256": "b7df531cbb86010f830fcbf49b22a87a0c8cae9abc798ce522163d2bef95893b",
+  "exportManifestSha256": "c299b87ec9cee4ace160ed608760952d4a1aa865615bf894649c35c2995e8fda",
   "dependencies": [],
   "submodules": [
     {
       "name": "packages/pi-team-bright",
       "path": "packages/pi-team-bright",
       "repository": "https://github.com/deephbz/pi-team-bright.git",
-      "commit": "72936739ea58846bb612efacd8f01c9fad7fedf5",
-      "tree": "d0f9b67b18ed4d413856e75c93b81dd14f2a1d2e",
+      "commit": "05bcb55b0ceb1cf974b706dd67890609e1e61c77",
+      "tree": "1aa6b77f31a1f7cf26e58a26172c5e41f3037dd0",
       "identity": {
         "kind": "npm-package",
         "name": "@hypercarrier/pi-team-bright",
-        "version": "0.24.0-rc.7"
+        "version": "0.25.1"
       }
     },
     {
@@ -36,8 +36,8 @@
       "name": "config/colorstack",
       "path": "config/colorstack",
       "repository": "https://github.com/deephbz/colorstack.git",
-      "commit": "c0a1a51bef009a2e549391e3c5835fd2e4960dcc",
-      "tree": "511c5bf15c65b05d445b8e2cc40a222becbc7dba",
+      "commit": "ede8ba66482b2897dd8be939f88571b24c5caf96",
+      "tree": "6fead2cb1c228fedd5ec5a03d4755fad0480be4f",
       "identity": {
         "kind": "python-project",
         "name": "colorstack",
@@ -60,8 +60,8 @@
       "name": "apps/trace-analytics",
       "path": "apps/trace-analytics",
       "repository": "https://github.com/deephbz/trace-analytics.git",
-      "commit": "fd49c01a86e40f1d73195198cbe61a33115de9a5",
-      "tree": "59c52be5fef9c8f6bd47b9b961269c2fe365070c",
+      "commit": "6b7c216f361c755c13b91dfa10b35173d2ff4f83",
+      "tree": "7ed51b0ae5aab54a0a531f5bc39f30cce160302c",
       "identity": {
         "kind": "npm-package",
         "name": "trace-analytics",

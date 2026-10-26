@@ -3,13 +3,13 @@
   "component": "colorstack",
   "source": {
     "repository": "https://github.com/deephbz/colorstack.git",
-    "commit": "c0a1a51bef009a2e549391e3c5835fd2e4960dcc",
-    "tree": "511c5bf15c65b05d445b8e2cc40a222becbc7dba"
+    "commit": "ede8ba66482b2897dd8be939f88571b24c5caf96",
+    "tree": "6fead2cb1c228fedd5ec5a03d4755fad0480be4f"
   },
   "gitlink": {
     "path": "config/colorstack",
     "mode": "160000",
-    "commit": "c0a1a51bef009a2e549391e3c5835fd2e4960dcc"
+    "commit": "ede8ba66482b2897dd8be939f88571b24c5caf96"
   },
   "pythonProject": {
     "name": "colorstack",

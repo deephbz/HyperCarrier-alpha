@@ -64,7 +64,7 @@ function threads(port: number): Promise<Record<string, any>> {
 	});
 }
 
-const hub = new Hub({ backend: "pi", models: { arcLabels: "anthropic/claude-haiku-5-5", arcSynthesis: "anthropic/claude-sonnet-5-5", rarebitRecap: "anthropic/claude-haiku-5-5", rarebitAsk: "anthropic/claude-sonnet-5-5" }, hosts: [{ id: "devbox", label: "devbox", kind: "pi-local", cacheDir,
+const hub = new Hub({ backend: "pi", models: { arcLabels: "anthropic/claude-haiku-5-5", arcSynthesis: "anthropic/claude-sonnet-5-5", rarebitAsk: "anthropic/claude-sonnet-5-5" }, hosts: [{ id: "devbox", label: "devbox", kind: "pi-local", cacheDir,
 	agentConfig: { agentDir: f.agentDir, pollMs: 30, discoverMs: 300, teamsMs: 0 },
 	env: { HOME: f.dir, HERDR_BIN: join(f.dir, "herdr"), FAKE_HERDR_STATE: join(f.dir, "state.json"), FAKE_HERDR_LOG: join(f.dir, "calls.jsonl") } }] } as any, { token: TOKEN });
 const started = Date.now();

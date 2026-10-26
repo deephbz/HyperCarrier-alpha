@@ -13,7 +13,7 @@ import { readWorkingSet } from "./working-set-db.ts";
 import { counter, tracing } from "../trace.ts";
 import { trackDerive } from "./derive-queue.ts";
 import { derivedVersion, WINDOW_BYTES, WINDOW_ENTRIES, ENTRY_PAGE_BYTES, type Source, type Derived, type WorkerJob } from "./working-set-types.ts";
-import type { PiEntry } from "../shared/protocol.ts";
+import type { PiEntry, ThreadOutline } from "../shared/protocol.ts";
 import { projectEntry, wireEntry } from "./projection.ts";
 import type { RarebitItem, RarebitValue } from "./views/rarebit.ts";
 
@@ -166,6 +166,26 @@ export class WorkingSet {
    entries.push(JSON.parse(text)); size += bytes;
   }
   return { entries: entries.reverse(), more: rows.length > entries.length, version: data.version };
+ }
+ #outlines = new Map<string, ThreadOutline>();
+ /** Navigation reads compact indexed rows once per version, never transcript bodies or paint windows. */
+ outline(path: string): ThreadOutline {
+  return this.snapshot(() => {
+   const data = this.load(path);
+   if (!data) throw new Error("This Session is not indexed yet");
+   const cached = this.#outlines.get(path);
+   if (cached?.version === data.version) return cached;
+   const totalEntries = Number(this.db.prepare("SELECT count(*) AS n FROM entries WHERE path=? AND ui IS NOT NULL AND ui <> 'null'").get(path)!.n);
+   const rows = this.db.prepare(`WITH ordered AS (
+    SELECT id, ui, row_number() OVER (ORDER BY position)-1 AS ordinal FROM entries WHERE path=? AND ui IS NOT NULL AND ui <> 'null'
+   ) SELECT id, ordinal, substr(json_extract(ui,'$.text'),1,120) AS text FROM ordered
+   WHERE json_extract(ui,'$.kind')='user' ORDER BY ordinal DESC LIMIT 2001`).all(path);
+   const value: ThreadOutline = { version: data.version, totalEntries, truncated: rows.length > 2000,
+    users: rows.slice(0,2000).reverse().map(row => ({id:String(row.id),ordinal:Number(row.ordinal),firstLine:String(row.text ?? "").split(/\r?\n/,1)[0]!.slice(0,120)})) };
+   this.#outlines.delete(path);this.#outlines.set(path,value);
+   if (this.#outlines.size > 32) this.#outlines.delete(this.#outlines.keys().next().value!);
+   return value;
+  });
  }
  nearest(path: string, at: number): string | undefined {
   const row = this.db.prepare("SELECT id FROM entries WHERE path=? AND t IS NOT NULL AND ui <> 'null' ORDER BY abs(t - ?) LIMIT 1").get(path, at);

@@ -26,7 +26,7 @@ export function SessionFind({ host, threadId, onClose, onGo }: { host: string; t
   finally { if (generation.current === token) setBusy(false); }
  };
  // Esc anywhere in the bar (input or a result link) closes it (focus R18).
- return <section className="session-find" aria-label="Find in this Session" onKeyDown={(e) => { if (e.key === "Escape") onClose(); }} style={{ padding: 8, maxHeight: "35vh", overflowY: "auto" }}>
+ return <section className="session-find quiet-scroll" aria-label="Find in this Session" onKeyDown={(e) => { if (e.key === "Escape") onClose(); }} style={{ padding: 8, maxHeight: "35vh", overflowY: "auto" }}>
   <form onSubmit={(e) => { e.preventDefault(); void run(); }}><input autoFocus aria-label="Find in Session" placeholder="Find in this Session, including tools…" value={query} maxLength={500} onChange={(e) => setQuery(e.target.value)} /><button className="btn small" disabled={busy || !query.trim()}>{busy ? "Scanning…" : "Find"}</button><button type="button" className="btn small" onClick={onClose}>Close</button></form>
   <p className="hint">Copied active branch · text, thinking and tools · case-insensitive substring · no images or inactive branches</p>
   {error && <p role="alert">{error}</p>}
@@ -48,7 +48,7 @@ export function FleetSearch({ hosts }: { hosts: HostState[] }) {
   }));
   setResults(rows); setBusy(false);
  };
- return <details className="fleet-search" style={{ padding: "4px 8px", maxHeight: "45vh", overflowY: "auto" }}>
+ return <details className="fleet-search quiet-scroll" style={{ padding: "4px 8px", maxHeight: "45vh", overflowY: "auto" }}>
   <summary>Search copied prose</summary>
   <form onSubmit={(e) => { e.preventDefault(); void run(); }}><input className="search" aria-label="Search copied prose" placeholder="Words or 2+ CJK characters…" value={query} maxLength={500} onChange={(e) => setQuery(e.target.value)} /><button className="btn small" disabled={busy || !query.trim()}>{busy ? "Searching…" : "Search"}</button></form>
   <p className="hint">Retained Pi copies · human turns, replies and compaction · excludes thinking and tools. Older history: K5 tools (not full-transcript search).</p>

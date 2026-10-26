@@ -191,7 +191,7 @@ export function AccountsDialog({ host, hostLabel, onClose }: { host: string; hos
 					</div>
 				)}
 				<input className="search" placeholder="Find a provider…" value={filter} onChange={(e) => setFilter(e.target.value)} style={{ margin: "8px 0" }} />
-				<div className="provider-list">
+				<div className="provider-list quiet-scroll">
 					{!providers && !error && <div className="hint">Loading…</div>}
 					{shown.map((p) => (
 						<div key={p.id} className={`provider ${p.signedIn ? "on" : ""}`} data-provider={p.id}>

@@ -1,0 +1,9 @@
+<!-- AmPi app icon: the Pi mark from https://pi.dev/logo-on-dark.svg (800 box), centered on a macOS icon tile. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#111111"/>
+  <g transform="translate(112 112)">
+    <path fill="#F09082" d="M165.29 165.29H517.36V400H400V282.65H165.29Z"/>
+    <path fill="#4D9ABF" d="M165.29 282.65H282.65V400H400V517.36H282.65V634.72H165.29Z"/>
+    <path fill="#F1BE58" d="M517.36 400H634.72V634.72H517.36Z"/>
+  </g>
+</svg>

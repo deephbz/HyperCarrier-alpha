@@ -50,18 +50,51 @@ export function isBusy(t: ThreadSummary | undefined): boolean {
 	return t !== undefined && t.activity !== "idle";
 }
 
-/** Does this thread need the owner? Only positive evidence counts (domain.md attention rules). */
+/**
+ * Does this thread need the owner? The one Needs-you derivation over every ask source: a live signal first
+ * (`attentionOf`), else the open asks of its Arc. The notifier, the Dock count and Overview all read it. Only
+ * positive evidence counts (domain.md attention rules).
+ */
 export function needsYou(t: ThreadSummary): string | undefined {
-	return attentionOf(t)[0]?.reason;
+	return attentionOf(t)[0]?.reason ?? arcAsks(t);
 }
 
-/** Every positive signal that the owner is needed, each naming the authority it came from. */
+/** Closed and archived threads keep history but never need owner attention. */
+export function isAttentionEligible(t: ThreadSummary): boolean {
+	return !t.closed && !t.archived;
+}
+
+const ASK_NOUN: Record<NonNullable<ThreadSummary["arc"]>["asks"][number]["kind"], [string, string]> = {
+	decision: ["decision", "decisions"], approval: ["approval", "approvals"], input: ["input request", "input requests"], blocker: ["blocker", "blockers"],
+};
+/** The open asks of a thread's Arc, each kind with a positive count. Closed and archived threads ask nothing: their kept Arcs are history. */
+export function openAsks(t: ThreadSummary): NonNullable<ThreadSummary["arc"]>["asks"] {
+	return isAttentionEligible(t) ? (t.arc?.asks ?? []).filter((a) => a.n > 0) : [];
+}
+
+/** The open asks of a thread's Arc as one reason, such as "Arc: 1 open decision". */
+export function arcAsks(t: ThreadSummary): string | undefined {
+	const asks = openAsks(t);
+	return asks.length ? `Arc: ${asks.map((a) => `${a.n} open ${ASK_NOUN[a.kind][a.n === 1 ? 0 : 1]}`).join(", ")}` : undefined;
+}
+
+/**
+ * Every positive signal that the owner is needed, each naming the authority it came from. Closed and archived threads never
+ * need the owner: their kept reasons and last errors are history (`closedState`), so Sidebar, Overview and the notifier
+ * all see none.
+ */
 export function attentionOf(t: ThreadSummary): { source: string; reason: string }[] {
+	if (!isAttentionEligible(t)) return [];
 	const out: { source: string; reason: string }[] = [];
 	if (t.lastError) out.push({ source: "error", reason: t.lastError });
-	for (const a of t.attention ?? []) out.push(a);
-	if (t.rarebit?.status === "needs_attention" && t.rarebit.fresh) out.push({ source: "Rarebit", reason: t.rarebit.reason ?? "needs you" });
+	// 2026-10-25: Team and Rarebit signals are retired. Old nodes can still send them.
+	for (const a of t.attention ?? []) if (!["team", "rarebit"].includes(a.source.toLowerCase())) out.push(a);
 	return out;
+}
+
+/** What a closed thread last reported (its kept parked or stopped reason, else its last error), shown as history. */
+export function closedState(t: ThreadSummary): string | undefined {
+	return t.attention?.[0]?.reason ?? t.lastError;
 }
 
 /**

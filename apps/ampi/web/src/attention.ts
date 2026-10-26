@@ -6,13 +6,13 @@ import type { ThreadSummary } from "../../src/shared/protocol.ts";
 import type { HostThreads } from "./components/Sidebar.tsx";
 import { native } from "./native.ts";
 import { navigate } from "./nav.ts";
-import { go, isBusy, needsYou } from "./util.ts";
+import { attentionOf, go, isAttentionEligible, isBusy, needsYou, openAsks } from "./util.ts";
 
 
 export function notify(title: string, body: string, host: string, threadId: string): void {
 	const shell = native();
 	if (shell) {
-		shell.postMessage({ type: "notify", title, body, route: `#/h/${encodeURIComponent(host)}/t/${encodeURIComponent(threadId)}` });
+		shell.postMessage({ type: "notify", title, body, tag: `${host}|${threadId}`, route: `#/h/${encodeURIComponent(host)}/t/${encodeURIComponent(threadId)}` });
 		return;
 	}
 	if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
@@ -40,31 +40,53 @@ function setBadge(count: number): void {
 	navigate(route);
 };
 
+export function needsYouCount(data: HostThreads[]): number {
+	return data.reduce((count, { threads }) => count + threads.filter((t) => needsYou(t)).length, 0);
+}
+
 export function useAttention(data: HostThreads[], current?: { host?: string; thread?: string }): void {
 	const previous = useRef<Map<string, ThreadSummary> | undefined>(undefined);
 	useEffect(() => {
 		const now = new Map<string, ThreadSummary>();
-		let count = 0;
 		for (const { host, threads } of data)
-			for (const t of threads) {
-				now.set(`${host.id}|${t.id}`, t);
-				if (!t.archived && needsYou(t)) count++;
-			}
-		setBadge(count);
+			for (const t of threads) now.set(`${host.id}|${t.id}`, t);
+		setBadge(needsYouCount(data));
 		const before = previous.current;
 		previous.current = now;
 		if (!before) return;
 		const away = document.hidden || !document.hasFocus();
-		for (const { host, threads } of data)
-			for (const t of threads) {
-				const was = before.get(`${host.id}|${t.id}`);
-				if (!was || t.archived) continue;
-				const viewing = !away && current?.host === host.id && current.thread === t.id;
-				if (viewing) continue;
-				const reason = needsYou(t);
-				if (reason && reason !== needsYou(was)) notify(`Needs you: ${t.title}`, `${host.label} · ${reason}${t.lastError ? ` — ${t.lastError}` : ""}`, host.id, t.id);
-				else if (away && isBusy(was) && !isBusy(t) && t.kind !== "worker" && !reason)
-					notify(`Finished: ${t.title}`, `${host.label} · ${t.preview ?? "the agent settled"}`, host.id, t.id);
-			}
+		for (const n of notices(before, data, current, away)) notify(n.title, n.body, n.host, n.threadId);
 	}, [data, current?.host, current?.thread]);
+}
+
+/** The notifications one thread-list update raises against the previous one: transitions only, never the initial state. */
+export function notices(before: Map<string, ThreadSummary>, data: HostThreads[], current: { host?: string; thread?: string } | undefined, away: boolean): { title: string; body: string; host: string; threadId: string }[] {
+	const out: { title: string; body: string; host: string; threadId: string }[] = [];
+	const hosts = data.map((d) => d.host);
+	for (const { host, threads } of data)
+		for (const t of threads) {
+			const was = before.get(`${host.id}|${t.id}`);
+			// History raises neither Needs you nor Finished notifications.
+			if (!was || !isAttentionEligible(t)) continue;
+			const viewing = !away && current?.host === host.id && current?.thread === t.id;
+			if (viewing) continue;
+			const reason = needsYou(t);
+			if (reason && (newSignal(was, t) || asksGrew(was, t))) out.push({ title: `Needs you: ${t.title}`, body: `${host.label} · ${reason}${t.lastError ? ` — ${t.lastError}` : ""}`, host: host.id, threadId: t.id });
+			else if (away && isBusy(was) && !isBusy(t) && t.kind !== "worker" && !reason)
+				out.push({ title: `Finished: ${t.title}`, body: `${host.label} · ${t.preview ?? "the agent settled"}`, host: host.id, threadId: t.id });
+		}
+	return out;
+}
+
+/** A live signal, by source and reason, that the previous list did not show. A cleared signal is never new. */
+function newSignal(was: ThreadSummary, t: ThreadSummary): boolean {
+	const key = (a: { source: string; reason: string }) => `${a.source}\u0000${a.reason}`;
+	const before = new Set(attentionOf(was).map(key));
+	return attentionOf(t).some((a) => !before.has(key(a)));
+}
+
+/** An Arc ask count grew or a new ask kind appeared. A shrink resolves an ask and stays silent. */
+function asksGrew(was: ThreadSummary, t: ThreadSummary): boolean {
+	const before = new Map(openAsks(was).map((a) => [a.kind, a.n]));
+	return openAsks(t).some((a) => a.n > (before.get(a.kind) ?? 0));
 }

@@ -60,7 +60,7 @@ export function Modal({ children, onClose, label = "AmPi dialog", overlay = "dia
 	}, [titleId]);
 	return (
 		<div className="modal-back" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-			<div ref={ref} className="modal" role="dialog" aria-modal="true" aria-label={label} tabIndex={-1}>
+			<div ref={ref} className="modal quiet-scroll" role="dialog" aria-modal="true" aria-label={label} tabIndex={-1}>
 				{children}
 			</div>
 		</div>
@@ -278,7 +278,7 @@ export function Palette({ data, onClose, query = "", onQuery }: { data: HostThre
 					} else if (e.key === "Enter") pick(index);
 				}}
 			/>
-			<div style={{ marginTop: 8, maxHeight: "50vh", overflowY: "auto" }}>
+			<div className="quiet-scroll" style={{ marginTop: 8, maxHeight: "50vh", overflowY: "auto" }}>
 				{rows.map(({ host, t }, i) => (
 					<button key={`${host.id}|${t.id}`} className={`palette-item ${i === index ? "on" : ""}`} onMouseEnter={() => setIndex(i)} onClick={() => pick(i)} title={t.title || "Untitled Session"}>
 						<span className="palette-title" dir="auto">{t.team?.teamId ? `${t.team.teamId} / ${t.team.worker ?? "Lead"}` : t.title || "Untitled Session"}</span>

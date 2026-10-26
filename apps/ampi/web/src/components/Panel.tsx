@@ -2,13 +2,11 @@ import { useEffect, useState } from "react";
 import type { ThreadSummary } from "../../../src/shared/protocol.ts";
 import { hub, useTopic } from "../client.ts";
 import { clock, money, tokens } from "../util.ts";
-import { RarebitPanel } from "./RarebitPanel.tsx";
 import { TeamPanel } from "./TeamPanel.tsx";
 import { ChangesPanel } from "./ChangesPanel.tsx";
 import { ShellDock } from "./ShellDock.tsx";
 
 export const PANELS: [string, string][] = [
-	["rarebit", "Rarebit"],
 	["team", "Team"],
 	["changes", "Changes"],
 	["shell", "Shell"],
@@ -71,7 +69,7 @@ function InfoPanel({ host, threadId, summary }: { host: string; threadId: string
 					{summary?.workingBudget ? ` (working budget; window ${tokens(summary.contextWindow)})` : ""}
 				</dd>
 				<dt>spend</dt>
-				<dd>{money(summary?.costUsd ?? 0)}</dd>
+				<dd>{summary?.spendLabel ?? money(summary?.costUsd ?? 0)}</dd>
 			</dl>
 			<PromptInputs host={host} cwd={agent.cwd ?? summary?.cwd} />
 			<h3>Compactions</h3>
@@ -125,7 +123,6 @@ export function Panel({ name, host, threadId, summary, setPanel }: { name: strin
 			</div>
 			<div className={`panel-body ${name === "shell" ? "flush" : ""}`}>
 				{name === "info" && <InfoPanel host={host} threadId={threadId} summary={summary} />}
-				{name === "rarebit" && <RarebitPanel host={host} threadId={threadId} />}
 				{name === "team" && <TeamPanel host={host} threadId={threadId} summary={summary} />}
 				{name === "changes" && <ChangesPanel host={host} threadId={threadId} />}
 				{name === "shell" && <ShellDock host={host} threadId={threadId} cwd={summary?.cwd} title={summary?.title} />}

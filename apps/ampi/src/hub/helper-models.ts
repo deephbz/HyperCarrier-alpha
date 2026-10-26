@@ -1,5 +1,5 @@
 // The hub's global config file, its one writer, and the helper models it names. Helper models answer the hub's own
-// isolated calls (Arc Builds, Rarebit recap and side ask); thread models are chosen per Session elsewhere (src/node/models.ts).
+// isolated calls (Arc Builds and Rarebit side ask); thread models are chosen per Session elsewhere (src/node/models.ts).
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -13,9 +13,9 @@ export function hubConfigPath(): string {
  * One hub.json `models` key per helper purpose, the only way to configure it. `arcLabels` covers Arc chunk labels
  * (step 1); `arcSynthesis` covers step 2: the headline, the synthesis and the two-tier context.
  */
-export type ModelPurpose = "arcLabels" | "arcSynthesis" | "rarebitRecap" | "rarebitAsk";
+export type ModelPurpose = "arcLabels" | "arcSynthesis" | "rarebitAsk";
 export type HelperModels = Partial<Record<ModelPurpose, string>>;
-const PURPOSES: readonly ModelPurpose[] = ["arcLabels", "arcSynthesis", "rarebitRecap", "rarebitAsk"];
+const PURPOSES: readonly ModelPurpose[] = ["arcLabels", "arcSynthesis", "rarebitAsk"];
 
 let configFile: string | undefined, configModels: unknown, configEvidence: unknown;
 /**
@@ -78,8 +78,8 @@ const noModel = (message: string) => Object.assign(new Error(message), { code: "
 
 /**
  * Model settings this hub does not read, each as one sentence that names the key to set: hub.json `models.arc`, any
- * other unknown key under `models` (such as a typo), and the AMPI_RAREBIT_RECAP_MODEL and AMPI_RAREBIT_ASK_MODEL env
- * vars. An unset key's error repeats them, so an owner who set the old name learns why it has no effect.
+ * other unknown key under `models` (such as a typo), and the AMPI_RAREBIT_ASK_MODEL env
+ * variable. An unset key's error repeats them, so an owner who set the old name learns why it has no effect.
  */
 function staleNotes(models: unknown, file: string): string[] {
 	const notes: string[] = [];
@@ -87,7 +87,7 @@ function staleNotes(models: unknown, file: string): string[] {
 		if (key === "arc") notes.push("models.arc is no longer read; set models.arcLabels and models.arcSynthesis.");
 		else if (!PURPOSES.includes(key as ModelPurpose)) notes.push(`models.${key} is not a model key; use models.${PURPOSES.join(", models.")}.`);
 	}
-	for (const [env, key] of [["AMPI_RAREBIT_RECAP_MODEL", "rarebitRecap"], ["AMPI_RAREBIT_ASK_MODEL", "rarebitAsk"]] as const)
+	for (const [env, key] of [["AMPI_RAREBIT_ASK_MODEL", "rarebitAsk"]] as const)
 		if (process.env[env]) notes.push(`${env} is ignored; set models.${key} in ${file}.`);
 	return notes;
 }
@@ -100,7 +100,7 @@ function warnStale(notes: string[]): void {
 	warned = said;
 }
 
-const PURPOSE_WORDS: Record<ModelPurpose, string> = { arcLabels: "Arc labels", arcSynthesis: "Arc synthesis", rarebitRecap: "Rarebit recap", rarebitAsk: "Rarebit ask" };
+const PURPOSE_WORDS: Record<ModelPurpose, string> = { arcLabels: "Arc labels", arcSynthesis: "Arc synthesis", rarebitAsk: "Rarebit ask" };
 const purposeWords = (ps: ModelPurpose[]) => ps.length === 2 && ps.every((p) => p.startsWith("arc")) ? "Arc labels and synthesis" : ps.map((p) => PURPOSE_WORDS[p]).join(" and ");
 const SOURCE_WORDS = (s: ModelSource) => s.kind === "build" ? "per-Build model" : s.kind === "call" ? "per-call model" : "hub.json";
 const SOURCE_FIX = (s: ModelSource, keys = [s.kind === "file" || s.kind === "unset" ? s.key : ""]) => s.kind === "build" ? "Change or clear the per-Build model."

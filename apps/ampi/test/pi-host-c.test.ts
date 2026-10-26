@@ -10,7 +10,7 @@ import { Hub } from "../src/hub/hub.ts";
 import { Browser } from "./helpers.ts";
 import { control, fixture } from "./pi-fixtures.ts";
 import { PI_VIEWS } from "../src/pi/views/index.ts";
-import { PiHost, modelLimits } from "../src/pi/host.ts";
+import { BOOTSTRAP, PiHost, agentLaunch, modelLimits } from "../src/pi/host.ts";
 import { TOKEN, iso, line, user, assistant, toolResult, setup } from "./pi-host-fixtures.ts";
 
 test("pi host: unreadable latest activity cannot expire an old copy", async (t) => {
@@ -211,4 +211,55 @@ test("pi host: a model_change entry names the Session's model before any turn us
 	await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.model);
 	appendFileSync(f.sessionA, line({ type: "model_change", id: "mc1", parentId: "r1", timestamp: new Date().toISOString(), provider: "p", modelId: "m2" }));
 	await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.model === "p/m2");
+});
+
+const BOOT = `eval(Buffer.from('${BOOTSTRAP}','base64').toString())`;
+
+test("agent launch: a local Host runs the hub's own Node without a shell; a remote Host keeps its SSH login-shell command", () => {
+	assert.deepEqual(agentLaunch({ id: "devbox", label: "devbox", kind: "pi-local" }), { command: process.execPath, args: ["-e", BOOT] });
+	assert.deepEqual(agentLaunch({ id: "devbox", label: "devbox", kind: "pi-local", remoteNode: "/opt/my node/bin/node" }), { command: "/opt/my node/bin/node", args: ["-e", BOOT] }, "a path with spaces is one argument");
+	const ssh = ["-T", "-C", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"];
+	assert.deepEqual(agentLaunch({ id: "far", label: "far", kind: "pi-ssh" }), { command: "ssh", args: [...ssh, "--", "far", `sh -lc ${JSON.stringify(`exec node -e "${BOOT}"`)}`] });
+	assert.deepEqual(agentLaunch({ id: "far", label: "far", kind: "pi-ssh", target: "user@far", sshArgs: ["-p", "2222"], remoteNode: "/opt/node/bin/node" }), {
+		command: "ssh",
+		args: [...ssh, "-p", "2222", "--", "user@far", `sh -lc ${JSON.stringify(`exec /opt/node/bin/node -e "${BOOT}"`)}`],
+	});
+});
+
+/** A local PiHost on the fixture's fake herdr; resolves once its agent says hello. */
+async function localAgent(t: { after: (fn: () => unknown) => void }, f: ReturnType<typeof fixture>, extra: { remoteNode?: string; env?: Record<string, string> }) {
+	const host = new PiHost({
+		id: "devbox", label: "devbox", kind: "pi-local", cacheDir: join(f.dir, "cache"), remoteNode: extra.remoteNode,
+		agentConfig: { agentDir: f.agentDir, pollMs: 30, discoverMs: 150, teams: false },
+		env: { HOME: f.dir, HERDR_BIN: join(f.dir, "herdr"), FAKE_HERDR_STATE: join(f.dir, "state.json"), FAKE_HERDR_LOG: join(f.dir, "calls.jsonl"), ...extra.env },
+	});
+	t.after(() => host.stop());
+	host.start();
+	const end = Date.now() + 10_000;
+	while (host.state.status !== "connected" && Date.now() < end) await new Promise((resolve) => setTimeout(resolve, 25));
+	assert.equal(host.state.status, "connected", `agent did not connect: ${JSON.stringify(host.state)}`);
+	return host;
+}
+
+test("agent launch: a local PATH whose node fails still starts the agent on the hub's executable", async (t) => {
+	const f = fixture();
+	const bin = join(f.dir, "bin");
+	mkdirSync(bin);
+	writeFileSync(join(bin, "node"), `#!/bin/sh\necho "$@" >> ${JSON.stringify(join(f.dir, "path-node.log"))}\nexit 7\n`);
+	chmodSync(join(bin, "node"), 0o755);
+	const host = await localAgent(t, f, { env: { PATH: `${bin}:${process.env.PATH}` } });
+	assert.equal(existsSync(join(f.dir, "path-node.log")), false, "the PATH node never ran");
+	const command = spawnSync("ps", ["-o", "command=", "-p", String(host.state.node?.pid)], { encoding: "utf8" }).stdout.trim();
+	assert.ok(command.startsWith(`${process.execPath} -e `), `the agent runs on the hub's Node: ${command}`);
+});
+
+test("agent launch: a local remoteNode with spaces gets -e and the bootstrap as arguments, the Host env, and the agent on stdin", async (t) => {
+	const f = fixture();
+	const dir = join(f.dir, "my node");
+	mkdirSync(dir);
+	const wrapper = join(dir, "node wrapper");
+	writeFileSync(wrapper, `#!/bin/sh\nprintf '%s\\n' "$AMPI_PROBE" "$#" "$1" "$2" > ${JSON.stringify(join(f.dir, "args.log"))}\nexec ${JSON.stringify(process.execPath)} "$@"\n`);
+	chmodSync(wrapper, 0o755);
+	await localAgent(t, f, { remoteNode: wrapper, env: { AMPI_PROBE: "from host env" } });
+	assert.deepEqual(readFileSync(join(f.dir, "args.log"), "utf8").split("\n").slice(0, 4), ["from host env", "2", "-e", BOOT]);
 });

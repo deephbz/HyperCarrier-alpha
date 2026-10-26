@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { diffRevisions } from "@earendil-works/chord/delta";
 import type { HostState } from "../hub/hosts.ts";
 import type { ActionAck, ClientFrame, CommandAck, SlashCommands, ControlSubmission, HostOps, OpHandlers, OpName, OpRequest, OpResult, Ops, Placement, PiHostFrame, PiThreadView, PiTopicValue, SubmittedPrompt, ThreadCreated, ThreadResumed, ThreadsState, ThreadSummary, Topic } from "../shared/protocol.ts";
+import { historySpend, spendLabel } from "../shared/spend.ts";
 import { SESSION_SCOPE_MS } from "../shared/session-scope.ts";
 import { ask } from "./ask.ts";
 import { resolveHelperModel } from "../hub/helper-models.ts";
@@ -36,7 +37,10 @@ export type PiHostConfig = {
 	target?: string;
 	sshArgs?: string[];
 	herdrSession?: string;
-	/** Node on the Host. Default `node`. */
+	/**
+	 * Node on a remote Host, run by its login shell. Default `node`. A local Host runs the hub's own Node
+	 * (`process.execPath`) without a shell; `remoteNode` there replaces that executable (tests).
+	 */
 	remoteNode?: string;
 	/** Root of local copies. Default `~/.ampi/pi-cache`. */
 	cacheDir?: string;
@@ -110,7 +114,7 @@ const LEGACY_OPS: Partial<Record<string, OpName>> = { "view.cos-arc.build": "vie
 type Copy = {
  path: string; file: string; offset: number; session?: ReaderSession; closedAt?: number;
 	/** Whole-line length of the Session file at the agent's last read; absent from an agent that does not report it. */ sourceBytes?: number;
- revision: number; data?: Derived; updatedAt: number; cost: number; model?: string;
+ revision: number; data?: Derived; updatedAt: number; cost: number; priced?: boolean; model?: string;
 	contextTokens?: number;
 	/** Percent of the latest assistant prompt read from cache, as hc-hud and Pi's footer compute it. */
 	cacheHit?: number; preview?: string; lastKnownLive?: boolean; generation: number;
@@ -126,9 +130,22 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const AGENT_SCRIPT = fileURLToPath(new URL("./remote-agent.cjs", import.meta.url));
 
 /** Reads the first stdin line `{ cfg, code }`, then runs the agent with the rest of stdin as its command stream. */
-const BOOTSTRAP = Buffer.from(
+export const BOOTSTRAP = Buffer.from(
 	`let b=Buffer.alloc(0);const h=(d)=>{b=Buffer.concat([b,d]);const i=b.indexOf(10);if(i<0)return;process.stdin.off("data",h);process.stdin.pause();const m=JSON.parse(b.subarray(0,i).toString());process.env.HCM_CFG=m.cfg;if(i+1<b.length)process.stdin.unshift(b.subarray(i+1));eval(Buffer.from(m.code,"base64").toString());process.stdin.resume();};process.stdin.on("data",h);`,
 ).toString("base64");
+
+/**
+ * The agent's launch command. A local Host runs the hub's own Node directly, so a login shell's version manager
+ * cannot pick another Node and a path with spaces needs no quoting. A remote Host runs `remoteNode` (default `node`)
+ * through SSH and its login shell. Both read `{ cfg, code }` from stdin's first line (BOOTSTRAP).
+ */
+export function agentLaunch(config: PiHostConfig): { command: string; args: string[] } {
+	const bootstrap = `eval(Buffer.from('${BOOTSTRAP}','base64').toString())`;
+	if (config.kind === "pi-local") return { command: config.remoteNode ?? process.execPath, args: ["-e", bootstrap] };
+	const remoteCmd = `exec ${config.remoteNode ?? "node"} -e "${bootstrap}"`;
+	const options = ["-T", "-C", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"];
+	return { command: "ssh", args: [...options, ...(config.sshArgs ?? []), "--", config.target ?? config.id, `sh -lc ${JSON.stringify(remoteCmd)}`] };
+}
 
 /** Replicated values are JSON: chord's diff cannot carry `undefined`, so drop such keys. */
 function defined<T extends Record<string, unknown>>(value: T): T {
@@ -180,6 +197,11 @@ export function modelLimits(model: string | undefined, limits: ModelLimits | und
 	const configured = limits.budget.models?.[model!] ?? limits.budget.tokens ?? window;
 	return { contextWindow: window, workingBudget: Math.min(configured, window) };
 }
+function piSpendFields(copy: { cost: number; priced?: boolean }): Pick<ThreadSummary, "spend" | "spendLabel"> {
+ const spend = historySpend(copy.priced === false ? null : copy.cost);
+ return { spend, spendLabel: spendLabel(spend) };
+}
+
 type Source = { value: unknown; listeners: Set<(value: unknown) => void> };
 
 export class PiHost extends EventEmitter {
@@ -500,7 +522,7 @@ export class PiHost extends EventEmitter {
  #applyDerived(copy: Copy, data: Derived): void {
   if (copy.session && copy.session.id !== data.session.id) this.#byThread.delete(copy.session.id);
   copy.data = data; copy.session = data.session; copy.updatedAt = data.session.updated ?? 0;
-  copy.cost = data.cost; copy.model = data.model; copy.contextTokens = data.contextTokens; copy.cacheHit = data.cacheHit; copy.preview = data.preview;
+  copy.cost = data.cost; copy.priced = data.priced; copy.model = data.model; copy.contextTokens = data.contextTokens; copy.cacheHit = data.cacheHit; copy.preview = data.preview;
   this.#byThread.set(data.session.id, copy);
  }
 
@@ -662,33 +684,13 @@ export class PiHost extends EventEmitter {
 		const offsets = Object.fromEntries([...this.#copies].map(([path, c]) => [path, c.offset]));
 		const cfg = Buffer.from(JSON.stringify({ offsets, forgotten: this.#store.forgotten(), tailBytes: 0, herdrSession: this.config.herdrSession ?? "default", recentMs: this.#recentMs(), ...this.config.agentConfig })).toString("base64");
 		const code = readFileSync(AGENT_SCRIPT).toString("base64");
-		const node = this.config.remoteNode ?? "node";
 		// The command line stays small and fixed: the agent and its config (offsets grow with every copy) arrive as
 		// stdin's first line, under the argument-length limit and out of the Host's process list.
-		const remoteCmd = `exec ${node} -e "eval(Buffer.from('${BOOTSTRAP}','base64').toString())"`;
+		const launch = agentLaunch(this.config);
 		const child =
 			this.config.kind === "pi-local"
-				? spawn("sh", ["-c", remoteCmd], { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ...this.config.env } })
-				: spawn(
-						"ssh",
-						[
-							"-T",
-							"-C",
-							"-o",
-							"BatchMode=yes",
-							"-o",
-							"ConnectTimeout=10",
-							"-o",
-							"ServerAliveInterval=15",
-							"-o",
-							"ServerAliveCountMax=3",
-							...(this.config.sshArgs ?? []),
-							"--",
-							this.config.target ?? this.config.id,
-							`sh -lc ${JSON.stringify(remoteCmd)}`,
-						],
-						{ stdio: ["pipe", "pipe", "pipe"] },
-					);
+				? spawn(launch.command, launch.args, { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ...this.config.env } })
+				: spawn(launch.command, launch.args, { stdio: ["pipe", "pipe", "pipe"] });
 		this.#child = child;
 		// A failed command write leaves the link half-open: frames still arrive, but commands vanish until they time
 		// out. End the link, so pending commands answer now and the reconnect starts.
@@ -1037,6 +1039,7 @@ export class PiHost extends EventEmitter {
 			queued: (control?.steer ?? 0) + (control?.followUp ?? 0),
 			...(blocked ? { attention: [{ source: "Herdr", reason: "needs input" }] } : {}),
 			costUsd: copy.cost,
+			...piSpendFields(copy),
 			...(copy.readError ? { lastError: copy.readError } : {}),
 			...(copy.contextTokens ? { contextTokens: copy.contextTokens } : {}),
 			...limits,
@@ -1484,6 +1487,11 @@ export class PiHost extends EventEmitter {
      return { ...value, coverage: { ...value.coverage!, notIndexed, stale }, hostStatus: this.state.status };
     });
    },
+			"thread.outline": async (args) => {
+				const copy = this.#copyByThread(String(args.threadId));
+				if (!copy) throw new Error("Session unavailable");
+				return this.#store.outline(copy.path);
+			},
 			"thread.find": async (args) => {
 				const copy = this.#copyByThread(String(args.threadId));
 				if (!copy?.data) throw new Error("Session is not indexed yet");

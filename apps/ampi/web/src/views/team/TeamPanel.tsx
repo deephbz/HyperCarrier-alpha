@@ -60,7 +60,7 @@ function Graph({ tasks, team, host }: { tasks: PiTeamTask[]; team: Team; host: s
 		<p className="ptb-hint">Dependencies → · Scroll to explore. Select a Task for details.</p>
 		{graph.cycle && <p className="ptb-notice">Some dependencies form a cycle. Unresolved Tasks appear in the last layer.</p>}
 		{boundary > 0 && <p className="ptb-hint">{boundary} dependencies outside this page are listed in Task details.</p>}
-		<div className="ptb-graph-scroll" tabIndex={0} role="region" aria-label="Task dependency graph">
+		<div className="ptb-graph-scroll quiet-scroll" tabIndex={0} role="region" aria-label="Task dependency graph">
 			<div className="ptb-graph" style={{ width: graph.width, height: graph.height }}>
 				<svg width={graph.width} height={graph.height} aria-hidden="true">
 					<defs><marker id="ptb-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" /></marker></defs>

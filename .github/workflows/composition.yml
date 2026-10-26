@@ -11,6 +11,9 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    # Linux WebKit is not an AmPi target; the webkit job runs the WebKit cases.
+    env:
+      AMPI_TEST_ENGINES: chromium
     steps:
       - uses: actions/checkout@v4
         with:
@@ -28,3 +31,21 @@ jobs:
       - run: npm --workspace @hypercarrier/trace-viewer test
       - run: npm run build:ampi
       - run: npm run build:trace-viewer
+
+  webkit:
+    # AmPi.app renders in macOS WebKit, so its browser cases run on macOS.
+    runs-on: macos-latest
+    env:
+      AMPI_TEST_ENGINES: webkit
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npx playwright install webkit
+      - run: npm --workspace @hypercarrier/ampi test

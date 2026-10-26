@@ -5,6 +5,7 @@
 // This module reads only what a driver passes in. It never finds a hub, a key, or a port on its own.
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { basename } from 'node:path';
 
 // deploy-live.sh runs a copy of this module from a temp directory, so `ws` may resolve only from the checkout cwd.
 const WebSocket = (() => { try { return createRequire(import.meta.url)('ws'); } catch { return createRequire(process.cwd() + '/package.json')('ws'); } })();
@@ -27,7 +28,9 @@ export function topicSnapshot({ port, host, auth, topic, timeoutMs = 5000 }) {
     ws.on('open', () => ws.send(JSON.stringify({ t: 'sub', sid: 1, host, topic })));
     ws.on('message', data => {
       const f = JSON.parse(String(data));
-      if (f.t !== 'snap' || f.sid !== 1) return;
+      if (f.sid !== 1) return;
+      if (f.t === 'end') { clearTimeout(timer); ws.close(); fail(new Error(`${topic.view ?? topic.kind} subscription ended: ${f.reason}`)); return; }
+      if (f.t !== 'snap') return;
       clearTimeout(timer); ws.close();
       done(f.value);
     });
@@ -66,7 +69,14 @@ export function herdrAgentList(bin = 'herdr') {
 /** Row i: pids of the hub's local remote agents (direct children running the agent bootstrap). */
 export function agentPids(hubPid) {
   const ps = execFileSync('ps', ['-Ao', 'pid=,ppid=,command='], { encoding: 'utf8' });
-  return ps.split('\n').map(l => l.trim().split(/\s+/)).filter(p => p[1] === String(hubPid) && p.slice(2).join(' ').startsWith('node -e eval(Buffer')).map(p => Number(p[0])).sort((a, b) => a - b);
+  return agentPidsFromPS(ps, hubPid);
+}
+
+/** Parse only direct Node bootstrap children. Absolute execPath and PATH-resolved node are equivalent. */
+export function agentPidsFromPS(ps, hubPid) {
+  return ps.split('\n').map(l => l.trim().split(/\s+/)).filter(p => p[1] === String(hubPid)
+    && p[2] && (p[2] === process.execPath || basename(p[2]) === 'node')
+    && p[3] === '-e' && p[4]?.startsWith('eval(Buffer')).map(p => Number(p[0])).sort((a, b) => a - b);
 }
 
 /**

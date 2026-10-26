@@ -22,6 +22,8 @@ test("pi host: Sessions arrive Host-qualified, in Herdr's layout, and a transcri
 	assert.deepEqual(a.location, { workspace: "w1", workspaceLabel: "alpha", tab: "w1:tA", tabLabel: "main", pane: "w1:p2" });
 	assert.equal(a.activity, "streaming", "Herdr says the pane is working");
 	assert.equal(a.costUsd, 0.25);
+	assert.equal(a.spendLabel, "$0.25 (excludes compaction, tool model calls)");
+	assert.equal(list.threads["pi:sess-b"].spendLabel, "no price reported");
 	assert.equal(a.model, "prov/model-x");
 	assert.equal(Math.floor(a.cacheHit), 33, "cache read over the latest assistant prompt");
 	assert.deepEqual(list.layout.workspaces.map((w: any) => w.id), ["w2", "w1"], "Herdr's order, not sorted");

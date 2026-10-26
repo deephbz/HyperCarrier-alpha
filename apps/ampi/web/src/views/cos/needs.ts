@@ -3,18 +3,19 @@
 
 import type { ThreadSummary } from "../../../../src/shared/protocol.ts";
 import { NEEDS_YOU_KINDS, type NeedsYouKind } from "../../../../src/pi/views/cos-arc-context.ts";
+import { openAsks } from "../../util.ts";
 
 export const KIND_LABEL: Record<NeedsYouKind, string> = { decision: "Decisions", approval: "Approvals and permissions", input: "Input", blocker: "Blockers" };
 
 type Row = { t: ThreadSummary };
 export type AskRow<R extends Row> = { row: R; n: number; since: number | null; stale: boolean };
 
-/** Sessions with open tier-2 asks, grouped by kind in NEEDS_YOU_KINDS order; each group oldest ask first, unknown age last. */
+/** Sessions with open tier-2 asks (`openAsks`, as Needs you reads them), grouped by kind in NEEDS_YOU_KINDS order; each group oldest ask first, unknown age last. */
 export function asksByKind<R extends Row>(rows: R[]): { kind: NeedsYouKind; rows: AskRow<R>[] }[] {
 	return NEEDS_YOU_KINDS.flatMap((kind) => {
 		const list = rows.flatMap((row) => {
-			const ask = row.t.arc?.asks.find((a) => a.kind === kind);
-			return ask && ask.n > 0 ? [{ row, n: ask.n, since: ask.since, stale: row.t.arc!.stale }] : [];
+			const ask = openAsks(row.t).find((a) => a.kind === kind);
+			return ask ? [{ row, n: ask.n, since: ask.since, stale: row.t.arc!.stale }] : [];
 		});
 		list.sort((a, b) => (a.since ?? Infinity) - (b.since ?? Infinity));
 		return list.length ? [{ kind, rows: list }] : [];

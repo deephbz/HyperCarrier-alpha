@@ -19,7 +19,7 @@ export function PiPanel({ name, host, threadId, summary, entry, setPanel }: { na
 	return (
 		<aside className="panel" data-panel-name={name}>
 			<div className="panel-tabs">
-				<div className="seg">
+				<div className="seg quiet-scroll">
 					{tabs.map((p) => (
 						<span key={p.name} className="panel-tab-choice">
 							<button className={p.name === name ? "on" : ""} onClick={() => setPanel(p.name)}>{p.label}</button>
@@ -32,7 +32,7 @@ export function PiPanel({ name, host, threadId, summary, entry, setPanel }: { na
 					✕
 				</button>
 			</div>
-			<div className="panel-body">
+			<div className="panel-body quiet-scroll">
 				<View key={`${host}|${threadId}`} host={host} threadId={threadId} summary={summary} entry={entry} />
 			</div>
 		</aside>

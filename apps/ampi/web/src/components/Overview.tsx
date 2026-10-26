@@ -1,5 +1,6 @@
 import type { ThreadSummary } from "../../../src/shared/protocol.ts";
-import { ACTIVITY_LABEL, MOD, ago, attentionOf, go, href, isBusy, money, needsYou } from "../util.ts";
+import { ACTIVITY_LABEL, MOD, ago, attentionOf, go, href, isBusy, needsYou } from "../util.ts";
+import { spendLabel, sumSpend, summarySpend } from "../../../src/shared/spend.ts";
 import { useEffect, useRef, useState } from "react";
 import { useKeepPlace } from "../keep-place.ts";
 import { hasRealModel, useModels } from "../models.ts";
@@ -79,7 +80,7 @@ function Onboarding({ data, onNew, onAddHost, onHelp }: { data: HostThreads[]; o
 				title="Start a thread"
 				action={
 					<button className="btn small" onClick={onNew}>
-						New thread <span className="kbd">{MOD}N</span>
+						New agent <span className="kbd">{MOD}N</span>
 					</button>
 				}
 			>
@@ -154,20 +155,20 @@ export function Overview({ data, onNew, onAddHost, onHelp }: { data: HostThreads
 	}, []);
 	// The Host decides which Sessions are in scope (it keeps unknown-age and source-loss copies); count what it lists.
 	const inScope = (t: ThreadSummary) => !t.archived;
+	const hosts = data.map((d) => d.host);
 	const rows: Row[] = data.flatMap((d) => d.threads.filter(inScope).map((t) => ({ host: d.host.id, hostLabel: d.host.label, t })));
 	const byRecent = (a: Row, b: Row) => b.t.updatedAt - a.t.updatedAt;
 	// Live signals (errors, Herdr, node Summaries) first; then Pi Sessions' open tier-2 asks by kind (D16).
-	const signals = rows.filter((r) => needsYou(r.t)).sort(byRecent);
+	const signals = rows.filter((r) => attentionOf(r.t).length).sort(byRecent);
 	const asks = asksByKind(rows);
-	const asking = (t: ThreadSummary) => Boolean(t.arc?.asks.length);
-	const needs = rows.filter((r) => needsYou(r.t) || asking(r.t));
+	const needs = rows.filter((r) => needsYou(r.t));
 	const running = rows.filter((r) => isBusy(r.t)).sort(byRecent);
 	const dayAgo = Date.now() - 24 * 3600_000;
 	const weekAgo = Date.now() - 7 * 24 * 3600_000;
 	const coverage = arcCoverage(rows, weekAgo);
 	// Node Sessions: a fresh Summary; Pi Sessions: every tier-2 thread done on a current Arc.
 	const finished = (t: ThreadSummary) => (t.rarebit?.status === "finished" && t.rarebit.fresh) || arcFinished(t);
-	const open = (t: ThreadSummary) => needsYou(t) || asking(t);
+	const open = (t: ThreadSummary) => Boolean(needsYou(t));
 	const recent = rows.filter((r) => !isBusy(r.t) && !open(r.t) && finished(r.t) && r.t.updatedAt > weekAgo).sort(byRecent);
 	// Idle is not done (P5): quiet threads without positive evidence of being finished stay on the board.
 	const quiet = rows
@@ -177,7 +178,8 @@ export function Overview({ data, onNew, onAddHost, onHelp }: { data: HostThreads
 	const teams = rows.filter((r) => r.t.team?.role === "lead").sort(byRecent);
 	// Pi Hosts (D15 stage 1): agents start in Herdr, and there is no node to set up.
 	const piOnly = data.length > 0 && data.every((d) => isPiHost(d.host));
-	const spend = rows.filter((r) => r.t.updatedAt > dayAgo).reduce((sum, r) => sum + r.t.costUsd, 0);
+	// One figure over both backends: the sum names the classes some of its Sessions do not count.
+	const spend = spendLabel(sumSpend(rows.filter((r) => r.t.updatedAt > dayAgo).map((r) => summarySpend(r.t))));
 	const changed = rows.filter((r) => r.t.updatedAt > (since ?? dayAgo)).length;
 	const loading = data.some(reading);
 	const ended = unavailable(data);
@@ -187,12 +189,12 @@ export function Overview({ data, onNew, onAddHost, onHelp }: { data: HostThreads
 			<div className="topbar">
 				<b>Overview</b>
 				<span className="crumbs">
-					{loading ? "Reading Sessions…" : rows.length === 0 && ended ? ended : <>{rows.length.toLocaleString()} Session{rows.length === 1 ? "" : "s"} · {data.length} Host{data.length === 1 ? "" : "s"} · {money(spend)} in Sessions active today</>}
+					{loading ? "Reading Sessions…" : rows.length === 0 && ended ? ended : <>{rows.length.toLocaleString()} Session{rows.length === 1 ? "" : "s"} · {data.length} Host{data.length === 1 ? "" : "s"} · {spend} in Sessions active today</>}
 				</span>
 				{updating && <span className="hint" role="status">Updating…</span>}
 				<span className="spacer" />
 				<button className="btn primary small" onClick={onNew}>
-					{piOnly ? "+ New agent" : "+ New thread"}
+					+ New agent
 				</button>
 			</div>
 			<div className="scroll" ref={scroller} onScroll={keepPlace.onScroll} data-page-scroller tabIndex={-1}>

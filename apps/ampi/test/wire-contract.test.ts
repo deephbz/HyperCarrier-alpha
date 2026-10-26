@@ -62,8 +62,8 @@ export const noEscape: Equal<Found, never> = true;
 /** Every op name, checked against the registry both ways: `satisfies` refuses a missing and an extra key. */
 const OP_NAMES = {
 	"thread.submit": true, "thread.abort": true, "thread.withdraw": true, "thread.commands": true, "thread.command": true, "thread.create": true, "thread.resume": true, "thread.close": true,
-	"sessions.search": true, "thread.find": true, "thread.history": true, "thread.entry": true, "prompts.list": true, "models.list": true,
-	"view.rarebit.ask": true, "view.rarebit.recap": true, "view.cos.timeline.locate": true, "view.cos.arc.build": true,
+	"sessions.search": true, "thread.outline": true, "thread.find": true, "thread.history": true, "thread.entry": true, "prompts.list": true, "models.list": true,
+	"view.rarebit.ask": true, "view.cos.timeline.locate": true, "view.cos.arc.build": true,
 } satisfies Record<OpName, true>;
 
 test("wire contract: the Host serves every registry op and nothing else", (t) => {

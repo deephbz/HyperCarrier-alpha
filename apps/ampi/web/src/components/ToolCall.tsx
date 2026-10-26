@@ -108,7 +108,7 @@ export function ToolCall({
 				<span className={`state ${result?.isError ? "err" : result ? "ok" : ""}`}>{state}</span>
 			</div>
 			{expanded && (
-				<div className="tool-body">
+				<div className="tool-body quiet-scroll">
 					{source}
 					{name === "edit" && args?.edits && <Diff patch={editPatch(args.edits)} />}
 					{name === "write" && args?.content !== undefined && <pre>{args.content.split("\n").slice(0, 80).join("\n")}</pre>}

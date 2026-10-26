@@ -12,7 +12,7 @@ import type { HostedView, PiViewContext } from "../src/pi/views/types.ts";
 import type { ViewTopic } from "../src/shared/protocol.ts";
 
 /** Every helper model, explicit: hub helper models have no built-in default. */
-export const HELPER_MODELS = { arcLabels: "anthropic/claude-haiku-5-5", arcSynthesis: "anthropic/claude-sonnet-5-5", rarebitRecap: "anthropic/claude-haiku-5-5", rarebitAsk: "anthropic/claude-sonnet-5-5" };
+export const HELPER_MODELS = { arcLabels: "anthropic/claude-haiku-5-5", arcSynthesis: "anthropic/claude-sonnet-5-5", rarebitAsk: "anthropic/claude-sonnet-5-5" };
 
 export const TOKEN = "c".repeat(64);
 export const iso = (n: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, n)).toISOString();

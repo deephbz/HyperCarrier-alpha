@@ -182,12 +182,13 @@ function scanOnce() {
 			const opTable: { [K in OpName]: Ops[K]["args"][] } = {
 				"sessions.search": [{ query: "Canary" }],
 				"thread.find": [{ threadId: THREAD, query: "Canary" }],
+                "thread.outline": [{threadId: THREAD}],
 				"thread.history": [{ threadId: THREAD }, { threadId: BAD_THREAD }],
 				"thread.entry": [...["cu1", "ca1", "cr1", "ca2"].map((entry) => ({ threadId: THREAD, entry })), ...["bu1", "bx1", "bu2"].map((entry) => ({ threadId: BAD_THREAD, entry }))],
 				"prompts.list": [{}],
 				"models.list": [{}],
 				"view.cos.timeline.locate": [{ threadId: THREAD, at: Date.parse(iso(2)) }],
-				"view.rarebit.recap": [{ threadId: THREAD }],
+
 				"view.rarebit.ask": [{ threadId: THREAD, question: "What happened?" }],
 				"view.cos.arc.build": [{ threadId: THREAD }],
 				// Resume first, so the later control ops reach a pane.

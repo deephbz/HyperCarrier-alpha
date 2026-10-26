@@ -19,26 +19,21 @@ export function ActivityIcon({ t }: { t: ThreadSummary }) {
 	return null;
 }
 
-export function ThreadBadges({ t, compact = false }: { t: ThreadSummary; compact?: boolean }) {
+export function ThreadBadges({ t, compact = false, hideTeam = false }: { t: ThreadSummary; compact?: boolean; hideTeam?: boolean }) {
 	const attention = attentionOf(t);
 	if (compact) return <>
-		{attention.length > 0 && <span className={`badge ${t.lastError ? "err" : "attn"}`} role="img" aria-label="Needs you" title={attention.map((a) => `${a.source}: ${a.reason}`).join("\n")}>!</span>}
 		{t.queued > 0 && <span className="row-meta" title={`${t.queued.toLocaleString()} queued`}>{t.queued.toLocaleString()} ↵</span>}
-		{attention.length === 0 && t.team?.role === "lead" && <span className="row-meta">team</span>}
+		{!hideTeam && t.team?.role === "lead" && <span className="row-meta">team</span>}
 	</>;
 	return (
 		<>
-			{t.rarebit?.status === "needs_attention" && t.rarebit.fresh && (
-				<span className="badge attn" title={`Rarebit: needs you (${t.rarebit.reason ?? ""})`}>
-					◆! {t.rarebit.reason ?? "needs you"}
-				</span>
-			)}
-			{(t.attention ?? []).slice(0, 1).map((a) => (
-				<span key={a.reason} className="badge attn" title={`${a.source}: ${(t.attention ?? []).map((x) => x.reason).join("; ")}`}>
+			{/* A closed thread never needs the owner (attentionOf); its kept reason shows in the Closed feedback. */}
+			{attention.filter((a) => a.source !== "error").slice(0, 1).map((a) => (
+				<span key={a.reason} className="badge attn" title={`${a.source}: ${a.reason}`}>
 					◆! {a.reason}
 				</span>
 			))}
-			{t.lastError && (
+			{!t.closed && t.lastError && (
 				<span className="badge err" title={t.lastError}>
 					× error
 				</span>
@@ -79,7 +74,7 @@ export function ThreadRow({
 			className={`row ${active ? "active" : ""} ${child ? "child" : ""}`}
 			onClick={(e) => {
 				if ((e.target as HTMLElement).closest("a, button")) return;
-				if (hasChildren && toggle) toggle(); else go(host, t.id);
+				go(host, t.id);
 			}}
 			title={`${t.title}\n${t.cwd}${t.model ? `\n${t.model}` : ""}`}
 			data-thread={t.id}
@@ -88,28 +83,17 @@ export function ThreadRow({
 			data-row-level={child ? 2 : 1}
 			data-leader-row={hasChildren ? t.team?.teamId : undefined}
 		>
-			{!child && (hasChildren && toggle ? (
-				<button
-					className="twisty"
-					data-collapse-toggle={t.team?.teamId}
-					tabIndex={-1}
-					aria-label={`${open ? "Collapse" : "Expand"} ${t.title || "Untitled Session"}`}
-					aria-expanded={open}
-					onClick={(e) => {
-						e.stopPropagation();
-						toggle?.();
-					}}
-				>
-					{hasChildren ? (open ? "▾" : "▸") : ""}
-				</button>
-			) : <span className="twisty" aria-hidden="true">{hasChildren ? "▾" : ""}</span>)}
+			{!child && <span className="twisty" aria-hidden="true" />}
 			{/* Every row reserves the status-mark slot, so its text starts at the same x whatever the Session's state. */}
 			<span className="mark-slot"><ActivityIcon t={t} /></span>
 			<a className="title" href={href.thread(host, t.id)} aria-current={active ? "page" : undefined} data-nav-row tabIndex={active ? 0 : -1} aria-expanded={hasChildren ? open : undefined} data-team-role={t.team?.role} data-parent-leader={child ? t.team?.teamId : undefined} data-parent-nav-id={navParentId} data-nav-id={hasChildren && t.team?.role === "lead" ? t.team.teamId : t.id} data-row-level={child ? 2 : 1} data-leader-row={hasChildren ? t.team?.teamId : undefined} dir="auto">
-				{t.team?.role === "worker" && t.team.worker ? <b>{t.team.worker}</b> : t.title || "Untitled Session"}
+				{t.team?.role === "worker" && t.team.worker ? t.team.worker : t.title || "Untitled Session"}
 			</a>
-			<ThreadBadges t={t} compact />
-			{hasChildren && !open && <span className="badge worker-count" data-worker-count={t.team?.teamId}>{workerCount}</span>}
+			<ThreadBadges t={t} compact hideTeam={hasChildren} />
+			{hasChildren && toggle && <button className="team-fold" data-collapse-toggle={t.team?.teamId} tabIndex={-1} aria-label={`${open ? "Collapse" : "Expand"} Workers for ${t.title || "Untitled Session"}`} aria-expanded={open} onClick={toggle}>
+				<span className="twisty" aria-hidden="true">{open ? "▾" : "▸"}</span><span>team</span>
+				{!open && <span className="badge worker-count" data-worker-count={t.team?.teamId}>{workerCount}</span>}
+			</button>}
 			<span className="sub">{ago(t.updatedAt)}</span>
 		</div>
 	);
@@ -283,7 +267,7 @@ export function Sidebar({
 	const [showArchived, setShowArchived] = useState(false);
 	const activePage = route.page ?? (!route.host ? (PAGES.some((p) => p.name === "timeline") ? "timeline" : "overview") : undefined);
 	return (
-		<aside className="side" onKeyDown={(event) => handleSidebarKeyDown(event.nativeEvent, event.currentTarget)}>
+		<aside className="side quiet-scroll" onKeyDown={(event) => handleSidebarKeyDown(event.nativeEvent, event.currentTarget)}>
 			<div className="side-top">
 				<div className="brand">
 					<a href="#/" style={{ color: "inherit", textDecoration: "none" }}>
@@ -302,7 +286,7 @@ export function Sidebar({
 					</div>
 				)}
 			</div>
-			<div className="side-scroll">
+			<div className="side-scroll quiet-scroll">
 				{data.some((d) => isPiHost(d.host)) && <FleetSearch hosts={data.filter((d) => isPiHost(d.host)).map((d) => d.host)} />}
 				<a className={`row ${activePage === "overview" ? "active" : ""}`} href={href.page("overview")} data-nav-row tabIndex={activePage === "overview" ? 0 : -1} aria-current={activePage === "overview" ? "page" : undefined}>
 					<span className="twisty">⌂</span>

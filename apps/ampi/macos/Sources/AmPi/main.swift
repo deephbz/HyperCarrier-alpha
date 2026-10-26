@@ -358,7 +358,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 			content.body = body["body"] as? String ?? ""
 			content.sound = .default
 			if let route = body["route"] as? String { content.userInfo = ["route": route] }
-			let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+			// One identifier per thread, so a later notification for the thread replaces the delivered one.
+			let request = UNNotificationRequest(identifier: body["tag"] as? String ?? UUID().uuidString, content: content, trigger: nil)
 			UNUserNotificationCenter.current().add(request)
 		case "badge":
 			let count = body["count"] as? Int ?? 0

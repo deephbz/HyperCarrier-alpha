@@ -1,4 +1,5 @@
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { CompanionScrollbar } from "./CompanionScrollbar.tsx";
 import { Composer } from "./Composer.tsx";
 import { openAccounts } from "./Accounts.tsx";
 import type { InjectedMessage, PiEntry, ToolArgsPreview } from "../../../src/shared/protocol.ts";
@@ -19,10 +20,11 @@ import { SessionFind } from "./Search.tsx";
 import { EntryBody, fetchEntry, shortenedLabel } from "./EntryBody.tsx";
 import { PI_BANDS } from "../views/registry.ts";
 import { toolRuns } from "../views/rarebit/tool-runs.ts";
-import { useKeepPlace } from "../keep-place.ts";
+import { END_BAND, atEnd, useKeepPlace } from "../keep-place.ts";
+import { toCss } from "../display.ts";
 import { SessionTitle } from "./SessionTitle.tsx";
 import { perfMarkPainted } from "../perf.ts";
-import { handleRegionScrollKey, useKeyAction } from "../keymap.ts";
+import { handleRegionScrollKey, isEditableTarget, useKeyAction } from "../keymap.ts";
 import { useFocusIntent } from "../context.ts";
 
 // biome-ignore lint: live and inbox docs are loosely typed JSON
@@ -77,10 +79,10 @@ function NoticeParts({ message }: { message: InjectedMessage }) {
 }
 
 /** One extension message as one disclosure row: kind badge, sender and first line; open, its text and, when shortened, the full text in the card. */
-function NoticeEntry({ entry, host, threadId }: { entry: Extract<PiEntry, { kind: "custom" }>; host: string; threadId: string }) {
+export function NoticeEntry({ entry, host, threadId, fragment }: { entry: Extract<PiEntry, { kind: "custom" }>; host: string; threadId: string; fragment?: string }) {
 	const { message } = entry;
 	return (
-		<details className="msg notice" data-entry={entry.id}>
+		<details className="msg notice" data-entry={entry.id} data-fragment={fragment ?? entry.id}>
 			<summary className="disclosure">
 				<span className={`badge ${message.kind === "alert" ? "attn" : ""}`}>{message.label}</span>
 				{message.sender && <span className="notice-sender">{message.sender}</span>}
@@ -100,8 +102,33 @@ function NoticeEntry({ entry, host, threadId }: { entry: Extract<PiEntry, { kind
 const FIRST_PAINT = 40;
 /** Messages rendered after first paint, and how many more each time the reader scrolls near the top. */
 const WINDOW = 120;
-/** Where the reader was in each Session, so Back (or returning) lands there again: an anchor entry and its offset. */
-const PLACES = new Map<string, { id: string; offset: number; limit: number }>();
+/**
+ * A read place: an anchor entry and its top's offset below the transcript's top. `unit: "css"` marks the offset in the
+ * transcript's CSS px; a place without it predates the marker (history state outlives a reload) and holds screen px.
+ */
+type Place = { id: string; offset: number; limit: number; unit?: "css" };
+/** Where the reader was in each Session, so Back (or returning) lands there again. */
+const PLACES = new Map<string, Place>();
+/** Branch summaries in a window: Pi writes one where the reader's Session moved to another branch. */
+const branchMarks = (entries: PiEntry[]) => entries.flatMap((e) => e.kind === "compaction" && e.reason === "branch" ? [e.id] : []);
+/** Entries after the reader's last-seen entry: a count, or "some" when that entry left the served window. */
+/**
+ * Painted rows split after each row that the source window followed with dropped, unpainted entries. Each segment's key
+ * names the boundary that starts it, `head` for the first, so a trim above never renames or remounts a segment.
+ */
+function segments<T extends { id: string }>(rows: T[], omitted: Set<string>, head: string): { key: string; rows: T[] }[] {
+	const parts = [{ key: head, rows: [] as T[] }];
+	rows.forEach((row, i) => {
+		parts.at(-1)!.rows.push(row);
+		if (omitted.has(row.id) && i < rows.length - 1) parts.push({ key: `after-${row.id}`, rows: [] });
+	});
+	return parts;
+}
+function newBelow(entries: { id: string }[], away: { last?: string } | undefined): number | "some" {
+	if (!away) return 0;
+	const at = away.last === undefined ? -1 : entries.findIndex((e) => e.id === away.last);
+	return away.last !== undefined && at < 0 ? "some" : entries.length - 1 - at;
+}
 
 const Entries = memo(function Entries({
 	entries,
@@ -168,16 +195,17 @@ const Entries = memo(function Entries({
 	const parts = useMemo(() => lens ? toolRuns(entries, busy) : [], [entries, lens, busy]);
 	const open = useMemo(() => openCalls(entries), [entries]);
 	const calls = new Set(entries.flatMap((entry) => entry.kind === "assistant" ? entry.blocks.flatMap((b) => b.type === "tool" ? [b.callId] : []) : []));
-	const renderEntry = (preview: PiEntry) => {
+	/** `fragment` names this rendered part of the entry: the lens part key, or the entry ID for a whole entry. */
+	const renderEntry = (preview: PiEntry, fragment = preview.id) => {
 				const entry = fullEntries.get(preview.id) ?? preview;
 				const fade = preview.bodyAvailable && !fullEntries.has(preview.id);
 				const lastText = entry.kind === "assistant" ? entry.blocks.findLastIndex((b) => b.type === "text" && b.text.trim() !== "") : -1;
 				const rendered = (() => { switch (entry.kind) {
 					case "user":
 						return (
-							<div key={entry.id} className="msg user" data-entry={entry.id}>
+							<div key={entry.id} className="msg user you" data-entry={entry.id} data-fragment={fragment}>
 								<div className="who">
-									<span>You</span>
+									<span className="you-label">You</span>
 									<span>{clock(entry.ts)}</span>
 									<span style={{ flex: 1 }} />
 									{!canFork && <RarebitJump host={host} threadId={threadId} entry={entry.id} />}
@@ -187,14 +215,14 @@ const Entries = memo(function Entries({
 									</button>
 									)}
 								</div>
-								<div className={fade ? "clip-fade" : undefined}>{entry.text}</div>
+								<div data-quote-body className={fade ? "clip-fade" : undefined}>{entry.text}</div>
 								{proseToggle(preview)}
 								{entry.images > 0 && <UserImages host={host} threadId={threadId} entryId={entry.id} count={entry.images} />}
 							</div>
 						);
 					case "assistant":
 						return (
-							<div key={entry.id} className="msg assistant" data-entry={entry.id}>
+							<div key={entry.id} className="msg assistant" data-entry={entry.id} data-fragment={fragment}>
 								{!canFork && entry.blocks.some((b) => b.type === "text") && <RarebitJump host={host} threadId={threadId} entry={entry.id} />}
 								{entry.blocks.map((block, i) =>
 									block.type === "text" ? (
@@ -229,11 +257,11 @@ const Entries = memo(function Entries({
 							</div>
 						);
 					case "tool-result":
-						return lens && !calls.has(entry.callId) ? <div key={entry.id} data-entry={entry.id}><ToolCall name={entry.name} args={{ summary: "" }} result={results.get(entry.callId)} outputSource={outputSource(entry.callId)} /></div> : null;
+						return lens && !calls.has(entry.callId) ? <div key={entry.id} data-entry={entry.id} data-fragment={fragment}><ToolCall name={entry.name} args={{ summary: "" }} result={results.get(entry.callId)} outputSource={outputSource(entry.callId)} /></div> : null;
 					case "compaction":
 						return (
 							<Fragment key={entry.id}>
-								<div className="compaction" data-entry={entry.id}>
+								<div className="compaction" data-entry={entry.id} data-fragment={fragment}>
 									Context compacted{entry.reason ? ` (${entry.reason})` : ""} ·{" "}
 									{entry.summary?.startsWith("## Working-state summary") ? "HC summary with Rarebit record" : "native summary"} · {clock(entry.ts)}
 								</div>
@@ -246,20 +274,20 @@ const Entries = memo(function Entries({
 						);
 					case "reset":
 						return (
-							<div key={entry.id} className="compaction" data-entry={entry.id}>
+							<div key={entry.id} className="compaction" data-entry={entry.id} data-fragment={fragment}>
 								Context reset{entry.handoff ? " with a handoff note" : ""}
 							</div>
 						);
 					case "custom":
-						return <NoticeEntry key={entry.id} entry={entry} host={host} threadId={threadId} />;
+						return <NoticeEntry key={entry.id} entry={entry} host={host} threadId={threadId} fragment={fragment} />;
 					default:
 						return null;
 				} })();
   return <Fragment key={entry.id}>{rendered}</Fragment>;
 	};
 	return <>{lens ? parts.map((part) => part.kind === "run"
-		? <RarebitTools key={part.id} run={part}>{part.entries.map((entry, i) => <Fragment key={`${entry.id}:${i}`}>{renderEntry(entry)}</Fragment>)}</RarebitTools>
-		: <Fragment key={part.key}>{renderEntry(part.entry)}</Fragment>) : entries.map((entry) => <Fragment key={entry.id}>{renderEntry(entry)}</Fragment>)}</>;
+		? <RarebitTools key={part.id} run={part}>{part.entries.map((entry, i) => <Fragment key={part.keys[i]}>{renderEntry(entry, part.keys[i])}</Fragment>)}</RarebitTools>
+		: <Fragment key={part.key}>{renderEntry(part.entry, part.key)}</Fragment>) : entries.map((entry) => <Fragment key={entry.id}>{renderEntry(entry)}</Fragment>)}</>;
 });
 
 const NO_LIVE = {};
@@ -369,14 +397,36 @@ export function ThreadView({
 	const pi = isPiHost(useHosts().hosts.find((h) => h.id === host));
 	// A Pi Session opens with Arc when the owner last showed it and the pane is wide; a narrow pane collapses it (R16).
 	useArcReopen(pi, panel, setPanel);
+	const reader = pi;
 	const [finding, setFinding] = useState(false);
 	const focusIntent = useFocusIntent();
-	useKeyAction("find", pi ? (event) => { event.preventDefault(); setFinding(true); } : undefined);
+	useKeyAction("find", reader ? (event) => { event.preventDefault(); setFinding(true); } : undefined);
 	const scroller = useRef<HTMLDivElement>(null);
 	const pinned = useRef(true);
-	const keepPlace = useKeepPlace(scroller, "[data-entry]", "data-entry", pinned);
+	/** The first entry of the paint window, held while the reader is away from the newest end. */
+	const held = useRef<string | undefined>(undefined);
+	/** How many entries the paint window covers, before the lens widens it. */
+	const painted = useRef(FIRST_PAINT);
+	/** Painted entries that the source window evicted from its front while the reader was away from the newest end. */
+	const kept = useRef<PiEntry[]>([]);
+	/** While the reader is away, the last painted entry: entries that arrive after it only feed "↓ N new". */
+	const last = useRef<string | undefined>(undefined);
+	/** Painted entries followed by entries the source window dropped unpainted. */
+	const omitted = useRef(new Set<string>());
+	/** The React key of the first painted segment: the omission boundary above it, which a trim must not rename. */
+	const head = useRef("head");
+	const clearOmitted = () => {
+		omitted.current.clear();
+		head.current = "head";
+	};
+	const shownRef = useRef<PiEntry[]>([]);
+	/** Kept and served entries, the rows a paint window can cover. */
+	const allRef = useRef<PiEntry[]>([]);
+	// The bottom of a frozen window is not the newest end: a reader there stays away and the window extends instead.
+	const tailPainted = useCallback(() => !last.current || last.current === allRef.current.at(-1)?.id, []);
+	const keepPlace = useKeepPlace(scroller, "[data-entry]", "data-entry", pinned, END_BAND, tailPainted);
 	const beforeLensChange = useCallback(() => { keepPlace.capture({ accept: (node) => node.matches(".msg.user, .compaction, .notice") || Boolean(node.querySelector(".md")) }); }, [keepPlace.capture]);
-	const lens = useRarebitLens(host, threadId, pi, beforeLensChange);
+	const lens = useRarebitLens(host, threadId, reader, beforeLensChange);
 	const [older, setOlder] = useState<PiEntry[]>([]);
 	const [olderMore, setOlderMore] = useState(true);
  const [historyError, setHistoryError] = useState<string>();
@@ -402,6 +452,32 @@ export function ThreadView({
 		};
 	}, []);
 	const [jump, setJump] = useState<{ entry: string; id: string; threadId: string }>();
+	// "↓ N new": the newest entry when the reader left the end. Entries after it arrived below the reader. A Pi thread
+	// serves a bounded tail, so its length can stay or shrink while entries arrive: count by identity. A last-seen entry
+	// that slid out of the window leaves "↓ new" without a number.
+	const [away, setAway] = useState<{ last?: string }>();
+	const noteAway = () => { if (!pinned.current !== (away !== undefined)) setAway(pinned.current ? undefined : { last: view?.entries.at(-1)?.id }); };
+	const fresh = newBelow(view?.entries ?? [], away);
+	// Only explicit branch evidence starts the count again: the newest entry is gone and the window carries a branch
+	// summary it did not carry before. A missing newest entry alone is a window that moved past it (a coalesced
+	// snapshot, a reconnect), so the button stays and reads "↓ new".
+	const newest = view?.entries.at(-1)?.id;
+	const [tip, setTip] = useState(() => ({ id: newest, marks: branchMarks(view?.entries ?? []) }));
+	if (newest !== tip.id) {
+		const entries = view?.entries ?? [];
+		const marks = branchMarks(entries);
+		setTip({ id: newest, marks });
+		if (away && tip.id && newest && !entries.some((e) => e.id === tip.id) && marks.some((m) => !tip.marks.includes(m))) setAway({ last: newest });
+	}
+	const toEnd = () => {
+		const el = scroller.current;
+		if (!el) return;
+		pinned.current = true;
+		thaw();
+		el.scrollTop = el.scrollHeight;
+		el.focus({ preventScroll: true }); // the button goes away; the keys keep scrolling the transcript
+		setAway(undefined);
+	};
 	const [title, setTitle] = useState(summary?.title ?? "");
 	useEffect(() => setTitle(summary?.title ?? ""), [summary?.title]);
 	useEffect(() => {
@@ -409,17 +485,22 @@ export function ThreadView({
 		setOlderMore(true);
   setHistoryError(undefined);
 		pinned.current = true;
+		held.current = undefined;
+		kept.current = [];
+		last.current = undefined;
+		clearOmitted();
+		setAway(undefined);
 	}, [threadId]);
 	// The newest entries paint first; the rest follow right after, so a switch shows the latest turn at once.
 	const [limit, setLimit] = useState(FIRST_PAINT);
 	const [closing, setClosing] = useState(false);
 	const [resuming, setResuming] = useState(false);
 	// A place to restore, taken when this Session opens (Back, or switching back to it), unless a link names an entry.
-	const restore = useRef<{ id: string; offset: number; limit: number } | undefined>(undefined);
+	const restore = useRef<Place | undefined>(undefined);
 	const [, setRestoreTick] = useState(0);
 	useEffect(() => {
 		const key = `${host}/${threadId}`;
-		const fromHistory = entryState().place as { key: string; id: string; offset: number; limit: number } | undefined;
+		const fromHistory = entryState().place as (Place & { key: string }) | undefined;
 		// Precedence (D20): this history entry's place, then the link's ?e= entry, then this Session's last place. The
 		// entry place makes Back return to where that entry was read; the newest end clears both places (savePlace).
 		const place = fromHistory?.key === key ? fromHistory : entry ? undefined : PLACES.get(key);
@@ -433,7 +514,7 @@ export function ThreadView({
 			// Only a growth that changes the limit commits a render that consumes `grow`.
 			timer = setTimeout(() => {
 				const el = scroller.current;
-				if (el && !pinned.current && !restore.current && limitRef.current < WINDOW) grow.current = el.scrollHeight - el.scrollTop;
+				if (el && !pinned.current && !restore.current && limitRef.current < WINDOW) keepPlace.capture();
 				setLimit((l) => Math.max(l, WINDOW));
 			}, 0);
 		});
@@ -454,7 +535,7 @@ export function ThreadView({
 			const el = scroller.current;
 			const key = `${host}/${threadId}`;
 			if (!el || restore.current) return;
-			if (el.scrollHeight - el.scrollTop - el.clientHeight < 60) {
+			if (atEnd(el, END_BAND) && tailPainted()) {
 				PLACES.delete(key); // at the newest end: come back there, following new messages
 				noteEntry({ place: undefined }, at);
 				return;
@@ -462,7 +543,11 @@ export function ThreadView({
 			const top = el.getBoundingClientRect().top;
 			const anchor = [...el.querySelectorAll<HTMLElement>("[data-entry]")].find((n) => n.getBoundingClientRect().bottom > top);
 			if (!anchor) return;
-			const place = { id: anchor.dataset.entry!, offset: anchor.getBoundingClientRect().top - top, limit: limitRef.current };
+			const id = anchor.dataset.entry!;
+			// Back/open restores the first fragment of this entry, so save its offset too, in the transcript's CSS px: a
+			// restore adds it to scrollTop, also at another display size.
+			const first = el.querySelector<HTMLElement>(`[data-entry="${CSS.escape(id)}"]`)!;
+			const place: Place = { id, offset: toCss(first.getBoundingClientRect().top - top, el), limit: painted.current, unit: "css" };
 			PLACES.set(key, place);
 			// Also on this history entry, so Back and Forward return to where each entry was read (Amp's thread page
 			// restores per history entry too). The write is deferred and keeps the URL.
@@ -473,7 +558,7 @@ export function ThreadView({
 	useEffect(() => {
 		const key = `${host}/${threadId}`;
 		const pop = () => {
-			const place = entryState().place as { key: string; id: string; offset: number; limit: number } | undefined;
+			const place = entryState().place as (Place & { key: string }) | undefined;
 			if (!place || place.key !== key) return;
 			restore.current = place;
 			pinned.current = false;
@@ -485,59 +570,137 @@ export function ThreadView({
 	}, [host, threadId]);
 	useEffect(() => () => cancelAnimationFrame(saving.current), [host, threadId]);
 	// Where the transcript area sits in the window: a panel that has to overlay the main (narrow windows) covers only
-	// the transcript, never the topbar or the composer's Send, Steer, and Stop.
+	// the transcript, never the topbar or the composer's Send, Steer, and Stop. The slot's `top` and `bottom` are its own
+	// CSS px, which the page and panel zoom scale; the rect is screen px.
 	useEffect(() => {
 		const el = scroller.current;
 		if (!el) return;
 		const root = document.documentElement.style;
 		const measure = () => {
 			const r = el.getBoundingClientRect();
-			root.setProperty("--transcript-top", `${Math.round(r.top)}px`);
-			root.setProperty("--transcript-bottom", `${Math.round(window.innerHeight - r.bottom)}px`);
+			const slot = document.querySelector(".panel-slot") ?? document.documentElement;
+			root.setProperty("--transcript-top", `${Math.round(toCss(r.top, slot))}px`);
+			root.setProperty("--transcript-bottom", `${Math.round(toCss(window.innerHeight - r.bottom, slot))}px`);
 		};
 		measure();
+		// App applies the region zoom after this effect and after this listener run, so measure once more a frame later.
+		let frame = requestAnimationFrame(measure);
+		const later = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(measure); };
 		const observer = new ResizeObserver(measure);
 		observer.observe(el);
 		window.addEventListener("resize", measure);
+		window.addEventListener("ampi:display", later);
 		return () => {
+			cancelAnimationFrame(frame);
 			observer.disconnect();
 			window.removeEventListener("resize", measure);
+			window.removeEventListener("ampi:display", later);
 			root.removeProperty("--transcript-top");
 			root.removeProperty("--transcript-bottom");
 		};
-	}, [threadId]);
+	}, [threadId, panel]);
 	const limitRef = useRef(FIRST_PAINT);
 	limitRef.current = limit;
-	// Growing the window upward keeps what the reader is looking at in place.
-	const grow = useRef<number | undefined>(undefined);
+	// Growing the window upward keeps what the reader is looking at in place: an anchor, so rows that arrive below in
+	// the same commit do not move it.
 	const growWindow = () => {
-		const el = scroller.current;
-		if (!el || !view || limit >= view.entries.length) return;
-		grow.current = el.scrollHeight - el.scrollTop;
-		setLimit((l) => l + WINDOW);
+		if (!view || held.current === allRef.current[0]?.id) return;
+		keepPlace.capture();
+		setLimit(painted.current + WINDOW);
+	};
+	// A frozen window changes only by the reader: a scroll near its bottom extends it, G or "↓ N new" thaws it.
+	const [frozen, setFrozen] = useState(0);
+	const extending = useRef(false);
+	const thaw = () => {
+		kept.current = [];
+		last.current = undefined;
+		clearOmitted();
+		setFrozen((n) => n + 1);
+	};
+	const growBelow = () => {
+		const all = allRef.current;
+		const end = last.current ? all.findIndex((e) => e.id === last.current) : -1;
+		if (extending.current || pinned.current || end < 0 || end >= all.length - 1) return;
+		extending.current = true;
+		const read = keepPlace.capture();
+		const stop = Math.min(all.length - 1, end + WINDOW);
+		last.current = all[stop].id;
+		// Rows more than WINDOW above the read entry may go: "Read an earlier page" pages them back by id.
+		const at = read ? all.findIndex((e) => e.id === read.id) : -1;
+		const start = all.findIndex((e) => e.id === held.current);
+		if (at - WINDOW > start && start >= 0) {
+			held.current = all[at - WINDOW].id;
+			setLimit(stop + 1 - (at - WINDOW));
+		}
+		setFrozen((n) => n + 1);
 	};
 	const shown = useMemo(() => {
-		const entries = view?.entries ?? [];
-		let start = Math.max(0, entries.length - limit);
+		const source = view?.entries ?? [];
+		const before = allRef.current;
+		// The source window serves a bounded tail and drops its oldest entries as entries arrive, many at once after a
+		// reconnect. A reader away from the newest end keeps a frozen window: the painted rows the source dropped stay,
+		// and arrivals past its last row paint nothing. A window without any overlap starts again at its newest end.
+		if (pinned.current) {
+			kept.current = [];
+			last.current = undefined;
+			clearOmitted();
+		} else if (source.length && before.length) {
+			last.current ??= shownRef.current.at(-1)?.id;
+			const first = before.findIndex((e) => e.id === source[0].id);
+			if (first > 0) {
+				const from = Math.max(0, before.findIndex((e) => e.id === shownRef.current[0]?.id));
+				const end = last.current ? before.findIndex((e) => e.id === last.current) + 1 : before.length;
+				kept.current = before.slice(from, Math.min(end, first));
+				if (end < first && kept.current.length) omitted.current.add(kept.current.at(-1)!.id);
+			} else if (first < 0) {
+				kept.current = [];
+				if (!source.some((e) => e.id === last.current)) {
+					last.current = undefined;
+					clearOmitted();
+				}
+			}
+		}
+		const entries = kept.current.length ? [...kept.current, ...source] : source;
+		allRef.current = entries;
+		let end = last.current ? entries.findIndex((e) => e.id === last.current) + 1 : entries.length;
+		if (end <= 0) {
+			last.current = undefined;
+			end = entries.length;
+		}
+		if (!pinned.current) last.current ??= entries[end - 1]?.id;
+		for (const id of omitted.current) if (!entries.some((e) => e.id === id)) omitted.current.delete(id);
+		let start = Math.max(0, end - limit);
+		// While the reader is away from the newest end, arrivals add rows below and remove none above. The read entry then
+		// needs no place correction, and no correction scroll reaches growWindow as if the reader had scrolled up.
+		const at = held.current && !pinned.current ? entries.findIndex((e) => e.id === held.current) : -1;
+		if (at >= 0 && at < start) start = at;
+		held.current = entries[start]?.id;
+		painted.current = end - start;
 		// Keep the preceding prose and its complete run when the paint window cuts through tool traffic.
 		if (lens) while (start > 0) {
 			const previous = entries[start - 1];
 			start--;
 			if (previous.kind === "user" || (previous.kind === "assistant" && previous.blocks.some((b) => b.type === "text" && b.text.trim()))) break;
 		}
-		return entries.slice(start);
-	}, [view, limit, lens]);
+		// The first segment keeps the key of the boundary above it, also after that boundary row leaves the source.
+		const boundary = entries.slice(0, start).findLast((e) => omitted.current.has(e.id));
+		if (boundary) head.current = `after-${boundary.id}`;
+		else if (entries.slice(start).some((e) => `after-${e.id}` === head.current)) head.current = "head";
+		return (shownRef.current = entries.slice(start, end));
+	}, [view, limit, lens, frozen]);
 	useLayoutEffect(() => {
+		extending.current = false;
 		const el = scroller.current;
 		if (!el) return;
-		if (grow.current !== undefined) {
-			el.scrollTop = el.scrollHeight - grow.current;
-			grow.current = undefined;
-		} else if (restore.current) {
+		if (restore.current) {
 			const place = restore.current;
 			const anchor = el.querySelector<HTMLElement>(`[data-entry="${CSS.escape(place.id)}"]`);
 			if (anchor) {
-				el.scrollTop += anchor.getBoundingClientRect().top - el.getBoundingClientRect().top - place.offset;
+				const offset = place.unit === "css" ? place.offset : toCss(place.offset, el);
+				const target = el.scrollTop + toCss(anchor.getBoundingClientRect().top - el.getBoundingClientRect().top, el) - offset;
+				el.scrollTop = target;
+				// WebKit keeps scrollTop in whole CSS px and rounds a write down, a screen px or more at display zoom.
+				if (Math.abs(el.scrollTop - target) >= 0.5) el.scrollTop = Math.round(target);
 				restore.current = undefined;
 			} else if (view && limit >= place.limit) {
 				// The remembered entry is gone (another branch, or compacted away): fall back to the newest end.
@@ -555,16 +718,15 @@ export function ThreadView({
 		[host, threadId],
 	);
 	const loadOlder = async () => {
-		const first = older[0]?.id ?? view?.entries[0]?.id;
+		const first = older[0]?.id ?? kept.current[0]?.id ?? view?.entries[0]?.id;
 		if (!first) return;
   setHistoryError(undefined);
   try {
 		const page = await hub.request(host, "thread.history", { threadId, before: first, limit: 200, version: view?.sourceVersion });
 		pinned.current = false;
 		// Earlier messages arrive above: keep the message being read where it is.
-		const el = scroller.current;
-		if (el) grow.current = el.scrollHeight - el.scrollTop;
-		setOlder((prev) => [...page.entries, ...prev].slice(0, pi ? 400 : undefined));
+		keepPlace.capture();
+		setOlder((prev) => [...page.entries, ...prev].slice(0, reader ? 400 : undefined));
 		setOlderMore(page.more);
   } catch (error) { setHistoryError(String(error)); }
 	};
@@ -578,7 +740,7 @@ export function ThreadView({
 			let pages = 0;
 			const loaded = () => older.some((e) => e.id === entry) || view.entries.some((e) => e.id === entry);
 			const collected: PiEntry[] = [];
-			if (!loaded() && pi) {
+			if (!loaded() && reader) {
 				try {
 					const page = await hub.request(host, "thread.history", { threadId, around: entry, version: view.sourceVersion });
 					if (cancelled) return;
@@ -675,9 +837,9 @@ export function ThreadView({
 					Compact
 				</button>
 				)}
-				{pi && <button className="btn ghost small" onClick={() => setFinding(!finding)} title={`${MOD}F`}>Find</button>}
+				{reader && <button className="btn ghost small" onClick={() => setFinding(!finding)} title={`${MOD}F`}>Find</button>}
 				{/* The open panel carries its own tabs; the top bar offers them only while it is closed. */}
-				{pi && <RarebitControls host={host} threadId={threadId} panel={panel} setPanel={setPanel} beforeLensChange={beforeLensChange} />}
+				{reader && <RarebitControls host={host} threadId={threadId} panel={panel} setPanel={setPanel} beforeLensChange={beforeLensChange} />}
 				{pi && (
 					// Less frequent actions live one click away, as in Amp's thread header; the title keeps the width.
 					<details className="t-more" ref={moreRef} onClick={(e) => (e.target as HTMLElement).closest("a, button") && moreRef.current?.removeAttribute("open")}>
@@ -714,24 +876,33 @@ export function ThreadView({
 					</div>
 				)}
 			</div>
-			{pi && finding && <SessionFind host={host} threadId={threadId} onClose={() => { setFinding(false); focusIntent("find.close"); }} onGo={() => focusIntent("find.go")} />}
-			{pi && (view?.agent as Any)?.readError && <p className="err-box" role="status">Last indexed copy · {(view!.agent as Any).readError}. New source bytes retry the read.</p>}
+			{reader && finding && <SessionFind host={host} threadId={threadId} onClose={() => { setFinding(false); focusIntent("find.close"); }} onGo={() => focusIntent("find.go")} />}
+			{reader && (view?.agent as Any)?.readError && <p className="err-box" role="status">Last indexed copy · {(view!.agent as Any).readError}. New source bytes retry the read.</p>}
    {historyError && <p className="err-box" role="status">{historyError}</p>}
 			{missing && (
 				<div className="entry-missing" role="status">
 					<span>
-						The linked entry <code>{missing}</code> could not be loaded from this copied branch{!pi && olderMore ? " within the newest 25,000 entries" : ""}. Refresh the Session and retry.
+						The linked entry <code>{missing}</code> could not be loaded from this copied branch{!reader && olderMore ? " within the newest 25,000 entries" : ""}. Refresh the Session and retry.
 					</span>
 					<button className="btn ghost small" onClick={() => setMissing(undefined)}>
 						Dismiss
 					</button>
 				</div>
 			)}
+			<div className="transcript-frame">
 			<div
 				className="scroll"
 				data-region="transcript"
+				data-end-band={END_BAND}
 				tabIndex={-1}
 				onKeyDown={(event) => {
+					// G goes to the newest end, past a frozen window's bottom.
+					if (event.key === "G" && !event.metaKey && !event.ctrlKey && !event.altKey && !isEditableTarget(event.target) && (event.target as HTMLElement).closest(".scroll, .panel-body, [data-scrollable]") === event.currentTarget) {
+						event.preventDefault();
+						event.stopPropagation();
+						toEnd();
+						return;
+					}
 					handleRegionScrollKey(event);
 					if (event.key === "i" && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && focusIntent("insert")) event.preventDefault();
 				}}
@@ -739,7 +910,9 @@ export function ThreadView({
 				onScroll={(e) => {
 					const el = e.currentTarget;
 					keepPlace.onScroll();
+					noteAway();
 					if (el.scrollTop < 600 && !restore.current) growWindow();
+					if (el.scrollHeight - el.scrollTop - el.clientHeight < 600 && !restore.current) growBelow();
 					savePlace();
 				}}
 			>
@@ -751,20 +924,26 @@ export function ThreadView({
 							{(view.hiddenBefore || older.length > 0) && olderMore && (
 								<div style={{ textAlign: "center" }}>
 									<button className="btn small" onClick={() => void loadOlder()}>
-										{pi ? "Read an earlier page" : "Show earlier messages (before the active context)"}
+										{reader ? "Read an earlier page" : "Show earlier messages (before the active context)"}
 									</button>
 								</div>
 							)}
 							{older.length > 0 && (
 								<>
-									<Entries entries={pi ? older.filter((e) => !view.entries.some((v) => v.id === e.id)) : older} live={NO_LIVE} host={host} threadId={threadId} onOpenConversation={openConversation} canFork={!pi} lens={lens} />
-									<div className="compaction">{pi ? "Newest messages below · intermediate entries may be omitted" : "The model's active context starts below"}</div>
+									<Entries entries={reader ? older.filter((e) => !shown.some((v) => v.id === e.id)) : older} live={NO_LIVE} host={host} threadId={threadId} onOpenConversation={openConversation} canFork={!pi} lens={lens} />
+									<div className="compaction">{reader ? "Newest messages below · intermediate entries may be omitted" : "The model's active context starts below"}</div>
 								</>
 							)}
 							{view.entries.length === 0 && !busy && <div className="empty">Send a message to start.</div>}
-							<Entries entries={shown} live={view.live} host={host} threadId={threadId} onOpenConversation={openConversation} canFork={!pi} lens={lens} busy={busy} />
-							<LivePartial live={view.live} />
-							{busy && !(view.live as Any)?.generation?.message && !((view.live as Any)?.tools ?? []).some((t: Any) => t.status !== "done") && (
+							{segments(shown, omitted.current, head.current).map((part, i, parts) => (
+								<Fragment key={part.key}>
+									{i > 0 && <div className="omitted">Some entries after this one were never shown here. ↓ new goes to the newest.</div>}
+									<Entries entries={part.rows} live={view.live} host={host} threadId={threadId} onOpenConversation={openConversation} canFork={!pi} lens={lens} busy={i === parts.length - 1 && tailPainted() && busy} />
+								</Fragment>
+							))}
+							{/* Live output belongs after the newest entry; a frozen window ends earlier. */}
+							{tailPainted() && <LivePartial live={view.live} />}
+							{busy && tailPainted() && !(view.live as Any)?.generation?.message && !((view.live as Any)?.tools ?? []).some((t: Any) => t.status !== "done") && (
 								<div className="status-line">
 									<span className="spinner" /> {ACTIVITY_LABEL[summary?.activity ?? "thinking"]}…
 								</div>
@@ -773,6 +952,16 @@ export function ThreadView({
 						</>
 					)}
 				</div>
+				<div className="new-below" role="status">
+					{/* A reader away from the end cannot see live output: the status row says the thread is still working. */}
+					{fresh !== 0 ? (
+						<button className="btn small" title="Go to the newest entry and follow" onClick={toEnd}>↓ {fresh === "some" ? "" : `${fresh} `}new{away && busy ? " · working…" : ""}</button>
+					) : (
+						away && busy && <span className="note">working…</span>
+					)}
+				</div>
+			</div>
+			{pi && <CompanionScrollbar host={host} threadId={threadId} version={view?.sourceVersion} missingEntry={missing} />}
 			</div>
 			{summary && attentionOf(summary).length > 0 && (
 				// Why the sidebar marks this Session with "!", said where the owner acts on it.

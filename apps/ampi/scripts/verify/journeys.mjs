@@ -288,6 +288,7 @@ async function disclosureRows(p) {
     const head = p.locator('.transcript :is(summary, .tool-head)').nth(i);
     if (!(await head.isVisible())) continue;
     await head.evaluate(el => el.scrollIntoView({ block: 'center' }));
+    await p.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
     const row = await head.evaluate(el => {
       const r = el.getBoundingClientRect();
       const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
@@ -824,7 +825,7 @@ export const journeys = [
         const reason = await row.getAttribute('title');
         assert.match(reason, /\d+ open · (asked .+ ago|ask time unknown)/);
         await row.click();
-        await p.waitForURL(/#\/v\/arcs\/devbox\//);
+        await p.waitForURL(/#\/v\/arcs\/devbox(?:%23pi)?\//);
         await p.getByRole('region', { name: 'Evergreen context' }).getByRole('heading', { level: 2, name: /^Needs you/ }).waitFor();
         await j.goto('#/v/overview');
         await card.waitFor();
@@ -1190,6 +1191,11 @@ export const journeys = [
       };
       const scroller = p.locator('[data-region="transcript"]');
       const shown = text => p.locator('.transcript').getByText(text, { exact: false }).first().waitFor({ timeout: 20_000 });
+      // Away readers freeze their painted window. Source admission does not require new rows to paint.
+      const admitted = text => assertEventually(async () => {
+        const source = await topicSnapshot({ port: j.state.port, host: 'devbox', auth: { bearer: readFileSync(join(j.state.run, 'hub.key'), 'utf8').trim() }, topic: { kind: 'thread', threadId: 'pi:sess-verify-a20' } });
+        return source.entries.some(entry => JSON.stringify(entry).includes(text));
+      }, `the reader source did not admit ${text}`, 20_000);
       const where = () => scroller.evaluate(el => ({ top: Math.round(el.scrollTop), gap: Math.round(el.scrollHeight - el.scrollTop - el.clientHeight) }));
       await j.step('follow-through-collapse', 'At the bottom, collapse the tool call above, then a reply streams in; the view follows it', async () => {
         await scroller.evaluate(el => { el.scrollTop = el.scrollHeight; });
@@ -1210,7 +1216,7 @@ export const journeys = [
         await j.settle();
         const before = await where();
         for (const k of [1, 2, 3]) reply(`A20-stream-${k}`);
-        await shown('A20-stream-3');
+        await admitted('A20-stream-3');
         await j.settle();
         const after = await where();
         assert(Math.abs(after.top - before.top) <= 2, `the reader moved ${before.top} → ${after.top} (${after.gap} px above the bottom)`);
@@ -1226,11 +1232,12 @@ export const journeys = [
         await j.goto('#/v/overview');
         await p.locator('.overview').waitFor();
         await p.goBack();
-        await shown('A20-stream-3');
+        await scroller.waitFor();
+        await admitted('A20-stream-3');
         const at = () => scroller.evaluate((el, id) => { const e = el.querySelector(`[data-entry="${CSS.escape(id)}"]`); return e && Math.round(e.getBoundingClientRect().top - el.getBoundingClientRect().top); }, before.entry);
         await assertEventually(async () => { const y = await at(); return y !== null && Math.abs(y - before.y) <= 4; }, `Back did not restore entry ${before.entry} at ${before.y}`);
         reply('A20-after-back');
-        await shown('A20-after-back');
+        await admitted('A20-after-back');
         await j.settle();
         const after = await at();
         assert(after !== null && Math.abs(after - before.y) <= 4, `entry ${before.entry} moved ${before.y} → ${after} after a reply`);
@@ -1605,7 +1612,7 @@ export const journeys = [
       let estimateCalls;
       await j.step('open-arc', 'Open the big Session Arc from the inventory', async () => {
         await p.locator('.cos-session-name a[href*="pi%3Asess-big"]').click();
-        await p.waitForURL(/arcs\/devbox\/pi%3Asess-big/);
+        await p.waitForURL(/arcs\/devbox(?:%23pi)?\/pi%3Asess-big/);
         await p.getByRole('heading', { level: 1, name: /^Arc · / }).waitFor();
         const toolbar = await p.locator('.cos-toolbar span').first().innerText();
         assert.match(toolbar, /^devbox · (\d+) chunks · [1-9]\d* labelled$/);
@@ -1838,6 +1845,17 @@ export const journeys = [
       const p = j.page;
       await j.goto(thread('worker-gui', 'rarebit'));
       await p.locator('.rb-message').first().waitFor();
+      await j.step('retired-derivations', 'Read Rarebits and open Models; Summary and Recap have no controls', async () => {
+        assert.equal(await p.getByRole('button', { name: /^(Recap|Summary)$/ }).count(), 0);
+        await p.locator('.rb-controls').getByRole('button', { name: 'Timeline', exact: true }).waitFor();
+        await p.locator('.rb-controls').getByRole('button', { name: 'Arc', exact: true }).waitFor();
+        await p.getByRole('button', { name: 'Models', exact: true }).click();
+        await p.getByLabel('Side ask model', { exact: true }).waitFor();
+        assert.equal(await p.getByLabel('Recap model', { exact: true }).count(), 0);
+        assert.equal(await p.locator('.rb-view [role="alert"]').count(), 0);
+        await p.getByRole('button', { name: 'Models', exact: true }).click();
+        return { messages: await p.locator('.rb-message').count(), retiredControls: 0 };
+      }, { expectSide: s => assert.equal(s.askCalls, 0, 'reading Rarebits called the model') });
       await j.step('top-row', 'Read the Rarebit top row', async () => {
         const meta = await p.locator('.rb-header .rb-meta').first().innerText();
         for (const name of ['Diagnosis', 'Models']) await p.getByRole('button', { name, exact: true }).waitFor();

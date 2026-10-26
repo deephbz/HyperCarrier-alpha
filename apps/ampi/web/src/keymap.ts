@@ -186,5 +186,16 @@ export function handleRegionScrollKey(event: ReactKeyboardEvent<HTMLElement>) {
 	// Jumps are instant: a windowed transcript loads entries near its edge and keeps place, which cancels a smooth scroll.
 	if (event.key === "g") scroller.scrollTo({ top: 0 });
 	else if (event.key === "G") scroller.scrollTo({ top: scroller.scrollHeight });
-	else scroller.scrollBy({ top: pages[event.key as keyof typeof pages], behavior: "smooth" });
+	else scroller.scrollTo({ top: scrollKeyTarget(scroller, pages[event.key as keyof typeof pages], line), behavior: "smooth" });
+}
+
+/**
+ * Where a j/k/d/u step lands. A scroller that follows arrivals within `data-end-band` px of its bottom (the transcript)
+ * would pull an up step that ends inside that band back to the bottom, so an up step lands at least one line above it.
+ */
+export function scrollKeyTarget(scroller: HTMLElement, delta: number, line: number): number {
+	const top = scroller.scrollTop + delta;
+	const band = Number(scroller.dataset.endBand ?? 0);
+	if (delta >= 0 || !band) return top;
+	return Math.max(0, Math.min(top, scroller.scrollHeight - scroller.clientHeight - band - line));
 }

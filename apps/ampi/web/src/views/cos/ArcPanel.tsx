@@ -15,7 +15,7 @@ import { rememberArcShown } from "./arc-reopen.ts";
 export function AvailableModels({ failure }: { failure: ArcFailure }) {
 	const rows = failure.available;
 	if (!rows?.length) return null;
-	return <details className="cos-models"><summary>All {rows.length} models Pi lists</summary><ul>{rows.map((m) => <li key={m}><code>{m}</code></li>)}</ul></details>;
+	return <details className="cos-models"><summary>All {rows.length} models Pi lists</summary><ul className="quiet-scroll">{rows.map((m) => <li key={m}><code>{m}</code></li>)}</ul></details>;
 }
 
 export type ArcBuild = { pending: boolean; failure: string; start: () => void };

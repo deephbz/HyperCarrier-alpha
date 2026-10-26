@@ -32,7 +32,7 @@ function ArcList() {
 		<header className="cos-header"><h1>Arcs</h1><span className="cos-meta">{rows.length} long-running Sessions</span><a href={href.page("timeline")}>Timeline</a></header>
 		<p className="cos-caption">Sessions active within 96 hours, plus live Sessions. Recover the shape of a long Session. Chunks are deterministic. Project labels and the context tree build when you ask, and automatically after an agent stop in a running Session.</p>
 		<FeedStatus feeds={feeds} connected={connected} />
-		<div className="cos-scroll cos-list">
+		<div className="cos-scroll quiet-scroll cos-list">
 			<div className="cos-list-head cos-arc-list-head"><span>Session</span><span>Context</span><span>Span</span><span>Entries</span><span>Explore</span></div>
 			{rows.slice(0, limit).map((s) => <div className="cos-list-row cos-arc-list-row" key={s.ref}>
 				<div className="cos-session-name"><a href={href.page("arcs", [s.host, s.threadId])} title={s.title}>{s.title}</a><span>{s.host} · {dateTime(s.start)} → {dateTime(s.end)}</span></div>
@@ -81,7 +81,7 @@ export function ArcPageView({ host, threadId, value, stale, error, build }: { ho
 				: failed && <><p className="cos-error" role={failed.role}>{failureText(failed.failure, v.keptAt, labelRetry(failed.failure, v))}{v.keptAt ? "" : " Deterministic chunks remain below."}</p><AvailableModels failure={failed.failure} /></>}
 			{v.job?.state === "running" && <p className="cos-notice" role="status">{progressText(v.job)}</p>}
 			{stuckText(v) && <p className="cos-notice" role="status">{stuckText(v)}</p>}
-			<div className="cos-scroll cos-arc-body">
+			<div className="cos-scroll quiet-scroll cos-arc-body">
 				<ArcContextView value={v} />
 				{v.synthesis && <p className="cos-headline">{v.synthesis.headline}<span className="cos-meta">{v.synthesis.model ? ` · ${v.synthesis.model}` : ""}{v.synthesis.builtAt ? ` · built ${dateTime(v.synthesis.builtAt)}` : ""}{v.coverage.synthesisCurrent ? " · current" : ""}</span></p>}
 				<section aria-label="Projects"><h2>Projects <span className="cos-meta">inferred</span></h2>{!v.cards.length ? <p className="cos-meta">No project labels yet. The chunks below are available without a model.</p> : v.cards.map((card, i) => <div className="cos-project" key={card.name}><span className={`cos-project-mark cos-color-${i % 6}`} /><div><a href={href.thread(host, threadId, { entry: card.resumeEntryId })}>{card.name}</a><span className="cos-meta"> · {card.chunks} chunks{card.inferred ? ` · ${card.inferred.status}` : ""}</span>{card.inferred && <p title={card.inferred.full?.summary}>{card.inferred.summary}</p>}</div></div>)}</section>

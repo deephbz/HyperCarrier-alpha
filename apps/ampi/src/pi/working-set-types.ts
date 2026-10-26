@@ -13,7 +13,7 @@ export const derivedVersion = (source: string) => `${DERIVATION_VERSION}/${CHUNK
 /** Whether a stored derived version used these index rules (any chunk rules); otherwise the entries rebuild. */
 export const sameIndex = (version: string) => version.startsWith(`${DERIVATION_VERSION}:`) || version.startsWith(`${DERIVATION_VERSION}/`);
 /** Bump when `derive` adds or changes a Session summary field; unchanged Sessions then re-derive without an index rebuild. */
-export const SUMMARY_VERSION = 2;
+export const SUMMARY_VERSION = 3;
 export const WINDOW_ENTRIES = 400;
 /** UTF-8 bytes in one page of a full projected entry. */
 export const ENTRY_PAGE_BYTES = 64 * 1024;
@@ -33,13 +33,14 @@ export type WorkerJob =
 export type Series = {
  start: number; end: number; buckets: [number, number, number][];
  entries: [number, string][]; marks: [number, string, "stop" | "error"][];
- stopped: boolean; entryCount: number; omittedHints: number; omittedMarks: number;
+ stopped: boolean; priced: boolean; entryCount: number; omittedHints: number; omittedMarks: number;
 };
 export type Derived = {
  version: string; bytes: number; asOf: number; invalidLines: number; count: number; tip: string | null;
  session: { id: string; session: string; ref: string; cwd?: string | null; started?: number | null; updated?: number | null; title?: string | null };
  summaryVersion?: number;
- cost: number; model?: string; contextTokens?: number; cacheHit?: number; preview?: string;
+ /** `cost` sums the entries' prices; `priced` says whether any entry reported one (else the figure is no price). */
+ cost: number; priced: boolean; model?: string; contextTokens?: number; cacheHit?: number; preview?: string;
  /** Tool calls of the last turn that are still open (src/shared/tool-state.ts). */
  openCalls?: number;
  timeline: Series;

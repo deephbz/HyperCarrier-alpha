@@ -110,6 +110,7 @@ export function NewAgentDialog({ hosts, defaultHost, beside, onClose }: { hosts:
 			<div className="field">
 				First message (optional)
 				<textarea
+					className="quiet-scroll"
 					rows={3}
 					value={prompt}
 					onChange={(e) => setPrompt(e.target.value)}

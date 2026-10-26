@@ -22,6 +22,7 @@ const kinds = (): Kinds => ({ user: 0, continuation: 0, stop: 0, toolCalls: 0, t
 const positive = (n: unknown) => typeof n === "number" && Number.isFinite(n) && n > 0 ? n : 0;
 // The reader sets a missing price to null; a cost object or number may also arrive, and totals skip anything else.
 const costOf = (u: PiReaderEntry["usage"]) => positive(typeof u?.cost === "number" ? u.cost : u?.cost?.total);
+const hasPrice = (u: PiReaderEntry["usage"]) => { const c = typeof u?.cost === "number" ? u.cost : u?.cost?.total; return typeof c === "number" && Number.isFinite(c); };
 const parse = <T,>(x: unknown): T => JSON.parse(String(x));
 const body = (e: PiReaderEntry) => e.blocks?.filter((b) => b.type === "text").map((b) => b.text ?? "").join("\n") ?? e.text ?? "";
 
@@ -90,7 +91,7 @@ function derive(source: Source, reader: any, db: ReturnType<typeof openWorkingSe
  const session = reader.session();
  const records: PiReaderEntry[] = [], nativeMeta: any[] = [], occurrences: any[] = [], rarebitChars = new Map<string, number>();
  const buckets = new Map<number, [number, number, number]>(), hints: [number, string][] = [], marks: [number, string, "stop" | "error"][] = [];
- let whole = kinds(), live = kinds(), totalChars = 0, rareChars = 0, count = 0, cost = 0, staleItems = 0;
+ let whole = kinds(), live = kinds(), totalChars = 0, rareChars = 0, count = 0, cost = 0, staleItems = 0, priced = false;
  const rarebitHash = createHash("sha256");
  let model: string | undefined, contextTokens: number | undefined, cacheHit: number | undefined, lastPreview: string | undefined;
  let lastUser = -1, lastStop = -1, selector = "", title = session.title;
@@ -118,7 +119,7 @@ function derive(source: Source, reader: any, db: ReturnType<typeof openWorkingSe
    // A compaction restarts the agent's context, so it makes a built Arc stale like a new message does.
    if (r.kind !== "error") { staleItems++; rarebitHash.update(JSON.stringify([r.id, r.kind, r.text])); }
   }
-  cost += positive(costOf(e.usage));
+  cost += positive(costOf(e.usage)); priced ||= hasPrice(e.usage);
   // The reader's names for the turn, call and result evidence that projectEntry maps to user, tool and tool-result.
   if (e.kind === "human") open.add({ kind: "user" });
   else if (e.kind === "assistant") open.add({ kind: "assistant", stop: e.stop, blocks: (e.blocks ?? []).map((b) => b.type === "toolCall" ? { type: "tool", callId: String(b.id) } : b) });
@@ -158,11 +159,11 @@ function derive(source: Source, reader: any, db: ReturnType<typeof openWorkingSe
  return {
   version, summaryVersion: SUMMARY_VERSION, bytes: reader.info().bytes, asOf: Date.now(), invalidLines: reader.info().invalidLines, count, tip: session.tip,
   session: { id: session.id, session: session.id.slice(3), ref: session.ref, cwd: session.cwd, started: session.started, updated: session.updated, title },
-  cost, ...(model ? { model } : {}), ...(contextTokens ? { contextTokens } : {}), ...(cacheHit !== undefined ? { cacheHit } : {}), ...(lastPreview ? { preview: lastPreview } : {}),
+  cost, priced, ...(model ? { model } : {}), ...(contextTokens ? { contextTokens } : {}), ...(cacheHit !== undefined ? { cacheHit } : {}), ...(lastPreview ? { preview: lastPreview } : {}),
   ...(open.ids.size ? { openCalls: open.ids.size } : {}),
   timeline: { start: hints[0]?.[0] ?? 0, end: hints.at(-1)?.[0] ?? 0, entries: sampled, entryCount: count,
    omittedHints: hints.length - sampled.length, marks: marks.slice(-256), omittedMarks: Math.max(0, marks.length - 256),
-   stopped: marks.at(-1)?.[2] === "stop" && lastStop > lastUser, buckets: [...buckets.values()].sort((a, b) => a[0] - b[0]) },
+   stopped: marks.at(-1)?.[2] === "stop" && lastStop > lastUser, priced, buckets: [...buckets.values()].sort((a, b) => a[0] - b[0]) },
   arc: { chunks: arc.chunks, excludedEntries: arc.excludedEntries, shortenedChunks: arc.shortenedChunks, inputChars },
   rarebit: { stats: { ...counts, rarebitTokens: Math.ceil(rareChars / 4), totalTokens: Math.ceil(totalChars / 4), ratio: totalChars ? rareChars / totalChars : null },
    diagnosis: { session: tokens(whole), live: tokens(live), entries: count, ms: Math.round(performance.now() - started) }, selector,
