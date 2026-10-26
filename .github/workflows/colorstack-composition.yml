@@ -3,7 +3,8 @@ name: Colorstack composition
 on:
   pull_request:
   push:
-    branches: [main]
+    # A release side branch, such as release/durable, gets the same checks as main.
+    branches: [main, "release/**"]
 
 permissions:
   contents: read
