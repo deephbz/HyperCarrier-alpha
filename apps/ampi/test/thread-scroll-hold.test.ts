@@ -2,7 +2,8 @@ import "./bound.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Page } from "playwright";
-import { ENGINES, anchor, entries, frames, gap, grown, offsetOf, open, scrollAway, scrollTop, streaming, view } from "./thread-scroll-fixture.ts";
+import { END_BAND } from "../web/src/keep-place.ts";
+import { ENGINES, anchor, entries, frames, gap, grown, offsetOf, open, scrollAway, scrollTop, settled, streaming, view } from "./thread-scroll-fixture.ts";
 import { engineSkip } from "./engines.ts";
 
 // The real ThreadView with the real stylesheet in Chromium; only the hub is a script on the page's WebSocket. A reader
@@ -89,13 +90,21 @@ test("scroll hold: arrivals below a reader away from the end show \"↓ N new\";
 	assert.equal(await status.getByRole("button").count(), 0, "a following reader sees no count");
 });
 
-test("scroll hold: one end band; a reader 30 px above the end follows arrivals", async (t) => {
+test("scroll hold: one end band; a reader who scrolls down to 30 px above the end follows arrivals, and 30 px up leaves", async (t) => {
 	const { page, publish } = await open(t, 200);
-	await page.evaluate(() => { const el = document.querySelector<HTMLElement>("[data-region=transcript]")!; el.scrollTop = el.scrollHeight - el.clientHeight - 30; });
+	const place = (gap: number) => page.evaluate((gap) => { const el = document.querySelector<HTMLElement>("[data-region=transcript]")!; el.scrollTop = el.scrollHeight - el.clientHeight - gap; }, gap);
+	await place(600);
+	await frames(page);
+	await place(30);
 	await frames(page);
 	await publish(202);
-	assert.ok(await gap(page) <= 2, `a reader inside the end band follows; gap ${await gap(page)}`);
+	assert.ok(await gap(page) <= 2, `a reader who scrolls down into the end band follows; gap ${await gap(page)}`);
 	assert.equal(await page.locator("[data-region=transcript] [role=status] button").count(), 0, "a reader inside the end band sees no count");
+	await place(30);
+	await frames(page);
+	await publish(204);
+	assert.ok(await gap(page) >= 30, `a reader who scrolls 30 px up from the end leaves it; gap ${await gap(page)}`);
+	assert.equal(await page.locator("[data-region=transcript] [role=status] button").count(), 1, "the reader who left sees the count");
 });
 
 test("scroll hold: k and u from the end leave the end band, so arrivals do not pull the reader back", async (t) => {
@@ -320,6 +329,43 @@ for (const engine of ENGINES) test(`scroll hold (${engine}): a wheel up during a
 	await page.keyboard.press("Shift+G");
 	await grow(21);
 	assert.ok((await tailBelow(page)).below <= 1 && await gap(page) <= 2, `G follows again; gap ${await gap(page)}`);
+});
+
+// A reader's scroll up leaves the end at once, whatever its step: a trackpad sends steps of a few px, and Linux WebKit
+// animates one wheel in steps. A stream render between two steps inside the end band must not pull the reader back
+// (failure: Linux CI, steps under END_BAND kept the pin). Only the reader's scroll down into the band follows again.
+for (const engine of ENGINES) for (const step of [20, 40]) test(`scroll hold (${engine}): wheel steps of ${step} px up during a stream leave the end; a scroll down to it follows again`, { skip: engineSkip(engine) }, async (t) => {
+	const { page, send } = await open(t, 201, "pi", engine);
+	let lines = 10;
+	const grow = async () => {
+		lines++;
+		send(view(201, grown(lines)));
+		await page.waitForFunction((lines) => [...document.querySelectorAll("[data-entry] p")].at(-1)?.textContent?.includes(`line ${lines} `), lines);
+		await frames(page);
+	};
+	await grow();
+	assert.ok(await gap(page) <= 2, `the end follows the stream; gap ${await gap(page)}`);
+	const box = (await page.locator("[data-region=transcript]").boundingBox())!;
+	await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+	let last = 0;
+	for (let i = 1; i <= 15; i++) {
+		await page.mouse.wheel(0, -step);
+		await frames(page);
+		await grow();
+		const now = await gap(page);
+		assert.ok(now > 2 && now >= last - 1, `after ${i} steps the stream pulled the reader back: gap ${now}, before ${last}`);
+		last = now;
+	}
+	await settled(page);
+	assert.ok(await gap(page) > END_BAND, `the steps leave the end band; gap ${await gap(page)}`);
+	const read = await anchor(page);
+	for (let i = 0; i < 5; i++) await grow();
+	const at = await offsetOf(page, read.id);
+	assert.ok(at !== null && Math.abs(at - read.offset) <= 1, `the read entry moved from ${read.offset} to ${at}`);
+	await page.mouse.wheel(0, 100_000);
+	await settled(page);
+	await grow();
+	assert.ok((await tailBelow(page)).below <= 1 && await gap(page) <= 2, `a scroll down to the end follows again; gap ${await gap(page)}`);
 });
 
 // Owner incident (AmPi macOS app): a reader away from the end scrolls down with the trackpad while a reply streams. The

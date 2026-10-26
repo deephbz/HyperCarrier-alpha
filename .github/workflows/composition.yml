@@ -35,8 +35,10 @@ jobs:
   webkit:
     # AmPi.app renders in macOS WebKit, so its browser cases run on macOS.
     runs-on: macos-latest
+    # macos-latest has 3 cores; the default pool of 8 overloads it.
     env:
       AMPI_TEST_ENGINES: webkit
+      AMPI_TEST_CONCURRENCY: 3
     steps:
       - uses: actions/checkout@v4
         with:

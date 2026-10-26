@@ -135,4 +135,17 @@ export async function scrollAway(page: Page) {
 	await page.mouse.wheel(0, -4000);
 	await frames(page);
 }
+/**
+ * Waits until the transcript's scrollTop holds for five frames. Linux WebKit animates one wheel over about 200 ms;
+ * macOS WebKit and Chromium apply it at once. A reader's place sampled before then is still moving.
+ */
+export const settled = (page: Page) => page.evaluate(() => new Promise<void>((done) => {
+	const el = document.querySelector<HTMLElement>("[data-region=transcript]")!;
+	let last = el.scrollTop, still = 0;
+	const tick = () => {
+		if (el.scrollTop !== last) { last = el.scrollTop; still = 0; } else if (++still >= 5) return done();
+		requestAnimationFrame(tick);
+	};
+	requestAnimationFrame(tick);
+}));
 export const scrollTop = (page: Page) => page.evaluate(() => document.querySelector<HTMLElement>("[data-region=transcript]")!.scrollTop);

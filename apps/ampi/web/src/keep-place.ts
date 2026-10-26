@@ -70,9 +70,9 @@ export const END_BAND = 60;
 export const atEnd = (el: HTMLElement, band = 2) => el.scrollHeight - el.scrollTop - el.clientHeight <= band;
 
 /**
- * A reader recorded at scrollTop `top` has scrolled up and away from the bottom; their scroll event may not have arrived
+ * A reader pinned at scrollTop `top` has scrolled up and away from the bottom; their scroll event may not have arrived
  * yet. useKeepPlace turns scroll anchoring off, so only the reader or a clamp moves scrollTop; it tells them apart with
- * `clamped`.
+ * `clamped`. The transcript asks with the 2 px edge, not its end band: a scroll up leaves at once, whatever its step.
  */
 export function leftBottom(el: HTMLElement, top: number, band = 2) {
 	return el.scrollTop < top - 2 && !atEnd(el, band);
@@ -131,6 +131,12 @@ export function useKeepPlace(
 	const low = useRef(0);
 	/** Reads mutations not yet delivered: a render's layout effects run before its MutationObserver callback. */
 	const mutations = useRef<MutationObserver | undefined>(undefined);
+	/**
+	 * The highest recorded scrollTop since the pin began, or since the bottom. useKeepPlace turns scroll anchoring off, so
+	 * only the reader or a clamp lowers scrollTop; a drop below this height is the reader's own scroll up, even in steps
+	 * inside the end band.
+	 */
+	const pinTop = useRef<number | undefined>(undefined);
 	/** Whether scrollTop sits below the record only by a clamp; the record (pin and place) then still holds. */
 	const clamp = useCallback(() => {
 		const el = scroller.current;
@@ -142,25 +148,27 @@ export function useKeepPlace(
 	const remember = useCallback(() => {
 		const el = scroller.current;
 		if (!el) return;
-		if (atEnd(el, band) && tail()) pinned.current = true;
 		saved.current = capturePlace(el, selector, attribute, pinned.current);
 		size.current = { width: el.clientWidth, height: el.clientHeight };
 		top.current = el.scrollTop;
+		pinTop.current = !pinned.current ? undefined : pinTop.current === undefined || el.scrollTop > pinTop.current || atEnd(el) ? el.scrollTop : pinTop.current;
 		// Mutations before this record are measured in it.
 		mutations.current?.takeRecords();
 		low.current = el.scrollHeight;
-	}, [scroller, selector, attribute, pinned, band, tail]);
-	// The one reader of "follow the bottom": a pinned reader who moved up since the last record has left the bottom, even
-	// if their scroll event (a frame after the scroll) has not arrived yet. Every snap and capture asks this, so the
-	// answer does not depend on which layout effect or click handler runs first. Only the reader leaves: a clamp does not.
+	}, [scroller, selector, attribute, pinned]);
+	// The one reader of "follow the bottom": a pinned reader who moved up since the pin began has left the bottom at once,
+	// whatever the step (a trackpad sends a few px, an animated wheel steps), even if their scroll event (a frame after
+	// the scroll) has not arrived yet. Every snap and capture asks this, so the answer does not depend on which layout
+	// effect or click handler runs first. Only the reader leaves: a clamp does not.
 	const following = useCallback(() => {
 		const el = scroller.current;
-		if (el && pinned.current && leftBottom(el, top.current, band) && !clamp()) {
+		if (el && pinned.current && leftBottom(el, pinTop.current ?? top.current) && !clamp()) {
 			pinned.current = false;
+			pinTop.current = undefined;
 			saved.current = capturePlace(el, selector, attribute, false);
 		}
 		return pinned.current;
-	}, [scroller, selector, attribute, pinned, band, clamp]);
+	}, [scroller, selector, attribute, pinned, clamp]);
 	const capture = useCallback((options?: Options) => {
 		const el = scroller.current;
 		if (!el) return;
@@ -190,7 +198,9 @@ export function useKeepPlace(
 		if (resized()) return;
 		// A clamp's scroll event is no scroll: the pin and the place stay until the content grows back.
 		if (clamp()) return;
-		pinned.current = atEnd(el, band) && tail();
+		// The reader's scroll up leaves the end (`following`); only their scroll down into the end band follows again.
+		if (following()) pinned.current = tail();
+		else if (el.scrollTop > top.current && atEnd(el, band) && tail()) pinned.current = true;
 		remember();
 	}, [scroller, selector, attribute, following, pinned, band, tail, resized, remember, clamp]);
 	// Scroll anchoring stays off from mount to unmount. React runs every layout cleanup of a commit before its effects:
