@@ -907,6 +907,7 @@ export function ThreadView({
 					if (event.key === "i" && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && focusIntent("insert")) event.preventDefault();
 				}}
 				ref={scroller}
+				onWheel={keepPlace.onWheel}
 				onScroll={(e) => {
 					const el = e.currentTarget;
 					keepPlace.onScroll();

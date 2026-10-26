@@ -142,7 +142,7 @@ export function RarebitView({ host, threadId, entry }: { host: string; threadId:
 			{stale && value && <div className="rb-error" role="status">Last local copy · Host may be away. Reconnect the Host to see new messages.</div>}
 			{failure && <div className="rb-error" role="alert">Rarebit: {failure} The panel retries when the Session changes.</div>}
 		</header>
-		<div className="rb-scroll quiet-scroll" ref={scroller} onScroll={() => { keepPlace.onScroll(); if (tailSpace) pinned.current = false; updateSteps(); }}>
+		<div className="rb-scroll quiet-scroll" ref={scroller} onWheel={keepPlace.onWheel} onScroll={() => { keepPlace.onScroll(); if (tailSpace) pinned.current = false; updateSteps(); }}>
 			{!value && !failure ? <p className="rb-state" role="status">Reading the Session…</p> : !count && !failure ? <p className="rb-state">No Rarebits yet. Human messages and agent prose appear here; tool traffic stays in the transcript.</p> : null}
 			{entry && value && !value.items.some((i) => i.id === entry) && <p className="rb-state">This entry is outside this Rarebit page or is not selected. Read it in the transcript.</p>}
 			{entry && hasSide && <p className="rb-state">End the side ask to return to the linked Rarebit.</p>}

@@ -331,6 +331,24 @@ for (const engine of ENGINES) test(`scroll hold (${engine}): a wheel up during a
 	assert.ok((await tailBelow(page)).below <= 1 && await gap(page) <= 2, `G follows again; gap ${await gap(page)}`);
 });
 
+// The wheel up leaves the end at its input. macOS WebKit applies a wheel's scroll asynchronously, so a stream render can
+// run before the scroll lands (failure: macOS CI, the render followed and ate the wheel). The wheel here moves nothing.
+for (const engine of ENGINES) test(`scroll hold (${engine}): a wheel up whose scroll has not landed leaves the end before the next render`, { skip: engineSkip(engine) }, async (t) => {
+	const { page, send } = await open(t, 201, "pi", engine);
+	const grow = async (lines: number) => {
+		send(view(201, grown(lines)));
+		await page.waitForFunction((lines) => [...document.querySelectorAll("[data-entry] p")].at(-1)?.textContent?.includes(`line ${lines} `), lines);
+		await frames(page);
+	};
+	await grow(10);
+	assert.ok(await gap(page) <= 2, `the reader starts at the end; gap ${await gap(page)}`);
+	const before = await scrollTop(page);
+	await page.locator("[data-region=transcript]").dispatchEvent("wheel", { deltaY: -300, bubbles: true });
+	await grow(11);
+	for (let i = 0; i < 4; i++) await frames(page);
+	assert.ok(Math.abs(await scrollTop(page) - before) <= 1 && await gap(page) > 2, `the render kept the read place; moved ${await scrollTop(page) - before}, gap ${await gap(page)}`);
+});
+
 // A reader's scroll up leaves the end at once, whatever its step: a trackpad sends steps of a few px, and Linux WebKit
 // animates one wheel in steps. A stream render between two steps inside the end band must not pull the reader back
 // (failure: Linux CI, steps under END_BAND kept the pin). Only the reader's scroll down into the band follows again.

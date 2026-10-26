@@ -169,6 +169,19 @@ export function useKeepPlace(
 		}
 		return pinned.current;
 	}, [scroller, selector, attribute, pinned, clamp]);
+	// The reader's wheel up leaves the end at its input, before its scroll lands. WebKit on macOS applies a wheel's scroll
+	// asynchronously: a render between the wheel and its scroll still sees scrollTop at the end and would follow. A wheel
+	// that a nested scroller takes, a pinch zoom, or a scroller already at its top moves nothing here.
+	const onWheel = useCallback((event: { deltaY: number; ctrlKey: boolean; target: EventTarget | null }) => {
+		const el = scroller.current;
+		if (!el || !pinned.current || event.deltaY >= 0 || event.ctrlKey || el.scrollTop <= 0) return;
+		for (let node = event.target instanceof Element ? event.target : null; node && node !== el; node = node.parentElement) {
+			if (node.scrollTop > 0 && /auto|scroll/.test(getComputedStyle(node).overflowY)) return;
+		}
+		pinned.current = false;
+		pinTop.current = undefined;
+		saved.current = capturePlace(el, selector, attribute, false);
+	}, [scroller, selector, attribute, pinned]);
 	const capture = useCallback((options?: Options) => {
 		const el = scroller.current;
 		if (!el) return;
@@ -258,5 +271,5 @@ export function useKeepPlace(
 			mutations.current = undefined;
 		};
 	}, [scroller, selector, attribute, resized, following, tail, remember, clamp]);
-	return { capture, onScroll, following };
+	return { capture, onScroll, onWheel, following };
 }
