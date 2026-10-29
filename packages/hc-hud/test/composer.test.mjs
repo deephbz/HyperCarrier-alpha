@@ -1,3 +1,4 @@
+import "./home.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
@@ -9,11 +10,11 @@ const slot = (over = {}) => ({ v: 1, key: "context.budget", producer: "hc-auto-c
 function harness(mode = "tui") {
   const emitter = new EventEmitter(), trace = [], notifications = [];
   const events = { emit: (...args) => emitter.emit(...args), on(name, fn) { emitter.on(name, fn); return () => emitter.off(name, fn); } };
-  let footer, entries = [], reads = 0, leaf = "leaf";
+  let footer, entries = [], reads = 0, usageReads = 0, nameReads = 0, leaf = "leaf", name = "test";
   const ctx = { mode, cwd: "/workspace/项目", model: { provider: "p", id: "claude-fable-5-1", contextWindow: 1000000 },
-    getContextUsage: () => ({ tokens: 440000, contextWindow: 1000000 }),
+    getContextUsage: () => { usageReads++; return { tokens: 440000, contextWindow: 1000000 }; },
     sessionManager: { getSessionId: () => "session", getLeafId: () => leaf, getEntryCount: () => entries.length,
-      getEntries() { reads++; return entries; }, getCwd: () => ctx.cwd, getSessionName: () => "test" },
+      getEntries() { reads++; return entries; }, getCwd: () => ctx.cwd, getSessionName() { nameReads++; return name; } },
     ui: { notify: (...args) => notifications.push(args), setFooter(factory) {
       trace.push(factory ? "set" : "clear"); footer?.dispose();
       footer = factory?.({ requestRender() { trace.push("render"); } }, { fg: (_tone, text) => text }, {
@@ -23,8 +24,8 @@ function harness(mode = "tui") {
     } },
   };
   return { pi: { events, getThinkingLevel: () => "medium" }, ctx, trace, notifications,
-    get footer() { return footer; }, get reads() { return reads; },
-    append(entry) { entries.push(entry); }, branch() { leaf = "new"; }, emitter };
+    get footer() { return footer; }, get reads() { return reads; }, get usageReads() { return usageReads; }, get nameReads() { return nameReads; },
+    append(entry) { entries.push(entry); }, rename(next) { name = next; entries.push({ type: "session_info", name: next }); }, branch() { leaf = "new"; }, emitter };
 }
 test("presence order, synchronous replay, late discovery, Session clearing, shutdown and reload", () => {
   const h = harness();
@@ -98,12 +99,24 @@ test("stats cache refreshes on append, branch, and invalidation", () => {
   const h = harness(), composer = createComposer(h.pi);
   composer.start(h.ctx);
   h.footer.render(120); h.footer.render(120);
-  assert.equal(h.reads, 1);
+  assert.equal(h.reads, 1); assert.equal(h.usageReads, 1);
   h.append({ type: "usage", usage: { cost: { total: 2 } } });
-  assert.match(h.footer.render(120)[1], /\$2.00/); assert.equal(h.reads, 2);
-  h.branch(); h.footer.render(120); assert.equal(h.reads, 3);
-  h.footer.invalidate(); h.footer.render(120); assert.equal(h.reads, 4);
+  assert.match(h.footer.render(120)[1], /\$2.00/); assert.equal(h.reads, 2); assert.equal(h.usageReads, 2);
+  h.branch(); h.footer.render(120); assert.equal(h.reads, 3); assert.equal(h.usageReads, 3);
+  h.footer.invalidate(); h.footer.render(120); assert.equal(h.reads, 4); assert.equal(h.usageReads, 4);
+  h.ctx.model = { ...h.ctx.model, contextWindow: 200000 };
+  h.footer.render(120); assert.equal(h.usageReads, 5);
   composer.setTier("minimal"); assert.doesNotMatch(h.footer.render(120)[1], /\$/);
+  composer.shutdown();
+});
+test("Session name is read once per cache key, and a rename refreshes it", () => {
+  // Pi 1.4.0 getSessionName() walks every entry, and the footer renders on every frame.
+  const h = harness(), composer = createComposer(h.pi);
+  composer.start(h.ctx);
+  h.footer.render(120); h.footer.render(120); h.footer.render(120);
+  assert.equal(h.nameReads, 1);
+  h.rename("renamed");
+  assert.match(h.footer.render(120).join("\n"), /renamed/); assert.equal(h.nameReads, 2);
   composer.shutdown();
 });
 test("slot ownership survives retraction, warns once, rejects old and invalid inputs", () => {

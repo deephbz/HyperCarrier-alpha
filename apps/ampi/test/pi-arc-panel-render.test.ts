@@ -186,7 +186,7 @@ test("arc panel split models: a Build row names its label and synthesis models, 
 		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: null }, afterEntryId: null, error: `${lastError.message} ${lastError.hint}`, errorCode: "model" };
 	const failed = renderToStaticMarkup(createElement(panel as never, props(value({ builds: [failedRun] as unknown as ArcValue["builds"], job: { state: "error", done: 0, total: 0, chunks: 2, toLabel: 0, waitingFor: null, trigger: "manual", lastError } } as Partial<ArcValue>))));
 	const alert = /role="alert">([^<]*)</.exec(failed)![1]!;
-	assert.match(alert, /^No model named anthropic\/claude-nope-9 \(per-Build model, Arc labels and synthesis\) · \d\d:\d\d( [AP]M)?\. Change or clear the per-Build model\. Available: p\/m-0, p\/m-1, \+12 more\.$/);
+	assert.match(alert, /^No model named anthropic\/claude-nope-9 \(per-Build model, Arc labels and synthesis\) · \d\d:\d\d( [AaPp][Mm])?\. Change or clear the per-Build model\. Available: p\/m-0, p\/m-1, \+12 more\.$/);
 	assert.deepEqual([alert.split("claude-nope-9").length - 1, alert.split("Available:").length - 1], [1, 1], "one model mention, one list");
 	assert.match(failed, /<details class="cos-models"><summary>All 14 models Pi lists<\/summary><ul class="quiet-scroll">(<li><code>p\/m-\d+<\/code><\/li>){14}<\/ul><\/details>/);
 	assert.match(failed, />Last Build · Arc build failed · no model calls · \$0 · anthropic\/claude-nope-9 not found<\/p>/);
@@ -208,7 +208,7 @@ test("arc copy: a queued automatic Build says how many run first; a backoff says
 	const at = new Date(2026, 9, 19, 14, 35).getTime();
 	const render = (over: Partial<ArcValue>) => tier2(renderToStaticMarkup(createElement(page as never, props(value({ nextAutoAt: at, ...over } as Partial<ArcValue>)))));
 	assert.match(render({ queuedAhead: 2 }), /2 newer messages\. Waiting for 2 automatic Builds ahead · Build arc starts now\./);
-	assert.match(render({ backoff: { failures: 3, code: "model" } }), /2 newer messages\. After 3 failures, next try [^<]*35( [AP]M)?\./);
+	assert.match(render({ backoff: { failures: 3, code: "model" } }), /2 newer messages\. After 3 failures, next try [^<]*35( [AaPp][Mm])?\./);
 	const stuck = render({ backoff: { failures: 2, code: "model" }, stuck: { chunks: ["c1"], until: "messages" } });
 	assert.doesNotMatch(stuck, /After 2 failures/);
 	for (const over of [{ queuedAhead: 1 }, { backoff: { failures: 1, code: "model" as const } }]) assert.equal(tier2(renderToStaticMarkup(createElement(panel as never, props(value({ nextAutoAt: at, ...over } as Partial<ArcValue>))))), render(over), "the panel says the same");

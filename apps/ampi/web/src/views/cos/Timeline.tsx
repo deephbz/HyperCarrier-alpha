@@ -1,4 +1,4 @@
-import { Fragment, memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { TimelineSession, TimelineValue } from "../../../../src/pi/views/cos-timeline.ts";
 import { isSessionInScope, SESSION_SCOPE_MS } from "../../../../src/shared/session-scope.ts";
 import { navigate } from "../../nav.ts";
@@ -11,6 +11,7 @@ import type { TimeRange } from "./range.ts";
 import { nextTimelineWindow, timelineWindow, windowRange } from "./window.ts";
 import { inPanel, type PanelSelection } from "./panel.ts";
 import { drawnSpan, laneSpend, laneTotal, mergeBuckets, type Unit } from "./totals.ts";
+import { anchorAt, groupSessions, orderGroups, scrollFor, timelineRows, type Anchor, type Group, type Row } from "./rows.ts";
 import { SessionTitle } from "../../components/SessionTitle.tsx";
 import { useTopic } from "../../client.ts";
 import { isPiThreadId, type ThreadSummary } from "../../../../src/shared/protocol.ts";
@@ -20,7 +21,7 @@ import { hub } from "../../client.ts";
 type SummarySession = TimelineSession & { summary?: ThreadSummary };
 type TimelineFeed = Omit<TimelineValue, "sessions"> & { sessions: SummarySession[] };
 type Session = SummarySession & { host: string };
-type Band = { key: string; title: string; members: Session[]; target: Session; team: boolean; buckets: [number, number, number][]; start: number; end: number };
+type Band = Row<Session> & { title: string; buckets: [number, number, number][]; start: number; end: number };
 const ROW = 56;
 const X = 1000;
 
@@ -37,7 +38,7 @@ export function nearest(entries: [number, string][], t: number): string | undefi
  * read once per page visit, so rows do not reorder under the pointer after a visit.
  */
 type Attention = "needs" | "new" | undefined;
-const rank = (band: Band, seen: Map<string, number>) => Math.max(0, ...band.members.map((s) => ({ needs: 2, new: 1 })[attention(s, seen) ?? "x" as never] ?? 0));
+const rank = (band: { members: Session[] }, seen: Map<string, number>) => Math.max(0, ...band.members.map((s) => ({ needs: 2, new: 1 })[attention(s, seen) ?? "x" as never] ?? 0));
 function attention(s: Session, seen: Map<string, number>): Attention {
 	const last = s.marks.reduce<Session["marks"][number] | undefined>((a, m) => (!a || m[0] >= a[0] ? m : a), undefined);
 	if (s.summary && !isAttentionEligible(s.summary)) return undefined;
@@ -47,20 +48,10 @@ function attention(s: Session, seen: Map<string, number>): Attention {
 	return undefined;
 }
 
-function group(sessions: Session[], merged: boolean): Band[] {
-	const groups = new Map<string, Session[]>();
-	const leads = new Set(sessions.filter((s) => s.team && s.role === "lead").map((s) => `${s.host}/${s.team}`));
-	for (const s of sessions) {
-		const team = `${s.host}/${s.team}`;
-		const key = merged && s.team && leads.has(team) ? `team:${team}` : s.ref;
-		const members = groups.get(key) ?? []; members.push(s); groups.set(key, members);
-	}
-	return [...groups].map(([key, members]) => {
-		const team = key.startsWith("team:");
-		const target = (team ? members.find((s) => s.role === "lead") : members[0])!;
-		return { key, title: target.title, target, team, members,
-			buckets: mergeBuckets(members), start: Math.min(...members.map((s) => s.start)), end: Math.max(...members.map((s) => s.end)) };
-	});
+/** Lanes in the shared group order (rows.ts); `merged` only changes how a Team group renders. */
+function lanes(groups: Group<Session>[], merged: boolean, from: number, to: number): Band[] {
+	return timelineRows(groups, merged, (s) => s.live || (s.end >= from && s.start <= to)).map((row) => ({ ...row, title: row.target.title,
+		buckets: mergeBuckets(row.members), start: Math.min(...row.members.map((s) => s.start)), end: Math.max(...row.members.map((s) => s.end)) }));
 }
 
 function LaneTitle({ session, title, team }: { session: Session; title: string; team: boolean }) {
@@ -104,7 +95,7 @@ export const TimelineStream = memo(function TimelineStream({ band, label, from, 
 		const b = band.buckets.find((b) => b[0] === bucket);
 		onHover(`${band.title} · ${dateTime(t)} · ${unit === 2 ? `${spendLabel(laneSpend(band.members, b?.[2] ?? 0))} / 15 min` : `${tokens(b?.[1] ?? 0)} tokens / 15 min`}${band.team ? ` · opens the lead’s Team panel${needing.length ? ` · needs you: ${needing.map((s) => s.title).join(", ")}` : fresh.length ? ` · new answer: ${fresh.map((s) => s.title).join(", ")}` : ""}` : " · opens nearest entry"}`);
 	};
-	return <div className={`cos-stream-row ${focus ? "cos-focused" : ""} ${needing.length ? "cos-waiting" : ""}`} style={{ height: ROW }}>
+	return <div className={`cos-stream-row ${focus ? "cos-focused" : ""} ${needing.length ? "cos-waiting" : ""} ${band.position ? `cos-member cos-member-${band.position}` : ""}`} style={{ height: ROW }} data-group={band.group.key} data-lane={band.key}>
 		<div className="cos-band-label">{label ?? <LaneTitle session={band.target} title={band.title} team={band.team} />}<span>{[
 			<span className="cos-total" title={`${band.team ? "Team" : "Session"} total in range: ${unit === 2 ? `$${total.toFixed(4)}${spendSuffix(laneSpend(band.members, total))}` : `${Math.round(total).toLocaleString()} tokens`}`}>{unit === 2 ? spendLabel(laneSpend(band.members, total)) : amount(unit, total)}</span>,
 			band.members.some((s) => s.source && s.source.state !== "ready") && "last indexed copy",
@@ -180,7 +171,18 @@ function TimelineView({ route, selected }: { route: Route; selected?: PanelSelec
 	const from = preview?.[0] ?? (validRange ? Math.max(fullFrom, Math.min(requestedFrom, fullTo - 60_000)) : selected ? (queryParams.has("all") ? fullFrom : Math.max(fullFrom, now - SESSION_SCOPE_MS)) : moment !== undefined ? Math.max(fullFrom, moment - 2 * 3600_000) : focused ? Math.max(fullFrom, focused.start - 900_000) : now - SESSION_SCOPE_MS);
 	const to = preview?.[1] ?? (validRange ? Math.min(fullTo, Math.max(requestedTo, from + 60_000)) : selected ? (queryParams.has("all") ? fullTo : now) : moment !== undefined ? Math.max(from + 60_000, Math.min(fullTo, moment + 2 * 3600_000)) : focused ? Math.max(from + 60_000, Math.min(fullTo, focused.end + 900_000)) : fullTo);
 	const window = timelineWindow(validRange ? requestedFrom : undefined, validRange ? requestedTo : undefined, Boolean(selected && queryParams.has("all")));
-	const bands = useMemo(() => group(sessions, merged).filter((band) => band.members.some((s) => s.live) || (band.end >= from && band.start <= to)).sort((a, b) => Number(b.members.some((s) => s.ref === focus)) - Number(a.members.some((s) => s.ref === focus)) || rank(b, seen) - rank(a, seen) || a.start - b.start || a.key.localeCompare(b.key)), [sessions, merged, focus, from, to]);
+	const groups = useMemo(() => orderGroups(groupSessions(sessions), (g) => rank(g, seen), focus), [sessions, focus, seen]);
+	const bands = useMemo(() => lanes(groups, merged, from, to), [groups, merged, from, to]);
+	// A Team toggle keeps the group at the top of the viewport in place (rows.ts anchorAt/scrollFor).
+	const place = useRef<Anchor | undefined>(undefined);
+	useLayoutEffect(() => {
+		const anchor = place.current, node = scrollRef.current;
+		place.current = undefined;
+		const top = anchor && node ? scrollFor(bands, anchor, ROW) : undefined;
+		if (top === undefined || !node) return;
+		node.scrollTop = top;
+		setScroll(node.scrollTop);
+	}, [bands]);
 	const unreadable = feeds.flatMap((f) => (f.value?.unreadable ?? []).filter((u) => !selected || (f.host.id === selected.host && u.threadId === selected.threadId)));
 	const waitingOutside = sessions.filter((s) => attention(s, seen) && (s.end < from || s.start > to)).length;
 	const bucketMs = feeds.find((f) => f.value)?.value?.bucketMs ?? 900_000;
@@ -238,7 +240,7 @@ function TimelineView({ route, selected }: { route: Route; selected?: PanelSelec
 				<a aria-current={unit === 1 ? "true" : undefined} href={change({ unit: "tokens" })}>Tokens</a>
 			</>}
 			<span className="cos-toolbar-divider" />
-			<button className={`btn small cos-team-toggle ${merged ? "cos-team-merged" : "cos-team-separate"}`} aria-pressed={merged} title={merged ? "Separate members" : "Merge Teams"} onClick={() => update({ teams: merged ? "separate" : "merged" })}>{merged ? "Merge Teams" : "Separate members"}</button>
+			<button className={`btn small cos-team-toggle ${merged ? "cos-team-merged" : "cos-team-separate"}`} aria-pressed={merged} title={merged ? "Separate Team members" : "Merge Team members"} onClick={() => { place.current = anchorAt(bands, scrollRef.current?.scrollTop ?? 0, ROW); update({ teams: merged ? "separate" : "merged" }); }}>{merged ? "Team members merged" : "Team members separated"}</button>
 			<span className="spacer" />
 			<button aria-label={`Time window: ${typeof window === "number" ? `${window} h` : window}`} title={`Show ${nextTimelineWindow(window, Boolean(selected))}${typeof nextTimelineWindow(window, Boolean(selected)) === "number" ? " h" : ""}`} onClick={cycleWindow}>{typeof window === "number" ? `${window} h` : window}</button>
 		</nav>

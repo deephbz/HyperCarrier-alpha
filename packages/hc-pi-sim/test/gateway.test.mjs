@@ -1,3 +1,4 @@
+import "./home.mjs";
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { replay, SimWorld, magpieProfile, checkCacheHistory, assertCacheSafe, cacheShape, MAGPIE_SOURCE } from '../src/index.mjs';

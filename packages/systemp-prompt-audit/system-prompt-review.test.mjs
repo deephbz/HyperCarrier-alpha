@@ -1,3 +1,4 @@
+import "./test/home.mjs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";

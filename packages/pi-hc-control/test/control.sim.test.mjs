@@ -1,6 +1,7 @@
 // Real Pi SDK (pi-sim): admission evidence, ordering, compaction and C1 holds,
 // abort, status, typed slash commands, and descriptor lifecycle. pi-sim forbids sockets, so the
 // transport is replaced by a recorder; descriptor files are real.
+import "./home.mjs";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

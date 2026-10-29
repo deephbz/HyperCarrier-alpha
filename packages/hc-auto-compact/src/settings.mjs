@@ -16,7 +16,7 @@ export const DEFAULT_AUTO_COMPACT_SETTINGS = Object.freeze({
   enabled: true,
   threshold: 90,
   preservation: "artifact-handoff",
-  method: "native",
+  method: "keepset",
   execution: "foreground",
   pre_compact_prompt: DEFAULT_PRE_COMPACT_PROMPT,
 });

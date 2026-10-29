@@ -1,19 +1,19 @@
 {
   "schemaVersion": 1,
   "sourceRepository": "HyperCarrier",
-  "sourceCommit": "0385705eb8141f6a1402cd5f28ce9177a5e29792",
-  "sourceTree": "3e82c15d9c88cb74c2887fdede86232c0fd00ce1",
+  "sourceCommit": "b4b44f4b09bb2dd17229985d3334e87cd7312c49",
+  "sourceTree": "dec07fef9a78559b682d65e555c9d71fd4812971",
   "sourceWorktreeDirty": false,
-  "exportContentSha256": "b8732fdc152bbef4363caa0e4fc06c8aa945fd567b585de699fb3b26d9bec38c",
-  "exportManifestSha256": "c299b87ec9cee4ace160ed608760952d4a1aa865615bf894649c35c2995e8fda",
+  "exportContentSha256": "a8f355ae837cba7910eee51f4f53a96112f8ba5367d4ab0d89c883b40c9943a3",
+  "exportManifestSha256": "ebe058d0151f2ae6d8a3e5f7d26e3b15e38c9fcc8ec6a43184498cfd65e15b5b",
   "dependencies": [],
   "submodules": [
     {
       "name": "packages/pi-team-bright",
       "path": "packages/pi-team-bright",
       "repository": "https://github.com/deephbz/pi-team-bright.git",
-      "commit": "05bcb55b0ceb1cf974b706dd67890609e1e61c77",
-      "tree": "1aa6b77f31a1f7cf26e58a26172c5e41f3037dd0",
+      "commit": "16551cb52cd1cd4177cdf4f4bbe8999cdf213ab1",
+      "tree": "0e2fc375960fc72d3da7d0874d5f577d0ad31f1e",
       "identity": {
         "kind": "npm-package",
         "name": "@hypercarrier/pi-team-bright",
@@ -24,8 +24,8 @@
       "name": "packages/pi-openai-blackmagic-compact",
       "path": "packages/pi-openai-blackmagic-compact",
       "repository": "https://github.com/deephbz/pi-openai-blackmagic-compact.git",
-      "commit": "580563ac31452444b1fecac29fa93e5e2c5ac58e",
-      "tree": "927f4cf550566447a62d55663076516a5f6e754e",
+      "commit": "c113df09c416f207ffb9b206e6c9d3b8be767d05",
+      "tree": "b8acc0adecdbd58d6cadc3038d6cb0e80d7917aa",
       "identity": {
         "kind": "npm-package",
         "name": "@hypercarrier/pi-openai-blackmagic-compact",
@@ -36,8 +36,8 @@
       "name": "config/colorstack",
       "path": "config/colorstack",
       "repository": "https://github.com/deephbz/colorstack.git",
-      "commit": "ede8ba66482b2897dd8be939f88571b24c5caf96",
-      "tree": "6fead2cb1c228fedd5ec5a03d4755fad0480be4f",
+      "commit": "a4b18392b975979505f5d54ab96d6f1194d6c026",
+      "tree": "fafd22b8ec0e1b007227d350a21a4766100d4aa6",
       "identity": {
         "kind": "python-project",
         "name": "colorstack",
@@ -48,20 +48,20 @@
       "name": "packages/hc-rarebit",
       "path": "packages/hc-rarebit",
       "repository": "https://github.com/deephbz/rarebit.git",
-      "commit": "1eead8768bc2beb1a6957ebc41baa2b8e28db728",
-      "tree": "5508257c8661979e32ac966c6e5926b9b478e28d",
+      "commit": "b3274fdf0c23660830ad4b17635d9aea388d80bd",
+      "tree": "eb98345e7778ca2b66a8012c06978e19abfe8e94",
       "identity": {
         "kind": "npm-package",
         "name": "@hypercarrier/rarebit",
-        "version": "0.5.2"
+        "version": "0.6.0"
       }
     },
     {
       "name": "apps/trace-analytics",
       "path": "apps/trace-analytics",
       "repository": "https://github.com/deephbz/trace-analytics.git",
-      "commit": "6b7c216f361c755c13b91dfa10b35173d2ff4f83",
-      "tree": "7ed51b0ae5aab54a0a531f5bc39f30cce160302c",
+      "commit": "ad0d126869c491c30eba67ac54abfc47165e78aa",
+      "tree": "f3528d51b89cb60d32adb793a39b6efbc334d66c",
       "identity": {
         "kind": "npm-package",
         "name": "trace-analytics",

@@ -53,6 +53,11 @@ export async function readObservationSnapshot() { const data = read(); readTaskS
 	f.setState({ ...f.state, agents: f.state.agents.filter((a: any) => a.pane_id !== "w1:p1") });
 	const stopped = await browser.until<TeamValue>(alpha, v => v.teams[0]?.members[1]?.live === false);
 	assert.deepEqual(stopped.teams[0]!.members[1], { member: "worker", role: "teammate", threadId: "pi:sess-b", ref: "devbox/pi:sess-b", pane: "w1:p1", live: false, status: "not running" });
+	// A closed member keeps its Team in its summary and its Timeline lane, so the Timeline groups it with its lead.
+	const closed = await browser.until<any>(browser.sub("devbox", { kind: "threads" }), v => v.threads["pi:sess-b"]?.live === false);
+	assert.deepEqual(closed.threads["pi:sess-b"].team, { teamId: "alpha", role: "worker", worker: "worker" });
+	const lanes = await browser.until<any>(browser.sub("devbox", { kind: "view", view: "cos.timeline" }), v => v.sessions.some((s: any) => s.threadId === "pi:sess-b"));
+	assert.equal(lanes.sessions.find((s: any) => s.threadId === "pi:sess-b").team, "alpha");
 	// PTB can explicitly end a Membership on process shutdown; recorded identity still survives.
 	data.teams[0]!.memberships[1]!.lifecycle.state = "ended";
 	data.tasks.alpha.tasks[0]!.title = "Read after the worker stopped"; save();

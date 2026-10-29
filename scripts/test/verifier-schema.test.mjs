@@ -1,3 +1,4 @@
+import "./home.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { validateSchema, validateSchemaDefinition } from "../lib/closed-json-schema.mjs";

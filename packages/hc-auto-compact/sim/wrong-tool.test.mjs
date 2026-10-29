@@ -1,4 +1,5 @@
 // A declared phase tool must redirect a mistaken call without cancelling work.
+import "../test/home.mjs";
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { magpieProfile } from '@hypercarrier/pi-sim';

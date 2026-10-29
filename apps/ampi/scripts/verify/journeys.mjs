@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { thread, timeline, arc } from '../ux/recipes.mjs';
 import { threadsSnapshot, topicSnapshot, paneCoverage, agentWatch } from './live-rows.mjs';
 import { app, checkout } from './hub.mjs';
+import { timelineTeams } from './timeline-teams.mjs';
 import { arcFloor } from '../../src/pi/views/cos-arc-rules.ts';
 
 const num = text => Number(String(text).replace(/[^\d]/g, ''));
@@ -955,6 +956,10 @@ export const journeys = [
         return { inspector: await inspector.innerText() };
       });
     },
+  },
+  {
+    id: 'T2teams', feature: 't2-timeline.md', title: 'Toggle Teams on the Timeline without losing the place',
+    run: j => timelineTeams(j, addFixture),
   },
   {
     id: 'T3', feature: 't3-open-session.md', title: 'Open an important Session',

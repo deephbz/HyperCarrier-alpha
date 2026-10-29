@@ -98,7 +98,7 @@ export function RarebitView({ host, threadId, entry }: { host: string; threadId:
 		keepPlace.capture();
 		set({ hide });
 	};
-	useLayoutEffect(() => { const el = scroller.current; if (el && keepPlace.following()) el.scrollTop = el.scrollHeight; }, [value, state.side, state.pending, state.hide]);
+	useLayoutEffect(() => { if (keepPlace.following()) keepPlace.follow(); }, [value, state.side, state.pending, state.hide]);
 	useEffect(() => {
 		// A linked entry is revealed once; a later Hide/Show must not jump back to it.
 		if (!entry || !value || revealed.current === entry) return;

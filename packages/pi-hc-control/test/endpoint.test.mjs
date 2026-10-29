@@ -1,5 +1,6 @@
 // Real unix sockets and files: permissions, framing, concurrent clients,
 // path-length fallback, stale descriptors, Session switch, and cleanup.
+import "./home.mjs";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";

@@ -46,6 +46,12 @@ export async function componentScript(): Promise<string> {
 export const entries = (n: number) => Array.from({ length: n }, (_, i) => i % 2 === 0
 	? { id: `e${i}`, kind: "user", text: `Question ${i}`, images: 0 }
 	: { id: `e${i}`, kind: "assistant", blocks: [{ type: "text", text: `Answer ${i}.\n\n${"More detail. ".repeat(4 + (i % 7) * 6)}` }] });
+/** entries(200) with every assistant entry split by a bash call: prose, the tool call, and prose after the tool. */
+export const splitEntries = () => entries(200).map((entry, i) => entry.kind === "assistant" ? { ...entry, blocks: [
+	{ type: "text", text: `Answer ${i}. ${"Details. ".repeat(30)}` },
+	{ type: "tool", callId: `mixed${i}`, name: "bash", args: { command: "pwd" } },
+	{ type: "text", text: `After tool ${i}. ${"More details. ".repeat(30)}` },
+] } : entry);
 /** `tail`: extra text on the newest entry, as a streaming answer grows. `from`: the first entry a capped Pi tail serves. */
 export const view = (n: number, tail = "", from = 0) => {
 	const list: any[] = entries(n);
@@ -123,6 +129,11 @@ export const offsetOf = (page: Page, id: string) => page.evaluate((id) => {
 	return node ? node.getBoundingClientRect().top - el.getBoundingClientRect().top : null;
 }, id);
 export const gap = (page: Page) => page.evaluate(() => { const el = document.querySelector<HTMLElement>("[data-region=transcript]")!; return el.scrollHeight - el.scrollTop - el.clientHeight; });
+/** Waits until the reader is more than `px` above the end. A wheel's scroll can land frames after `mouse.wheel` returns. */
+export const awayFromEnd = (page: Page, px: number) => page.waitForFunction((px) => {
+	const el = document.querySelector<HTMLElement>("[data-region=transcript]")!;
+	return el.scrollHeight - el.scrollTop - el.clientHeight > px;
+}, px, { timeout: 5000 }).catch(() => undefined);
 
 /** A view whose run streams `lines` lines of prose after entry e(n-1). */
 export const streaming = (n: number, lines: number) => ({ ...view(n), live: { run: { activity: "streaming" }, generation: { message: { role: "assistant", content: [{ type: "text", text: Array.from({ length: lines }, (_, i) => `Streamed line ${i + 1}.`).join("\n\n") }] } } } });
@@ -149,3 +160,21 @@ export const settled = (page: Page) => page.evaluate(() => new Promise<void>((do
 	requestAnimationFrame(tick);
 }));
 export const scrollTop = (page: Page) => page.evaluate(() => document.querySelector<HTMLElement>("[data-region=transcript]")!.scrollTop);
+
+/** The "↓ N new" button a reader away from the end sees. */
+export const newButton = (page: Page) => page.locator("[data-region=transcript] [role=status] button");
+/** The last streamed line's bottom, below the transcript's visible bottom, and its text. */
+export const tailBelow = (page: Page) => page.evaluate(() => {
+	const el = document.querySelector<HTMLElement>("[data-region=transcript]")!;
+	const last = [...el.querySelectorAll<HTMLElement>("[data-entry] p")].at(-1)!;
+	return { below: last.getBoundingClientRect().bottom - el.getBoundingClientRect().bottom, text: last.textContent };
+});
+/** Tool traffic and Team messages, as a busy agent writes them. */
+export const traffic = (k: number) => k % 3 === 2
+	? [{ id: `m${k}`, kind: "custom", entryKind: "team-update", message: { kind: "team-update", label: "Team", sender: "lead", text: `Team message ${k}` } }]
+	: [
+		{ id: `c${k}`, kind: "assistant", blocks: [{ type: "tool", callId: `call${k}`, name: "bash", args: { command: `ls ${k}` } }] },
+		{ id: `r${k}`, kind: "tool-result", callId: `call${k}`, name: "bash", isError: false, text: `output ${k}`, truncated: false },
+	];
+/** The source cap: past it, each arrival evicts the oldest entry. */
+export const CAP = 400;

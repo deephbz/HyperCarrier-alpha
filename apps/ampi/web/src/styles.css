@@ -820,16 +820,53 @@ kbd {
 	border-radius: 4px;
 	padding: 0 4px;
 }
+/* A table cell breaks only between words, so a table that does not fit scrolls sideways instead of splitting words.
+   Shadows mark a cut edge (overlay scrollbars hide it), and the first column stays in view while the table scrolls.
+   The covers and the sticky column paint --md-surface, the background the table sits on. */
+.md {
+	--md-surface: var(--bg);
+}
+.you .md {
+	--md-surface: var(--bg-user);
+}
 .md table {
-	border-collapse: collapse;
+	border-collapse: separate;
+	border-spacing: 0;
+	border-top: 1px solid var(--border);
+	border-left: 1px solid var(--border);
 	display: block;
 	max-width: 100%;
 	overflow-x: auto;
+	background:
+		linear-gradient(to right, var(--md-surface) 30%, transparent) left / 32px 100% no-repeat local,
+		linear-gradient(to left, var(--md-surface) 30%, transparent) right / 32px 100% no-repeat local,
+		radial-gradient(farthest-side at 0 50%, rgb(0 0 0 / 0.18), transparent) left / 12px 100% no-repeat scroll,
+		radial-gradient(farthest-side at 100% 50%, rgb(0 0 0 / 0.18), transparent) right / 12px 100% no-repeat scroll;
 }
 .md td,
 .md th {
-	border: 1px solid var(--border);
+	border-right: 1px solid var(--border);
+	border-bottom: 1px solid var(--border);
 	padding: 4px 8px;
+	overflow-wrap: break-word;
+	max-width: 60ch;
+}
+.md tr > :first-child {
+	position: sticky;
+	left: 0;
+	z-index: 1;
+	background: var(--md-surface);
+	box-shadow: 1px 0 0 var(--border-strong);
+}
+/* An assistant message's table may grow past the 76ch prose column, centred, up to the pane less its gutters.
+   A table that fits the column stays on the text's left edge. Clipped previews and indented bodies keep the column.
+   100cqw is the pane: .main is the size container. The scroller cannot be one: its layout containment would
+   capture fixed-position descendants such as the Quote button. Under a display zoom WebKit resolves 100cqw and the
+   translate in different scales and the table overflows the pane, so a zoomed display keeps tables in the column. */
+html:not([data-zoomed]) .transcript .msg.assistant > .md table {
+	width: max-content;
+	max-width: calc(100cqw - 48px);
+	translate: min(0px, calc((min(76ch, 100cqw - 48px) - 100%) / 2));
 }
 .md a {
 	color: var(--accent);
@@ -1265,19 +1302,12 @@ details[open] > .disclosure::before,
 	background: var(--bg-elev);
 	font-size: 13px;
 }
-.rb-summary.needs_attention {
-	border-color: var(--attn);
-	background: var(--attn-soft);
-}
 .rb-status {
 	font-weight: 500;
 	display: flex;
 	gap: 6px;
 	align-items: center;
 	margin-bottom: 4px;
-}
-.rb-status.needs_attention {
-	color: var(--attn);
 }
 .rb-sep {
 	font-size: 11px;

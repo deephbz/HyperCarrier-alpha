@@ -222,6 +222,8 @@ export function App() {
 		const apply = () => {
 			const settings = JSON.parse(localStorage.getItem("ampi.display") ?? "{}") as { overall?: number; sidebar?: number; transcript?: number; composer?: number; panel?: number };
 			document.documentElement.style.zoom = String(settings.overall ?? 1);
+			// WebKit misplaces container-unit geometry under any zoom; zoom-sensitive layout keys off this flag.
+			document.documentElement.toggleAttribute("data-zoomed", (settings.overall ?? 1) !== 1 || (settings.transcript ?? 1) !== 1);
 			for (const region of ["sidebar", "transcript", "composer", "panel"] as const) {
 				const root = document.querySelector<HTMLElement>(`[data-region="${region}"]`);
 				if (root) root.style.zoom = String(settings[region] ?? 1);

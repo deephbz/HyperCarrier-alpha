@@ -474,7 +474,7 @@ export function ThreadView({
 		if (!el) return;
 		pinned.current = true;
 		thaw();
-		el.scrollTop = el.scrollHeight;
+		keepPlace.follow();
 		el.focus({ preventScroll: true }); // the button goes away; the keys keep scrolling the transcript
 		setAway(undefined);
 	};
@@ -706,9 +706,9 @@ export function ThreadView({
 				// The remembered entry is gone (another branch, or compacted away): fall back to the newest end.
 				restore.current = undefined;
 				pinned.current = true;
-				el.scrollTop = el.scrollHeight;
+				keepPlace.follow();
 			}
-		} else if (keepPlace.following()) el.scrollTop = el.scrollHeight;
+		} else if (keepPlace.following()) keepPlace.follow();
 	});
 	const openConversation = useCallback(
 		(conversationId: string) => {

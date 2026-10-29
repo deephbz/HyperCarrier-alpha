@@ -97,6 +97,8 @@ async function startHub(f: Fixture) {
 					label: "devbox",
 					kind: "pi-local",
 					cacheDir: join(f.dir, "cache"),
+					// The fixture Sessions date from 2026-01-01; without this window the Host may evict them before the test opens them.
+					recentMs: Number.MAX_SAFE_INTEGER,
 					agentConfig: { agentDir: f.agentDir, pollMs: 30, discoverMs: 150, teams: false, controlStatusMs: 300 },
 					askCommand: [process.execPath, "-e", "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(s.length+':'+s.split('\\n')[0]))"],
 					env: { HOME: f.dir, HERDR_BIN: join(f.dir, "herdr"), FAKE_HERDR_STATE: join(f.dir, "state.json"), FAKE_HERDR_LOG: join(f.dir, "calls.jsonl") },

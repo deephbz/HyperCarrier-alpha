@@ -259,7 +259,7 @@ export function Overview({ data, onNew, onAddHost, onHelp }: { data: HostThreads
 							<List {...paging("quiet")}
 								rows={quiet}
 								empty="Every idle thread appears finished."
-								reason={(t) => (t.arc ? (t.arc.stale ? `Arc out of date · ${t.arc.newMessages} new since build` : "Arc: work still open") : t.rarebit ? `Summary ${t.rarebit.fresh ? t.rarebit.status.replace("_", " ") : "out of date"}` : t.ref ? "no Arc yet" : "no Summary yet")}
+								reason={(t) => (t.arc ? (t.arc.stale ? `Arc out of date · ${t.arc.newMessages} new since build` : "Arc: work still open") : t.rarebit ? (t.rarebit.status === "error" ? "Summary failed" : t.rarebit.fresh ? "Summary up to date" : "Summary out of date") : t.ref ? "no Arc yet" : "no Summary yet")}
 							/>
 						</div>
 						<div className="ov-card" data-card="recent">

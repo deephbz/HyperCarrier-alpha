@@ -262,6 +262,9 @@ export class PiHost extends EventEmitter {
 	#hostWideKey?: string;
 	/** The threads topic recomputes at least this often; a difference found then is a host input #hostInputs missed. */
 	static AUDIT_MS = 60_000;
+	/** The agent beats every 5 s. A link silent this long is dead, even when its process never exits. */
+	static SILENT_MS = 30_000;
+	static SILENT_TICK_MS = 5_000;
 	#audit?: ReturnType<typeof setInterval>;
 	#auditDue = false;
 	/** The clock that #hostInputs' `recent` reads, set when #markHostChanges runs, so a publish never sees a later edge. */
@@ -704,9 +707,27 @@ export class PiHost extends EventEmitter {
 		child.stderr!.on("data", (chunk: Buffer) => {
 			stderr = (stderr + chunk.toString()).slice(-2000);
 		});
+		// Only `close` starts the reconnect, and some dead links never close: an agent stuck inside process.exit, a
+		// stopped process, a stalled SSH pipe. A link with no frame for SILENT_MS is killed, so its close follows.
+		// A hub that was itself suspended (the Mac slept) restarts the clock instead of blaming the agent.
+		let heard = Date.now();
+		let ticked = heard;
+		let silence = "";
+		const watchdog = setInterval(() => {
+			const now = Date.now();
+			if (now - ticked > 3 * PiHost.SILENT_TICK_MS) heard = now;
+			ticked = now;
+			if (now - heard <= PiHost.SILENT_MS) return;
+			clearInterval(watchdog);
+			silence = `; no frame for ${Math.round((now - heard) / 1000)} s, killed`;
+			console.error(`pi host ${this.config.id}: agent ${child.pid} sent no frame for ${now - heard} ms; killing it to reconnect`);
+			child.kill("SIGKILL");
+		}, PiHost.SILENT_TICK_MS);
+		watchdog.unref();
 		let buffer = "";
 		child.stdout!.setEncoding("utf8");
 		child.stdout!.on("data", (data: string) => {
+			heard = Date.now();
 			const start = tracing ? nowUs() : 0;
 			let frames = 0;
 			buffer += data;
@@ -723,8 +744,14 @@ export class PiHost extends EventEmitter {
 			}
 			if (tracing) complete("agent-frames", "ipc", start, { bytes: data.length, frames });
 		});
-		child.on("error", (error) => this.#closed(child, error.message));
-		child.on("close", (code, signal) => this.#closed(child, `agent exited (${code ?? signal})${stderr ? `: ${stderr.trim().split("\n").pop()}` : ""}${stdinError}`));
+		child.on("error", (error) => {
+			clearInterval(watchdog);
+			this.#closed(child, error.message);
+		});
+		child.on("close", (code, signal) => {
+			clearInterval(watchdog);
+			this.#closed(child, `agent exited (${code ?? signal})${stderr ? `: ${stderr.trim().split("\n").pop()}` : ""}${stdinError}${silence}`);
+		});
 	}
 
 	#closed(child: ChildProcess, reason: string): void {
@@ -966,7 +993,12 @@ export class PiHost extends EventEmitter {
 	#hostInputs(copy: Copy) {
 		const agent = this.#agentFor(copy.path);
 		const control = agent?.control?.live ? agent.control : undefined;
-		const member = agent?.pane ? this.#teams.get(agent.pane) : undefined;
+		const live = agent?.pane ? this.#teams.get(agent.pane) : undefined;
+		// Team membership outlives the pane: a closed member keeps its recorded Membership, as on a durable Host
+		// (src/durable/reader-side.ts). A Session recorded in more than one Team stays unlabeled.
+		const recorded = this.#teamsFrame?.recorded?.filter((m) => m.session === copy.path) ?? [];
+		const member = live && live.session === copy.path ? live : new Set(recorded.map((m) => m.team)).size === 1
+			? recorded.find((m) => m.role === "lead" || m.role === "leader") ?? recorded[0] : undefined;
 		const workspace = this.#layout.workspaces.find((w) => w.id === agent?.workspace);
 		const tab = workspace?.tabs.find((t) => t.id === agent?.tab);
 		const threadId = copy.session?.id;
@@ -975,7 +1007,7 @@ export class PiHost extends EventEmitter {
 			recent: !copy.updatedAt || this.#inputsAt - Math.max(copy.updatedAt, copy.closedAt ?? 0) < this.#inputsWindow,
 			agent: agent && { pane: agent.pane, workspace: agent.workspace, workspaceLabel: workspace?.label, tab: agent.tab, tabLabel: tab?.label, title: agent.title, name: agent.name, cwd: agent.cwd, status: agent.status, live: Boolean(agent.pane || agent.control?.live) },
 			control: control && { idle: control.idle, compacting: control.compacting, steer: control.pending?.steer ?? 0, followUp: control.pending?.followUp ?? 0 },
-			team: member && member.session === copy.path ? { team: member.team, role: member.role, member: member.member } : undefined,
+			team: member && { team: member.team, role: member.role, member: member.member },
 			limits: modelLimits(copy.model, this.#limits),
 			livenessKnown: this.#livenessKnown,
 			lastKnownLive: copy.lastKnownLive,

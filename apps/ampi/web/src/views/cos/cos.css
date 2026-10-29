@@ -48,6 +48,10 @@
 .cos-stream-row { display: grid; grid-template-columns: 220px minmax(0, 1fr); padding: 0 20px; align-items: center; }
 .cos-stream-row:nth-child(even) { background: var(--bg-side); }
 .cos-stream-row.cos-focused { background: var(--accent-soft); }
+/* Members of an expanded Team share one rule along their labels; the lead row comes first (rows.ts). */
+.cos-member .cos-band-label { border-left: 2px solid var(--border-strong); padding-left: 8px; }
+.cos-member-first .cos-band-label, .cos-member-only .cos-band-label { border-top-left-radius: 4px; }
+.cos-member-first, .cos-member-only { box-shadow: inset 0 1px 0 var(--border); }
 .cos-waiting .cos-band-label { border-left: 2px solid var(--attn); padding-left: 8px; }
 .cos-band-label a.cos-wait-label { color: var(--attn); font-weight: 500; }
 .cos-band-label a.cos-new-label { color: var(--accent); }

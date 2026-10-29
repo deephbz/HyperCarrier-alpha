@@ -1,3 +1,4 @@
+import "./home.mjs";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { applyGraph, derivedStatus, initialTeamState, LEAD, readyFrontier, Refusal, type TeamState, updateTask } from "../src/graph.ts";

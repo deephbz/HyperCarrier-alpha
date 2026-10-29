@@ -22,6 +22,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          # The runner's cached Node 22 can be older than AmPi's floor; take the newest patch.
+          check-latest: true
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npm run verify:composition -- --debug
@@ -47,6 +49,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          # The runner's cached Node 22 can be older than AmPi's floor; take the newest patch.
+          check-latest: true
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npx playwright install webkit

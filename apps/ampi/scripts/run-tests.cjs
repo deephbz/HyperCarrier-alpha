@@ -3,6 +3,15 @@
 //
 //   node scripts/run-tests.cjs [fast|full|exhaustiveOnly]   a lane from test-lanes.json (default fast)
 //   node scripts/run-tests.cjs <file>...                    probe files; npm test -- <file> does the same
+//   --shard=k/N   run the k-th of N disjoint parts of those files (hosted CI runs one part per job)
+//   --list        print the files the run would start, one per line, and exit
+//   --engine-cases  keep only the files with browser-engine cases: files that import test/engines.ts, directly or
+//                 through a local helper (the macOS job runs these with AMPI_TEST_ENGINES=webkit)
+//
+// Every shard computes the same partition: the files sorted by their cost hint (`costs` in test-lanes.json: rounded seconds
+// of the file in a hosted Linux CI shard; a file under 2 s has none and counts 1 s), each placed on the part with the least
+// hinted cost so far.
+// The N parts together run every file once. Hints only balance the parts; correctness never depends on them.
 //
 // Every run has two bounds, so no test run can hang (a probe run once hung for 3 h):
 //   AMPI_TEST_TIMEOUT_MS       per test, passed to --test-timeout (default 60000)
@@ -36,16 +45,49 @@ process.on("SIGUSR2", () => { limit = concurrency; if (pooling) pump(); });
 const quiet = process.env.AMPI_TEST_QUIET === "1";
 const load = () => os.loadavg().map((n) => n.toFixed(0)).join("/");
 
+const options = process.argv.slice(2).filter((arg) => arg.startsWith("--"));
+let shard, list = false, engineCases = false;
+for (const option of options) {
+	const match = /^--shard=([1-9]\d*)\/([1-9]\d*)$/.exec(option);
+	if (match && Number(match[1]) <= Number(match[2])) shard = { index: Number(match[1]), count: Number(match[2]) };
+	else if (option === "--list") list = true;
+	else if (option === "--engine-cases") engineCases = true;
+	else fail(`Unknown option: ${option} (options: --shard=k/N with 1 <= k <= N, --list, --engine-cases)`);
+}
 // `npm test -- <file>` arrives as `fast <file>`: files after a lane name replace the lane.
-const args = process.argv.slice(2);
+const args = process.argv.slice(2).filter((arg) => !arg.startsWith("--"));
 if (args.length > 1 && LANES.has(args[0])) args.shift();
 const lane = args.length === 0 ? "fast" : args.length === 1 && LANES.has(args[0]) ? args[0] : undefined;
+const manifest = JSON.parse(fs.readFileSync(path.join(root, "test-lanes.json"), "utf8"));
+const name = (file) => (file.startsWith(testDir + path.sep) ? path.relative(testDir, file) : file);
+const cost = (file) => manifest.costs?.[name(file)] ?? 1;
 let files;
 if (lane) {
-	const manifest = JSON.parse(fs.readFileSync(path.join(root, "test-lanes.json"), "utf8"));
 	files = (lane === "full" ? [...manifest.fast, ...manifest.exhaustiveOnly] : manifest[lane]).map((file) => path.join(testDir, file));
 } else {
 	files = args.map((arg) => [path.resolve(arg), path.join(testDir, arg)].find((file) => fs.existsSync(file)) ?? fail(`No test file or lane: ${arg} (lanes: ${[...LANES].join(", ")})`));
+}
+if (engineCases) {
+	const imports = (file) => [...fs.readFileSync(file, "utf8").matchAll(/^(?:import|export)\b[^;]*?["'](\.\.?\/[^"']+\.ts)["']/gm)].map((match) => path.resolve(path.dirname(file), match[1]));
+	const engines = path.join(testDir, "engines.ts");
+	const reaches = (file, seen = new Set()) => !seen.has(file) && (seen.add(file), imports(file).some((next) => next === engines || (fs.existsSync(next) && reaches(next, seen))));
+	files = files.filter((file) => reaches(file));
+}
+if (shard) {
+	const parts = Array.from({ length: shard.count }, () => ({ cost: 0, files: [] }));
+	const order = [...files].sort((a, b) => cost(b) - cost(a) || name(a).localeCompare(name(b)));
+	for (const file of order) {
+		const part = parts.reduce((least, next) => (next.cost < least.cost ? next : least));
+		part.cost += cost(file);
+		part.files.push(file);
+	}
+	const part = parts[shard.index - 1];
+	if (!list) console.log(`shard ${shard.index}/${shard.count}: ${part.files.length} of ${files.length} files, ${part.cost} s of hinted cost`);
+	files = part.files;
+}
+if (list) {
+	for (const file of files) console.log(name(file));
+	process.exit(0);
 }
 if (files.length === 0) process.exit(0);
 if (process.env.AMPI_PREFLIGHT_DONE !== "1") {
@@ -53,12 +95,12 @@ if (process.env.AMPI_PREFLIGHT_DONE !== "1") {
 	if (preflight.status !== 0) process.exit(preflight.status ?? 1);
 }
 
-const name = (file) => (file.startsWith(testDir + path.sep) ? path.relative(testDir, file) : file);
 const timesPath = path.join(os.homedir(), ".cache", "ampi-test", "times.json");
 let times = {};
 try { times = JSON.parse(fs.readFileSync(timesPath, "utf8")); } catch {}
-// Unknown files first: a new file can be the slowest.
-const queue = [...files].sort((a, b) => (times[name(b)] ?? Infinity) - (times[name(a)] ?? Infinity));
+// Unknown files first: a new file can be the slowest. A fresh hosted runner has no times; the cost hints order it.
+const expected = (file) => times[name(file)] ?? (manifest.costs?.[name(file)] ?? Infinity) * 1000;
+const queue = [...files].sort((a, b) => expected(b) - expected(a));
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), "ampi-test-runner-"));
 const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null" };

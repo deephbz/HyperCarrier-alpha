@@ -140,7 +140,7 @@ test("needs you: the macOS shell gets the thread tag, so a later Needs you repla
 test("Timeline: current Needs-you agrees with Overview; Team blockers and historical errors stay facts without a waiting flag", () => {
  const row = (summary: ThreadSummary) => {
   const session = { host: host.id, threadId: summary.id, ref: `${host.id}/${summary.id}`, title: summary.title, start: 0, end: 1000, live: true, blocked: false, waiting: false, marks: [[500, "old-error", "error"]], buckets: [], entries: [[500, "old-error"]], summary };
-  return renderToStaticMarkup(createElement(timelineStream as never, { label: "Worker", band: { key: session.ref, title: session.title, members: [session], target: session, team: false, buckets: [], start: 0, end: 1000 }, from: 0, to: 1000, bucketMs: 1000, unit: 1, scale: 0, color: 0, focus: false, now: 1000, onHover() {}, seen: new Map(), total: 0 }));
+  return renderToStaticMarkup(createElement(timelineStream as never, { label: "Worker", band: { key: session.ref, group: { key: session.ref, team: false, members: [session], start: 0, end: 1000 }, title: session.title, members: [session], target: session, team: false, buckets: [], start: 0, end: 1000 }, from: 0, to: 1000, bucketMs: 1000, unit: 1, scale: 0, color: 0, focus: false, now: 1000, onHover() {}, seen: new Map(), total: 0 }));
  };
  const blocked = thread({ attention: [{ source: "Team", reason: "Task api blocked" }] });
  assert.doesNotMatch(row(blocked), /cos-waiting|cos-wait-label/);

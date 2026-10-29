@@ -12,13 +12,13 @@ Configure these fields in Pi's `auto_compact` namespace:
 {
   "auto_compact": {
     "preservation": "artifact-handoff",
-    "method": "native",
+    "method": "keepset",
     "execution": "foreground"
   }
 }
 ```
 
-These values preserve the existing defaults. `/auto-compact status` reports
+These values are the defaults. `/auto-compact status` reports
 the effective selection. `/auto-compact off` still enforces W through plain
 native compaction, regardless of the selected method.
 
@@ -162,7 +162,7 @@ an independent lifecycle controller.
 
 ### Lifecycle and handoff
 
-This section describes the default artifact-handoff/native/foreground mode.
+This section describes the artifact-handoff/native/foreground mode.
 With preservation `none`, native execution moves directly to `ready`.
 Background execution always moves directly to `ready`. Foreground custom methods wait for the live planning tool.
 

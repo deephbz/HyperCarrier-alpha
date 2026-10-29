@@ -21,7 +21,7 @@ import { writeDemoSessions, type DemoSession } from "./demo/sessions.ts";
 import { webDistCurrent } from "./web-inputs.mjs";
 
 // The hub serves web/dist as it is, so a stale build would show old UI in screenshots and verify runs.
-// DEMO_WEB=external: the caller serves its own build of web/src (test/resize-edges.test.ts) and never loads web/dist.
+// DEMO_WEB=external: the caller serves its own build of web/src (test/resize-edges-fixture.ts) and never loads web/dist.
 const web = webDistCurrent(fileURLToPath(new URL("../../../", import.meta.url)));
 if (!web.ok && process.env.DEMO_WEB !== "external") {
 	console.error(`pi-demo: ${web.detail}`);

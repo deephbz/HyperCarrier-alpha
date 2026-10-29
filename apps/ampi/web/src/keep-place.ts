@@ -169,6 +169,15 @@ export function useKeepPlace(
 		}
 		return pinned.current;
 	}, [scroller, selector, attribute, pinned, clamp]);
+	// The one writer of "go to the newest end": the record moves with scrollTop. The browser sends that scroll's event a
+	// frame later and coalesces it with a reader's scroll in the same frame; measured from a stale record, the reader's
+	// scroll up would look like a move down and keep them pinned.
+	const follow = useCallback(() => {
+		const el = scroller.current;
+		if (!el) return;
+		el.scrollTop = el.scrollHeight;
+		remember();
+	}, [scroller, remember]);
 	// The reader's wheel up leaves the end at its input, before its scroll lands. WebKit on macOS applies a wheel's scroll
 	// asynchronously: a render between the wheel and its scroll still sees scrollTop at the end and would follow. A wheel
 	// that a nested scroller takes, a pinch zoom, or a scroller already at its top moves nothing here.
@@ -271,5 +280,5 @@ export function useKeepPlace(
 			mutations.current = undefined;
 		};
 	}, [scroller, selector, attribute, resized, following, tail, remember, clamp]);
-	return { capture, onScroll, onWheel, following };
+	return { capture, onScroll, onWheel, following, follow };
 }

@@ -33,6 +33,9 @@ test("pi host: 96-hour eviction respects open/live pins, removes copied payloads
  assert.ok((await browser.req("devbox", "thread.history", { threadId: "pi:sess-a" })).entries.length);
  browser.ws.send(JSON.stringify({ t: "unsub", sid: thread }));
  await browser.until<any>(threads, (v) => !v.threads["pi:sess-a"]);
+ // The eviction drops the copy before its index write lands, so a discovery publish can show the drop first.
+ const evictedBy = Date.now() + 3000;
+ while (index()[f.sessionA] && Date.now() < evictedBy) await new Promise((resolve) => setTimeout(resolve, 10));
  assert.equal(index()[f.sessionA], undefined); assert.ok(existsSync(f.sessionA), "native evidence is untouched");
  assert.ok(index()[f.sessionB], "live old Session stays copied");
  const expired = browser.sub("devbox", { kind: "thread", threadId: "pi:sess-a" });

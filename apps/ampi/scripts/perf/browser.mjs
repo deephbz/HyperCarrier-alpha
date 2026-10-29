@@ -44,7 +44,7 @@ const STEP_MS = 15_000;
 /** Chrome to launch: an explicit binary, Playwright's newest headless shell, or the installed Google Chrome. */
 export function findChrome(env = process.env) {
 	if (env.AMPI_PERF_CHROME) return env.AMPI_PERF_CHROME;
-	const cache = join(homedir(), process.platform === "darwin" ? "Library/Caches/ms-playwright" : ".cache/ms-playwright");
+	const cache = env.PLAYWRIGHT_BROWSERS_PATH || join(homedir(), process.platform === "darwin" ? "Library/Caches/ms-playwright" : ".cache/ms-playwright");
 	const shells = (() => { try { return readdirSync(cache).filter((d) => d.startsWith("chromium_headless_shell-")); } catch { return []; } })()
 		.sort((a, b) => Number(b.split("-")[1]) - Number(a.split("-")[1]));
 	for (const dir of shells) {

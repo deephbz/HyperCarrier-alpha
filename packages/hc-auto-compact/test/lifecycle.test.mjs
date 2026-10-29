@@ -1,3 +1,4 @@
+import "./home.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { heldRuntime } from './helpers/held-runtime.mjs';
@@ -71,7 +72,9 @@ function makeHarness({
   let currentActiveTools = [...activeTools];
   let currentlyIdle = idle;
   let currentlyHasPendingMessages = pendingMessages;
+  // These lifecycle tests drive Pi's native lane; the shipped default method is keepset.
   const configuredSettings = {
+    method: "native",
     ...strategy,
     enabled,
     threshold,
@@ -1419,7 +1422,7 @@ test("budget slot cannot replay or publish an older Session generation", async (
   let delayed = false;
   const harness = makeHarness({ settingsLoader: () => delayed
     ? loading.promise
-    : Promise.resolve({ settings: { enabled: true, threshold: 90 }, errors: [] }) });
+    : Promise.resolve({ settings: { method: "native", enabled: true, threshold: 90 }, errors: [] }) });
   await harness.handlers.get("session_start")({}, harness.ctx);
   assert.equal(harness.hudSlots.length, 1);
   assert.equal(harness.hudSlots[0].staleAfterMs, undefined);
@@ -1429,7 +1432,7 @@ test("budget slot cannot replay or publish an older Session generation", async (
   const count = harness.hudSlots.length;
   harness.emitEvent("hc.hud.composer", { v: 1, present: true, surface: "tui-footer" });
   assert.equal(harness.hudSlots.length, count);
-  loading.resolve({ settings: { enabled: false, threshold: 80 }, errors: [] });
+  loading.resolve({ settings: { method: "native", enabled: false, threshold: 80 }, errors: [] });
   await Promise.all([oldTurn, newSession]);
   assert.equal(harness.hudSlots.length, count + 1);
   assert.equal(harness.hudSlots.at(-1).value.mode, "off");
@@ -1491,7 +1494,7 @@ test("delayed model selection cannot publish into a newer Session", async () => 
   let delay = false;
   const harness = makeHarness({ settingsLoader: () => delay
     ? pending.promise
-    : Promise.resolve({ settings: { enabled: true, threshold: 90 }, errors: [] }) });
+    : Promise.resolve({ settings: { method: "native", enabled: true, threshold: 90 }, errors: [] }) });
   await harness.handlers.get("session_start")({}, harness.ctx);
   delay = true;
   const selecting = harness.handlers.get("model_select")({}, harness.ctx);
@@ -1499,7 +1502,7 @@ test("delayed model selection cannot publish into a newer Session", async () => 
   await harness.handlers.get("session_start")({}, harness.ctx);
   await triggerManual(harness);
   const count = harness.hudSlots.length;
-  pending.resolve({ settings: { enabled: false, threshold: 90, budget_tokens: 50_000 }, errors: [] });
+  pending.resolve({ settings: { method: "native", enabled: false, threshold: 90, budget_tokens: 50_000 }, errors: [] });
   await selecting;
   assert.equal(harness.hudSlots.length, count);
   assert.equal(harness.hudSlots.at(-1).value.limit, 100_000);
@@ -2514,6 +2517,7 @@ test("delayed settings loads cannot create reentrant or post-/off handoffs", asy
       if (loadCount === 1) return firstLoad.promise;
       return {
         settings: {
+          method: "native",
           enabled: false,
           threshold: 90,
           pre_compact_prompt: "preserve",
@@ -2528,6 +2532,7 @@ test("delayed settings loads cannot create reentrant or post-/off handoffs", asy
   await harness.commands.get("auto-compact").handler("off", harness.ctx);
   firstLoad.resolve({
     settings: {
+          method: "native",
       enabled: true,
       threshold: 90,
       pre_compact_prompt: "preserve",
@@ -2548,6 +2553,7 @@ test("delayed settings loads cannot create reentrant or post-/off handoffs", asy
   assert.match(reentrant.notices.at(-1).text, /already/i);
   startLoad.resolve({
     settings: {
+          method: "native",
       enabled: true,
       threshold: 90,
       pre_compact_prompt: "preserve",

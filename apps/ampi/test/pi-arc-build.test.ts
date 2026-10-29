@@ -1,78 +1,18 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
+import { chmodSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { cosDemo } from "../scripts/demo/cos.ts";
-import type { DemoContext } from "../scripts/demo/index.ts";
 import { useHubConfig, type ModelPurpose, resolveHelperModel } from "../src/hub/helper-models.ts";
 import { ask } from "../src/pi/ask.ts";
 import { piModelRegistry } from "../src/pi/model-registry.ts";
-import type { Chunk } from "../src/pi/views/cos-arc-chunks.ts";
 import { normalizeLabel, normalizeProjects } from "../src/pi/views/cos-arc-format.ts";
 import { CLOSED_CHUNKS_HEADER, LABEL_SYSTEM, STEP2_SYSTEM } from "../src/pi/views/cos-arc-prompts.ts";
 import { ARC_ASK_CONCURRENCY, EMPTY_ANSWER, LABEL_VERSION, arcClock, bounded, buildArc, buildLog, cosArc, json, type ArcFailure, type ArcValue } from "../src/pi/views/cos-arc.ts";
 import * as arcModule from "../src/pi/views/cos-arc.ts";
-import { rarebitView } from "../src/pi/views/rarebit.ts";
 import type { PiViewContext, PiViewSession } from "../src/pi/views/types.ts";
+import { HUB, MODELS, build, chunks, context, root, session, type Req } from "./pi-arc-build-fixture.ts";
 
-// Build arc through the real ask runner and the offline demo model, with a fake view context that counts calls in
-// flight and delays answers so that they complete out of order.
-
-const root = mkdtempSync(join(tmpdir(), "ampi-arc-build-"));
-// Every helper model is explicit; tests that need another set write their own hub.json, then return to this one.
-const MODELS = { arcLabels: "anthropic/claude-haiku-5-5", arcSynthesis: "anthropic/claude-sonnet-5-5", rarebitAsk: "anthropic/claude-sonnet-5-5" };
-const HUB = join(root, "models-hub.json");
-writeFileSync(HUB, JSON.stringify({ hosts: [], models: MODELS }));
-useHubConfig(HUB);
-cosDemo({ dir: root, agentDir: join(root, "agent") } as DemoContext);
-const model = [process.execPath, join(root, "cos-model.cjs")];
-const T = Date.parse("2026-10-19T00:00:00.000Z");
-// 20 chunks: four label batches of six, then one step-2 call.
-const chunks: Chunk[] = Array.from({ length: 20 }, (_, i) => ({ id: `c${i}`, index: i, hash: `h${i}`, startAt: new Date(T + i * 60_000).toISOString(), endAt: new Date(T + i * 60_000 + 30_000).toISOString(), firstEntryId: `u${i}`, lastEntryId: `a${i}`, firstAsk: `Step ${i}`, lastOwnerEntryId: `u${i}`, ownerTurns: 1, entries: 2, toolCalls: i % 3, where: null, idleBeforeMs: null, compactionEntryId: null }));
-const session = { threadId: "pi:sess-a", ref: "devbox/pi:sess-a", sourceVersion: "v1", summary: { cwd: "/work/demo" }, data: { arc: { chunks }, rarebit: { count: 40, fingerprint: "f".repeat(64) }, timeline: { stopped: true, marks: [] } },
-	arcEvidence: (ids: string[]) => new Map(ids.map((id) => { const i = id.slice(1); return [id, `[u${i}] USER: Run step ${i}.\n[a${i}] AGENT: Step ${i} landed and tests pass.`]; })),
-	entryTimes: (ids: string[]) => new Map(ids.map((id) => [id, T + Number(id.slice(1)) * 60_000])),
-	// Two Rarebit pages, newest first, cut at 8 KiB unless full text is asked for. Stop a3 asks after 9000 chars.
-	rarebits(this: { sourceVersion: string }, before?: string, fullText?: boolean) {
-		const page = (before ? chunks.slice(0, 10) : chunks.slice(10)).flatMap((c) => { const i = c.id.slice(1); return [
-			{ id: `u${i}`, kind: "user", t: null, text: `Run step ${i}.` },
-			{ id: `a${i}`, kind: "stop", t: null, text: i === "3" ? `Step 3 landed and tests pass.\n\n${"x".repeat(9000)}\n\nShould I keep step 3 behind a flag?` : `Step ${i} landed and tests pass.` }]; });
-		return { items: page.map((item) => (fullText ? item : { ...item, text: item.text.slice(0, 8192) })), more: !before, sourceVersion: this.sourceVersion };
-	} } as unknown as PiViewSession;
-
-type Run = { inFlight: number; maxInFlight: number; started: number; startedAfterFailure: number; failed: boolean };
-type Req = Parameters<PiViewContext["ask"]>[0];
-function context(name: string, delay: (call: number) => number, fail?: (call: number, req: Req) => boolean, edit?: (call: number, req: Req, text: string) => string) {
-	const run: Run = { inFlight: 0, maxInFlight: 0, started: 0, startedAfterFailure: 0, failed: false };
-	const dir = join(root, name); mkdirSync(dir, { recursive: true });
-	const ctx = { host: "devbox", stateDir: () => dir, session: () => session, lease: () => () => {}, invalidate() {}, snapshot: <T>(read: () => T) => read(), model: (p: ModelPurpose, o?: string) => resolveHelperModel(p, o),
-		async ask(req: Parameters<PiViewContext["ask"]>[0]) {
-			const call = run.started++;
-			if (run.failed) run.startedAfterFailure++;
-			run.inFlight++; run.maxInFlight = Math.max(run.maxInFlight, run.inFlight);
-			try {
-				await new Promise((r) => setTimeout(r, delay(call)));
-				if (fail?.(call, req)) { run.failed = true; throw Object.assign(new Error("model_error: synthetic failure"), { code: "model_error" }); }
-				const answer = await ask(req, model);
-				return edit ? { ...answer, text: edit(call, req, answer.text) } : answer;
-			} finally { run.inFlight--; }
-		} } as unknown as PiViewContext;
-	return { ctx, run, dir };
-}
-async function build(ctx: PiViewContext, limit?: number) {
-	buildArc(ctx, session, {}, { limit });
-	for (let i = 0; i < 400; i++) {
-		const v = cosArc.value(ctx, { kind: "view", view: "cos.arc", threadId: session.threadId }) as ArcValue;
-		if (v.job?.state !== "running") return v;
-		await new Promise((r) => setTimeout(r, 25));
-	}
-	throw new Error("Build arc did not finish");
-}
 const estimateOf = (ctx: PiViewContext) => (cosArc.value(ctx, { kind: "view", view: "cos.arc", threadId: session.threadId }) as ArcValue).buildEstimate;
 const receipt = (dir: string) => {
 	const r = JSON.parse(readFileSync(join(dir, readdirSync(dir).find((f) => /^[0-9a-f]{64}\.json$/.test(f))!), "utf8"));
@@ -442,117 +382,6 @@ process.stdin.resume(); process.stdin.on("end", () => console.log(JSON.stringify
 });
 
 
-// Real Pi calls go to a local Anthropic Messages endpoint (models.json sets only baseUrl, so built-in models stay). It
-// records the model of every outgoing request and answers with the offline demo model. A two-chunk Arc Build (labels,
-// step 2) and one side ask cover every purpose in three Pi calls. `providers` adds
-// models.json providers on the same endpoint; settings.json names magpie as Pi's defaultProvider, which the hub ignores.
-// `hubModels` is the whole hub.json models block. With `fails`, the
-// Build must fail and the Rarebit calls are skipped. `providerRun` keeps the Build's job and log record.
-let providerRun: { job: ArcValue["job"]; build: ReturnType<typeof buildLog>[number] | undefined } | undefined;
-async function providerModels(name: string, hubModels: Record<string, string>, { providers = {}, fails = false }: { providers?: Record<string, object>; fails?: boolean } = {}) {
-	const requests: { purpose: string; model: string }[] = [];
-	const purposeOf = (system: string) => system.startsWith("You label") ? "labels" : system.includes("chief of staff") ? "synthesis" : "rarebitAsk";
-	const text = (v: unknown): string => typeof v === "string" ? v : Array.isArray(v) ? v.map((b: { text?: string }) => b.text ?? "").join("") : "";
-	const server = createServer((req, res) => {
-		let body = "";
-		req.on("data", (d) => (body += d)).on("end", () => {
-			const b = JSON.parse(body) as { model: string; system?: unknown; messages: { role: string; content: unknown }[] };
-			requests.push({ purpose: purposeOf(text(b.system)), model: b.model });
-			const answer = spawnSync(model[0]!, model.slice(1), { input: text(b.messages.findLast((m) => m.role === "user")?.content), encoding: "utf8" }).stdout.trim();
-			const ev = (type: string, data: object) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
-			res.writeHead(200, { "content-type": "text/event-stream" });
-			ev("message_start", { message: { id: "msg_1", type: "message", role: "assistant", model: b.model, content: [], stop_reason: null, usage: { input_tokens: 1, output_tokens: 0 } } });
-			ev("content_block_start", { index: 0, content_block: { type: "text", text: "" } });
-			ev("content_block_delta", { index: 0, delta: { type: "text_delta", text: answer } });
-			ev("content_block_stop", { index: 0 });
-			ev("message_delta", { delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } });
-			ev("message_stop", {});
-			res.end();
-		});
-	});
-	await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-	const agentDir = join(root, `${name}-agent`); mkdirSync(agentDir, { recursive: true });
-	const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-	writeFileSync(join(agentDir, "models.json"), JSON.stringify({ providers: { anthropic: { baseUrl, apiKey: "test-key" }, ...Object.fromEntries(Object.entries(providers).map(([k, v]) => [k, { baseUrl, api: "anthropic-messages", ...v }])) } }));
-	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ defaultProvider: "magpie" }));
-	const saved = { PI_BIN: process.env.PI_BIN, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR, PI_OFFLINE: process.env.PI_OFFLINE, PI_SKIP_VERSION_CHECK: process.env.PI_SKIP_VERSION_CHECK };
-	Object.assign(process.env, { PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1", PI_SKIP_VERSION_CHECK: "1" });
-	delete process.env.PI_BIN;
-	const small = { ...session, data: { ...session.data, arc: { chunks: chunks.slice(0, 2) } } } as PiViewSession;
-	const rarebit = { threadId: "pi:sess-r", revision: 1, rarebitSnapshot: () => ({ context: "[u1] USER: Ship the cache cap?", count: 1, included: 1, omittedChars: 0, evidenceHash: "e".repeat(64), entry: "u1" }) } as unknown as PiViewSession;
-	try {
-		const file = join(root, `${name}-hub.json`);
-		writeFileSync(file, JSON.stringify({ hosts: [], models: hubModels }));
-		useHubConfig(file);
-		const r = context(name, () => 0);
-		Object.assign(r.ctx, { ask: (req: Req) => ask(req), model: (p: ModelPurpose, o?: string) => resolveHelperModel(p, o, piModelRegistry), session: (id: string) => (id === rarebit.threadId ? rarebit : small) });
-		buildArc(r.ctx, small);
-		let v: ArcValue | undefined;
-		for (let i = 0; i < 2400 && (!v || v.job?.state === "running"); i++) {
-			await new Promise((res) => setTimeout(res, 25));
-			v = cosArc.value(r.ctx, { kind: "view", view: "cos.arc", threadId: small.threadId }) as ArcValue;
-		}
-		providerRun = { job: v?.job ?? null, build: buildLog(r.ctx, small.threadId).at(-1) };
-		assert.equal(v?.job?.state, fails ? "error" : "done", JSON.stringify(v?.job?.lastError));
-		if (fails) return { requests: requests.length };
-
-		const side = await rarebitView.ops!.ask!(r.ctx, { threadId: rarebit.threadId, question: "Is the cap set?" }) as { side: { turns: { error?: string }[] } };
-		assert.equal(side.side.turns[0]!.error, undefined);
-		return Object.fromEntries(["labels", "synthesis", "rarebitAsk"].map((p) => [p, [...new Set(requests.filter((q) => q.purpose === p).map((q) => q.model))]]));
-	} finally {
-		useHubConfig(HUB);
-		server.close();
-		for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k]; else process.env[k] = v;
-	}
-}
-
-test("arc build provider model: each purpose's outgoing provider request carries its hub.json model (failure: Arc calls went out on Pi's default model)", async () => {
-	assert.deepEqual(await providerModels("provider-explicit", MODELS), { labels: ["claude-haiku-5-5"], synthesis: ["claude-sonnet-5-5"], rarebitAsk: ["claude-sonnet-5-5"] });
-	assert.deepEqual(providerRun!.build!.models, { labels: "anthropic/claude-haiku-5-5", synthesis: "anthropic/claude-sonnet-5-5" });
-});
-
-test("arc build provider model override: hub.json models.<purpose> changes that purpose's outgoing provider request (failure: a call site lost its purpose)", async () => {
-	assert.deepEqual(await providerModels("provider-hub", { arcLabels: "anthropic/claude-sonnet-5-5", arcSynthesis: "anthropic/claude-sonnet-5-5", rarebitAsk: "anthropic/claude-haiku-5-5" }),
-		{ labels: ["claude-sonnet-5-5"], synthesis: ["claude-sonnet-5-5"], rarebitAsk: ["claude-haiku-5-5"] });
-});
-
-// A local gateway provider, as on the owner's hub: its ids carry a route prefix.
-const MAGPIE = { magpie: { apiKey: "test-key", models: [{ id: "claude/claude-haiku-5-5" }, { id: "claude/claude-sonnet-5-5" }] } };
-
-test("arc build provider alias: a gateway provider/id reaches the provider as configured and the Build log names provider/id per purpose (failure: Pi's fuzzy --model or a custom-model fallback picked the route)", async () => {
-	assert.deepEqual(await providerModels("provider-alias", { ...MODELS, arcLabels: "magpie/claude/claude-haiku-5-5" }, { providers: MAGPIE }),
-		{ labels: ["claude/claude-haiku-5-5"], synthesis: ["claude-sonnet-5-5"], rarebitAsk: ["claude-sonnet-5-5"] });
-	assert.deepEqual(providerRun!.build!.models, { labels: "magpie/claude/claude-haiku-5-5", synthesis: "anthropic/claude-sonnet-5-5" });
-});
-
-test("arc build missing model: an unknown, bare, signed-out or unset model fails the Build with model, purpose, hub.json key and the listed rows before any provider call (failure: the Build spent labels, then fell back, guessed a provider, or failed late)", async () => {
-	// Each case: hub.json models, the key and name that fail, the failed Build purpose, the purposes the message names, and the Try rows.
-	const nope = "anthropic/claude-nope-9";
-	for (const [name, hub, key, model, purpose, words, tried] of [["missing", { ...MODELS, arcSynthesis: nope }, "arcSynthesis", nope, "synthesis", "Arc synthesis", ""],
-		["bare", { ...MODELS, arcSynthesis: "claude-sonnet-5-5" }, "arcSynthesis", "claude-sonnet-5-5", "synthesis", "Arc synthesis", " Try: anthropic/claude-sonnet-5-5."],
-		["signed-out", { ...MODELS, arcLabels: "locked/claude-haiku-5-5" }, "arcLabels", "locked/claude-haiku-5-5", "label", "Arc labels", " Try: anthropic/claude-haiku-5-5."]] as const) {
-		// `locked` has models but no credential, so Pi does not list it.
-		assert.deepEqual(await providerModels(`provider-${name}`, hub, { providers: { locked: { models: [{ id: "claude-haiku-5-5" }] } }, fails: true }), { requests: 0 }, name);
-		const err = providerRun!.job!.lastError!;
-		assert.deepEqual([err.code, err.purpose, err.model, err.preflight], ["model", purpose, model, true], name);
-		assert.equal(err.message, `No model named ${model} (hub.json, ${words}).`, name);
-		assert.ok(err.hint!.startsWith(`Edit models.${key} in ${join(root, `provider-${name}-hub.json`)}.${tried} Available: anthropic/claude-`), `${name}: ${err.hint}`);
-		assert.ok(err.available!.includes("anthropic/claude-sonnet-5-5") && !err.available!.some((m) => m.startsWith("locked/")), name);
-		assert.deepEqual([providerRun!.build!.state, providerRun!.build!.errorCode, providerRun!.build!.calls, providerRun!.build!.models], ["error", "model", 0, undefined], name);
-		assert.equal(providerRun!.build!.missingModel, model, name);
-	}
-	// Two bad keys: one Build failure names both, labels first, with one Available list.
-	await providerModels("provider-both", { ...MODELS, arcLabels: "anthropic/claude-nope-8", arcSynthesis: nope }, { fails: true });
-	const err = providerRun!.job!.lastError!;
-	assert.deepEqual([err.purpose, err.model], ["label", "anthropic/claude-nope-8"]);
-	assert.equal(err.message, "No model named anthropic/claude-nope-8 (hub.json, Arc labels). No model named anthropic/claude-nope-9 (hub.json, Arc synthesis).");
-	assert.match(err.hint!, /^Edit models\.arcLabels in [^ ]*\. Edit models\.arcSynthesis in [^ ]*\. Available: anthropic\/claude-.*, \+\d+ more\.$/);
-	// An unset key names the key and file, and the Build makes no provider call.
-	await providerModels("provider-unset", { arcSynthesis: MODELS.arcSynthesis }, { fails: true });
-	assert.equal(providerRun!.job!.lastError!.message, "No model set for Arc labels.");
-	assert.equal(providerRun!.job!.lastError!.hint, `Set models.arcLabels in ${join(root, "provider-unset-hub.json")}. Use a provider/model-id from pi --list-models on the hub.`);
-	assert.equal(providerRun!.build!.calls, 0);
-});
 
 test("arc build label gaps: a model answer that omits or nulls chunks fails the Build with code answer, not internal (failure: an answered call was logged as internal)", async () => {
 	for (const [name, drop] of [["omit", (raw: any) => { raw.chunks = raw.chunks.filter((l: any) => l.chunk !== "c2"); }], ["null", (raw: any) => { raw.chunks = raw.chunks.map((l: any) => (l.chunk === "c2" ? null : l)); }]] as const) {

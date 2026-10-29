@@ -1,3 +1,4 @@
+import "../test/home.mjs";
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { scenario, cacheShape, checkCacheHistory } from './scenarios.mjs';

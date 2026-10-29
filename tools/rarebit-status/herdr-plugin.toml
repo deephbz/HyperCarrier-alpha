@@ -1,6 +1,6 @@
 id = "rarebit-status"
 name = "Rarebit Status"
-version = "0.4.0"
+version = "0.5.0"
 min_herdr_version = "0.7.5"
 description = "Exact-Session Rarebit status and two-tab evidence deck"
 platforms = ["linux", "macos"]
@@ -31,12 +31,6 @@ id = "clear-current"
 title = "Rarebit Status: clear current pane"
 contexts = ["pane"]
 command = ["/bin/sh", "../herdr-node/launch.sh", "scripts/action.mjs", "clear-current"]
-
-[[actions]]
-id = "show-notification"
-title = "Rarebit Status: show current notification"
-contexts = ["pane"]
-command = ["/bin/sh", "../herdr-node/launch.sh", "scripts/action.mjs", "show-notification"]
 
 [[events]]
 on = "pane.agent_detected"
