@@ -1,7 +1,7 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { tempHome } from "./helpers.ts";
+import { tempHome, writePiSettings } from "./helpers.ts";
 import { SIM, startNode, kill } from "./crash-fixtures.ts";
 
 const toolTurn = (name: string) => `${name} turn\n/sim bash printf '${name}-one line %s\\n' 1 2 3 4\n/sim bash printf '${name}-two line %s\\n' 5 6 7 8\n/sim long 1`;
@@ -20,8 +20,8 @@ async function answered(client: any, threadId: string, name: string) {
 
 test("crash: a node killed after the keepset plan installs that plan on restart, with no second planning request", async () => {
 	const home = tempHome();
-	const budget = { AMPI_WORKING_BUDGET: "8000", AMPI_COMPACT_KEEP_RECENT: "200" };
-	let { child, client } = await startNode(home, 50000, { ...budget, AMPI_FAULT: "after-keepset-plan" });
+	writePiSettings({ auto_compact: { budget_tokens: 8000 }, compaction: { keepRecentTokens: 200 } });
+	let { child, client } = await startNode(home, 50000, { AMPI_FAULT: "after-keepset-plan" });
 	const died = new Promise<void>((resolve) => child.once("exit", () => resolve()));
 	try {
 		const { threadId } = await client.req("thread.create", { cwd: home, model: SIM });
@@ -40,7 +40,7 @@ test("crash: a node killed after the keepset plan installs that plan on restart,
 		await client.req("thread.compact", { threadId });
 		await died; // the node killed itself right after the plan memo was written
 		client.close();
-		({ child, client } = await startNode(home, 50000, budget));
+		({ child, client } = await startNode(home, 50000));
 		const view = client.sub({ kind: "thread", threadId });
 		const compacted = await client.until<any>(view, (v) => v.entries.some((e: any) => e.kind === "compaction"), 30_000);
 		const { records } = await client.req("compact.records", { threadId });
@@ -61,9 +61,9 @@ test("crash: a node killed after the keepset plan installs that plan on restart,
 
 test("crash: a method change after the paid plan does not bypass it on restart", async () => {
 	const home = tempHome();
-	const budget = { AMPI_WORKING_BUDGET: "8000", AMPI_COMPACT_KEEP_RECENT: "200" };
+	writePiSettings({ auto_compact: { budget_tokens: 8000 }, compaction: { keepRecentTokens: 200 } });
 	// The fault switches the thread to the native method, as an owner command would, and then kills the node.
-	let { child, client } = await startNode(home, 50000, { ...budget, AMPI_FAULT: "after-keepset-plan-native" });
+	let { child, client } = await startNode(home, 50000, { AMPI_FAULT: "after-keepset-plan-native" });
 	const died = new Promise<void>((resolve) => child.once("exit", () => resolve()));
 	try {
 		const { threadId } = await client.req("thread.create", { cwd: home, model: SIM });
@@ -72,7 +72,7 @@ test("crash: a method change after the paid plan does not bypass it on restart",
 		await client.req("thread.compact", { threadId });
 		await died;
 		client.close();
-		({ child, client } = await startNode(home, 50000, budget));
+		({ child, client } = await startNode(home, 50000));
 		const view = client.sub({ kind: "thread", threadId });
 		await client.until<any>(view, (v) => v.entries.some((e: any) => e.kind === "compaction"), 30_000);
 		const status = await client.req("compact.records", { threadId });
@@ -89,15 +89,15 @@ test("crash: a method change after the paid plan does not bypass it on restart",
 
 test("restart: the first keepset compaction after a restart has no captured request and falls back in owner words", async () => {
 	const home = tempHome();
-	const budget = { AMPI_WORKING_BUDGET: "8000", AMPI_COMPACT_KEEP_RECENT: "200" };
-	let { child, client } = await startNode(home, 50000, budget);
+	writePiSettings({ auto_compact: { budget_tokens: 8000 }, compaction: { keepRecentTokens: 200 } });
+	let { child, client } = await startNode(home, 50000);
 	try {
 		const { threadId } = await client.req("thread.create", { cwd: home, model: SIM });
 		await client.req("thread.command", { threadId, name: "auto-compact", args: "off" });
 		for (const name of ["alpha", "beta"]) await answered(client, threadId, name);
 		client.close();
 		await kill(child);
-		({ child, client } = await startNode(home, 50000, budget));
+		({ child, client } = await startNode(home, 50000));
 		await client.req("thread.compact", { threadId });
 		const view = client.sub({ kind: "thread", threadId });
 		await client.until<any>(view, (v) => v.entries.some((e: any) => e.kind === "compaction"), 30_000);

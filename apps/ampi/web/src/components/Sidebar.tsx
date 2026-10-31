@@ -1,18 +1,29 @@
 import { useState } from "react";
 import type { HerdrLayout, ThreadSummary, ThreadsState } from "../../../src/shared/protocol.ts";
 import { PiHostSection } from "./PiSidebar.tsx";
-import { type HostState, hub, useTopic } from "../client.ts";
+import { isPiHost } from "./host-label.ts";
+import { type HostState, hub, useNow, useTopic } from "../client.ts";
+import { type LinkView, linkView } from "./host-fold.ts";
 import { hasRealModel, useModels } from "../models.ts";
 import { openAccounts } from "./Accounts.tsx";
 import { ACTIVITY_LABEL, MOD, ago, attentionOf, go, href, isBusy } from "../util.ts";
-import { FleetSearch } from "./Search.tsx";
 import { PAGES } from "../views/registry.ts";
 import { dispatchKeyAction } from "../keymap.ts";
 import { handleSidebarKeyDown } from "./sidebar-keys.ts";
 import { setThemeChoice, useThemeChoice, type ThemeChoice } from "../theme.ts";
+import { PinMenu, PinnedSection, openPinMenu } from "./Pinned.tsx";
+import { Segmented } from "./Segmented.tsx";
 
 /** `error`: why the Host ended or holds this list (pending or end frame); an ended list never loads further. */
-export type HostThreads = { host: HostState; threads: ThreadSummary[]; stale: boolean; layout?: HerdrLayout; error?: string } & Pick<ThreadsState, "indexing" | "listing" | "updating">;
+export type HostThreads = { host: HostState; threads: ThreadSummary[]; stale: boolean; layout?: HerdrLayout; error?: string } & Pick<ThreadsState, "indexing" | "listing" | "updating" | "settingsNotice">;
+
+/** A Host link's last failure and next step. Each view shows both while the Host is not connected, so a retry keeps the reason. */
+export function LinkNotes({ view }: { view: LinkView }) {
+	return <>
+		{view.error && <div className="host-note err" data-link-error>{view.error}</div>}
+		{view.hint && <div className="host-note" data-link-hint>{view.hint}</div>}
+	</>;
+}
 
 export function ActivityIcon({ t }: { t: ThreadSummary }) {
 	if (isBusy(t)) return <span className="spinner" title={ACTIVITY_LABEL[t.activity]} />;
@@ -84,6 +95,7 @@ export function ThreadRow({
 				if ((e.target as HTMLElement).closest("a, button")) return;
 				go(host, t.id);
 			}}
+			onContextMenu={(e) => openPinMenu(e, host, t.id, t.title)}
 			title={`${t.title}\n${t.cwd}${t.model ? `\n${t.model}` : ""}`}
 			data-thread={t.id}
 			data-team-role={t.team?.role}
@@ -154,17 +166,16 @@ export function Sidebar({
 	route,
 	hubConnected,
 	onNew,
-	onAddHost,
+	onHostSetup,
 	onToggle,
 }: {
 	data: HostThreads[];
 	route: { host?: string; thread?: string; page?: string };
 	hubConnected: boolean;
 	onNew: () => void;
-	onAddHost: () => void;
+	onHostSetup: () => void;
 	onToggle: () => void;
 }) {
-	const [filter, setFilter] = useState("");
 	const [showArchived, setShowArchived] = useState(false);
 	const archivedCount = data.reduce((count, host) => count + host.threads.filter((thread) => thread.archived).length, 0);
 	const activePage = route.page ?? (!route.host ? (PAGES.some((p) => p.name === "timeline") ? "timeline" : "overview") : undefined);
@@ -181,7 +192,10 @@ export function Sidebar({
 				<button className="btn ghost" onClick={onNew}>
 					+ New agent <span className="kbd">{MOD}N</span>
 				</button>
-				<input className="search" aria-label="Filter Sessions" placeholder="Filter Sessions…" value={filter} onChange={(e) => setFilter(e.target.value)} />
+				{/* One search entry: the ⌘K palette searches Session names or prose; the tree below never filters. */}
+				<button className="search search-open" onClick={() => dispatchKeyAction("session.palette", new KeyboardEvent("keydown"))}>
+					Search Sessions or prose… <span className="kbd">{MOD}K</span>
+				</button>
 				{!hubConnected && (
 					<div className="hint" data-hub-disconnected>
 						Not connected to the hub. If it is running, open the link that <code>ampi open</code> prints: it carries this machine's access key.
@@ -189,15 +203,15 @@ export function Sidebar({
 				)}
 			</div>
 			<div className="side-scroll quiet-scroll">
-				{data.some((d) => servesHostOps(d.host)) && <FleetSearch hosts={data.filter((d) => servesHostOps(d.host)).map((d) => d.host)} />}
-				<a className={`row ${activePage === "overview" ? "active" : ""}`} href={href.page("overview")} data-nav-row tabIndex={activePage === "overview" ? 0 : -1} aria-current={activePage === "overview" ? "page" : undefined}>
-					<span className="twisty">⌂</span>
-					<span className="title">Overview</span>
-					<span className="sub">{MOD}0</span>
-				</a>
-				{[...new Set(PAGES.map((p) => p.section))].map((section) => (
+				{[...new Set(PAGES.map((p) => p.section))].map((section, i) => (
 					<div key={section} className="nav-section" data-nav-section={section}>
 						<div className="nav-label">{section}</div>
+						{/* Overview leads the first section (Chief of Staff): it is the fleet's front page. ⌘0 still opens it. */}
+						{i === 0 && (
+							<a className={`row nav-row ${activePage === "overview" ? "active" : ""}`} href={href.page("overview")} data-nav-row tabIndex={activePage === "overview" ? 0 : -1} data-nav-page="overview" aria-current={activePage === "overview" ? "page" : undefined} title={`Overview (${MOD}0)`}>
+								<span className="title">Overview</span>
+							</a>
+						)}
 						{PAGES.filter((p) => p.section === section).map((p) => (
 							<a key={p.name} className={`row nav-row ${activePage === p.name ? "active" : ""}`} href={href.page(p.name)} data-nav-row tabIndex={activePage === p.name ? 0 : -1} data-nav-page={p.name} aria-current={activePage === p.name ? "page" : undefined} title={p.label}>
 								<span className="title">{p.label}</span>
@@ -205,12 +219,13 @@ export function Sidebar({
 						))}
 					</div>
 				))}
+				<PinnedSection data={data} />
 				{data.map((d) => (
-					<PiHostSection key={d.host.link} data={d} hosts={data.map((other) => other.host)} route={route} filter={filter} showArchived={showArchived} />
+					<PiHostSection key={d.host.link} data={d} hosts={data.map((other) => other.host)} route={route} showArchived={showArchived} />
 				))}
 				<div className="side-footer">
-					<button className="btn ghost small" onClick={onAddHost}>
-						+ Add host
+					<button className="btn ghost small" title="How to add a remote host: a prompt for your coding agent" onClick={onHostSetup}>
+						Remote host (?)
 					</button>
 					<button className="btn ghost small" onClick={() => setShowArchived(!showArchived)}>
 						{showArchived ? "Hide archived" : `Show archived (${archivedCount})`}
@@ -221,6 +236,7 @@ export function Sidebar({
 					<ThemeToggle />
 				</div>
 			</div>
+			<PinMenu />
 		</aside>
 	);
 }
@@ -230,13 +246,5 @@ const THEMES: [ThemeChoice, string][] = [["system", "System"], ["light", "Light"
 /** System · Light · Dark. The choice persists in this browser; System follows the OS. */
 function ThemeToggle() {
 	const choice = useThemeChoice();
-	return (
-		<div className="seg theme-toggle" role="group" aria-label="Theme">
-			{THEMES.map(([value, label]) => (
-				<button key={value} className={choice === value ? "on" : ""} aria-pressed={choice === value} onClick={() => setThemeChoice(value)}>
-					{label}
-				</button>
-			))}
-		</div>
-	);
+	return <Segmented className="theme-toggle" label="Theme" value={choice} options={THEMES} onChange={setThemeChoice} />;
 }

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
-import type { ThreadsState, ThreadSummary } from "../../src/shared/protocol.ts";
+import type { SettingsNotice, ThreadsState, ThreadSummary } from "../../src/shared/protocol.ts";
+import { displayCwd } from "./hud.ts";
 import { findHost, type HostState, useHosts, useTopic } from "./client.ts";
 import { AccountsDialog } from "./components/Accounts.tsx";
-import { AddHostDialog, CommandPalette, DisplayDialog, HelpDialog, Palette } from "./components/Dialogs.tsx";
+import { CommandPalette, DisplayDialog, HelpDialog, HostSetupDialog, Palette } from "./components/Dialogs.tsx";
 import { useModels } from "./models.ts";
 import { Overview } from "./components/Overview.tsx";
 import { NewAgentDialog } from "./components/PiDialogs.tsx";
@@ -113,9 +114,41 @@ function ResizeEdge({ side, width, onChange }: { side: "sidebar" | "panel"; widt
 function HostFeed({ host, onData }: { host: HostState; onData: (id: string, data: HostThreads) => void }) {
 	const { value, stale, error } = useTopic(host.link, { kind: "threads" });
 	useEffect(() => {
-		onData(host.link, { host, threads: Object.values(value?.threads ?? {}) as ThreadSummary[], stale, ...(value?.layout ? { layout: value.layout } : {}), indexing: value?.indexing, listing: value?.listing, updating: value?.updating, error });
+		onData(host.link, { host, threads: Object.values(value?.threads ?? {}) as ThreadSummary[], stale, ...(value?.layout ? { layout: value.layout } : {}), indexing: value?.indexing, listing: value?.listing, updating: value?.updating, settingsNotice: value?.settingsNotice, error });
 	}, [host, value, stale, error, onData]);
 	return null;
+}
+
+const NOTICED = "ampi.settingsNotice";
+
+/**
+ * Invalid Pi settings a Host ignored, as Pi's Auto Compact warns about them: one notice per Host and settings stamp,
+ * also across reloads. It stays until the owner dismisses it; an edit that fixes the file ends it.
+ */
+function SettingsNotices({ feeds }: { feeds: Record<string, HostThreads> }) {
+	const [open, setOpen] = useState<({ host: string; link: string; label: string } & SettingsNotice)[]>([]);
+	useEffect(() => {
+		const noticed = JSON.parse(localStorage.getItem(NOTICED) ?? "{}") as Record<string, string>;
+		const fresh = Object.values(feeds).flatMap(({ host, settingsNotice: n }) => (n && noticed[host.id] !== n.stamp ? [{ host: host.id, link: host.link, label: host.label, ...n }] : []));
+		for (const n of fresh) noticed[n.host] = n.stamp;
+		if (fresh.length) localStorage.setItem(NOTICED, JSON.stringify(noticed));
+		setOpen((prev) => {
+			// A reconnecting Host keeps its notice; a Host that reports another stamp or none ends it.
+			const next = [...prev.filter((n) => { const f = feeds[n.link]; return !f || f.stale || f.settingsNotice?.stamp === n.stamp; }), ...fresh];
+			return next.length === prev.length && next.every((n, i) => n === prev[i]) ? prev : next;
+		});
+	}, [feeds]);
+	if (!open.length) return null;
+	return (
+		<div className="toast settings-notice" role="status" aria-live="polite">
+			{open.map((n) => (
+				<p key={n.link}>
+					{n.label}: ignored invalid Pi settings in {displayCwd(n.file)}: {n.errors.join("; ")}.{" "}
+					<button className="link-button" onClick={() => setOpen((prev) => prev.filter((o) => o !== n))}>Dismiss</button>
+				</p>
+			))}
+		</div>
+	);
 }
 
 function useRoute() {
@@ -160,6 +193,16 @@ export function App() {
 	const focusSeq = useRef(0);
 	const pendingFocus = useRef<{ seq: number; chain: Target[]; ifLost?: true } | undefined>(undefined);
 	const [focusRequest, setFocusRequest] = useState<{ seq: number; chain: Target[]; ifLost?: true }>();
+	// A Session's regions mount after its data loads, so a request's first target may not exist yet. The adapter keeps it
+	// and focuses it when it mounts. The wait belongs to one arrival: the next route arrival, the next key request, any
+	// input (pointer, key, wheel) and any focus not placed here end it. No region focuses itself on mount: this adapter is
+	// the only writer of a requested focus.
+	const awaiting = useRef<Target | undefined>(undefined);
+	const placing = useRef(false);
+	const place = useRef((target: Target) => {
+		placing.current = true;
+		try { return focusRegion(target); } finally { placing.current = false; }
+	}).current;
 	const applyView = useRef({ sidebar: (_show: boolean) => {}, panel: (_open: boolean) => {} });
 	const focusIntent = useRef((intent: KeyIntent, entry?: Target): boolean => {
 		const region = (document.activeElement?.closest<HTMLElement>("[data-region]")?.dataset.region ?? null) as Region | null;
@@ -168,6 +211,7 @@ export function App() {
 		// A view-change request never displaces a pending key request; both resolve from `last`.
 		if (next.ifLost && pendingFocus.current && !pendingFocus.current.ifLost) return true;
 		recentRegions.current = next.recent;
+		if (!next.ifLost) awaiting.current = undefined;
 		if (next.change.sidebar) applyView.current.sidebar(next.change.sidebar === "show");
 		if (next.change.panel) applyView.current.panel(next.change.panel === "open");
 		pendingFocus.current = { seq: ++focusSeq.current, chain: next.chain, ifLost: next.ifLost };
@@ -203,13 +247,20 @@ export function App() {
 	useKeyAction("history.back", goBack);
 	useKeyAction("history.forward", goForward);
 	useEffect(() => installNavLinks(), []);
-	// Each route arrival: Back, Forward or a reload returns to the target the entry held (history.move).
+	// Each route arrival makes one focus request. Back, Forward or a reload returns to the target the entry held
+	// (history.move); a new arrival that opens a Session focuses its composer (session.switch).
+	const arrivedThread = useRef<string | undefined>(undefined);
 	useLayoutEffect(() => {
+		awaiting.current = undefined;
 		const arrival = arriveEntry();
 		const intent = routeIntent.current;
 		routeIntent.current = undefined;
+		const thread = route.thread ? `${route.host}\n${route.thread}` : undefined;
+		const opened = thread !== undefined && thread !== arrivedThread.current;
+		arrivedThread.current = thread;
 		if (arrival.kind === "traverse") focusIntent("history.move", arrival.focus);
 		else if (intent) focusIntent(intent);
+		else if (opened) focusIntent("session.switch");
 	}, [hash]);
 	useKeyAction("new", () => setDialog("new"));
 	useEffect(() => installKeymapDispatcher(), []);
@@ -226,6 +277,8 @@ export function App() {
 		const apply = () => {
 			const settings = JSON.parse(localStorage.getItem("ampi.display") ?? "{}") as { overall?: number; sidebar?: number; transcript?: number; composer?: number; panel?: number };
 			document.documentElement.style.zoom = String(settings.overall ?? 1);
+			// WebKit misplaces container-unit geometry under any zoom; zoom-sensitive layout keys off this flag.
+			document.documentElement.toggleAttribute("data-zoomed", (settings.overall ?? 1) !== 1 || (settings.transcript ?? 1) !== 1);
 			for (const region of ["sidebar", "transcript", "composer", "panel"] as const) {
 				const root = document.querySelector<HTMLElement>(`[data-region="${region}"]`);
 				if (root) root.style.zoom = String(settings[region] ?? 1);
@@ -238,6 +291,7 @@ export function App() {
 	useEffect(() => { if (zoomToast) { const timer = setTimeout(() => setZoomToast(""), 1800); return () => clearTimeout(timer); } }, [zoomToast]);
 	useEffect(() => {
 		const record = (event: FocusEvent) => {
+			if (!placing.current) awaiting.current = undefined;
 			lastFocused.current = event.target as Element;
 			const region = (event.target as Element | null)?.closest?.<HTMLElement>("[data-region]")?.dataset.region;
 			if (region === "transcript" || region === "composer" || region === "panel") recentRegions.current = remember(recentRegions.current, region);
@@ -246,16 +300,20 @@ export function App() {
 		};
 		document.addEventListener("focusin", record);
 		// A click on empty space leaves focus on body on purpose: forget the element, so a later removal steals nothing (R11).
-		// A removed or inerted element stays remembered; the observer below handles it first.
+		// A removed or inerted element lost focus to a layout change. The browser blurs an inerted element at its next focus
+		// fixup, which can come after the observer below has run, so this path restores focus too; the first path forgets it.
 		const leave = (event: FocusEvent) => {
 			const was = event.target as Element;
 			setTimeout(() => {
-				if (lastFocused.current === was && document.activeElement === document.body && was.isConnected && !was.closest("[inert]")) lastFocused.current = null;
+				if (lastFocused.current !== was || document.activeElement !== document.body) return;
+				lastFocused.current = null;
+				if (!was.isConnected || was.closest("[inert]")) focusIntent("layout.change");
 			});
 		};
 		document.addEventListener("focusout", leave);
 		// Any other writer that removes or inerts the focused element (resize, squeeze, auto-collapse) is a layout change.
 		const lost = new MutationObserver(() => {
+			if (awaiting.current && place(awaiting.current)) { awaiting.current = undefined; return; }
 			const was = lastFocused.current;
 			if (document.activeElement !== document.body || !was || (was.isConnected && !was.closest("[inert]"))) return;
 			lastFocused.current = null;
@@ -269,19 +327,24 @@ export function App() {
 		const frame = requestAnimationFrame(() => {
 			if (pendingFocus.current?.seq === focusRequest.seq) pendingFocus.current = undefined;
 			if (focusRequest.ifLost && document.activeElement && document.activeElement !== document.body) return;
-			for (const target of focusRequest.chain) if (focusRegion(target)) return;
+			const [first, ...rest] = focusRequest.chain;
+			if (place(first!)) return;
+			if (!focusRequest.ifLost) awaiting.current = first;
+			for (const target of rest) if (place(target)) return;
 		});
 		return () => cancelAnimationFrame(frame);
 	}, [focusRequest]);
-	useEffect(() => { if (route.thread) focusIntent("session.switch"); }, [route.host, route.thread]);
 	useEffect(() => {
-		const pointer = () => { document.documentElement.dataset.input = "pointer"; };
-		const keyboard = () => { document.documentElement.dataset.input = "keyboard"; };
+		const pointer = () => { document.documentElement.dataset.input = "pointer"; awaiting.current = undefined; };
+		const keyboard = () => { document.documentElement.dataset.input = "keyboard"; awaiting.current = undefined; };
+		const wheel = () => { awaiting.current = undefined; };
 		document.addEventListener("pointerdown", pointer, true);
 		document.addEventListener("keydown", keyboard, true);
+		document.addEventListener("wheel", wheel, { capture: true, passive: true });
 		return () => {
 			document.removeEventListener("pointerdown", pointer, true);
 			document.removeEventListener("keydown", keyboard, true);
+			document.removeEventListener("wheel", wheel, true);
 		};
 	}, []);
 	useEffect(() => {
@@ -343,7 +406,7 @@ export function App() {
 				// An overlaid panel closes on Escape, as a sheet should; focus returns to `last`.
 				focusIntent("panel.close");
 			} else if (e.altKey && !mod && (e.key === "ArrowUp" || e.key === "ArrowDown") && !(e.target as HTMLElement)?.closest?.("select, [contenteditable]") && !((e.target as HTMLInputElement)?.value ?? "")) {
-				// Works from an empty composer (it autofocuses); never while a draft or another field has text.
+				// Works from an empty composer (a Session opens in it); never while a draft or another field has text.
 				// Alt+↑/↓: the previous or next Session in the sidebar's order.
 				const rows = [...document.querySelectorAll<HTMLElement>(".side-scroll .row[data-thread]")];
 				if (!rows.length) return;
@@ -373,7 +436,7 @@ export function App() {
 			if (!open && panel) panelClosed(panel);
 			setPanel(open ? defaultPanel() : undefined);
 			const r = linkRoute(hashRoute(), hosts);
-			if (!open && r.panel && r.host && r.thread) navigate(href.thread(r.host, r.thread, r.entry ? { entry: r.entry } : {}), "replace");
+			if (!open && r.panel && r.host && r.thread) navigate(href.thread(r.host, r.thread, r.entry ? { entry: r.entry } : {}), "replace", { reveal: false });
 		},
 	};
 	const page = PAGES.find((p) => p.name === (route.page ?? (!route.host ? "timeline" : undefined)));
@@ -391,11 +454,12 @@ export function App() {
 		<FocusIntentContext.Provider value={focusIntent}>
 		<div className={`app ${sideHidden ? "sidebar-hidden" : ""} ${showPanel ? "has-panel" : ""} ${overlayPanel ? "panel-overlay" : ""}`} style={{ "--side-w": `${sidebarWidth}px`, "--side-visible": sideHidden ? "0px" : "var(--side-w)", "--panel-w": `${panelWidth}px` } as CSSProperties}>
 			{zoomToast && <div className="toast" role="status" aria-live="polite">{zoomToast}</div>}
+			<SettingsNotices feeds={feeds} />
 			{hosts.map((host) => (
 				<HostFeed key={host.link} host={host} onData={onData} />
 			))}
 			<div className="sidebar-slot" data-region="sidebar" tabIndex={-1} inert={sideHidden}>
-				<Sidebar data={data} route={route} hubConnected={connected} onNew={() => setDialog("new")} onAddHost={() => setDialog("host")} onToggle={() => (squeezed ? setSidebarPeek(false) : setSidebarHidden(true))} />
+				<Sidebar data={data} route={route} hubConnected={connected} onNew={() => setDialog("new")} onHostSetup={() => setDialog("host")} onToggle={() => (squeezed ? setSidebarPeek(false) : setSidebarHidden(true))} />
 				<ResizeEdge side="sidebar" width={sidebarWidth} onChange={setSidebarWidth} />
 			</div>
 			{sideHidden && <button className="btn ghost sidebar-reveal" aria-label="Show sidebar" title={`Show sidebar (${MOD}B)`} onClick={() => (sidebarHidden ? setSidebarHidden(false) : setSidebarPeek(true))}>☰</button>}
@@ -409,7 +473,7 @@ export function App() {
 			) : route.host && route.thread ? (
 				<ThreadView key={`${route.host}|${route.thread}`} host={route.host} threadId={route.thread} summary={summary} models={models} panel={panel} setPanel={setPanelTracked} entry={route.entry} />
 			) : (
-				<Overview data={data} onNew={() => setDialog("new")} onAddHost={() => setDialog("host")} onHelp={() => setDialog("help")} />
+				<Overview data={data} onNew={() => setDialog("new")} onHostSetup={() => setDialog("host")} onHelp={() => setDialog("help")} />
 			)}
 			</div>
 			{!page && route.host && route.thread && panel && showPanel && <div className="panel-slot" data-region="panel" tabIndex={-1} onKeyDown={handleRegionScrollKey}>
@@ -418,7 +482,7 @@ export function App() {
 			</div>}
 			{/* One dialog for every Host source; the chosen Host decides Herdr placement or a durable tab. */}
 			{dialog === "new" && <NewAgentDialog hosts={hosts} defaultHost={route.host} beside={summary} onClose={closeDialog} />}
-			{dialog === "host" && <AddHostDialog onClose={() => setDialog(undefined)} />}
+			{dialog === "host" && <HostSetupDialog onClose={() => setDialog(undefined)} />}
 			{dialog === "palette" && <Palette data={data} query={paletteQuery.current} onQuery={(query) => { paletteQuery.current = query; }} onClose={() => setDialog(undefined)} />}
 			{dialog === "commands" && <CommandPalette query={paletteQuery.current} onQuery={(query) => { paletteQuery.current = query; }} onClose={() => setDialog(undefined)} />}
 			{dialog === "display" && <DisplayDialog onClose={() => setDialog(undefined)} />}

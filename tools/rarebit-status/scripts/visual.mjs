@@ -11,8 +11,6 @@ function terminalStyle(tone, ansi) {
       return ansi.blue;
     case "boundary":
       return ansi.bold;
-    case "attention":
-      return `${ansi.yellow}${ansi.bold}`;
     case "diagnostic":
       return ansi.red;
     case "muted":

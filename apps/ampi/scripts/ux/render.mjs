@@ -42,7 +42,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const out = resolve(dirname(fileURLToPath(import.meta.url)), '../../docs/ux');
   const map = JSON.parse(await readFile(join(out, 'map.json'), 'utf8'));
   const { chromium } = await import('playwright');
-  const browser = await chromium.launch({ headless: true, ...(process.env.UX_CHROME_CHANNEL ? { channel: process.env.UX_CHROME_CHANNEL } : {}) });
+  const { launchOptions } = await import('./browser.mjs');
+  const browser = await chromium.launch(launchOptions());
   try { await renderGrid(map, out, browser); } finally { await browser.close(); }
 }
 export function render(map) {

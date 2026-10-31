@@ -2,18 +2,20 @@
 // WebSockets onto host links. It owns no agent state: requests go to exactly the host they name, and subscriptions
 // are re-established after a host reconnects (the node sends a fresh snapshot).
 
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { createHash, timingSafeEqual } from "node:crypto";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { homedir, hostname } from "node:os";
+import { hostname } from "node:os";
 import { basename, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
-import type { HostsFrame, HubOps, NodeFrame, Topic } from "../shared/protocol.ts";
+import type { HostsFrame, HubOps, NodeFrame, PinsFrame, Topic } from "../shared/protocol.ts";
 import { DurableHost } from "./durable-host.ts";
 import { type HostConfig, type HostState, linkKey } from "./hosts.ts";
+import { type HubHome, newHubToken } from "./home.ts";
+import { Pins } from "./pins.ts";
 import { PiHost, type PiHostConfig } from "../pi/host.ts";
-import { buildQueue, deriveQueue } from "../pi/derive-queue.ts";
+import { buildQueue, deriveQueue, roleWaitQueue } from "../pi/derive-queue.ts";
 import { sweepAskScratch } from "../pi/ask.ts";
 import { complete, instant, nowUs, span, tracing } from "../trace.ts";
 import { loopWindow, watched } from "../loop-watch.ts";
@@ -23,7 +25,7 @@ export { hubConfigPath };
 
 // `models` names helper models; helper-models.ts reads them from the file on every call and owns every hub.json write.
 /** `persistentCookie`: the login cookie outlives the client session (see `loginCookie`). */
-export type HubConfig = { hosts: (HostConfig | PiHostConfig)[]; backend?: "pi"; self?: string; models?: HelperModels; arcEvidence?: ArcEvidence; persistentCookie?: boolean };
+export type HubConfig = { hosts: (HostConfig | PiHostConfig)[]; self?: string; models?: HelperModels; arcEvidence?: ArcEvidence; persistentCookie?: boolean };
 
 /** Browser → hub frames: node frames addressed to one host, plus hub operations. */
 type BrowserFrame =
@@ -45,37 +47,6 @@ const MIME: Record<string, string> = {
 	".woff2": "font/woff2",
 	".json": "application/json",
 };
-
-/**
- * The hub's access key: 32 random bytes in a 0600 file next to the node socket. The hub can type into terminals and
- * run agents on every host, so it trusts exactly who the node socket trusts (the owner's own processes), not every
- * process that can reach loopback.
- */
-export function hubToken(home = process.env.AMPI_HOME ?? join(homedir(), ".ampi")): string {
-	try {
-		const token = readFileSync(join(home, "hub.token"), "utf8").trim();
-		if (/^[0-9a-f]{64}$/.test(token)) return token;
-	} catch {}
-	return saveHubToken(home, newHubToken());
-}
-
-export function newHubToken(): string {
-	return randomBytes(32).toString("hex");
-}
-
-/**
- * Replaces the stored key. The page, the app, and `ampi open` read the file each time, so they pick it up; a hub
- * keeps the key it started with, and browsers holding the old cookie must open the new link.
- */
-export function saveHubToken(home: string, token: string): string {
-	mkdirSync(home, { recursive: true, mode: 0o700 });
-	const path = join(home, "hub.token");
-	// Write then rename: a reader never sees a partial key, and the file is 0600 from its first byte.
-	const next = `${path}.${process.pid}.tmp`;
-	writeFileSync(next, `${token}\n`, { mode: 0o600 });
-	renameSync(next, path);
-	return token;
-}
 
 /** Browsers send cookies to every port of a host, so the cookie names its port: no other loopback server receives it. */
 export function cookieName(port: number): string {
@@ -121,21 +92,19 @@ function same(a: string, b: string): boolean {
 }
 
 /**
- * Pi backend (D15 stage 1): `"backend": "pi"` in hub.json, or AMPI_BACKEND=pi. This machine is a Pi Host named by its
- * own Host ID (`self`, default this machine's `hostname`), and no pi-durable node starts. Without it the hub keeps the AmPi node.
+ * The hub's Hosts (D15, D26). This machine is always a Pi Host and a durable Host, both named by its own Host ID
+ * (`self`, else AMPI_SELF, else this machine's `hostname`), so its node starts with the hub. hub.json lists every
+ * other Host. A `"backend"` field from older hub.json files loads and changes nothing; `ampi doctor` notes it.
  */
-export function loadHubConfig(path = hubConfigPath()): HubConfig {
-	const parsed = existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as Partial<HubConfig> & { backend?: string; self?: string }) : {};
+export function loadHubConfig(path = hubConfigPath()): HubConfig & { self: string } {
+	const parsed = existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as Partial<HubConfig>) : {};
 	const hosts = parsed.hosts ?? [];
 	const models = { ...(parsed.models ? { models: parsed.models } : {}), ...(parsed.persistentCookie === true ? { persistentCookie: true } : {}) };
-	if ((parsed.backend ?? process.env.AMPI_BACKEND) === "pi") {
-		// Every Session reference names its Host, so this machine always has a real name, never a placeholder.
-		const self = parsed.self ?? process.env.AMPI_SELF ?? hostname();
-		if (!hosts.some((host) => host.kind === "pi-local")) hosts.unshift({ id: self, label: self, kind: "pi-local" });
-		return { hosts, backend: "pi", self, ...models };
-	}
-	if (!hosts.some((host) => host.kind === "local")) hosts.unshift({ id: "local", label: process.platform === "darwin" ? "This Mac" : "Local", kind: "local" });
-	return { hosts, ...models };
+	// Every Session reference names its Host, so this machine always has a real name, never a placeholder.
+	const self = parsed.self ?? process.env.AMPI_SELF ?? hostname();
+	if (!hosts.some((host) => host.kind === "local")) hosts.unshift({ id: self, label: self, kind: "local" });
+	if (!hosts.some((host) => host.kind === "pi-local")) hosts.unshift({ id: self, label: self, kind: "pi-local" });
+	return { hosts, self, ...models };
 }
 
 class BrowserClient {
@@ -176,6 +145,7 @@ export class Hub {
 	readonly clients = new Set<BrowserClient>();
 	readonly config: HubConfig;
 	readonly configPath: string | undefined;
+	readonly pins: Pins;
 	server?: Server;
 	#nextHostId = 1;
 	/** host sid → owner, per host. */
@@ -187,14 +157,21 @@ export class Hub {
 	#milestones = new Set<string>();
 
 	readonly persistentCookie: boolean;
+	#home: HubHome | undefined;
 	#healLogged = new Map<string, number>();
 
-	constructor(config: HubConfig, options: { configPath?: string; token?: string; persistentCookie?: boolean } = {}) {
+	/**
+	 * `home`: the AmPi home this hub owns, where its pins, key and Pi copies persist. Without it (demo and test hubs)
+	 * pins last as long as this hub, the key is `token` or a new one, and every Pi Host names its own `cacheDir`.
+	 */
+	constructor(config: HubConfig, options: { configPath?: string; token?: string; persistentCookie?: boolean; home?: HubHome } = {}) {
 		this.config = config;
+		this.#home = options.home;
+		this.pins = new Pins(options.home);
 		this.persistentCookie = options.persistentCookie ?? config.persistentCookie === true;
 		this.configPath = options.configPath;
 		useHubConfig(options.configPath, config.models, config.arcEvidence);
-		this.token = options.token ?? hubToken();
+		this.token = options.token ?? options.home?.token() ?? newHubToken();
 		for (const host of config.hosts) this.#addLink(host);
 	}
 
@@ -205,8 +182,18 @@ export class Hub {
 		instant(name);
 	}
 
+	/**
+	 * A Pi Host keeps its copies in the home's pi-cache, which the home holds, unless its config names a `cacheDir`.
+	 * The hub locks that exact directory before the Host reads it, and throws RootOwned when another hub owns it.
+	 */
+	#piCache(config: PiHostConfig): PiHostConfig & { cacheDir: string } {
+		if (config.cacheDir) return { ...config, cacheDir: this.#home?.claim(config.cacheDir, `Pi Host ${config.id}'s copies`) ?? config.cacheDir };
+		if (!this.#home) throw new Error(`Pi Host ${config.id}: a hub without a home needs a cacheDir for it`);
+		return { ...config, cacheDir: this.#home.file("pi-cache") };
+	}
+
 	#addLink(config: HostConfig | PiHostConfig): DurableHost | PiHost {
-		const link = config.kind === "pi-local" || config.kind === "pi-ssh" ? new PiHost(config as PiHostConfig) : new DurableHost(config as HostConfig);
+		const link = config.kind === "pi-local" || config.kind === "pi-ssh" ? new PiHost(this.#piCache(config as PiHostConfig)) : new DurableHost(config as HostConfig);
 		const key = linkKey(config);
 		this.links.set(key, link);
 		this.#hostSubs.set(key, new Map());
@@ -245,9 +232,13 @@ export class Hub {
 		return [...this.links].map(([key, link]) => ({ ...link.state, link: key }));
 	}
 
+	#hostsFrame(): HostsFrame {
+		return { t: "hosts", hosts: this.hostStates(), ...(this.configPath ? { config: this.configPath } : {}) };
+	}
+
 	#broadcastHosts(): void {
-		const hosts = this.hostStates();
-		for (const client of this.clients) client.send({ t: "hosts", hosts } satisfies HostsFrame);
+		const frame = this.#hostsFrame();
+		for (const client of this.clients) client.send(frame);
 	}
 
 	#fromHost(hostId: string, frame: NodeFrame): void {
@@ -345,33 +336,6 @@ export class Hub {
 		try {
 			let value: HubOps[keyof HubOps]["result"];
 			switch (op) {
-				case "hosts.add": {
-					const target = String(args.target ?? "").trim();
-					if (!/^[A-Za-z0-9_.@:-]+$/.test(target)) throw new Error("Enter an ssh destination like me@devbox");
-					if (this.config.backend === "pi") {
-						// The SSH alias is the Host's identity (D15): one link per alias.
-						const pi: PiHostConfig = { id: target, label: String(args.label || target), kind: "pi-ssh", target };
-						if (this.links.has(linkKey(pi))) throw new Error(`${target} is already added`);
-						if (this.configPath) updateHubHosts<HostConfig | PiHostConfig>(this.configPath, (hosts) => [...hosts, pi]);
-						this.config.hosts.push(pi);
-						this.#addLink(pi).start();
-						value = { id: pi.id } satisfies HubOps["hosts.add"]["result"];
-						break;
-					}
-					const host: HostConfig = {
-						id: `h${Date.now().toString(36)}`,
-						label: String(args.label || target),
-						kind: "ssh",
-						target,
-						// The remote command is not settable from the page: a browser-reachable API that runs arbitrary
-						// commands would turn any hub compromise into code execution. Custom commands live in hub.json.
-					};
-					if (this.configPath) updateHubHosts<HostConfig | PiHostConfig>(this.configPath, (hosts) => [...hosts, host]);
-					this.config.hosts.push(host);
-					this.#addLink(host).start();
-					value = { id: host.id } satisfies HubOps["hosts.add"]["result"];
-					break;
-				}
 				case "hosts.remove": {
 					const route = this.route(String(args.id));
 					if ("error" in route) throw new Error(route.error.message);
@@ -395,6 +359,20 @@ export class Hub {
 					this.link(String(args.id))?.reconnect();
 					value = {} satisfies HubOps["hosts.reconnect"]["result"];
 					break;
+				case "pins.set": {
+					const threadId = String(args.threadId ?? "");
+					if (!threadId) throw new Error("A pin needs a threadId");
+					const pins = this.pins.set(threadId, args.pinned === true, String(args.host ?? ""), String(args.title ?? "").slice(0, 200), args.intent === "owner");
+					for (const each of this.clients) each.send({ t: "pins", pins } satisfies PinsFrame);
+					client.send({ t: "res", id, ok: true, value: {} satisfies HubOps["pins.set"]["result"] });
+					return;
+				}
+				case "pins.hint": {
+					const pins = this.pins.hint(String(args.host ?? ""), String(args.threadId ?? ""));
+					if (pins) for (const each of this.clients) each.send({ t: "pins", pins } satisfies PinsFrame);
+					client.send({ t: "res", id, ok: true, value: {} satisfies HubOps["pins.hint"]["result"] });
+					return;
+				}
 				default:
 					throw new Error(`Unknown hub operation ${op}`);
 			}
@@ -433,7 +411,8 @@ export class Hub {
 				const client = new BrowserClient(this, ws);
 				this.clients.add(client);
 				this.milestone("first-ws-connect");
-				client.send({ t: "hosts", hosts: this.hostStates() } satisfies HostsFrame);
+				client.send(this.#hostsFrame());
+				client.send({ t: "pins", pins: this.pins.list() } satisfies PinsFrame);
 				ws.on("message", (data) => {
 					const start = tracing ? nowUs() : 0;
 					let frame: BrowserFrame | undefined;
@@ -559,7 +538,7 @@ export class Hub {
 		if (url.pathname === "/api/health") {
 			// Unauthenticated callers learn only that this hub answers and a proof that it holds the key, so the app hands
 			// the key only to the real hub, never to another process that took the port.
-			const body = this.#authorized(req) ? { ok: true, proof: hubProof(this.token), hosts: this.hostStates(), derive: deriveQueue(), builds: buildQueue(), loop: loopWindow() ?? null, missedInputs: [...this.links.values()].reduce((n, l) => n + (l instanceof PiHost ? l.missedInputs : 0), 0) } : { ok: true, proof: hubProof(this.token) };
+			const body = this.#authorized(req) ? { ok: true, proof: hubProof(this.token), hosts: this.hostStates(), derive: deriveQueue(), builds: buildQueue(), roleWaits: roleWaitQueue(), loop: loopWindow() ?? null, missedInputs: [...this.links.values()].reduce((n, l) => n + (l instanceof PiHost ? l.missedInputs : 0), 0) } : { ok: true, proof: hubProof(this.token) };
 			res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(body));
 			return;
 		}

@@ -1,12 +1,12 @@
 // The hub-side commands of `ampi`. cli.ts loads this module only for them, so `ampi node` never loads the hub.
 import { instant, nameProcess, span, spanAsync } from "./trace.ts";
 import { localTime, startLoopWatch } from "./loop-watch.ts";
-import { fchmodSync, existsSync, fstatSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { fchmodSync, fstatSync } from "node:fs";
 import { format } from "node:util";
 import { spawn } from "node:child_process";
-import { hubConfigPath, Hub, hubProof, hubToken, loadHubConfig, newHubToken, saveHubToken } from "./hub/hub.ts";
-import { ampiHome, doctor, hubPort, versionLine } from "./doctor.ts";
+import { hubConfigPath, Hub, hubProof, loadHubConfig } from "./hub/hub.ts";
+import { ampiHome, HubHome, newHubToken, readHubToken, RootOwned } from "./hub/home.ts";
+import { doctor, hubPort, versionLine } from "./doctor.ts";
 
 /** `ampi hub | open | doctor | version`. */
 export async function hubCommand(command: string, rest: string[]): Promise<void> {
@@ -25,22 +25,39 @@ export async function hubCommand(command: string, rest: string[]): Promise<void>
 			}
 			startLoopWatch();
 			keepOutputPrivate();
+			// The root locks come first: a hub that shares the home or the hub.json directory with a running hub stops before
+			// it reads or writes any of its state.
 			const configPath = flag("config") ?? hubConfigPath();
-			const rotated = rest.includes("--rotate-key") ? newHubToken() : undefined;
+			const home = span("home-lock", "startup", () => HubHome.acquire(ampiHome(), configPath));
+			if (!(home instanceof HubHome)) {
+				const owner = [home.pid ? `pid ${home.pid}` : "starting", ...(home.port ? [`port ${home.port}`] : [])].join(", ");
+				console.error(
+					home.use ? new RootOwned(home, home.use).message : `An AmPi hub already runs for ${home.dir} (${owner}). Open it with: ampi open`,
+				);
+				process.exit(1);
+			}
 			const config = span("config-load", "startup", () => loadHubConfig(configPath));
-			const hub = span("hub-construct", "startup", () => new Hub(config, { configPath, token: rotated ?? hubToken(ampiHome()), ...(rest.includes("--persistent-cookie") ? { persistentCookie: true } : {}) }));
+			// A new key is saved only once the hub holds every root, so a refused hub changes nothing.
+			const rotate = rest.includes("--rotate-key");
+			const token = rotate ? newHubToken() : home.token();
+			let hub: Hub;
+			try {
+				hub = span("hub-construct", "startup", () => new Hub(config, { configPath, home, token, ...(rest.includes("--persistent-cookie") ? { persistentCookie: true } : {}) }));
+			} catch (error) {
+				if (!(error instanceof RootOwned)) throw error;
+				console.error(error.message);
+				process.exit(1);
+			}
+			if (rotate) home.saveToken(token);
 			const wanted = hubPort(flag("port"));
 			const port = await spanAsync("listen", "startup", () => hub.listen(wanted)).catch((error: NodeJS.ErrnoException) => {
 				if (error.code === "EADDRINUSE") {
-					console.error(`Port ${wanted} is in use. If AmPi already runs there, use: ampi open. Otherwise pick another port: ampi hub --port 7879`);
+					console.error(`Port ${wanted} is in use by another program. ampi doctor shows what answers there.`);
 					process.exit(1);
 				}
 				throw error;
 			});
-			// Saved only once this hub owns the port: a refused start must not strand a running hub's key.
-			if (rotated) saveHubToken(ampiHome(), rotated);
-			// Remembered so `ampi open` and `ampi doctor` find this hub without being told the port again.
-			writeFileSync(join(ampiHome(), "hub.port"), `${port}\n`, { mode: 0o600 });
+			home.recordPort(port);
 			const url = `http://127.0.0.1:${port}/?k=${hub.token}`;
 			// Only a terminal sees the key. Redirected output becomes a log that outlives the hub and the key's secrecy.
 			console.log(
@@ -52,6 +69,7 @@ export async function hubCommand(command: string, rest: string[]): Promise<void>
 			const stop = async () => {
 				instant("stop-requested");
 				await spanAsync("hub-close", "startup", () => hub.close());
+				home.release();
 				instant("stopped");
 				process.exit(0);
 			};
@@ -62,7 +80,7 @@ export async function hubCommand(command: string, rest: string[]): Promise<void>
 		case "open": {
 			// The link to a running hub, with the access key; --launch opens it in the default browser.
 			const port = hubPort(flag("port"));
-			const token = existsSync(join(ampiHome(), "hub.token")) ? hubToken() : "";
+			const token = readHubToken() ?? "";
 			let proof = "";
 			try {
 				proof = ((await (await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(2000) })).json()) as { proof?: string }).proof ?? "";

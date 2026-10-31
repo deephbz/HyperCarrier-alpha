@@ -57,7 +57,7 @@ export type PiViewSession = {
 	/** Bounded UI window. Whole-Session computations use data, never this window. */
 	window(): PiEntry[];
 	/** One page of Rarebit items before `before`; texts cut at 8 KiB unless `fullText`. */
-	rarebits(before?: string, fullText?: boolean): RarebitValue;
+	rarebits(before?: string, fullText?: boolean, around?: string): RarebitValue;
 	rarebitSnapshot(maxChars: number): { context: string; evidenceHash: string; count: number; included: number; omittedChars: number; entry?: string };
 	arcEvidence(ids: string[]): Map<string, string>;
 	nearest(at: number): string | undefined;

@@ -8,7 +8,7 @@ import { useHoverCard } from "./hover-card.tsx";
  */
 export function ModelHudCard({ summary, label }: { summary: ThreadSummary; label?: string }) {
 	// The composer sits at the bottom of the window, so the card opens upward.
-	const { id, open, anchorProps, render } = useHoverCard<HTMLSpanElement>({ prefer: "above", deps: [summary] });
+	const { id, open, anchorProps, render } = useHoverCard<HTMLSpanElement>({ prefer: "above" });
 	const view = open ? hudView(summary) : undefined;
 	return <span className="model-hud-card" {...anchorProps}>
 		<span className="model-hud-trigger hint" tabIndex={0} aria-describedby={open ? id : undefined}>{label ?? summary.model}</span>

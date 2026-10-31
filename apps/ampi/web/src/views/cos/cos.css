@@ -37,7 +37,6 @@
 .cos-toolbar a, .cos-toolbar button { padding: 3px 8px; border-radius: 4px; }
 .cos-toolbar a[aria-current], .cos-toolbar button[aria-current] { background: var(--accent-soft); color: var(--accent); }
 .cos-toolbar button { border: 1px solid var(--border-strong); background: var(--bg); min-width: 28px; }
-.cos-toolbar button:active { transform: scale(.97); }
 .cos-toolbar-divider { width: 1px; height: 16px; background: var(--border); margin: 0 4px; }
 .cos-caption { color: var(--text-2); margin: 0; padding: 0 20px 12px; font-size: 12px; max-width: 100%; }
 .cos-axis { display: grid; grid-template-columns: 220px minmax(0, 1fr); padding: 8px 20px; background: var(--bg-side); font-size: 12px; color: var(--text-2); }
@@ -48,6 +47,10 @@
 .cos-stream-row { display: grid; grid-template-columns: 220px minmax(0, 1fr); padding: 0 20px; align-items: center; }
 .cos-stream-row:nth-child(even) { background: var(--bg-side); }
 .cos-stream-row.cos-focused { background: var(--accent-soft); }
+/* Members of an expanded Team share one rule along their labels; the lead row comes first (rows.ts). */
+.cos-member .cos-band-label { border-left: 2px solid var(--border-strong); padding-left: 8px; }
+.cos-member-first .cos-band-label, .cos-member-only .cos-band-label { border-top-left-radius: 4px; }
+.cos-member-first, .cos-member-only { box-shadow: inset 0 1px 0 var(--border); }
 .cos-waiting .cos-band-label { border-left: 2px solid var(--attn); padding-left: 8px; }
 .cos-band-label a.cos-wait-label { color: var(--attn); font-weight: 500; }
 .cos-band-label a.cos-new-label { color: var(--accent); }
@@ -113,7 +116,7 @@
 .cos-badge { margin-left: 2px; padding: 0 5px; line-height: 16px; font-weight: 400; border: 1px solid var(--border-strong); vertical-align: 1px; }
 .cos-leaf > summary { cursor: pointer; list-style: none; }
 .cos-leaf > summary::-webkit-details-marker { display: none; }
-.cos-leaf[open] > summary .cos-leaf-title { text-decoration: underline dotted var(--text-2); }
+.cos-leaf[open] > summary .cos-leaf-title { text-decoration: underline dotted var(--text-2); text-decoration-thickness: 1px; }
 .cos-leaf > p, .cos-leaf > blockquote { margin: 4px 0 0; padding-left: 8px; border-left: 2px solid var(--border-strong); font-size: 12px; color: var(--text-2); max-width: 86ch; }
 .cos-arc-body p.cos-context-empty { margin: 6px 0; font-size: 12px; }
 .cos-arc-body section[aria-label="Evergreen context"] h2 { margin-top: 20px; }

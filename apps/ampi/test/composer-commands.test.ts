@@ -13,7 +13,7 @@ test("Composer Enter routes durable audit and other built-ins through typed comm
 	await page.getByRole("alert").filter({ hasText: "No system prompt recorded yet for this thread." }).waitFor()
 		.catch((error) => { throw new Error(`${error.message}; requests: ${JSON.stringify(sent.filter((f) => f.op).map((f) => ({ op: f.op, name: f.args?.name, content: f.args?.content })))}`); });
 	assert.equal(await input.inputValue(), "/export-system-prompt", "empty audit keeps the draft");
-	assert.equal(await page.getByRole("alert").textContent(), "Not sent: No system prompt recorded yet for this thread. Your draft is kept; fix it and send again.");
+	assert.equal(await page.locator("[data-outcome] > span").textContent(), "Not sent: No system prompt recorded yet for this thread. Your draft is kept; fix it and send again.");
 	assert.ok(received.some((f: any) => f.t === "res" && f.error?.code === "audit_empty"), "the empty-audit command is an explicit pre-effect refusal");
 	assert.equal(sent.filter((f) => f.op === "thread.submit").length, 0, "audit must not start a turn");
 	await assert.rejects(wire.req("devbox", "audit.snapshot", { threadId }), { code: "not_found" });
@@ -58,6 +58,8 @@ test("Composer Enter routes durable audit and other built-ins through typed comm
 test("durable Composer removes +Image and sends pasted images", async (t) => {
 	for (const browserName of ["chromium", "webkit"] as const) await t.test(browserName, { skip: engineSkip(browserName) }, async (t) => {
 		const f = await fixture(t, 100_000, false, false, undefined, {}, browserName);
+		// ThreadView passes the thread's summary row, which carries the node's image capability.
+		await f.page.goto(`${f.origin}/?thread=${encodeURIComponent(f.threadId)}&summary=1`);
 		assert.equal(await f.page.getByRole("button", { name: /Image/ }).count(), 0, `${browserName}: no image-attachment button`);
 		await f.page.evaluate(() => window.addEventListener("ampi:accounts", (event) => {
 			document.body.dataset.accountsHost = (event as CustomEvent).detail;
@@ -188,7 +190,7 @@ for (const pi of [false, true]) test(pi
 	}
 	const feedback = page.getByRole("alert").filter({ hasText: "Workbench did not answer." });
 	await feedback.waitFor();
-	assert.equal(await feedback.textContent(), `Workbench did not answer. Your message is back in the composer. ${pi ? "Check the Pi pane before sending again; it may already have arrived." : "Send again delivers it once; editing it makes a new message."}`);
+	assert.equal(await feedback.locator("> span").textContent(), `Workbench did not answer. Your message is back in the composer. ${pi ? "Check the Pi pane before sending again; it may already have arrived." : "Send again delivers it once; editing it makes a new message."}`);
 	assert.equal(await input.inputValue(), "Second queued text", "a lost reply restores the retry draft");
 	const sends = sent.filter((frame) => frame.op === "thread.submit");
 	assert.equal(new Set(sends.map((frame) => frame.args.requestId)).size, 3, "each distinct send allocates its identity before any acknowledgement");

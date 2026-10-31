@@ -1,12 +1,14 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
+import { utimesSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 import { runDaemon } from "../src/node/daemon.ts";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { CompactionTask } from "@earendil-works/pi-durable";
 import { CompactDoc } from "../src/plugins/compact.ts";
 import { hydrate } from "../src/plugins.ts";
-import { TestClient, tempHome } from "./helpers.ts";
+import { TestClient, tempHome, writePiSettings } from "./helpers.ts";
 
 const SIM = { provider: "ampi-sim", modelId: "sim-1" };
 
@@ -106,8 +108,7 @@ test("busy auto-compact waits outside admission and refuses to compact after Clo
 });
 
 test("per-thread off prevents the HC trigger; on uses the stored budget and threshold", async () => {
-	const previous = process.env.AMPI_COMPACT_KEEP_RECENT;
-	process.env.AMPI_COMPACT_KEEP_RECENT = "200";
+	writePiSettings({ compaction: { keepRecentTokens: 200 } });
 	const home = tempHome();
 	const daemon = await runDaemon({ home, simTokensPerSecond: 50_000, plugins: await hydrate() });
 	const client = await TestClient.connect(daemon.socket);
@@ -131,7 +132,7 @@ test("per-thread off prevents the HC trigger; on uses the stored budget and thre
 		assert.ok((await client.req("compact.records", { threadId })).records.some((r: any) => r.reason === "working_budget" && r.trigger.workingBudget === 3000));
 	} finally {
 		client.close(); await daemon.stop();
-		if (previous === undefined) delete process.env.AMPI_COMPACT_KEEP_RECENT; else process.env.AMPI_COMPACT_KEEP_RECENT = previous;
+		writePiSettings(undefined);
 	}
 });
 
@@ -142,8 +143,7 @@ test("per-thread off prevents the HC trigger; on uses the stored budget and thre
 const GROW = "/sim bash seq 1 4000\n/sim long 1";
 
 test("Auto Compact: crossing W compacts with the HC summary method; a summarizer failure falls back and is recorded", async () => {
-	process.env.AMPI_WORKING_BUDGET = "12000";
-	process.env.AMPI_COMPACT_KEEP_RECENT = "200";
+	writePiSettings({ auto_compact: { budget_tokens: 12_000 }, compaction: { keepRecentTokens: 200 } });
 	const home = tempHome();
 	const daemon = await runDaemon({ home, simTokensPerSecond: 50000, plugins: await hydrate() });
 	try {
@@ -196,8 +196,92 @@ test("Auto Compact: crossing W compacts with the HC summary method; a summarizer
 		client.close();
 	} finally {
 		await daemon.stop();
-		delete process.env.AMPI_WORKING_BUDGET;
-		delete process.env.AMPI_COMPACT_KEEP_RECENT;
+		writePiSettings(undefined);
+	}
+});
+
+test("Auto Compact settings come from Pi's settings.json, and an edit applies without a restart", async () => {
+	writePiSettings({ auto_compact: { budget_tokens: 20_000 }, compaction: { keepRecentTokens: 300 } });
+	const home = tempHome();
+	const daemon = await runDaemon({ home, simTokensPerSecond: 50000, plugins: await hydrate() });
+	try {
+		const client = await TestClient.connect(daemon.socket);
+		const threads = client.sub({ kind: "threads" });
+		const budget = (n: number) => client.until<any>(threads, (v) => v.threads[threadId]?.workingBudget === n);
+		const { threadId } = await client.req("thread.create", { cwd: home, model: SIM, prompt: "first" });
+		await budget(20_000);
+		let status = await client.req("thread.command", { threadId, name: "auto-compact", args: "status" });
+		assert.match(status.body, /Working budget W: 20000 tokens; trigger: 18000 \(90%\)/);
+		assert.match(status.body, /Keep recent: 300 tokens/);
+		assert.equal(daemon.runtime.settings().compaction?.keepRecentTokens, 300, "pi-durable keeps Pi's keep-recent");
+
+		// A per-model budget wins over the global one; the threshold, method and keep-recent follow the edit.
+		writePiSettings({ auto_compact: { budget_tokens: 20_000, threshold: 80, method: "summary", modelOverrides: { "ampi-sim/sim-1": { budget_tokens: 30_000 } } },
+			compaction: { keepRecentTokens: 400 } });
+		await client.req("thread.submit", { threadId, content: "second" });
+		await budget(30_000);
+		status = await client.req("thread.command", { threadId, name: "auto-compact", args: "status" });
+		assert.match(status.body, /Working budget W: 30000 tokens; trigger: 24000 \(80%\)/);
+		assert.match(status.body, /Method: summary:/);
+		assert.match(status.body, /Keep recent: 400 tokens/);
+		assert.equal(daemon.runtime.settings().compaction?.keepRecentTokens, 400);
+
+		// A thread's /auto-compact controls win over every setting, the per-model budget included.
+		await client.req("thread.command", { threadId, name: "auto-compact", args: "budget 25000" });
+		await budget(25_000);
+		writePiSettings({ auto_compact: { enabled: false, threshold: 200 } });
+		status = await client.req("thread.command", { threadId, name: "auto-compact", args: "status" });
+		assert.match(status.body, /Auto Compact: off/);
+		assert.match(status.body, /Ignored invalid Pi settings: auto_compact\.threshold must be greater than 1 and less than 110/);
+		await client.req("thread.command", { threadId, name: "auto-compact", args: "on" });
+		status = await client.req("thread.command", { threadId, name: "auto-compact", args: "status" });
+		assert.match(status.body, /Auto Compact: on/);
+		client.close();
+	} finally {
+		await daemon.stop();
+		writePiSettings(undefined);
+	}
+});
+
+test("an idle durable thread's meter follows a settings edit, and the node notices ignored settings once per stamp", async () => {
+	const file = join(process.env.PI_CODING_AGENT_DIR!, "settings.json");
+	// The mtime is pinned, so only the edit itself moves the stamp: same size with a new mtime, then a new size with the same mtime.
+	const edit = (settings: object, mtime: number) => {
+		writePiSettings(settings);
+		utimesSync(file, mtime, mtime);
+		return Date.now();
+	};
+	edit({ auto_compact: { budget_tokens: 20_000 } }, 1_000);
+	const home = tempHome();
+	const daemon = await runDaemon({ home, simTokensPerSecond: 50000, plugins: await hydrate() });
+	try {
+		const client = await TestClient.connect(daemon.socket);
+		const threads = client.sub({ kind: "threads" });
+		const { threadId } = await client.req("thread.create", { cwd: home, model: SIM, prompt: "first" });
+		await client.until<any>(threads, (v) => v.threads[threadId]?.workingBudget === 20_000 && v.threads[threadId]?.activity === "idle");
+		// R8: an idle thread's W matches Pi's within the poll, with no turn and no command.
+		const followed = async (settings: object, mtime: number, w: number) => {
+			const at = edit(settings, mtime);
+			await client.until<any>(threads, (v) => v.threads[threadId]?.workingBudget === w, 5_000);
+			assert.ok(Date.now() - at < 2_500, `W ${w} showed ${Date.now() - at} ms after the edit`);
+		};
+		await followed({ auto_compact: { budget_tokens: 30_000 } }, 2_000, 30_000);
+		await followed({ auto_compact: { budget_tokens: 9_000 } }, 2_000, 9_000);
+		assert.equal((await client.req("thread.command", { threadId, name: "auto-compact", args: "status" })).body.match(/Working budget W: (\d+)/)?.[1], "9000");
+
+		// The node, not each thread, carries the notice: one fact per settings stamp.
+		const invalid = edit({ auto_compact: { budget_tokens: 9_000, threshold: 200 } }, 3_000);
+		const noticed = await client.until<any>(threads, (v) => v.settingsNotice !== undefined, 5_000);
+		assert.ok(Date.now() - invalid < 2_500);
+		assert.deepEqual(noticed.settingsNotice.errors, ["auto_compact.threshold must be greater than 1 and less than 110"]);
+		assert.equal(noticed.settingsNotice.file, file, "the notice names the file to fix");
+		assert.equal(noticed.threads[threadId].settingsNotice, undefined);
+		edit({ auto_compact: { budget_tokens: 9_000 } }, 4_000);
+		await client.until<any>(threads, (v) => v.settingsNotice === undefined, 5_000);
+		client.close();
+	} finally {
+		await daemon.stop();
+		writePiSettings(undefined);
 	}
 });
 
@@ -242,9 +326,29 @@ async function turns(client: TestClient, threadId: string, from: number, to: num
 
 // The HC budget trigger is single-flight. Durable's native blocking-threshold and overflow compactions are admitted
 // without checking live ones (pi-durable generation.js), a known gap recorded in docs/current/now.md.
+test("context usage is unknown after a compaction until the next response, as a Pi Session counts it", async () => {
+	writePiSettings({ compaction: { keepRecentTokens: 200 } });
+	const home = tempHome();
+	const daemon = await runDaemon({ home, simTokensPerSecond: 50000, plugins: await hydrate() });
+	try {
+		const client = await TestClient.connect(daemon.socket);
+		const threads = client.sub({ kind: "threads" });
+		const { threadId } = await client.req("thread.create", { cwd: home, model: SIM, prompt: "Short thread" });
+		await client.until<any>(threads, (v) => v.threads[threadId]?.activity === "idle" && v.threads[threadId]?.preview);
+		await client.req("thread.submit", { threadId, content: "second turn" });
+		await client.until<any>(threads, (v) => v.threads[threadId]?.activity === "idle" && v.threads[threadId]?.preview?.includes("second turn") && v.threads[threadId]?.contextTokens);
+		await client.req("thread.compact", { threadId });
+		const view = client.sub({ kind: "thread", threadId });
+		await client.until<any>(view, (v) => v.entries.some((e: any) => e.kind === "compaction"));
+		await client.until<any>(threads, (v) => v.threads[threadId]?.activity === "idle" && v.threads[threadId]?.contextTokens === undefined);
+		await client.req("thread.submit", { threadId, content: "third turn" });
+		await client.until<any>(threads, (v) => v.threads[threadId]?.activity === "idle" && v.threads[threadId]?.preview?.includes("third turn") && v.threads[threadId]?.contextTokens > 0);
+		client.close();
+	} finally { await daemon.stop(); writePiSettings(undefined); }
+});
+
 test("HC trigger single-flight: responses above W during a slow HC summary start no second HC compaction", async () => {
-	process.env.AMPI_WORKING_BUDGET = "12000";
-	process.env.AMPI_COMPACT_KEEP_RECENT = "200";
+	writePiSettings({ auto_compact: { budget_tokens: 12_000 }, compaction: { keepRecentTokens: 200 } });
 	const home = tempHome();
 	const daemon = await runDaemon({ home, simTokensPerSecond: 50000, plugins: await hydrate() });
 	const client = await TestClient.connect(daemon.socket);
@@ -269,14 +373,12 @@ test("HC trigger single-flight: responses above W during a slow HC summary start
 	} finally {
 		watch?.stop();
 		client.close(); await daemon.stop();
-		delete process.env.AMPI_WORKING_BUDGET;
-		delete process.env.AMPI_COMPACT_KEEP_RECENT;
+		writePiSettings(undefined);
 	}
 });
 
 test("HC trigger single-flight releases after a failed compaction task: the next crossing compacts again", async () => {
-	process.env.AMPI_WORKING_BUDGET = "2500";
-	process.env.AMPI_COMPACT_KEEP_RECENT = "200";
+	writePiSettings({ auto_compact: { budget_tokens: 2500 }, compaction: { keepRecentTokens: 200 } });
 	const home = tempHome();
 	const daemon = await runDaemon({ home, simTokensPerSecond: 50000, plugins: await hydrate() });
 	const client = await TestClient.connect(daemon.socket);
@@ -300,14 +402,12 @@ test("HC trigger single-flight releases after a failed compaction task: the next
 	} finally {
 		watch?.stop();
 		client.close(); await daemon.stop();
-		delete process.env.AMPI_WORKING_BUDGET;
-		delete process.env.AMPI_COMPACT_KEEP_RECENT;
+		writePiSettings(undefined);
 	}
 });
 
 test("HC trigger single-flight releases after stale placement; an owner's manual compaction still overlaps (current behavior)", async () => {
-	process.env.AMPI_WORKING_BUDGET = "2500";
-	process.env.AMPI_COMPACT_KEEP_RECENT = "200";
+	writePiSettings({ auto_compact: { budget_tokens: 2500 }, compaction: { keepRecentTokens: 200 } });
 	const home = tempHome();
 	const daemon = await runDaemon({ home, simTokensPerSecond: 50000, plugins: await hydrate() });
 	const client = await TestClient.connect(daemon.socket);
@@ -333,8 +433,7 @@ test("HC trigger single-flight releases after stale placement; an owner's manual
 	} finally {
 		watch?.stop();
 		client.close(); await daemon.stop();
-		delete process.env.AMPI_WORKING_BUDGET;
-		delete process.env.AMPI_COMPACT_KEEP_RECENT;
+		writePiSettings(undefined);
 	}
 });
 
@@ -354,8 +453,7 @@ async function answered(client: TestClient, threadId: string, marker: string) {
 }
 
 test("keepset: the plan keeps the chosen outputs verbatim; a rejected plan falls back to the native summary and is recorded", async () => {
-	process.env.AMPI_WORKING_BUDGET = "8000";
-	process.env.AMPI_COMPACT_KEEP_RECENT = "200";
+	writePiSettings({ auto_compact: { budget_tokens: 8000 }, compaction: { keepRecentTokens: 200 } });
 	const home = tempHome();
 	const daemon = await runDaemon({ home, simTokensPerSecond: 50000, plugins: await hydrate() });
 	const client = await TestClient.connect(daemon.socket);
@@ -418,15 +516,13 @@ test("keepset: the plan keeps the chosen outputs verbatim; a rejected plan falls
 	} finally {
 		client.close();
 		await daemon.stop();
-		delete process.env.AMPI_WORKING_BUDGET;
-		delete process.env.AMPI_COMPACT_KEEP_RECENT;
+		writePiSettings(undefined);
 	}
 });
 
 test("keepset: a planner summary too large for the compaction trigger falls back with the fit reason", async () => {
 	// The trigger (90% of W) leaves room for AmPi's prompt and a normal plan, not for the 10k-token one.
-	process.env.AMPI_WORKING_BUDGET = "14000";
-	process.env.AMPI_COMPACT_KEEP_RECENT = "200";
+	writePiSettings({ auto_compact: { budget_tokens: 14_000 }, compaction: { keepRecentTokens: 200 } });
 	const home = tempHome();
 	const daemon = await runDaemon({ home, simTokensPerSecond: 50000, plugins: await hydrate() });
 	const client = await TestClient.connect(daemon.socket);
@@ -450,7 +546,6 @@ test("keepset: a planner summary too large for the compaction trigger falls back
 	} finally {
 		client.close();
 		await daemon.stop();
-		delete process.env.AMPI_WORKING_BUDGET;
-		delete process.env.AMPI_COMPACT_KEEP_RECENT;
+		writePiSettings(undefined);
 	}
 });

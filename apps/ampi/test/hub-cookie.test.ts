@@ -8,7 +8,12 @@ import { join } from "node:path";
 import { Hub, loadHubConfig } from "../src/hub/hub.ts";
 
 const TOKEN = "c".repeat(64);
-const stale = (n: number, from = 40000) => Array.from({ length: n }, (_, i) => `ampi_k_${from + i}=${"d".repeat(64)}`);
+// Cookies of other hubs on this host. They skip the hub's own port: Linux picks a test port from 32768-60999.
+const stale = (n: number, own: number) => {
+	const names: string[] = [];
+	for (let p = 40000; names.length < n; p++) if (p !== own) names.push(`ampi_k_${p}=${"d".repeat(64)}`);
+	return names;
+};
 
 async function withHub(options: { persistentCookie?: boolean }, run: (port: number) => Promise<void>) {
 	const hub = new Hub({ hosts: [] }, { token: TOKEN, ...options });
@@ -41,7 +46,7 @@ test("hub cookie: a client with 210 stale hub cookies still reaches the hub, whi
 		const log = console.log;
 		console.log = (...args: unknown[]) => lines.push(args.join(" "));
 		let res: Response;
-		const piled = { cookie: [...stale(210), `ampi_k_${port}=${TOKEN}`].join("; "), "user-agent": "AmPiPerf-test" };
+		const piled = { cookie: [...stale(210, port), `ampi_k_${port}=${TOKEN}`].join("; "), "user-agent": "AmPiPerf-test" };
 		try {
 			res = await fetch(`http://127.0.0.1:${port}/api/health`, { headers: piled });
 			// A second piled-up request from the same client within a minute heals again but does not log again.
@@ -53,7 +58,7 @@ test("hub cookie: a client with 210 stale hub cookies still reaches the hub, whi
 		const expired = res.headers.getSetCookie();
 		assert.equal(expired.length, 210);
 		// The expiring cookie matches the login cookie exactly except for its lifetime, or the client keeps the old one.
-		assert.equal(expired[0], `ampi_k_40000=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`);
+		assert.equal(expired[0], `${stale(1, port)[0]!.split("=")[0]}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`);
 		assert(!expired.some((c) => c.startsWith(`ampi_k_${port}=`)), "the hub never expires its own login");
 		assert.deepEqual(lines.filter((l) => l.includes("expired")), [`hub: expired 210 stale ampi_k_* cookies from a client (AmPiPerf-test)`]);
 	});
@@ -61,7 +66,7 @@ test("hub cookie: a client with 210 stale hub cookies still reaches the hub, whi
 
 test("hub cookie: a few cookies of other hubs stay; only a pile-up heals", async () => {
 	await withHub({}, async (port) => {
-		const res = await fetch(`http://127.0.0.1:${port}/api/health`, { headers: { cookie: stale(32).join("; ") } });
+		const res = await fetch(`http://127.0.0.1:${port}/api/health`, { headers: { cookie: stale(32, port).join("; ") } });
 		assert.deepEqual(res.headers.getSetCookie(), [], "a client with up to 32 hub cookies keeps them: other hubs on this host stay signed in");
 	});
 });
@@ -69,7 +74,7 @@ test("hub cookie: a few cookies of other hubs stay; only a pile-up heals", async
 test("hub cookie: headers past the server limit get a readable 431 that says how to recover, then the connection closes", async () => {
 	await withHub({}, async (port) => {
 		const reply = await new Promise<string>((done, fail) => {
-			const socket = connect(port, "127.0.0.1", () => socket.write(`GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nCookie: ${stale(900).join("; ")}\r\n\r\n`));
+			const socket = connect(port, "127.0.0.1", () => socket.write(`GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nCookie: ${stale(900, port).join("; ")}\r\n\r\n`));
 			let text = "";
 			socket.on("data", (d) => (text += d)).on("end", () => done(text)).on("close", () => done(text)).on("error", fail);
 		});

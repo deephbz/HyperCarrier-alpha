@@ -13,7 +13,7 @@ import { LABEL_BATCH, labelChunks, type StoredLabel } from "./cos-arc-step1.ts";
 import { EMPTY_ANSWER, NothingYet, writeArc } from "./cos-arc-step2.ts";
 export { json, type ArcErrorCode } from "./cos-arc-reply.ts";
 export { EMPTY_ANSWER };
-import { trackBuild } from "../derive-queue.ts";
+import { trackBuild, trackRoleWait } from "../derive-queue.ts";
 import { ModelNotFound, arcEvidence, type ArcEvidence } from "../../hub/helper-models.ts";
 import type { RarebitItem } from "./rarebit.ts";
 import type { AskUsage } from "../ask.ts";
@@ -796,11 +796,14 @@ function roleWait(ctx: PiViewContext, threadId: string, now: number): boolean {
 	if (now - w.since >= ROLE_WAIT_MS) return false;
 	if (!w.timer) {
 		w.timer = true;
-		arcClock.later(() => {
+		// The wait may hold back a hub-start Build, so /api/health counts it in `roleWaits` until its re-check has run: a
+		// harness that waits for hub-start Builds waits for this one too. A re-check that builds or still waits counts the
+		// Build or its own wait before this one settles. `builds` stays Builds: a wait that ends without one starts none.
+		void trackRoleWait(() => new Promise<void>((done) => arcClock.later(() => {
 			w.timer = false;
 			const s = ctx.session(threadId);
-			if (s) try { autoBuild(ctx, s); } catch (error) { console.error(`cos.arc: automatic Build of ${s.ref} failed to start:`, error); }
-		}, Math.min(ROLE_RECHECK_MS, w.since + ROLE_WAIT_MS - now));
+			try { if (s) autoBuild(ctx, s); } catch (error) { console.error(`cos.arc: automatic Build of ${s?.ref} failed to start:`, error); } finally { done(); }
+		}, Math.min(ROLE_RECHECK_MS, w.since + ROLE_WAIT_MS - now))));
 	}
 	return true;
 }

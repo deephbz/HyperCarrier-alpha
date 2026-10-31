@@ -46,7 +46,7 @@ test("durable L1 skeleton: Pi owner scenario records frames, checkpoints, effect
 		line({ type: "message", id: "u1", parentId: null, timestamp: at, message: { role: "user", content: [{ type: "text", text: "List the synthetic files" }], timestamp: Date.parse(at) } }) +
 		line({ type: "message", id: "a1", parentId: "u1", timestamp: at, message: { role: "assistant", content: [{ type: "text", text: "The synthetic file is sample.txt." }], model: "synthetic", provider: "fixture", usage: { input: 100, output: 20, cacheRead: 50, cacheWrite: 0, cost: { total: 0.25 } }, timestamp: Date.parse(at) } }));
 	const ctl = await control(f, f.sessionA, { queue: true });
-	const hub = new Hub({ backend: "pi", hosts: [{ id: "devbox", label: "devbox", kind: "pi-local", cacheDir: join(f.dir, "cache"),
+	const hub = new Hub({ hosts: [{ id: "devbox", label: "devbox", kind: "pi-local", cacheDir: join(f.dir, "cache"),
 		agentConfig: { agentDir: f.agentDir, pollMs: 30, discoverMs: 150, teams: false, controlStatusMs: 100 },
 		env: { HOME: f.dir, PATH: `${bin}:${process.env.PATH ?? ""}`, HERDR_BIN: join(f.dir, "herdr"), FAKE_HERDR_STATE: join(f.dir, "state.json"), FAKE_HERDR_LOG: join(f.dir, "calls.jsonl") },
 	}] }, { token });
@@ -697,7 +697,7 @@ test("durable L1 paired capture: shared owner scenario reports control and reade
 		const bin = join(f.dir, "bin"); mkdirSync(bin);
 		writeFileSync(join(bin, "herdr"), "#!/bin/sh\necho 'L1 refuses fallback Herdr' >&2\nexit 1\n", { mode: 0o755 });
 		const piFrames: any[] = [];
-		const piHub = new Hub({ backend: "pi", models: helperModels, hosts: [{ id: "devbox", label: "devbox", kind: "pi-local", cacheDir: join(f.dir, "cache"),
+		const piHub = new Hub({ models: helperModels, hosts: [{ id: "devbox", label: "devbox", kind: "pi-local", cacheDir: join(f.dir, "cache"),
 			askCommand,
 			agentConfig: { agentDir: f.agentDir, pollMs: 30, discoverMs: 150, teamsMs: 50, ptbObservation: observationModule, controlStatusMs: 100 },
 			env: { HOME: f.dir, PATH: `${bin}:${process.env.PATH ?? ""}`, HERDR_BIN: join(f.dir, "herdr"), FAKE_HERDR_STATE: join(f.dir, "state.json"), FAKE_HERDR_LOG: join(f.dir, "calls.jsonl") },

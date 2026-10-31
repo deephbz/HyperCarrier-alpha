@@ -36,7 +36,7 @@ const rows: [string, View, Focus, KeyIntent, string, object?, boolean?][] = [
 	["find Esc → last composer", session, at(null, "composer"), "find.close", "composer"],
 	["find Esc, last panel gone → transcript", session, at(null, "panel"), "find.close", "transcript"],
 	["find match → transcript", session, at(null, "composer"), "find.go", "transcript"],
-	["Session switch → composer if lost", session, at("sidebar"), "session.switch", "composer", {}, true],
+	["Session open → composer", session, at("sidebar"), "session.switch", "composer"],
 	["⌘0 → Overview content (D20)", session, at("transcript"), "overview", "page"],
 	["⌘0 from the sidebar → Overview content (D20)", session, at("sidebar"), "overview", "page"],
 	["⌘0 with the sidebar hidden → Overview content", { ...session, sidebarHidden: true }, at("transcript"), "overview", "page"],

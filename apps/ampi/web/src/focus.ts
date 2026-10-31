@@ -19,7 +19,7 @@ export type KeyIntent =
 	| "panel.close" // Esc on an overlaid panel
 	| "find.close" // find bar Esc or Close
 	| "find.go" // a find match opened: read there
-	| "session.switch" // Alt+↑/↓, palette Enter, sidebar row
+	| "session.switch" // a new route arrival opens a Session: Alt+↑/↓, palette Enter, sidebar row, a link
 	| "overview" // ⌘0
 	| "history.move" // Back or Forward arrived on an entry: return to the target it held
 	// View changes without a focus key. They move focus only when it would drop to body (R11, I20 no focus steal).
@@ -146,8 +146,8 @@ export function transition(view: View, focus: Focus, intent: KeyIntent): Next {
 					return absurd(from);
 			}
 		case "session.switch":
-			// Composer autofocus on Session open places focus; the model records the composer and catches a lost focus.
-			return { ...move(view, focus, "composer"), ifLost: true };
+			// A Session opens in its composer. Back, Forward and a reload arrive by history.move instead.
+			return move(view, focus, "composer");
 		case "overview":
 			// ⌘0 opens the Overview and focuses its content, so Space and ↓ scroll it (D20, owner ruling 2026-10-20).
 			return move({ ...view, session: false }, focus, "page");

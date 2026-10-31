@@ -1,16 +1,18 @@
 // Search owns extraction, tokenizer policy, and scope labels. The hub retains no
-// text corpus. Fleet reads FTS; in-Session find scans one ReaderItem at a time.
+// text corpus. Fleet reads FTS; in-Session find scans one native entry at a time.
 import type { DatabaseSync } from "node:sqlite";
 import { openCopyReader } from "./copy-reader.ts";
 import { derivedVersion, type Source } from "./working-set-types.ts";
 import type { PiReaderEntry } from "./views/types.ts";
-import { visitFindItems } from "./reader-item.ts";
+// @ts-ignore shared native extraction is plain ESM
+import { mirrorEntryText } from "../../../trace-analytics/src/sources/transcript.mjs";
 
 export const PROSE_KINDS = ["human", "assistant", "compaction"] as const;
 export const FLEET_SCOPE = "Indexed active branches retained by this hub (96 h by default, plus live/open Sessions). Unindexed copies and invalid records are not searched. Searches human turns, agent replies and compaction summaries. Excludes thinking, tools, injected messages, branch summaries and uncopied history. Word matching; indexed CJK bigrams. Use K5 tools for older history; K5 search is not full-transcript search.";
 export const FIND_SCOPE = "This Session’s copied active branch. Case-insensitive substring search covers user text, replies, thinking, tool calls/results, bash command/output, custom messages and summaries. Excludes images, non-text metadata, inactive branches and uncopied bytes.";
-export type SearchHit = { entry: string; ref: string; threadId: string; snippet: string; kind?: string; title?: string; version: string };
-export type SearchResult = { hits: SearchHit[]; more: boolean; scope: string; asOf: number | null; total?: number; scanned?: number; invalidLines?: number; coverage?: { indexed: number; notIndexed: number; stale: number; invalidLines: number } };
+/** Session Find adds `prose` (the match is in user or agent text), `at` (scan position) and `prompt` (the user entry it answers). */
+export type SearchHit = { entry: string; ref: string; threadId: string; snippet: string; kind?: string; title?: string; version: string; prose?: boolean; at?: number; prompt?: string };
+export type SearchResult = { hits: SearchHit[]; more: boolean; scope: string; asOf: number | null; total?: number; proseTotal?: number; windows?: { all: FindWindow; prose: FindWindow }; anchored?: boolean; scanned?: number; invalidLines?: number; coverage?: { indexed: number; notIndexed: number; stale: number; invalidLines: number } };
 const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+/gu;
 const encoded = (a: string, b: string) => `u${a.codePointAt(0)!.toString(16)}u${b.codePointAt(0)!.toString(16)}`;
 function grams(run: string) { const c = Array.from(run); return c.slice(1).map((b, i) => encoded(c[i]!, b)); }
@@ -73,9 +75,21 @@ export function forgetSearchBatch(db: DatabaseSync, path: string, limit: number)
  db.prepare(`DELETE FROM prose WHERE rowid IN (${batch})`).run(path, limit);
  return Number(db.prepare(`DELETE FROM prose_path WHERE rowid IN (${batch})`).run(path, limit).changes);
 }
+/** User and agent text, and compaction summaries: the prose that fleet search indexes and Session Find scopes to by default. */
+export function proseText(e: PiReaderEntry): string {
+ if (!(PROSE_KINDS as readonly string[]).includes(e.kind)) return "";
+ return e.kind === "compaction" ? e.summary ?? "" : (e.blocks ?? []).filter((b) => b.type === "text").map((b) => b.text ?? "").join("\n");
+}
+/** One entry's Find match for a lower-case query: prose first, so a prose hit shows prose context. */
+export function matchEntry(native: unknown, entry: PiReaderEntry, q: string): { snippet: string; prose: boolean } | undefined {
+ const cut = (text: string, at: number) => text.slice(Math.max(0, at - 80), at + q.length + 160);
+ const prose = proseText(entry), p = prose.toLowerCase().indexOf(q);
+ if (p >= 0) return { snippet: cut(prose, p), prose: true };
+ const text: string = mirrorEntryText(native), at = text.toLowerCase().indexOf(q);
+ return at < 0 ? undefined : { snippet: cut(text, at), prose: false };
+}
 export function indexProse(db: DatabaseSync, path: string, e: PiReaderEntry) {
- if (!(PROSE_KINDS as readonly string[]).includes(e.kind)) return;
- const text = e.kind === "compaction" ? e.summary ?? "" : (e.blocks ?? []).filter((b) => b.type === "text").map((b) => b.text ?? "").join("\n");
+ const text = proseText(e);
  if (!text) return;
  const { lastInsertRowid } = db.prepare('INSERT INTO prose(path,id,text,cjk) VALUES (?,?,?,?)').run(path, e.id, text, cjkBigrams(text));
  db.prepare('INSERT INTO prose_path(rowid,path) VALUES (?,?)').run(lastInsertRowid, path);
@@ -109,19 +123,86 @@ export function fleetSearch(db: DatabaseSync, query: string): SearchResult {
  });
  return { hits, more: rows.length > 100, scope: FLEET_SCOPE, asOf, coverage: { indexed: Number(coverage.indexed), notIndexed: 0, stale: 0, invalidLines: Number(coverage.invalid) } };
 }
-export function findInSession(source: Source, query: string, version: string): SearchResult {
+/** A Find window holds at most this many hits of one scope; at most half of them lie behind `from` when enough lie after. */
+const FIND_WINDOW = 200;
+/**
+ * One scope's Find window: its hits' scan positions (`first`..`last`), the matches before it (`skipped`), its length
+ * (`size`) and the index of its first match at or after `from` (`start`; equal to `size` when none lies after).
+ * Match k of the window is match `skipped + k` of the scope.
+ */
+export type FindWindow = { first: number; last: number; skipped: number; start: number; size: number };
+/**
+ * Where a Find window lies: around the entry `from`, at the branch's end (`tail`), or at its start (neither). The hub
+ * owns the branch's end; a client never guesses it.
+ */
+export type FindAsk = { from?: string; tail?: boolean };
+/** Keeps one scope's window in one pass. */
+function findWindow(ask: FindAsk) {
+ const head: SearchHit[] = [], behind: SearchHit[] = [], after: SearchHit[] = [];
+ const keepBehind = Boolean(ask.from || ask.tail);
+ let total = 0, before = 0, seen = false;
+ return {
+  total: () => total,
+  reach() { seen = true; },
+  add(hit: SearchHit) {
+   total++;
+   if (head.length < FIND_WINDOW) head.push(hit);
+   if (!keepBehind) return;
+   if (seen) { if (after.length < FIND_WINDOW) after.push(hit); return; }
+   before++; behind.push(hit);
+   if (behind.length > FIND_WINDOW) behind.shift();
+  },
+  close(): { hits: SearchHit[]; window: FindWindow } {
+   let hits = head, skipped = 0, start = 0;
+   if (seen || ask.tail) {
+    const back = Math.min(behind.length, Math.max(FIND_WINDOW / 2, FIND_WINDOW - after.length));
+    hits = [...behind.slice(behind.length - back), ...after.slice(0, FIND_WINDOW - back)];
+    skipped = before - back; start = back;
+   }
+   return { hits, window: { first: hits[0]?.at ?? 0, last: hits.at(-1)?.at ?? -1, skipped, start, size: hits.length } };
+  },
+ };
+}
+/**
+ * Collects a Find result over one scan of the branch, entry by entry. Each scope (all hits, prose hits) keeps one
+ * window. `anchored` echoes whether the scan met `from`: a `from` the copy lacks (a live entry newer than the copy, an
+ * entry on another branch) gives the first window and `anchored: false`, so the client can tell it from a reader
+ * before the first match. A result without `windows` comes from a hub that has none.
+ */
+export function findCollector(ask: FindAsk) {
+ const all = findWindow(ask), prose = findWindow(ask);
+ let scanned = 0, prompt: string | undefined, met = false;
+ return {
+  /** The next entry of the branch, and its match when it has one; returns the entry's scan position. */
+  visit(entry: { id: string; kind?: string }, hit?: Omit<SearchHit, "at" | "prompt">): number {
+   const at = scanned++;
+   if (entry.kind === "human") prompt = entry.id;
+   if (entry.id === ask.from) { met = true; all.reach(); prose.reach(); }
+   if (!hit) return at;
+   const found: SearchHit = { ...hit, at, prompt };
+   all.add(found);
+   if (hit.prose) prose.add(found);
+   return at;
+  },
+  close() {
+   const a = all.close(), p = prose.close();
+   const hits = [...new Set([...a.hits, ...p.hits])].sort((x, y) => x.at! - y.at!);
+   const total = all.total(), proseTotal = prose.total();
+   return { hits, more: total > a.window.size || proseTotal > p.window.size, total, proseTotal, windows: { all: a.window, prose: p.window }, scanned, ...(ask.from || ask.tail ? { anchored: Boolean(ask.tail || met) } : {}) };
+  },
+ };
+}
+/** Finds `query` in the Session's branch: one scan, one window per scope (findCollector). */
+export function findInSession(source: Source, query: string, version: string, ask: FindAsk = {}): SearchResult {
  const q = queryText(query).toLowerCase(), reader = openCopyReader(source);
  try {
   const info = reader.info();
   if (derivedVersion(info.version) !== version) throw new Error("Session changed. Retry Find on the current copy.");
-  const hits: SearchHit[] = []; let total = 0, scanned = 0;
-  visitFindItems(reader, ({ entry, semantics: { findText: text } }) => {
-   scanned++;
-   const at = text.toLowerCase().indexOf(q);
-   if (at < 0) return;
-   total++;
-   if (hits.length < 200) hits.push({ entry: entry.id, threadId: reader.session().id, ref: entry.ref, snippet: text.slice(Math.max(0, at - 80), at + q.length + 160), kind: entry.kind, version });
+  const found = findCollector(ask);
+  reader.visit(({ native, entry }: { native: unknown; entry: PiReaderEntry }) => {
+   const hit = matchEntry(native, entry, q);
+   found.visit(entry, hit && { entry: entry.id, threadId: reader.session().id, ref: entry.ref, snippet: hit.snippet, kind: entry.kind, version, prose: hit.prose });
   });
-  return { hits, more: total > hits.length, total, scanned, scope: FIND_SCOPE, asOf: Date.now(), invalidLines: info.invalidLines };
+  return { ...found.close(), scope: FIND_SCOPE, asOf: Date.now(), invalidLines: info.invalidLines };
  } finally { reader.close(); }
 }

@@ -8,7 +8,7 @@ import { runDaemon } from "../src/node/daemon.ts";
 import { hydrate } from "../src/plugins.ts";
 import { rarebitPlugin } from "../src/plugins/rarebit.ts";
 import type { Store } from "../src/node/runtime.ts";
-import { TestClient, tempHome } from "./helpers.ts";
+import { TestClient, tempHome, writePiSettings } from "./helpers.ts";
 
 const SIM = { provider: "ampi-sim", modelId: "sim-1" };
 
@@ -241,7 +241,7 @@ test("evicted command keys never become fresh spend authority, including after r
 });
 
 test("Rarebit keeps Title, selected evidence, compaction boundaries, and recall", async () => {
-	process.env.AMPI_COMPACT_KEEP_RECENT = "1";
+	writePiSettings({ compaction: { keepRecentTokens: 1 } });
 	const home = tempHome();
 	const daemon = await runDaemon({ home, simTokensPerSecond: 20000, plugins: await hydrate() });
 	try {
@@ -276,6 +276,6 @@ test("Rarebit keeps Title, selected evidence, compaction boundaries, and recall"
 		client.close();
 	} finally {
 		await daemon.stop();
-		delete process.env.AMPI_COMPACT_KEEP_RECENT;
+		writePiSettings(undefined);
 	}
 });

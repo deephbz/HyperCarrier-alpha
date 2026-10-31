@@ -5,6 +5,7 @@
 // summary plus the tool outputs the model keeps verbatim. The summary method writes the working-state summary from a
 // serialized range. Both add a Rarebit conversation record over the full durable history. Each compaction's method, trigger, and any
 // fallback reason are recorded in the conversation's CompactDoc (C3) and shown in the thread.
+// Pi's settings.json is the only settings source (src/node/compact-settings.ts); a thread's /auto-compact controls win.
 
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { ConversationId, EntryRecord, HookApi } from "@earendil-works/pi-durable";
@@ -12,8 +13,8 @@ import type { Context } from "@earendil-works/chord/context";
 import { AgentDoc, CompactionTask, defineDoc } from "@earendil-works/pi-durable";
 import { fallbackRun, plannerLine, recordDetail, recordLine } from "../shared/compact-record.ts";
 import { type BudgetOptions, type CompactMethod, type CompactRecord, compactionSettings, compactTrigger, hcCompactExtension, keepCap, workingBudget } from "@hypercarrier/auto-compact-durable";
+import { type CompactSettings, type CompactSettingsPort, compactSettingsPort } from "../node/compact-settings.ts";
 import { MetaDoc, NodeError, type NodePlugin, type NodeRuntime, type Store } from "../node/runtime.ts";
-import { defineOp } from "../node/server.ts";
 import { lastRequest } from "./cache-goblin.ts";
 import { history, storeById } from "./rarebit.ts";
 import type { CommandAck } from "../shared/protocol.ts";
@@ -35,22 +36,35 @@ export const CompactDoc = defineDoc<CompactState>({
 	initial: () => ({ records: [] }),
 });
 
-function num(name: string): number | undefined {
-	const value = process.env[name];
-	if (!value) return undefined;
-	const n = Number(value);
-	return Number.isFinite(n) ? n : undefined;
-}
-
-export function budgetOptions(state?: CompactState): BudgetOptions {
-	const { method: _method, enabled: _enabled, ...controls } = state?.controls ?? {};
+/**
+ * One thread's W options: its /auto-compact controls, then the settings. A thread's budget also wins over the per-model
+ * budget, as a Session's `/auto-compact budget` does in Pi. `model` is `"provider/modelId"`.
+ */
+export function budgetOptions(settings: CompactSettings, model: string | undefined, state?: CompactState): BudgetOptions {
+	const controls = state?.controls ?? {};
 	return {
-		thresholdPercent: num("AMPI_COMPACT_THRESHOLD"),
-		budgetTokens: num("AMPI_WORKING_BUDGET"),
-		keepRecentTokens: num("AMPI_COMPACT_KEEP_RECENT"),
-		...controls,
+		thresholdPercent: controls.thresholdPercent ?? settings.thresholdPercent,
+		budgetTokens: controls.budgetTokens ?? settings.budgetTokens,
+		modelBudgetTokens: controls.budgetTokens === undefined && model ? settings.modelBudgets[model] : undefined,
 	};
 }
+
+/** pi-durable's harness-wide compaction settings: Pi's keep-recent, else the package default for the global budget. */
+export function harnessCompaction(settings: CompactSettings) {
+	const modelOverrides = Object.fromEntries(Object.entries(settings.modelKeepRecent).map(([model, keepRecentTokens]) => [model, { keepRecentTokens }]));
+	return { ...compactionSettings({ budgetTokens: settings.budgetTokens, keepRecentTokens: settings.keepRecentTokens }), ...(Object.keys(modelOverrides).length ? { modelOverrides } : {}) };
+}
+
+/**
+ * The recent tokens a compaction of `model` keeps, as pi-durable resolves them from `harnessCompaction`. Keep-recent
+ * is harness-wide, so it comes from the global settings for every thread.
+ */
+function keepRecent(port: CompactSettingsPort, model: string | undefined): number {
+	const settings = port.global();
+	return (model ? settings.modelKeepRecent[model] : undefined) ?? harnessCompaction(settings).keepRecentTokens ?? 20_000;
+}
+
+const modelKey = (ref?: { provider: string; modelId: string }) => (ref ? `${ref.provider}/${ref.modelId}` : undefined);
 
 const METHODS: readonly CompactMethod[] = ["keepset", "summary", "native"];
 const METHOD_TEXT: Record<CompactMethod, string> = {
@@ -60,24 +74,28 @@ const METHOD_TEXT: Record<CompactMethod, string> = {
 };
 
 /** Fallbacks in a row at the end of the records: two or more say the planner is failing. */
-/** The context window of the conversation's model. */
-async function windowOf(api: HookApi, context: Context): Promise<number | undefined> {
-	const ref = (await api.snapshot(AgentDoc, api.conversationId, context))?.model;
-	return ref ? api.models.getModel(ref.provider, ref.modelId)?.contextWindow : undefined;
+/** The conversation's model, its context window, and the settings of its working directory. */
+async function agentOf(port: CompactSettingsPort, api: HookApi, context: Context) {
+	const agent = await api.snapshot(AgentDoc, api.conversationId, context);
+	const ref = agent?.model;
+	const window = ref ? api.models.getModel(ref.provider, ref.modelId)?.contextWindow : undefined;
+	return { model: modelKey(ref), window, settings: port.forCwd(agent?.cwd) };
 }
 
-export async function compactStatus(runtime: NodeRuntime, store: Store, conversationId: ConversationId) {
+export async function compactStatus(port: CompactSettingsPort, runtime: NodeRuntime, store: Store, conversationId: ConversationId) {
 	const state = await store.harness.snapshot(CompactDoc, conversationId, BACKGROUND_CONTEXT);
 	const agent = await store.harness.snapshot(AgentDoc, conversationId, BACKGROUND_CONTEXT);
 	const model = agent?.model ? runtime.models.getModel(agent.model.provider, agent.model.modelId) : undefined;
-	const options = budgetOptions(state);
-	return { records: state?.records ?? [], enabled: state?.controls?.enabled !== false, method: state?.controls?.method ?? "keepset", thresholdPercent: options.thresholdPercent ?? 90,
+	const settings = port.forCwd(agent?.cwd);
+	const options = budgetOptions(settings, modelKey(agent?.model), state);
+	return { records: state?.records ?? [], enabled: state?.controls?.enabled ?? settings.enabled, method: state?.controls?.method ?? settings.method, thresholdPercent: options.thresholdPercent ?? 90,
 		workingBudget: model?.contextWindow ? workingBudget(model.contextWindow, options) : null,
-		trigger: model?.contextWindow ? compactTrigger(model.contextWindow, options) : null, contextWindow: model?.contextWindow ?? null, keepRecentTokens: compactionSettings(budgetOptions()).keepRecentTokens ?? 20_000 };
+		trigger: model?.contextWindow ? compactTrigger(model.contextWindow, options) : null, contextWindow: model?.contextWindow ?? null,
+		keepRecentTokens: keepRecent(port, modelKey(agent?.model)), settingsErrors: [...new Set([...settings.errors, ...port.global().errors])] };
 }
 
 /** Policy controls only. The command adapter sends manual runs through the existing compact admission. */
-export async function compactCommand(runtime: NodeRuntime, thread: Awaited<ReturnType<NodeRuntime["thread"]>>, args: string): Promise<CommandAck> {
+export async function compactCommand(port: CompactSettingsPort, runtime: NodeRuntime, thread: Awaited<ReturnType<NodeRuntime["thread"]>>, args: string): Promise<CommandAck> {
 	const [option = "status", value, ...extra] = args.split(/\s+/).filter(Boolean);
 	const reply = (notice: string, body?: string): CommandAck => ({ via: "node", disposition: "handled", notice, ...(body ? { body } : {}) });
 	const alternatives: Record<string, string> = {
@@ -87,7 +105,7 @@ export async function compactCommand(runtime: NodeRuntime, thread: Awaited<Retur
 	if (alternatives[option]) return reply(`${option}: not on durable threads. Durable ${alternatives[option]}.`);
 	if (option === "help" && !value) return reply("Auto Compact commands", "Auto Compact commands\nstatus; run [prompt]; on; off; method <keepset|summary|native>; budget <tokens|default>; threshold <percent>\nPi pane only: execution, preservation");
 	if (option === "status" && !value) {
-		const s = await compactStatus(runtime, thread.store, thread.conversation.id);
+		const s = await compactStatus(port, runtime, thread.store, thread.conversation.id);
 		const last = s.records.at(-1);
 		return reply(`Auto Compact: ${s.enabled ? "on" : "off"}`, [
 			`Auto Compact: ${s.enabled ? "on" : "off"}`,
@@ -96,6 +114,7 @@ export async function compactCommand(runtime: NodeRuntime, thread: Awaited<Retur
 			...(s.method === "keepset" ? [`Keep cap: ${keepCap(s.workingBudget ?? undefined)} tokens (min 20000, W/4); each output cut at 8000`] : []),
 			"Pi window-edge safety: on (always)",
 			`Keep recent: ${s.keepRecentTokens} tokens (node policy); HC waits for at least ${2 * s.keepRecentTokens} message tokens before compacting`,
+			...(s.settingsErrors.length ? [`Ignored invalid Pi settings: ${s.settingsErrors.join("; ")}`] : []),
 			`Compaction records: ${s.records.length}`,
 			last ? `Latest: ${new Date(last.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" })} · ${last.reason} · ${recordLine(last)}` : "No compaction records yet.",
 			...(last && plannerLine(last) ? [`Planner: ${plannerLine(last)}`] : []),
@@ -124,7 +143,9 @@ export async function compactCommand(runtime: NodeRuntime, thread: Awaited<Retur
 	return reply(option === "on" || option === "off" ? `Auto Compact: ${option}; Pi\'s window-edge safety stays on.` : option === "method" ? `Auto Compact method: ${METHOD_TEXT[value as CompactMethod]}` : `Auto Compact ${option}: ${value}`);
 }
 
-export function compactPlugin(): NodePlugin {
+export function compactPlugin(port: CompactSettingsPort = compactSettingsPort()): NodePlugin {
+	/** Working directories of the summarized threads: their project settings feed `inputs` too. */
+	const cwds = new Set<string>();
 	/** Conversations whose budget decision this process is acting on right now (decided, compact() not yet recorded). */
 	const acting = new Set<string>();
 	const storeOf = async (api: { snapshot: (...args: never[]) => Promise<unknown> }, context: typeof BACKGROUND_CONTEXT) => {
@@ -132,23 +153,34 @@ export function compactPlugin(): NodePlugin {
 		if (!meta.store) throw new Error("storage unknown");
 		return storeById(meta.store);
 	};
-	defineOp("compact.records", async (args, runtime) => {
-		const { store, conversation } = await runtime.thread(String(args.threadId));
-		return compactStatus(runtime, store, conversation.id);
-	});
 	return {
+		ops: {
+			"compact.records": async (args, runtime) => {
+				const { store, conversation } = await runtime.thread(String(args.threadId));
+				return compactStatus(port, runtime, store, conversation.id);
+			},
+		},
+		commands: { "auto-compact": (runtime, thread, args) => compactCommand(port, runtime, thread, args) },
+		// Stamps only: a changed stamp refreshes the summaries, and only they parse the files.
+		inputs: () => [port.stamp(), ...[...cwds].map((cwd) => port.stamp(cwd))].join("\n"),
+		// Pi's Auto Compact warns about ignored settings; the global file is one fact for the whole node.
+		nodeState: () => {
+			const { stamp, errors } = port.global();
+			return errors.length ? { settingsNotice: { stamp, errors, file: port.file() } } : {};
+		},
 		extensions: [
 			hcCompactExtension({
 				history: async (api, context) => history(await storeOf(api as never, context), String(api.conversationId)).load(),
-				method: async (api, context) => (await api.snapshot(CompactDoc, api.conversationId, context))?.controls?.method ?? "keepset",
+				method: async (api, context) =>
+					(await api.snapshot(CompactDoc, api.conversationId, context))?.controls?.method ?? (await agentOf(port, api, context)).settings.method,
 				lastRequest,
 				workingBudget: async (api, context) => {
-					const window = await windowOf(api, context);
-					return window ? workingBudget(window, budgetOptions(await api.snapshot(CompactDoc, api.conversationId, context))) : undefined;
+					const { model, window, settings } = await agentOf(port, api, context);
+					return window ? workingBudget(window, budgetOptions(settings, model, await api.snapshot(CompactDoc, api.conversationId, context))) : undefined;
 				},
 				trigger: async (api, context) => {
-					const window = await windowOf(api, context);
-					return window ? compactTrigger(window, budgetOptions(await api.snapshot(CompactDoc, api.conversationId, context))) : undefined;
+					const { model, window, settings } = await agentOf(port, api, context);
+					return window ? compactTrigger(window, budgetOptions(settings, model, await api.snapshot(CompactDoc, api.conversationId, context))) : undefined;
 				},
 				// Fault injection for the crash tests: die after the plan memo, before the summary is installed. The
 				// `-native` variant first switches the thread to the native method, as an owner command would.
@@ -182,16 +214,19 @@ export function compactPlugin(): NodePlugin {
 				},
 			}),
 		],
-		settings: () => ({ compaction: compactionSettings(budgetOptions()) }),
+		// Harness-wide; the node reads it at each use, so a settings edit reaches the next compaction.
+		settings: () => ({ compaction: harnessCompaction(port.global()) }),
 		async summarize(store, conversationId, summary) {
 			const state = await store.harness.snapshot(CompactDoc, Number(conversationId) as ConversationId, BACKGROUND_CONTEXT);
-			if (summary.contextWindow) summary.workingBudget = workingBudget(summary.contextWindow, budgetOptions(state));
+			if (summary.cwd) cwds.add(summary.cwd);
+			if (summary.contextWindow) summary.workingBudget = workingBudget(summary.contextWindow, budgetOptions(port.forCwd(summary.cwd), summary.model, state));
 		},
 		async react(store, conversationId, summary) {
 			// W is the owner's figure; the request starts at the threshold share of W, as Pi's Auto Compact does (K2.I1).
 			const state = await store.harness.snapshot(CompactDoc, Number(conversationId) as ConversationId, BACKGROUND_CONTEXT);
-			if (state?.controls?.enabled === false) return;
-			const options = budgetOptions(state);
+			const settings = port.forCwd(summary.cwd);
+			if (!(state?.controls?.enabled ?? settings.enabled)) return;
+			const options = budgetOptions(settings, summary.model, state);
 			const budget = summary.contextWindow ? workingBudget(summary.contextWindow, options) : undefined;
 			const trigger = summary.contextWindow ? compactTrigger(summary.contextWindow, options) : undefined;
 			if (!budget || !trigger || !summary.contextTokens || summary.contextTokens < trigger || summary.activity === "compacting") return;
@@ -212,7 +247,7 @@ export function compactPlugin(): NodePlugin {
 				if (entry.kind === "pi.compaction" || entry.kind === "pi.reset") break;
 				for (const message of entry.model ?? []) messageTokens += Math.ceil(JSON.stringify((message as { content?: unknown }).content ?? "").length / 4);
 			}
-			const keep = compactionSettings(budgetOptions()).keepRecentTokens ?? 20_000;
+			const keep = keepRecent(port, summary.model);
 			if (messageTokens < 2 * keep) return;
 			// HC trigger single-flight: no budget compaction starts while a compaction task (any reason) is live, or a
 			// finished one's summary waits for the turn boundary. Every response above the trigger is a new crossing, and

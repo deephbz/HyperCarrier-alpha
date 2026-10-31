@@ -95,13 +95,6 @@ function ownsDurableLease(lease) {
   }
 }
 
-function cleanInline(value, max = 320) {
-  const text = String(value ?? "")
-    .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  return text.length > max ? `${text.slice(0, Math.max(0, max - 1))}…` : text;
-}
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -297,14 +290,10 @@ export function projectionTokens(view) {
     sourcePending: status.sourcePending,
   });
   return {
-    rarebit_attention:
-      presentation.tone === "attention" ? presentation.mark : null,
     rarebit_error:
       presentation.tone === "diagnostic" ? presentation.mark : null,
     rarebit_state_neutral:
       presentation.tone === "neutral" ? presentation.label : null,
-    rarebit_state_attention:
-      presentation.tone === "attention" ? presentation.label : null,
     rarebit_state_muted:
       presentation.tone === "muted" ? presentation.label : null,
     rarebit_state_diagnostic:
@@ -354,6 +343,8 @@ export function reportRarebitPane(view, reason) {
     "--clear-token",
     "rarebit_icon",
   ];
+  // rarebit_attention and rarebit_state_attention are retired (D24). They stay in this list, so every refresh clears
+  // them from panes that an older version marked.
   for (const name of [
     "rarebit_attention",
     "rarebit_error",
@@ -536,43 +527,4 @@ export function clearRarebitPane(paneId, reason = "manual_clear") {
   for (const token of RAREBIT_TOKEN_NAMES) args.push("--clear-token", token);
   runHerdr(args);
   appendReceipt("rarebit_cleared", { paneId, reason });
-}
-export function rarebitNotificationSound(status) {
-  return status?.status === "needs_attention" && !status.sourcePending
-    ? "request"
-    : "none";
-}
-
-export async function notifyRarebit(paneId) {
-  const view = await refreshRarebitPane(paneId, "notification");
-  const status = view.summary;
-  if (!shouldPublishRarebitMetadata(view)) return null;
-  const body = cleanInline(
-    status.sourcePending
-      ? `${status.label}: native source unavailable; current applicability unverified.`
-      : `${status.label}: ${status.reason} (${view.selection.occurrences.length} Rarebits)`,
-    235,
-  );
-  const sound = rarebitNotificationSound(status);
-  const response = runHerdr([
-    "notification",
-    "show",
-    `Rarebit ${status.label}`,
-    "--body",
-    body,
-    "--position",
-    "top-right",
-    "--sound",
-    sound,
-  ]);
-  appendReceipt("rarebit_notification_requested", {
-    paneId,
-    sessionId: view.session.id,
-    rarebitStatus: status.status,
-    statusReason: status.reason,
-    syncState: status.syncState,
-    applicability: status.applicability,
-    sound,
-  });
-  return response;
 }

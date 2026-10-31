@@ -42,7 +42,7 @@ test("host-link loss preserves message and typed-command keys while the browser 
 		assert.equal(failure.error.code, "host_disconnected", "the hub reports the real host-link break");
 		const alert = f.page.getByRole("alert");
 		await alert.waitFor();
-		assert.equal(await alert.innerText(), "Workbench did not answer. Your message is back in the composer. Send again delivers it once; editing it makes a new message.");
+		assert.equal(await alert.locator("> span").innerText(), "Workbench did not answer. Your message is back in the composer. Send again delivers it once; editing it makes a new message.");
 		assert.doesNotMatch(await alert.innerText(), /#|disconnected|correct the issue/);
 		await f.wire.when(() => f.wire.hosts.some((host) => host.id === "devbox" && host.status === "connected"), 1500);
 		await f.page.waitForFunction((text) => document.querySelector("textarea")?.value === text, text);
@@ -91,7 +91,7 @@ test("key_conflict is final: show the node refusal, keep plain text, and allocat
 	assert.equal(refusal.error.code, "key_conflict");
 	const feedback = f.page.getByRole("alert").filter({ hasText: refusal.error.message });
 	await feedback.waitFor();
-	assert.equal(await feedback.textContent(), `Not sent: ${refusal.error.message.replace(/\.+$/, "")}. Your draft is kept; fix it and send again.`);
+	assert.equal(await feedback.locator("> span").textContent(), `Not sent: ${refusal.error.message.replace(/\.+$/, "")}. Your draft is kept; fix it and send again.`);
 	assert.equal(await f.input.inputValue(), "Original");
 	assert.equal(retry.args.requestId, original.args.requestId);
 	await f.input.press("Enter");

@@ -39,7 +39,7 @@ import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlit
 import { CODEMODE_TOOL_NAME, createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
 import { CodemodeSandbox } from "@earendil-works/pi-codemode";
 import { contextTokensOf } from "@hypercarrier/auto-compact-durable/budget";
-import type { ActionAck, Activity, ControlCompaction, ControlSubmission, EditQueuedResult, NodeHealth, NodeInfo, Placement, ThreadCreated, ThreadSummary, ThreadsState } from "../shared/protocol.ts";
+import type { ActionAck, Activity, CommandAck, ControlCompaction, ControlSubmission, EditQueuedResult, NodeHealth, NodeInfo, NodeOpName, NodeOps, Placement, ThreadCreated, ThreadSummary, ThreadsState } from "../shared/protocol.ts";
 
 /** The frozen node backend keys its threads by conversation id, outside the Pi wire contract (docs/wire-boundary.md). */
 type NodeThreadsState = Omit<ThreadsState, "threads"> & { threads: Record<string, ThreadSummary> };
@@ -52,6 +52,7 @@ import { nodeGuard, recordStop, stopLatch, toolBlockReason } from "./guard.ts";
 import { type Marked, markStops, returnedInput, type StopIntent, type StopOutcome, settleStops } from "./stops.ts";
 import { FIRST_ORDER, newTab, orderAfter, type Placed, type Tab, tabLayout } from "./tabs.ts";
 import { Accounts } from "./accounts.ts";
+import { NODE_IMAGE_LIMITS } from "./images.ts";
 import { buildId } from "../shared/build.ts";
 import { type CacheTtl, cacheGoblinModels, CacheTtlDoc } from "../plugins/cache-goblin.ts";
 import { photonImages, piCodingTools } from "./coding-tools.ts";
@@ -155,6 +156,7 @@ export type NodePlugin = {
 	 * inside the reaction, so Close aborts it and it starts no request and writes nothing after the Close.
 	 */
 	react?(store: Store, conversationId: string, summary: ThreadSummary): void | Promise<void>;
+	/** A function runs at each use, so a plugin can follow its settings without a restart; keep it cheap. */
 	settings?: Partial<HarnessSettings> | ((models: MutableModels) => Partial<HarnessSettings>);
 	/**
 	 * The stop fence (src/node/stops.ts). `stops` lists this plugin's stored, unconfirmed stop intents of one store.
@@ -173,7 +175,21 @@ export type NodePlugin = {
 	closing?(store: Store, conversationId: string): StopIntent[] | Promise<StopIntent[]>;
 	/** Installed but not selected by default; conversations opt in with configure(). */
 	optIn?: Extension[];
+	/** Node ops this plugin answers with its own ports (`compact.records`). */
+	ops?: { [K in NodeOpName]?: (args: Record<string, unknown>, runtime: NodeRuntime) => Promise<NodeOps[K]["result"]> };
+	/** Slash commands this plugin answers, by name (`auto-compact`). */
+	commands?: Record<string, (runtime: NodeRuntime, thread: Awaited<ReturnType<NodeRuntime["thread"]>>, args: string) => Promise<CommandAck>>;
+	/**
+	 * A cheap fingerprint of the host inputs this plugin's summaries read (a settings file's stamp). The node polls it
+	 * once a second; a change refreshes the node-wide fields and every thread's summary, so an idle thread follows an edit.
+	 */
+	inputs?(): string;
+	/** Node-wide fields of the threads state, a pure projection of the plugin's inputs. */
+	nodeState?(): Pick<ThreadsState, "settingsNotice">;
 };
+
+/** How often the node polls the plugins' `inputs`. */
+const INPUTS_POLL_MS = 1000;
 
 export type NodeOptions = {
 	home?: string;
@@ -313,7 +329,8 @@ export class NodeRuntime {
 	readonly accounts: Accounts;
 	readonly threads: MutableReplicatedState<NodeThreadsState>;
 	readonly info: NodeInfo;
-	readonly settings: HarnessSettings;
+	/** The harness settings now. pi-durable reads them at each use, on every commit too. */
+	readonly settings: () => HarnessSettings;
 	/**
 	 * Conversations a stop fences now: thread key to the ids of the unconfirmed stop intents that cover it. A key is
 	 * fenced while any intent of any owner covers it, so one owner's receipt never lifts another owner's fence.
@@ -355,6 +372,9 @@ export class NodeRuntime {
 	/** Stores whose storage failed and is not open now, with the failure. `gaveUp` stops the reopen timer. */
 	readonly #failed = new Map<string, { error: string; attempts: number; gaveUp: boolean }>();
 	readonly #reopenTimers = new Set<ReturnType<typeof setTimeout>>();
+	/** The plugins' `inputs` at the last poll; undefined before the first. */
+	#inputs: string | undefined;
+	#inputsTimer: ReturnType<typeof setInterval> | undefined;
 	/** A successful open does not replenish the budget: resumed work can fail its first write. */
 	readonly #recoveryAttempts = new Map<string, number>();
 	readonly #opening = new Map<string, Promise<Store>>();
@@ -419,14 +439,16 @@ export class NodeRuntime {
 		this.registry.install(guard);
 		const pluginExtensions = this.plugins.flatMap((plugin) => plugin.extensions).map((extension) => this.#scoped(extension));
 		for (const extension of pluginExtensions) this.registry.install(extension);
-		const merged: HarnessSettings = {};
-		for (const plugin of this.plugins)
-			Object.assign(merged, (typeof plugin.settings === "function" ? plugin.settings(this.models) : plugin.settings) ?? {});
 		const optIn = new Set(this.plugins.flatMap((plugin) => (plugin.optIn ?? []).map((extension) => extension.name)));
 		// The core renders first, as Pi renders its own sections before extension sections.
 		const defaults = [codingTools, core, codemode, guard, ...pluginExtensions].filter((e) => !optIn.has(e.name));
 		// A task cut off 5 times without progress is parked until /retry (pi-durable's default, set here on purpose).
-		this.settings = { toolExecution: "parallel", retry: { maxRetries: 3 }, restartLimit: 5, ...merged, extensions: defaults };
+		this.settings = () => {
+			const merged: HarnessSettings = {};
+			for (const plugin of this.plugins)
+				Object.assign(merged, (typeof plugin.settings === "function" ? plugin.settings(this.models) : plugin.settings) ?? {});
+			return { toolExecution: "parallel", retry: { maxRetries: 3 }, restartLimit: 5, ...merged, extensions: defaults };
+		};
 		this.threads = replicatedState<NodeThreadsState>({ threads: {}, backend: "durable" });
 		this.info = {
 			nodeId: this.#nodeId(),
@@ -452,6 +474,8 @@ export class NodeRuntime {
 
 	/** Opens every storage under `threads/` and resumes unfinished work. */
 	async start(context: Context = BACKGROUND_CONTEXT): Promise<void> {
+		this.#pollInputs();
+		if (this.plugins.some((plugin) => plugin.inputs)) (this.#inputsTimer = setInterval(() => this.#pollInputs(), INPUTS_POLL_MS)).unref();
 		const dir = join(this.home, "threads");
 		for (const name of readdirSync(dir).sort()) {
 			if (!existsSync(join(dir, name, "harness.sqlite"))) continue;
@@ -973,7 +997,7 @@ export class NodeRuntime {
 		if (returned.length)
 			await store.harness.commit(async (tx) => {
 				const doc = await tx.doc(ReturnedDoc, id);
-				doc.items.push(...returned.map((s) => ({ id: s.submission, mode: s.deliverAs, content: s.text ?? s.origin?.summary ?? "", at: s.at, ...(s.origin ? { origin: s.origin } : {}) })));
+				doc.items.push(...returned.map((s) => ({ id: s.submission, mode: s.deliverAs, content: s.text ?? s.origin?.summary ?? "", at: s.at, ...(s.images ? { images: s.images } : {}), ...(s.origin ? { origin: s.origin } : {}) })));
 				doc.items.splice(0, Math.max(0, doc.items.length - 20));
 			}, context);
 		if (returned.length) await this.#publishReturned(key);
@@ -1352,7 +1376,7 @@ export class NodeRuntime {
 	}
 
 	#blockedReasons(blocked: Awaited<ReturnType<Store["harness"]["inspect"]>>["tasks"], closed: boolean): string[] {
-		return blocked.map(({ record, state }) => blockedReason(record.kind, (state as { reason: string }).reason, this.settings.restartLimit ?? 5, closed));
+		return blocked.map(({ record, state }) => blockedReason(record.kind, (state as { reason: string }).reason, this.settings().restartLimit ?? 5, closed));
 	}
 
 	async #internal(store: Store, conversationId: string): Promise<boolean> {
@@ -1394,6 +1418,7 @@ export class NodeRuntime {
 			activity: activityOf(live),
 			queued: inbox?.items.length ?? 0,
 			costUsd: 0,
+			images: NODE_IMAGE_LIMITS,
 		};
 		if (convMeta.archived || convMeta.closed) summary.archived = true;
 		// A durable thread is live while it is open: the node runs it whether or not a client watches. Close ends it.
@@ -1435,12 +1460,20 @@ export class NodeRuntime {
 		if (blocked.length && !running) summary.activity = "idle";
 		const parked = blocked.length ? this.#blockedReasons(blocked, !!closed) : (convMeta.closed?.attention ?? []);
 		if (parked.length) summary.attention = parked.map((reason) => ({ source: "node", reason }));
-		// The last response's context size, also after a compaction, as a Pi Session shows it (pi/derive-worker.ts).
-		if (assistantMessage?.usage) summary.contextTokens = contextTokensOf(assistantMessage.usage);
-		// As the Pi backend's derive-worker computes it: the latest response's prompt share read from cache.
-		const last = assistantMessage?.usage;
-		const prompt = (last?.input ?? 0) + (last?.cacheRead ?? 0) + (last?.cacheWrite ?? 0);
-		if (prompt > 0) summary.cacheHit = (100 * (last.cacheRead ?? 0)) / prompt;
+		// As Pi's getContextUsage and the Pi backend's derive-worker count them: the latest measured response gives the
+		// context size and the prompt share read from cache. A later compaction or reset makes the size unknown.
+		let restarted = false;
+		for (const entry of recent) {
+			if (entry.kind === "pi.compaction" || entry.kind === "pi.reset") restarted = true;
+			// biome-ignore lint: loosely typed pi-ai message
+			const message = entry.kind === "pi.assistant" ? (entry.model?.[0] as any) : undefined;
+			const usage = message?.stopReason === "aborted" || message?.stopReason === "error" ? undefined : message?.usage;
+			if (!usage || contextTokensOf(usage) === 0) continue;
+			if (!restarted) summary.contextTokens = contextTokensOf(usage);
+			const prompt = (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+			if (prompt > 0) summary.cacheHit = (100 * (usage.cacheRead ?? 0)) / prompt;
+			break;
+		}
 		if (agent?.model) {
 			const model = this.models.getModel(agent.model.provider, agent.model.modelId);
 			if (model?.contextWindow) summary.contextWindow = model.contextWindow;
@@ -1879,8 +1912,36 @@ export class NodeRuntime {
 		this.#schedule(store, conversationId, 0);
 	}
 
+	/** Follows the plugins' host inputs: after a change, the node-wide fields and every open thread's summary follow them. */
+	#pollInputs(): void {
+		if (this.#closing) return;
+		let inputs: string, node: Pick<ThreadsState, "settingsNotice">;
+		try {
+			inputs = this.plugins.map((plugin) => plugin.inputs?.() ?? "").join("\0");
+			if (inputs === this.#inputs) return;
+			node = Object.assign({}, ...this.plugins.map((plugin) => plugin.nodeState?.() ?? {}));
+		} catch (error) {
+			this.#report(error);
+			return;
+		}
+		const first = this.#inputs === undefined;
+		this.#inputs = inputs;
+		this.threads.change(BACKGROUND_CONTEXT, (draft) => {
+			if (node.settingsNotice) draft.settingsNotice = node.settingsNotice;
+			else delete draft.settingsNotice;
+		});
+		// The first poll runs before any storage opens; opening a storage summarizes its threads.
+		if (first) return;
+		for (const key of Object.keys(this.threads.value.threads)) {
+			const { storeId, conversationId } = parseThreadKey(key);
+			const store = this.stores.get(storeId);
+			if (store) this.#schedule(store, conversationId, 0);
+		}
+	}
+
 	async close(context: Context = BACKGROUND_CONTEXT): Promise<void> {
 		this.#closing = true;
+		clearInterval(this.#inputsTimer);
 		await Promise.allSettled(this.#opening.values());
 		for (const timer of this.#pending.values()) clearTimeout(timer);
 		for (const timer of this.#reopenTimers) clearTimeout(timer);

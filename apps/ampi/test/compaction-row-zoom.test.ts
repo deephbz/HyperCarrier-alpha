@@ -17,7 +17,8 @@ import { engineSkip } from "./engines.ts";
 // its stylesheet; the display size comes from the app's own zoom keys. The hub is a script on the page's WebSocket.
 
 const web = fileURLToPath(new URL("../web", import.meta.url));
-const ORIGIN = "http://ampi.test";
+// A secure context, as loopback is: the app uses crypto.randomUUID.
+const ORIGIN = "http://localhost";
 const ZOOM = 1.3;
 const HOST = { id: "devbox", link: "devbox#durable", label: "devbox", kind: "durable", status: "connected" };
 const THREAD = "c1";

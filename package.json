@@ -1,6 +1,6 @@
 {
   "name": "hypercarrier-alpha",
-  "version": "0.2.0-durable.1",
+  "version": "0.2.0-durable.2",
   "description": "A single-user, local-first Work OS for directing many concurrent agent workstreams; Pi and Herdr are its current carriers.",
   "private": true,
   "license": "MIT",

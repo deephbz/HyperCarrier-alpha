@@ -51,13 +51,20 @@ export function restorePlace(el: HTMLElement, selector: string, attribute: strin
 		const delta = toCss(off(), el);
 		// Ignore subpixel rounding within half a CSS pixel.
 		if (Math.abs(delta) > 0.5) el.scrollTop += delta;
-		// WebKit keeps scrollTop in whole screen px and rounds a write down, which leaves up to two CSS px at display zoom;
-		// one more write, rounded away from zero, keeps the closer place.
+		// WebKit keeps scrollTop in whole screen px and rounds a write down, which leaves up to two CSS px at display zoom.
+		// Try the whole-px steps on both sides of the rest and keep the closest place: a step rounded up alone can overshoot
+		// by a pixel.
 		const rest = off();
 		if (Math.abs(rest) > 0.5) {
-			const kept = el.scrollTop;
-			el.scrollTop = kept + Math.sign(rest) * Math.ceil(Math.abs(toCss(rest, el)));
-			if (Math.abs(off()) >= Math.abs(rest)) el.scrollTop = kept;
+			// Each try writes a value, never one read back: WebKit rounds a written value again.
+			const kept = el.scrollTop, need = Math.abs(toCss(rest, el));
+			let best: number | undefined, least = Math.abs(rest), last: number | undefined;
+			for (const step of new Set([Math.max(1, Math.floor(need)), Math.ceil(need)])) {
+				el.scrollTop = last = kept + Math.sign(rest) * step;
+				if (Math.abs(off()) < least) { best = last; least = Math.abs(off()); }
+			}
+			if (best === undefined) el.scrollTop = kept;
+			else if (best !== last) el.scrollTop = best;
 		}
 		return;
 	}
@@ -171,6 +178,19 @@ export function useKeepPlace(
 		}
 		return pinned.current;
 	}, [scroller, selector, attribute, pinned, clamp]);
+	// The one writer of "go to the newest end": the record moves with scrollTop. The browser sends that scroll's event a
+	// frame later and coalesces it with a reader's scroll in the same frame; measured from a stale record, the reader's
+	// scroll up would look like a move down and keep them pinned.
+	const follow = useCallback(() => {
+		const el = scroller.current;
+		if (!el) return;
+		el.scrollTop = el.scrollHeight;
+		remember();
+	}, [scroller, remember]);
+	// The one record of a place the view wrote itself (Back's restore, a reveal): it is the reader's place at once. Until
+	// that write's scroll event arrives, a resize (the prompt rail mounts) or a render restores the record, and the place
+	// from before the write would undo it.
+	const record = remember;
 	// The reader's wheel up leaves the end at its input, before its scroll lands. WebKit on macOS applies a wheel's scroll
 	// asynchronously: a render between the wheel and its scroll still sees scrollTop at the end and would follow. A wheel
 	// that a nested scroller takes, a pinch zoom, or a scroller already at its top moves nothing here.
@@ -196,9 +216,12 @@ export function useKeepPlace(
 		const el = scroller.current;
 		if (!el || (el.clientWidth === size.current.width && el.clientHeight === size.current.height)) return false;
 		if (saved.current) restorePlace(el, selector, attribute, saved.current);
-		remember();
+		// One render can resize the scroller and shrink its content (a run ends: the Composer shrinks while the live reply
+		// gives way to its entry). The restore then cannot reach the place, and a clamped reader keeps the record.
+		if (clamp()) size.current = { width: el.clientWidth, height: el.clientHeight };
+		else remember();
 		return true;
-	}, [scroller, selector, attribute, remember]);
+	}, [scroller, selector, attribute, remember, clamp]);
 	const onScroll = useCallback(() => {
 		const el = scroller.current;
 		if (!el) return;
@@ -273,5 +296,5 @@ export function useKeepPlace(
 			mutations.current = undefined;
 		};
 	}, [scroller, selector, attribute, resized, following, tail, remember, clamp]);
-	return { capture, onScroll, onWheel, following };
+	return { capture, onScroll, onWheel, following, follow, record };
 }

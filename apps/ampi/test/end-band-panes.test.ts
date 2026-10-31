@@ -34,7 +34,7 @@ async function componentBundle(): Promise<{ script: string; css: string }> {
 				const host = ${JSON.stringify(HOST)};
 				const threads = Array.from({ length: 30 }, (_, i) => ({ id: 'pi:q' + i, title: 'Quiet ' + i, createdAt: 0, updatedAt: Date.now() - (i + 1) * 60000, kind: 'thread', activity: 'idle', queued: 0, costUsd: 0 }));
 				const pane = window.PANE === 'overview'
-					? h(Overview, { data: [{ host, threads, stale: false }], onNew() {}, onAddHost() {}, onHelp() {} })
+					? h(Overview, { data: [{ host, threads, stale: false }], onNew() {}, onHostSetup() {}, onHelp() {} })
 					: h(RarebitView, { host: 'devbox', threadId: ${JSON.stringify(THREAD)} });
 				createRoot(document.getElementById('root')).render(h('div', { className: 'main-slot', style: { height: '500px' } }, pane));
 			` : undefined,

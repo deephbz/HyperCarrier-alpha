@@ -1,6 +1,7 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -21,6 +22,8 @@ before(async () => {
 	const stored = new Map<string, string>();
 	const localStorage = { getItem: (k: string) => stored.get(k) ?? null, setItem: (k: string, v: string) => void stored.set(k, v), removeItem: (k: string) => void stored.delete(k) };
 	Object.assign(globalThis, { location: { protocol: "http:", host: "127.0.0.1:1", hash: "" }, WebSocket: class { send() {} close() {} }, localStorage, document: { activeElement: null } });
+	// A Modal renders in a body portal, which the server renderer cannot hold: here it renders in place.
+	createRequire(import.meta.url)("react-dom").createPortal = (children: unknown) => children;
 	vite = await createServer({ configFile: `${web}vite.config.ts`, root: web, logLevel: "silent", server: { middlewareMode: true, hmr: false } });
 	section = (await vite.ssrLoadModule("/src/components/PiSidebar.tsx")).PiHostSection;
 	overview = (await vite.ssrLoadModule("/src/components/Overview.tsx")).Overview;
@@ -38,7 +41,7 @@ test("host lists render: a failed init says unavailable and the full reason, nev
 	assert.match(side, /unavailable/);
 	assert.doesNotMatch(side, /copies readable/);
 	assert.ok(side.includes(REASON), side);
-	const page = text(renderToStaticMarkup(createElement(overview as never, { data: [failed], onNew() {}, onAddHost() {}, onHelp() {} })));
+	const page = text(renderToStaticMarkup(createElement(overview as never, { data: [failed], onNew() {}, onHostSetup() {}, onHelp() {} })));
 	assert.ok(page.includes(`devbox: ${REASON}`), page);
 	assert.doesNotMatch(page, /No Sessions yet|Reading Sessions/);
 });
@@ -65,10 +68,10 @@ test("host lists render: two sources of one Host ID name their source in the sid
 	const head = (d: typeof pi) => text(/<div class="side-head">[\s\S]*?<\/button>/.exec(renderToStaticMarkup(createElement(section as never, { data: d, hosts, route: {}, filter: "" })))?.[0] ?? "");
 	assert.match(head(pi), /devbox · Pi in Herdr/);
 	assert.match(head(durable), /devbox · durable/);
-	assert.match(head(other), /^ ?linuxbox live/);
-	const page = text(renderToStaticMarkup(createElement(overview as never, { data: [pi, durable, other], onNew() {}, onAddHost() {}, onHelp() {} })));
+	assert.match(head(other), /^ ?linuxbox connected/, "a connected Host shows its dot; the word is for screen readers");
+	const page = text(renderToStaticMarkup(createElement(overview as never, { data: [pi, durable, other], onNew() {}, onHostSetup() {}, onHelp() {} })));
 	assert.match(page, /devbox · Pi in Herdr .*devbox · durable/);
-	assert.doesNotMatch(page, /\bamd · /);
+	assert.doesNotMatch(page, /\blinuxbox · /);
 	// One source per Host ID renders the bare label, as before the rule.
 	const alone = text(renderToStaticMarkup(createElement(section as never, { data: pi, hosts: [pi.host], route: {}, filter: "" })));
 	assert.doesNotMatch(alone, / · (Pi in Herdr|durable)/);

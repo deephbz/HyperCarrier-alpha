@@ -282,7 +282,7 @@ test("an unknown edit outcome stays with the thread's draft: after keyed navigat
 	assert.deepEqual(f.errors, []);
 });
 
-test("a recovered draft's warning goes away when the owner edits the recovered text out of the draft", async (t) => {
+test("a recovered draft's uncertain warning outlasts the recovered text until the owner dismisses it", async (t) => {
 	const drop = dropEdits({ code: "timeout", message: "Edit reply lost in test transport" });
 	const f = await fixture(t, 200, false, false, drop.transport);
 	const row = await queueFollowUp(f, "//sim long 20", "Old follow-up");
@@ -294,6 +294,8 @@ test("a recovered draft's warning goes away when the owner edits the recovered t
 	const alert = f.page.getByRole("alert").filter({ hasText: "Edit outcome unknown" });
 	await alert.waitFor();
 	await f.input.fill("Something else");
+	assert.equal(await alert.count(), 1, "the edit may already be in the queue, whatever the draft holds");
+	await alert.getByRole("button", { name: "Dismiss" }).click();
 	await alert.waitFor({ state: "detached" });
 	assert.deepEqual(f.errors, []);
 });

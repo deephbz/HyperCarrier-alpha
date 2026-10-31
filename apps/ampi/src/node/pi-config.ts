@@ -3,6 +3,7 @@
 // The node and Pi read the same files, so a thread and a Pi Session in one directory see the same resources.
 // Pi's own loaders are the authority; test/node-prompt-parity.test.ts compares this module with them.
 
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -470,17 +471,32 @@ export function readPiResources(cwd: string, options: PiConfigOptions = {}): PiR
 
 const cache = new Map<string, { at: number; stamp: string; value: PiResources }>();
 
-/** Settings and trust decide which resources load, so a change to them invalidates the cache at once. */
+/**
+ * How close to the read time an mtime makes a stamp racy. File times come from a coarse clock (a kernel tick on Linux,
+ * whole seconds on some file systems), so a later edit of the same size can keep the mtime of an edit this recent.
+ */
+const RACY_MS = 2_000;
+
+/**
+ * A file's change stamp, `mtime:size`, or `-` when it is absent. A racy stamp (an mtime within RACY_MS of now, or in
+ * the future) also carries a hash of the bytes, so a same-size edit inside one clock tick still moves it. A file older
+ * than that costs one `stat`: any later edit gets a later mtime. The stamp changes form once when the file ages, which
+ * costs one extra read.
+ */
+export function fileStamp(path: string): string {
+	try {
+		const stat = statSync(path);
+		const stamp = `${stat.mtimeMs}:${stat.size}`;
+		if (Date.now() - stat.mtimeMs >= RACY_MS) return stamp;
+		return `${stamp}:${createHash("sha1").update(readFileSync(path)).digest("base64url")}`;
+	} catch {
+		return "-";
+	}
+}
+
+/** Settings and trust decide which resources and settings load, so their stamp invalidates both caches at once. */
 function stamp(cwd: string, agentDir: string): string {
-	return [join(agentDir, "settings.json"), join(agentDir, "trust.json"), join(cwd, ".pi", "settings.json")]
-		.map((path) => {
-			try {
-				return statSync(path).mtimeMs;
-			} catch {
-				return 0;
-			}
-		})
-		.join(",");
+	return [join(agentDir, "settings.json"), join(agentDir, "trust.json"), join(cwd, ".pi", "settings.json")].map(fileStamp).join("|");
 }
 
 /**
@@ -497,4 +513,48 @@ export function piResources(cwd: string, options: PiConfigOptions = {}): PiResou
 	cache.set(key, { at: Date.now(), stamp: current, value });
 	if (cache.size > 64) cache.delete(cache.keys().next().value!);
 	return value;
+}
+
+/** Pi's settings files for one working directory, unmerged, and the stamp of the files they come from. */
+export type PiSettingsLayers = { global: PiSettings; project: PiSettings; stamp: string };
+
+const settingsCache = new Map<string, PiSettingsLayers>();
+
+/** Pi's global settings file. */
+export function piSettingsFile(options: PiConfigOptions = {}): string {
+	return join(resolve(options.agentDir ?? piAgentDir()), "settings.json");
+}
+
+/** The stamp `piSettingsLayers(cwd)` would carry, from `stat` calls only: a poll compares it without reading JSON. */
+export function piSettingsStamp(cwd: string | undefined, options: PiConfigOptions = {}): string {
+	const agentDir = resolve(options.agentDir ?? piAgentDir());
+	return cwd === undefined ? fileStamp(piSettingsFile({ agentDir })) : stamp(resolve(cwd), agentDir);
+}
+
+/**
+ * Pi's global settings and, when `cwd` is given, its project's: they apply only when `.pi/settings.json` exists and
+ * the project is trusted. The stamp covers that file, the global one and trust.json, so an edit shows at the next
+ * call with no age limit. A cache hit costs three `stat` calls; the durable harness reads it on every commit.
+ */
+export function piSettingsLayers(cwd: string | undefined, options: PiConfigOptions = {}): PiSettingsLayers {
+	assertTestIsolation();
+	const agentDir = resolve(options.agentDir ?? piAgentDir());
+	const dir = cwd === undefined ? undefined : resolve(cwd);
+	const key = `${agentDir}\0${dir ?? ""}`;
+	const current = piSettingsStamp(dir, { agentDir });
+	const hit = settingsCache.get(key);
+	if (hit?.stamp === current) return hit;
+	const global = readJson(join(agentDir, "settings.json"));
+	const projectFile = dir === undefined ? undefined : join(dir, ".pi", "settings.json");
+	const project = projectFile && existsSync(projectFile) && projectTrusted(dir!, agentDir, global.defaultProjectTrust) ? readJson(projectFile) : {};
+	const value = { global, project, stamp: current };
+	settingsCache.set(key, value);
+	if (settingsCache.size > 64) settingsCache.delete(settingsCache.keys().next().value!);
+	return value;
+}
+
+/** Pi's merged settings for `cwd` (`PiResources.settings`) without resource discovery. */
+export function piSettings(cwd: string, options: PiConfigOptions = {}): PiSettings {
+	const { global, project } = piSettingsLayers(cwd, options);
+	return deepMerge(global, project);
 }

@@ -32,8 +32,9 @@ const NODE_OPS = {
 } satisfies Record<NodeOpName, true>;
 
 test("node wire: the node serves every declared op and nothing else", async () => {
-	await hydrate();
-	const served = new Set([...ops.keys(), ...readerOps]), declared = new Set(Object.keys(NODE_OPS));
+	// A plugin can answer its own ops (NodePlugin.ops), beside the node's op table.
+	const plugins = await hydrate();
+	const served = new Set([...ops.keys(), ...readerOps, ...plugins.flatMap((plugin) => Object.keys(plugin.ops ?? {}))]), declared = new Set(Object.keys(NODE_OPS));
 	assert.deepEqual([...served].filter((op) => !declared.has(op)), [], "handlers without a NodeOps entry");
 	assert.deepEqual([...declared].filter((op) => !served.has(op)), [], "NodeOps entries without a handler");
 });

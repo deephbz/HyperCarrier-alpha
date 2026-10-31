@@ -16,7 +16,6 @@ import { frontmatter, loadPrompts, loadSkills } from "./core-extension.ts";
 import { NodeError, type NodeRuntime, parseThreadKey, type Store } from "./runtime.ts";
 import { CacheTtlDoc } from "../plugins/cache-goblin.ts";
 import { rarebitCommand } from "../plugins/rarebit.ts";
-import { compactCommand } from "../plugins/compact.ts";
 import { auditSnapshot } from "../plugins/prompt-audit.ts";
 import { homedir } from "node:os";
 import { ptbCommand } from "./ptb-command.ts";
@@ -226,7 +225,9 @@ async function execute(runtime: NodeRuntime, thread: Thread, frame: CommandArgs,
 				const notice = (reply: CommandAck) => ({ ...reply, notice: "Same as /compact: compacting now" });
 				return "completion" in result ? { completion: result.completion.then(notice) } : notice(result);
 			}
-			return compactCommand(runtime, thread, args);
+			const command = runtime.plugins.find((plugin) => plugin.commands?.["auto-compact"])?.commands?.["auto-compact"];
+			if (!command) throw new NodeError("unsupported", "This node has no Auto Compact plugin.");
+			return command(runtime, thread, args);
 		}
 		case "compact": {
 			const reply = { ...handled("Compaction started"), evidence: "compaction_started" };

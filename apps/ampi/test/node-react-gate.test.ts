@@ -7,7 +7,7 @@ import { runDaemon } from "../src/node/daemon.ts";
 import { type NodePlugin, parseThreadKey } from "../src/node/runtime.ts";
 import { hydrate } from "../src/plugins.ts";
 import { CompactDoc } from "../src/plugins/compact.ts";
-import { TestClient, tempHome } from "./helpers.ts";
+import { TestClient, tempHome, writePiSettings } from "./helpers.ts";
 
 const SIM = { provider: "ampi-sim", modelId: "sim-1" };
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -53,8 +53,7 @@ function probe() {
 
 test("plugin reactions start no work for a closed thread, across a held refresh and a reopen", async () => {
 
-	process.env.AMPI_WORKING_BUDGET = "300";
-	process.env.AMPI_COMPACT_KEEP_RECENT = "20";
+	writePiSettings({ auto_compact: { budget_tokens: 300 }, compaction: { keepRecentTokens: 20 } });
 	const home = tempHome();
 	const compactDecision = async (daemon: Awaited<ReturnType<typeof runDaemon>>, key: string) => {
 		const { storeId, conversationId } = parseThreadKey(key);

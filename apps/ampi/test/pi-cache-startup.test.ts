@@ -16,11 +16,19 @@ import { WorkingSet, workingSetUsage } from "../src/pi/working-set.ts";
 import { fixture as herdrFixture } from "./pi-fixtures.ts";
 import { openWorkingSet } from "../src/pi/working-set-db.ts";
 
+/**
+ * A temporary cache directory and the one cleanup that removes it. A test passes each Host stop or store close to
+ * `own`; the cleanup awaits them in order, then removes the directory, so no writer outlives it.
+ */
 function fixture(t: { after(fn: () => unknown): void }) {
  const dir = mkdtempSync(join(tmpdir(), "ampi-startup-"));
- t.after(() => rmSync(dir, { recursive: true, force: true }));
+ const closes: (() => unknown)[] = [];
+ t.after(async () => {
+  try { for (const close of closes) await close(); }
+  finally { rmSync(dir, { recursive: true, force: true }); }
+ });
  const config = { id: "fixture", label: "fixture", kind: "pi-local" as const, remoteNode: "/usr/bin/false", cacheDir: join(dir, "cache") };
- return { dir, config };
+ return { dir, config, own: (close: () => unknown) => { closes.push(close); } };
 }
 
 test("startup: constructing a Pi Host performs no cache I/O", async (t) => {
@@ -32,7 +40,7 @@ test("startup: constructing a Pi Host performs no cache I/O", async (t) => {
 });
 
 test("startup: health and page answer while metadata waits; unsubscribe and replacement cancel pending snapshots", async (t) => {
- const { config } = fixture(t);
+ const { config, own } = fixture(t);
  const webDist = join(import.meta.dirname, "..", "web", "dist");
  const indexPath = join(webDist, "index.html");
  mkdirSync(webDist, { recursive: true });
@@ -44,7 +52,7 @@ test("startup: health and page answer while metadata waits; unsubscribe and repl
   if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
  }
  if (createdIndex) t.after(() => rmSync(indexPath, { force: true }));
- const hub = new Hub({ hosts: [config], backend: "pi" }, { token: "c".repeat(64) });
+ const hub = new Hub({ hosts: [config] }, { token: "c".repeat(64) });
  const host = hub.link(config.id) as PiHost;
  mkdirSync(host.cacheDir, { recursive: true });
  const index = join(host.cacheDir, "index.json");
@@ -52,7 +60,7 @@ test("startup: health and page answer while metadata waits; unsubscribe and repl
  const frames: any[] = [];
  host.on("frame", frame => frames.push(frame));
  const port = await hub.listen(0);
- t.after(() => hub.close());
+ own(() => hub.close());
  host.send({ t: "sub", sid: 1, topic: { kind: "threads" } });
  host.send({ t: "unsub", sid: 1 });
  host.send({ t: "sub", sid: 2, topic: { kind: "threads" } });
@@ -144,7 +152,8 @@ test("startup: tail repair crosses chunk boundaries and handles empty or incompl
 });
 
 test("startup: queued copies do not poll heads; a started copy publishes its commit before the result notice", async (t) => {
- const { config } = fixture({ after(fn) { t.after(async () => { for (const job of jobs) job.done.resolve(null); await host.stop(); fn(); }); } }), host = new PiHost(config);
+ const { config, own } = fixture(t), host = new PiHost(config);
+ own(async () => { for (const job of jobs) job.done.resolve(null); await host.stop(); });
  mkdirSync(host.cacheDir, { recursive: true });
  const index: Record<string, unknown> = {};
  for (let i = 0; i < 12; i++) {
@@ -248,10 +257,10 @@ test("startup: the first threads snapshot reads saved heads while the derive Wor
 });
 
 test("startup: a working set without a saved database answers index reads before the derive Worker", async (t) => {
- const { config } = fixture(t);
+ const { config, own } = fixture(t);
  mkdirSync(config.cacheDir, { recursive: true });
  const store = new WorkingSet(config.id, config.cacheDir);
- t.after(() => store.close());
+ own(() => store.close());
  // Worker init needs a Worker message, which cannot arrive before this immediate; `readable` must not wait for it.
  assert.equal(await Promise.race([store.readable.then(() => "readable"), new Promise(r => setImmediate(() => r("waited")))]), "readable");
  assert.equal(store.load("/synthetic/none"), undefined);
@@ -315,16 +324,16 @@ test("startup: saved rows say listing until the first agents list, which places 
 });
 
 test("startup: a fresh cache lists nothing with indexing while init waits, and a failed init ends served and later lists", async (t) => {
- const { config } = fixture(t); const host = new PiHost(config);
+ const { config, own } = fixture(t); const host = new PiHost(config);
  mkdirSync(host.cacheDir, { recursive: true });
  // A WAL database with no tables has nothing saved to read. The held write lock keeps Worker init waiting until
  // BUSY_MS (5 s) fails it.
  const lock = new DatabaseSync(join(host.cacheDir, "working-set.sqlite")); lock.exec("PRAGMA journal_mode=WAL; BEGIN IMMEDIATE");
- t.after(() => { try { lock.exec("ROLLBACK"); } catch {} lock.close(); });
+ own(() => { try { lock.exec("ROLLBACK"); } catch {} lock.close(); });
  const frames: any[] = []; host.on("frame", f => frames.push(f));
  // A threads subscription sent in the same tick the Host reports the failure.
  host.on("state", (s) => { if (s.status === "disconnected") host.send({ t: "sub", sid: 4, topic: { kind: "threads" } }); });
- host.start(); t.after(() => host.stop().catch(() => {}));
+ host.start(); own(() => host.stop().catch(() => {}));
  host.send({ t: "sub", sid: 1, topic: { kind: "threads" } });
  // A view waits for init, so it is still preparing when init fails.
  host.send({ t: "sub", sid: 3, topic: { kind: "view", view: "cos.timeline" } });
@@ -342,7 +351,8 @@ test("startup: a fresh cache lists nothing with indexing while init waits, and a
  await new Promise(r => setTimeout(r, 100));
  for (const sid of [1, 2, 3, 4]) assert.equal(frames.filter(f => f.sid === sid && f.t === "end").length, 1, `sid ${sid} ends once`);
  for (const sid of [2, 3, 4]) assert.equal(frames.some(f => f.sid === sid && f.t === "snap"), false, `no value for sid ${sid} after a failed init`);
- assert.match(host.state.error ?? "", /Restart the hub/);
+ assert.match(host.state.error ?? "", /^Host cache unavailable: /);
+ assert.match(host.state.hint ?? "", /Restart the hub/, "the hint names the next step");
  assert.equal(host.state.cacheFailed, true);
 });
 
@@ -368,4 +378,22 @@ test("startup: updating clears at UPDATING_MAX_MS when the startup refresh does 
   const [, ms] = line?.match(/Updating cleared after (\d+) ms: the bound passed while the startup refresh still runs/) ?? [];
   assert.ok(Number(ms) >= 300, `updating holds until the bound: ${line}`);
  } finally { await host.stop(); }
+});
+
+test("startup: a failed index write shows as cache health, apart from the link, and the next good write clears it", async (t) => {
+ const { config, own } = fixture(t);
+ const host = new PiHost(config);
+ own(() => host.stop().catch(() => {}));
+ // A directory where the write puts its temporary file: every index write fails until it goes.
+ const blocker = join(host.cacheDir, "index.json.tmp");
+ mkdirSync(blocker, { recursive: true });
+ const states: { status: string; indexError?: string; error?: string }[] = []; host.on("state", s => states.push(s));
+ host.start();
+ const until = async (done: () => boolean) => { const by = Date.now() + 10_000; while (!done()) { if (Date.now() > by) throw new Error(`timed out: ${JSON.stringify(host.state)}`); await new Promise(r => setTimeout(r, 20)); } };
+ await until(() => host.state.indexError !== undefined);
+ assert.match(host.state.indexError ?? "", /EISDIR|EEXIST|directory/i);
+ assert.ok(!states.some(s => /EISDIR|directory/i.test(s.error ?? "")), "an index write failure never becomes a link error");
+ rmSync(blocker, { recursive: true });
+ await until(() => host.state.indexError === undefined);
+ assert.ok(existsSync(join(host.cacheDir, "index.json")), "the next write succeeds and clears the warning");
 });

@@ -7,13 +7,19 @@
 
 import { useEffect, useState } from "react";
 import type { ThreadSummary } from "../../../src/shared/protocol.ts";
-import type { HostState } from "../client.ts";
+import { type HostState, useNow } from "../client.ts";
 import { ago } from "../util.ts";
-import { type HostThreads, isPiHost, NodeNotes, ThreadRow } from "./Sidebar.tsx";
-import { hostMeta, readHostFold, saveHostFold } from "./host-fold.ts";
+import { type HostThreads, isPiHost, LinkNotes, NodeNotes, ThreadRow } from "./Sidebar.tsx";
+import { hostMeta, linkView, readHostFold, saveHostFold } from "./host-fold.ts";
 import { hostLabel } from "./host-label.ts";
 import { arrangeByLayout } from "./sidebar-layout.ts";
 import { projectTeamRows } from "./team-nesting.ts";
+
+/** The cache-health note for stale reads: the hub repaired them, so this reports a defect and its log, not an action. */
+function staleReadsNote({ reopened, behind, refused }: NonNullable<HostThreads["host"]["staleReads"]>): string {
+	const parts = [reopened && `${reopened} repaired by a reopen`, behind && `${behind} still behind after it`, refused && `${refused} refused in publish`].filter(Boolean);
+	return `Stale cache reads: ${parts.join(", ")}. The hub log names each one.`;
+}
 
 /** A bounded page keeps a large Host cheap without dropping its Herdr order or Team nesting. */
 function SessionRows({ list, host, active, expandedLeaders, toggleLeader, parentNavId }: { list: ThreadSummary[]; host: string; active?: string; expandedLeaders: Set<string>; toggleLeader: (id: string) => void; parentNavId: string }) {
@@ -34,7 +40,7 @@ function SessionRows({ list, host, active, expandedLeaders, toggleLeader, parent
 	</>;
 }
 
-export function PiHostSection({ data, hosts, route, filter, showArchived }: { data: HostThreads; hosts: HostState[]; route: { host?: string; thread?: string }; filter: string; showArchived: boolean }) {
+export function PiHostSection({ data, hosts, route, showArchived }: { data: HostThreads; hosts: HostState[]; route: { host?: string; thread?: string }; showArchived: boolean }) {
 	const { host } = data;
 	const pi = isPiHost(host);
 	const label = hostLabel(host, hosts);
@@ -54,14 +60,13 @@ export function PiHostSection({ data, hosts, route, filter, showArchived }: { da
 		try { localStorage.setItem(leadersKey, JSON.stringify([...next])); } catch { /* The Teams stay expanded for this page only. */ }
 		return next;
 	};
-	const q = filter.toLowerCase();
-	const match = (t: ThreadSummary) => !q || t.title.toLowerCase().includes(q) || t.cwd.toLowerCase().includes(q) || (t.preview ?? "").toLowerCase().includes(q);
-	const { groups, unplaced } = arrangeByLayout({ threads: data.threads.filter((t) => match(t) && (showArchived || !t.archived)), layout: data.layout });
+	const { groups, unplaced } = arrangeByLayout({ threads: data.threads.filter((t) => showArchived || !t.archived), layout: data.layout });
 	// No agents list since the Host connected: saved rows stay listed, unplaced and not live, under this note.
 	const looking = data.listing && host.status !== "disconnected";
 	// After a failed working-set init no copy is readable; host.error says why.
-	const status =
-		host.status === "connected" ? "live" : host.status === "connecting" ? "connecting…" : host.cacheFailed ? "unavailable" : `away${host.lastSeen ? ` · seen ${ago(host.lastSeen)} ago` : ""} · copies readable`;
+	const now = useNow(host.status !== "connected");
+	const view = linkView(host, now);
+	const status = host.cacheFailed ? "unavailable" : `${view.state} · copies readable`;
 	const toggle = (key: string) => setCollapsed((c) => ({ ...c, [key]: !c[key] }));
 	const toggleLeader = (id: string) => setExpandedLeaders((previous) => {
 		const next = new Set(previous);
@@ -77,15 +82,19 @@ export function PiHostSection({ data, hosts, route, filter, showArchived }: { da
 				<button className="host-collapse" onClick={() => setFold(saveHostFold(host, !fold.collapsed))} aria-expanded={!fold.collapsed} title={label}>
 					<span className={`dot ${host.status}`} />
 					<span className="grow">{label}</span>
-					<span className="meta">{hostMeta(host)}</span>
+					{host.status === "connected" ? <span className="visually-hidden">connected</span> : <span className="meta">{hostMeta(host, now)}</span>}
 					{/* A folded Host keeps its error for screen readers only; unfolding shows it. */}
-					{fold.collapsed && host.status === "disconnected" && host.error && <span className="visually-hidden">: {host.error}</span>}
+					{fold.collapsed && view.error && <span className="visually-hidden">: {view.error}</span>}
 				</button>
 				{teamIds.length > 0 && <button className="host-collapse-all" data-host-collapse-all={host.id} onClick={collapseAll} aria-label={`${allCollapsed ? "Expand" : "Collapse"} all Teams for ${label}`} title={`${allCollapsed ? "Expand" : "Collapse"} all Teams`}>{allCollapsed ? "Expand all" : "Collapse all"}</button>}
 			</div>
 			{!fold.collapsed && !pi && <NodeNotes host={host} />}
 			{!fold.collapsed && host.status === "disconnected" && <div className="host-note">{status}</div>}
-			{!fold.collapsed && host.status === "disconnected" && host.error && <div className="host-note err">{host.error}</div>}
+			{!fold.collapsed && <LinkNotes view={view} />}
+			{/* Cache health, apart from the link: a connected Host keeps its green dot. */}
+			{!fold.collapsed && host.indexError && <div className="host-note warn" data-index-error={host.id}>Index not saved: {host.indexError}</div>}
+			{!fold.collapsed && host.cacheFault && <div className="host-note warn" data-cache-fault={host.id}>Cache fault: {host.cacheFault}. Restart the hub if it lasts.</div>}
+			{!fold.collapsed && host.staleReads && <div className="host-note warn" data-stale-reads={host.id}>{staleReadsNote(host.staleReads)}</div>}
 			{!fold.collapsed && looking && <div className="host-note" role="status" data-listing>Looking for live Sessions…</div>}
 			{!fold.collapsed &&
 				groups.map((g) => (
@@ -107,7 +116,7 @@ export function PiHostSection({ data, hosts, route, filter, showArchived }: { da
 				</div>
 			)}
 			{!fold.collapsed && groups.length === 0 && unplaced.length === 0 && host.status === "connected" && (
-				<div className="host-note">{data.stale || data.indexing ? (pi ? "Reading Pi Sessions…" : "Reading threads…") : q ? "No Sessions match. Try a title or directory." : pi ? "No Pi Sessions found. Start an agent to begin." : "No threads yet. Start a thread to begin."}</div>
+				<div className="host-note">{data.stale || data.indexing ? (pi ? "Reading Pi Sessions…" : "Reading threads…") : pi ? "No Pi Sessions found. Start an agent to begin." : "No threads yet. Start a thread to begin."}</div>
 			)}
 		</div>
 	);

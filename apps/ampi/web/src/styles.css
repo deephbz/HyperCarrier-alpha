@@ -27,7 +27,7 @@
 	--diff-add-text: #116329;
 	--diff-del-text: #82071e;
 	--radius: 4px;
-	--worker-indent: 32px;
+	--worker-indent: 28px;
 	--mono: "Berkeley Mono V2", "Berkeley Mono", ui-monospace, "SF Mono", Menlo, monospace;
 	--sans: system-ui, -apple-system, "system-ui", "Segoe UI", Roboto, sans-serif;
 	--font-body: 13px;
@@ -138,13 +138,20 @@ a { color: var(--accent); text-underline-offset: 3px; }
 	outline: 2px solid var(--accent);
 	outline-offset: 2px;
 }
-button:active:not(:disabled) { transform: scale(0.97); }
-button:focus-visible:active { transform: none; }
+/* Press feedback on every pressable: a pointer press eases to 97 % and back; a key press does not move. */
+:is(button, .btn) { transition: transform 160ms cubic-bezier(0.23, 1, 0.32, 1); }
+:is(button, .btn):active:not(:disabled) { transform: scale(0.97); }
+:is(button, .btn):focus-visible:active { transform: none; }
+/* The smallest hit target: 24 px for a mouse, 40 px for a finger. Dense controls (the Session header, the prompt
+   header's step buttons) size to it instead of a width of their own. */
+:root { --hit: 24px; }
+@media (pointer: coarse) { :root { --hit: 40px; } }
 html[data-input="pointer"] .modal { animation: overlay-enter 160ms cubic-bezier(0.23, 1, 0.32, 1); }
 @keyframes overlay-enter { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+/* Reduced motion stops all movement. Liveness keeps its signal as an opacity pulse (after .spinner). */
 @media (prefers-reduced-motion: reduce) {
 	*, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
-	button:active:not(:disabled) { transform: none; }
+	:is(button, .btn):active:not(:disabled) { transform: none; }
 }
 ::placeholder { color: var(--text-3); opacity: 1; }
 /* Quiet scrollbars: one style for every scroll region except the transcript, which owns its strip. A .quiet-scroll
@@ -353,6 +360,18 @@ kbd {
 .search:focus {
 	border-color: var(--accent);
 }
+.search-open { display: flex; align-items: center; justify-content: space-between; color: var(--text-3); text-align: left; cursor: pointer; }
+/* Form row (FormRow.tsx): a field and its control group. The field takes the free width and keeps --field-min, or the
+   whole row on a narrower row. The group wraps below the field when both do not fit, then wraps among its controls. */
+.form-row { --field-min: 12em; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+.form-field { flex: 1 1 var(--field-min); min-width: min(var(--field-min), 100%); display: flex; }
+.form-field > * { flex: 1 1 auto; min-width: 0; }
+.form-actions { flex: 0 1 auto; max-width: 100%; margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px; }
+.form-actions > * { flex: none; max-width: 100%; }
+.palette-item.prose-hit { align-items: flex-start; padding: 6px 8px; }
+.prose-hit .palette-title { white-space: normal; }
+.palette-snippet { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--text-3); }
+.palette-foot { margin-top: 8px; }
 .side-scroll {
 	flex: 1;
 	/* The bar's track stays, transparent, so the rows keep their width when the list starts to overflow (invariant
@@ -369,8 +388,8 @@ kbd {
 .side-head {
 	display: flex;
 	align-items: center;
-	gap: 8px;
-	padding: 4px 8px;
+	gap: 6px;
+	padding: 4px 6px;
 	font-size: var(--font-label);
 	font-weight: 500;
 	line-height: var(--line-label);
@@ -384,7 +403,7 @@ kbd {
 .side-head .host-collapse {
 	display: flex;
 	align-items: center;
-	gap: 8px;
+	gap: 6px;
 	flex: 1;
 	min-width: 0;
 	padding: 0;
@@ -448,8 +467,8 @@ kbd {
 .row {
 	display: flex;
 	align-items: center;
-	gap: 8px;
-	padding: 4px 8px;
+	gap: 4px;
+	padding: 4px 6px;
 	min-height: 28px;
 	border-radius: 4px;
 	cursor: pointer;
@@ -484,7 +503,7 @@ kbd {
 	white-space: nowrap;
 }
 .row.child {
-	padding-left: calc(8px + var(--worker-indent));
+	padding-left: calc(6px + var(--worker-indent));
 }
 .row[data-team-role="worker"] .title {
 	color: var(--text-2);
@@ -493,7 +512,7 @@ kbd {
 .row .team-fold {
 	display: inline-flex;
 	align-items: center;
-	gap: 8px;
+	gap: 4px;
 	padding: 0 2px;
 	border: 0;
 	background: transparent;
@@ -510,7 +529,7 @@ kbd {
 	flex: none;
 }
 .row .twisty {
-	width: 12px;
+	width: 10px;
 	color: var(--text-3);
 	font-size: 10px;
 	flex: none;
@@ -559,6 +578,12 @@ kbd {
 		transform: rotate(360deg);
 	}
 }
+/* Under reduced motion every liveness mark pulses in place: a spinner becomes a pulsing dot, never a frozen arc that
+   reads as a "C". */
+@media (prefers-reduced-motion: reduce) {
+	.spinner { border-color: transparent; background: var(--accent) content-box; }
+	.spinner, .dot.connecting, .cursor-blink::after { animation: pulse 1.2s ease-in-out infinite !important; }
+}
 .idle-dot {
 	width: 11px;
 	height: 11px;
@@ -577,7 +602,7 @@ kbd {
 	line-height: var(--line-ui);
 	font-size: var(--font-ui);
 	color: var(--text-3);
-	padding: 0 8px 4px 24px;
+	padding: 0 6px 4px 20px;
 	overflow-wrap: anywhere;
 }
 .host-note.err {
@@ -593,8 +618,24 @@ kbd {
 	letter-spacing: normal;
 	color: var(--text-3);
 }
-.nav-row { padding-left: 28px; }
+.nav-row { padding-left: 20px; }
 .group-row { border: 0; width: 100%; background: transparent; text-align: left; }
+/* Pinned rows: a shortcut to a Session. The unpin control takes the age's place on hover or focus, and always on touch. */
+.pin-row .pin-x { display: none; flex: none; min-width: 18px; padding: 0; border: 0; border-radius: 4px; background: none; color: var(--text-3); font: inherit; line-height: var(--line-ui); cursor: pointer; }
+.pin-row:hover .pin-x, .pin-row:focus-within .pin-x { display: block; }
+.pin-row:hover .sub, .pin-row:focus-within .sub { display: none; }
+.pin-row .pin-x:hover { color: var(--text); background: var(--bg-elev); }
+@media (hover: none) { .pin-row .pin-x { display: block; } .pin-row .sub { display: none; } }
+@media (pointer: coarse) { .pin-row .pin-x { min-width: 32px; } }
+.pin-row.gone .title, .pin-row.gone .sub { color: var(--text-3); }
+@media (hover: none) { .pin-row.gone .sub { display: inline; } }
+/* A Session listed on several Host routes: one link per Host under the title; AmPi never picks one silently. */
+.pin-row.choice { flex-wrap: wrap; }
+.pin-hosts { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 2px 10px; padding-left: 22px; font-size: 0.92em; }
+.pin-hosts a { color: var(--text-2); text-decoration: none; }
+.pin-hosts a:hover, .pin-hosts a:focus-visible { color: var(--text); text-decoration: underline; }
+.pin-star { color: var(--text-3); }
+.pin-star.on { color: var(--accent); }
 .group-row .group-label { line-height: var(--line-ui); color: var(--text-3); font-size: var(--font-ui); }
 .side-footer { display: flex; flex-wrap: wrap; gap: 4px; padding: 16px 4px 0; }
 .list-more { margin: 4px 8px; }
@@ -670,7 +711,8 @@ kbd {
 	font-size: 12px;
 	color: var(--text-2);
 }
-.seg button.on {
+/* The chosen option: a Segmented button (aria-pressed) or the open tab of the Pi panel strip (PiPanel.tsx). */
+.seg > button[aria-pressed="true"], .panel-tab-choice > button.on {
 	background: var(--bg-soft);
 	color: var(--text);
 	font-weight: 500;
@@ -680,40 +722,71 @@ kbd {
  flex: 1;
  min-height: 0;
  min-width: 0;
+ position: relative;
 }
-/* The transcript's one strip (CompanionScrollbar): dashes at full-branch ordinals. Where it shows, the transcript
-   hides its native bar and keeps no gutter; wheel and keys still scroll the transcript. */
+/* The sticky prompt header (PromptHeader): over the transcript's top edge, shown once the reader has scrolled past the
+   prompt they are reading the answer to. It overlays, so showing it never moves the transcript. */
+.prompt-head { position: absolute; top: 0; left: 0; right: 14px; z-index: 4; background: color-mix(in srgb, var(--bg) 94%, transparent); backdrop-filter: blur(6px); border-bottom: 1px solid var(--border); }
+.prompt-head.away { visibility: hidden; }
+.prompt-head .in { max-width: calc(76ch + 48px); margin: 0 auto; padding: 0 24px; height: 27px; display: flex; align-items: center; gap: 8px; font-size: var(--font-ui); }
+.prompt-head .lbl { color: var(--rb-user); font-weight: 500; }
+.prompt-head .hint { color: var(--text-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.prompt-head .q { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); text-decoration: none; }
+.prompt-head .q:hover { color: var(--text); }
+.prompt-head .tb { flex: none; width: 22px; text-align: center; border-radius: 4px; color: var(--text-2); text-decoration: none; line-height: 22px; }
+.prompt-head .tb:hover { background: var(--bg-soft); color: var(--text); }
+.prompt-head .tb[aria-disabled] { color: var(--border-strong); pointer-events: none; }
+@media (pointer: coarse) { .prompt-head .in { height: auto; min-height: var(--hit); } .prompt-head .tb { width: var(--hit); line-height: var(--hit); } }
+/* The prompt rail: the strip plus the outline it opens on hover or focus. */
+.prompt-rail { position: relative; display: flex; flex: 0 0 28px; }
+.prompt-outline { width: 360px; max-height: 70vh; overflow-y: auto; padding: 4px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); font-size: var(--font-ui); }
+.prompt-outline .hint { padding: 4px 8px; color: var(--text-3); }
+.prompt-outline a { display: flex; gap: 8px; padding: 3px 8px; border-radius: 4px; color: var(--text-2); text-decoration: none; }
+.prompt-outline a:hover { background: var(--bg-soft); color: var(--text); }
+.prompt-outline a.in { color: var(--text); }
+.prompt-outline a.cur { background: var(--accent-soft); }
+.prompt-outline .n { flex: none; min-width: 2.5em; text-align: right; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.prompt-outline .tx { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The prompt rail (CompanionScrollbar): a short stack of dashes in the middle of the right edge, sampled by
+   railLayout, on the transcript's own background. Where it shows, the transcript hides its native bar and keeps no gutter; wheel and keys
+   still scroll the transcript. */
 .transcript-frame.strip > .scroll { scrollbar-width: none; }
 .transcript-frame.strip > .scroll::-webkit-scrollbar { display: none; }
 .companion-scrollbar {
- margin-block: 4px;
+ margin-block: 8px;
  position: relative;
- flex: 0 0 14px;
- background: var(--bg-side);
+ flex: 0 0 28px;
+ display: flex;
+ flex-direction: column;
+ justify-content: center;
+ align-items: flex-end;
+ padding-right: 8px;
+ min-height: 0;
+ overflow: hidden;
 }
 .companion-scrollbar a {
- position: absolute;
- left: 0;
- width: 14px;
- height: 8px;
- transform: translateY(-50%);
+ flex: none;
+ height: 6px;
+ width: 20px;
  display: flex;
  align-items: center;
- justify-content: center;
+ justify-content: flex-end;
 }
+.companion-scrollbar a.skip { display: none; }
 .companion-scrollbar a span {
  pointer-events: none;
- width: 8px;
+ width: 12px;
  height: 2px;
+ border-radius: 1px;
  background: var(--border-strong);
 }
 /* Dashes kept from an older outline take no hover or click until the current outline replaces them, and look dimmer. */
 .companion-scrollbar[aria-busy="true"] a { pointer-events: none; }
-.companion-scrollbar[aria-busy="true"] a span { background: var(--border); opacity: 0.6; }
-.companion-scrollbar a:hover span, .companion-scrollbar a:focus-visible span {
- background: var(--accent);
- height: 3px;
-}
+.companion-scrollbar[aria-busy="true"] a span { opacity: 0.5; }
+/* Prompts on screen: dark and long, so the rail shows where the reader is. The current prompt is the boldest. */
+.companion-scrollbar a.in span { width: 18px; background: var(--text); }
+.companion-scrollbar a.cur span { height: 3px; }
+.companion-scrollbar a:hover span, .companion-scrollbar a:focus-visible span { width: 18px; background: var(--accent); }
 .scroll {
 	flex: 1;
 	overflow-y: auto;
@@ -750,7 +823,7 @@ kbd {
 	line-height: var(--line-body);
 }
 .msg {
-	margin: 16px 0;
+	margin: 12px 0;
 }
 /* A user message, in the transcript and in the Rarebit messages panel: one color style for both. */
 .you {
@@ -780,7 +853,7 @@ kbd {
 }
 /* An extension message is one disclosure row: badge, sender and first line on one line; open, the full text (A26). */
 .msg.notice {
-	margin: 8px 0;
+	margin: 2px 0;
 }
 .notice > .disclosure > :is(.notice-sender, .notice-first) {
 	min-width: 0;
@@ -827,16 +900,53 @@ kbd {
 	border-radius: 4px;
 	padding: 0 4px;
 }
+/* A table cell breaks only between words, so a table that does not fit scrolls sideways instead of splitting words.
+   Shadows mark a cut edge (overlay scrollbars hide it), and the first column stays in view while the table scrolls.
+   The covers and the sticky column paint --md-surface, the background the table sits on. */
+.md {
+	--md-surface: var(--bg);
+}
+.you .md {
+	--md-surface: var(--bg-user);
+}
 .md table {
-	border-collapse: collapse;
+	border-collapse: separate;
+	border-spacing: 0;
+	border-top: 1px solid var(--border);
+	border-left: 1px solid var(--border);
 	display: block;
 	max-width: 100%;
 	overflow-x: auto;
+	background:
+		linear-gradient(to right, var(--md-surface) 30%, transparent) left / 32px 100% no-repeat local,
+		linear-gradient(to left, var(--md-surface) 30%, transparent) right / 32px 100% no-repeat local,
+		radial-gradient(farthest-side at 0 50%, rgb(0 0 0 / 0.18), transparent) left / 12px 100% no-repeat scroll,
+		radial-gradient(farthest-side at 100% 50%, rgb(0 0 0 / 0.18), transparent) right / 12px 100% no-repeat scroll;
 }
 .md td,
 .md th {
-	border: 1px solid var(--border);
+	border-right: 1px solid var(--border);
+	border-bottom: 1px solid var(--border);
 	padding: 4px 8px;
+	overflow-wrap: break-word;
+	max-width: 60ch;
+}
+.md tr > :first-child {
+	position: sticky;
+	left: 0;
+	z-index: 1;
+	background: var(--md-surface);
+	box-shadow: 1px 0 0 var(--border-strong);
+}
+/* An assistant message's table may grow past the 76ch prose column, centred, up to the pane less its gutters.
+   A table that fits the column stays on the text's left edge. Clipped previews and indented bodies keep the column.
+   100cqw is the pane: .main is the size container. The scroller cannot be one: its layout containment would
+   capture fixed-position descendants such as the Quote button. Under a display zoom WebKit resolves 100cqw and the
+   translate in different scales and the table overflows the pane, so a zoomed display keeps tables in the column. */
+html:not([data-zoomed]) .transcript .msg.assistant > .md table {
+	width: max-content;
+	max-width: calc(100cqw - 48px);
+	translate: min(0px, calc((min(76ch, 100cqw - 48px) - 100%) / 2));
 }
 .md a,
 .notice-raw {
@@ -851,7 +961,7 @@ kbd {
 .thinking {
 	color: var(--text-3);
 	font-size: 13px;
-	margin: 8px 0;
+	margin: 2px 0;
 }
 /* One disclosure row for Thinking, tool rows, source links and shortened rows: the same marker, gutter, font and colour.
    A <summary> opens through its <details>; a button row sets aria-expanded.
@@ -864,7 +974,7 @@ kbd {
 	align-items: center;
 	gap: 6px;
 	min-width: 0;
-	padding: 4px 8px;
+	padding: 2px 8px;
 	border-radius: 4px;
 	list-style: none;
 	cursor: pointer;
@@ -898,6 +1008,10 @@ details[open] > .disclosure::before,
 .disclosure:hover {
 	background: var(--bg-soft);
 }
+/* Dense rows for a mouse; a finger keeps the taller target. */
+@media (pointer: coarse) {
+	.disclosure { padding-block: 4px; }
+}
 .thinking .body {
 	white-space: pre-wrap;
 	border-left: 2px solid var(--border);
@@ -906,7 +1020,7 @@ details[open] > .disclosure::before,
 }
 .tool {
 	border-radius: var(--radius);
-	margin: 8px 0;
+	margin: 2px 0;
 }
 .tool-head {
 	color: var(--text);
@@ -996,7 +1110,7 @@ details[open] > .disclosure::before,
 	gap: 10px;
 	color: var(--text-3);
 	font-size: 12px;
-	margin: 18px 0;
+	margin: 12px 0;
 }
 /* Entries the source window dropped before they painted: the compaction rule, its own label. */
 .omitted {
@@ -1006,7 +1120,7 @@ details[open] > .disclosure::before,
 	color: var(--text-3);
 	font-size: 12px;
 	font-style: italic;
-	margin: 18px 0;
+	margin: 12px 0;
 }
 .omitted::before,
 .omitted::after,
@@ -1117,6 +1231,9 @@ details[open] > .disclosure::before,
 .composer-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-left: auto; }
 .composer-feedback { padding: 4px 12px; font-size: 12px; overflow-wrap: anywhere; color: var(--text-2); max-height: 96px; overflow-y: auto; }
 .composer-feedback.error { color: var(--err); }
+.composer-feedback.uncertain { color: var(--attn); }
+.composer-feedback.outcome { display: flex; align-items: center; gap: 6px; }
+.composer-feedback.outcome > span { flex: 1; }
 .queue {
 	max-width: 76ch;
 	max-height: 96px;
@@ -1480,6 +1597,8 @@ details[open] > .disclosure::before,
 	flex-wrap: wrap;
 	overflow-wrap: anywhere;
 }
+/* Popovers (Popover.tsx): every menu, card and outline. The component writes left, top and size limits. */
+.popover { position: fixed; z-index: 50; }
 /* Dialog */
 .modal-back {
 	position: fixed;
@@ -1601,6 +1720,9 @@ details[open] > .disclosure::before,
 	z-index: 20;
 	max-width: 420px;
 }
+.toast.settings-notice { bottom: auto; top: 18px; }
+.settings-notice p { margin: 0; }
+.settings-notice p + p { margin-top: 6px; }
 .link-button {
 	background: none;
 	border: 0;
@@ -1661,18 +1783,11 @@ details[open] > .disclosure::before,
 	outline-offset: 2px;
 }
 .slash-menu {
-	position: absolute;
-	bottom: calc(100% + 8px);
-	left: 24px;
-	right: 24px;
-	max-width: 76ch;
-	margin-inline: auto;
 	border: 1px solid var(--border);
 	border-radius: 8px;
 	box-shadow: var(--shadow);
 	background: var(--bg-elev);
 	padding: 4px;
-	z-index: 2;
 	max-height: min(40vh, 320px);
 	overflow-y: auto;
 }
@@ -1891,20 +2006,21 @@ details[open] > .disclosure::before,
 	max-height: min(46vh, 420px);
 }
 
-/* The Session topbar stays one row: actions keep their size, location and spend truncate, and give way first. */
+/* A page topbar stays one row: actions keep their size, location and spend truncate, and give way first. The Session
+   topbar is a form row instead: its name is the field. */
 .main { container-type: inline-size; }
-.topbar { flex-wrap: nowrap; }
+.topbar:not(.form-row) { flex-wrap: nowrap; }
 .topbar > .btn, .topbar > .badge, .topbar > .rb-controls, .topbar > .seg { flex: none; }
-.session-title { position: relative; flex: 0 1 420px; min-width: 0; max-width: 55%; }
+.session-title { position: relative; min-width: 0; }
 .session-title-line { display: flex; align-items: center; min-width: 0; }
 .topbar .session-title .t-title { flex: 1 1 auto; width: 100%; min-width: 0; max-width: 100%; }
 .session-copy.btn.small { flex: none; padding: 4px; width: 24px; height: 24px; opacity: 0; pointer-events: none; }
 .session-copy svg { flex: none; }
 .session-title:hover .session-copy, .session-title:focus-within .session-copy { opacity: 1; pointer-events: auto; }
-.session-metadata { position: absolute; top: 100%; left: 0; z-index: 20; width: min(520px, calc(100vw - 300px)); max-height: calc(100vh - 100px); overflow: auto; padding: 12px; background: var(--bg-elev); color: var(--text); border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--shadow); font-size: var(--font-ui); }
+.session-metadata { width: 520px; max-height: calc(100vh - 100px); overflow: auto; padding: 12px; background: var(--bg-elev); color: var(--text); border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--shadow); font-size: var(--font-ui); }
 /* The composer's model label opens SessionTitle's card surface (hover-card.tsx). */
 .composer-bar .model-hud-card { display: inline-flex; min-width: 0; }
-.composer-bar .model-hud-trigger { cursor: help; text-decoration: underline dotted; text-underline-offset: 2px; }
+.composer-bar .model-hud-trigger { cursor: help; text-decoration: underline dotted; text-decoration-thickness: 1px; text-underline-offset: 2px; }
 .composer-bar .model-hud-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* hc-hud's footer roles: the Session name bold, path and accounting dim, model neutral. */
 .hud-footer { font-family: var(--mono); font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
@@ -1920,16 +2036,30 @@ details[open] > .disclosure::before,
 @container (max-width: 640px) { .topbar > .hint { display: none; } }
 .topbar > .t-cost { flex: none; }
 .topbar a.btn { text-decoration: none; }
+/* The Session bar's actions sit tight but keep 24 px hit targets. */
+.thread-bar.form-row { position: relative; gap: 2px 8px; }
+.thread-bar > .form-actions { gap: 2px; }
+.thread-bar .btn.small:not(.session-copy), .thread-bar .seg button { padding: 3px 6px; min-height: var(--hit); min-width: var(--hit); justify-content: center; }
+/* The secondary actions (header-fold.ts). Folded, the group stays drawn for its width but is invisible, inert and out
+   of flow; More holds its actions. */
+.header-fold { display: flex; align-items: center; gap: 2px; flex: none; }
+.header-fold:empty { display: none; }
+.header-fold[data-folded] { position: absolute; top: 0; right: 0; width: max-content; visibility: hidden; pointer-events: none; }
+.thread-bar .rb-controls { gap: 2px; }
 /* The Session topbar's ⋯ menu. */
-.t-more { position: relative; flex: none; }
+.t-more { flex: none; }
 .t-more > summary { list-style: none; }
 .t-more > summary::-webkit-details-marker { display: none; }
-.t-more-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 5; min-width: 180px; padding: 4px; display: flex; flex-direction: column; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); }
-.t-more[open] .t-more-menu { animation: overlay-enter 150ms cubic-bezier(0.23, 1, 0.32, 1); }
-.t-more-menu > a, .t-more-menu > button { display: block; text-align: left; padding: 6px 10px; border: 0; border-radius: 4px; background: none; color: var(--text); font: inherit; font-size: 13px; text-decoration: none; cursor: pointer; }
+.t-more-menu { min-width: 180px; padding: 4px; display: flex; flex-direction: column; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); }
+.t-more-menu:not(.row-menu) { animation: overlay-enter 150ms cubic-bezier(0.23, 1, 0.32, 1); }
+.t-more-menu > a, .t-more-menu > button { display: flex; align-items: center; min-height: var(--hit); text-align: left; padding: 6px 10px; border: 0; border-radius: 4px; background: none; color: var(--text); font: inherit; font-size: 13px; text-decoration: none; cursor: pointer; }
 .t-more-menu > a:hover, .t-more-menu > button:hover:not(:disabled), .t-more-menu > :focus-visible { background: var(--hover, var(--accent-soft)); }
 .t-more-menu > button:disabled { color: var(--text-3); cursor: default; }
-@media (prefers-reduced-motion: reduce) { .t-more[open] .t-more-menu { animation: none; } }
+.t-more-menu > button[aria-pressed="true"] { color: var(--accent); font-weight: 500; }
+.t-more-menu > hr { margin: 4px 6px; border: 0; border-top: 1px solid var(--border); }
+/* A labelled control inside the menu, such as the transcript mode. */
+.t-more-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 6px 4px 10px; font-size: 13px; color: var(--text-2); }
+@media (prefers-reduced-motion: reduce) { .t-more-menu:not(.row-menu) { animation: none; } }
 /* Same column as the composer below it: 76ch measured at the composer's 14 px, text at 13 px. */
 .attn-note { flex: none; padding: 6px 24px; font-size: 14px; border-top: 1px solid var(--border); color: var(--text-2); }
 .attn-note > div { max-width: 76ch; margin: 0 auto; padding: 0 1px; }
@@ -1956,3 +2086,37 @@ html[data-input="pointer"] :is([data-page-root], [data-page-focus]):focus { outl
 	margin-top: 4px;
 	white-space: normal;
 }
+/* Find in this Session (FindBar.tsx): a form row above the transcript, never over it. Matches show as highlights, as ticks
+   on the prompt strip, and with Filter on as a list of matching entries under their prompts. */
+.find-bar { flex: none; padding: 3px 14px 3px 8px; border-bottom: 1px solid var(--border); background: var(--bg-side); font-size: var(--font-ui); }
+.find-bar input { border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; font: inherit; color: inherit; background: var(--bg-elev); }
+.find-bar .c { color: var(--text-3); min-width: 64px; text-align: right; font-variant-numeric: tabular-nums; }
+.find-bar .find-wrap { color: var(--text-3); white-space: nowrap; }
+.find-bar .ib { border: 0; background: transparent; cursor: pointer; padding: 2px 6px; border-radius: 4px; color: var(--text-2); }
+.find-bar .ib:hover:not(:disabled) { background: var(--bg-soft); color: var(--text); }
+.find-bar .ib:disabled { color: var(--border-strong); cursor: default; }
+.find-bar .chip { border: 1px solid var(--border); background: transparent; border-radius: 999px; padding: 0 8px; line-height: 18px; font-size: 11px; cursor: pointer; color: var(--text-3); white-space: nowrap; }
+.find-bar .chip.on { border-color: var(--accent); color: var(--text); background: var(--accent-soft); }
+::highlight(ampi-find) { background-color: color-mix(in srgb, var(--warn) 30%, transparent); }
+::highlight(ampi-find-cur) { background-color: var(--warn); color: var(--bg); }
+/* Find marks on the rail: dash-sized, in a muted Find tone, placed by railLayout between the dashes around their
+   prompt; the current match is full strength and thicker. */
+.companion-scrollbar .find-mark { position: absolute; right: 8px; width: 12px; height: 2px; margin-top: -1px; border-radius: 1px; pointer-events: none; background: color-mix(in srgb, var(--warn) 45%, transparent); }
+.companion-scrollbar .find-mark.cur { height: 3px; margin-top: -1.5px; background: var(--warn); }
+.scroll[hidden] { display: none; }
+.find-filtered ~ .prompt-head { display: none; }
+.find-filtered { padding: 8px 24px 24px; }
+.find-filtered > * { max-width: 76ch; margin-inline: auto; }
+.find-prompt { display: flex; gap: 8px; padding: 10px 8px 2px; font-size: var(--font-ui); color: var(--text-2); }
+.find-prompt .lbl { color: var(--rb-user); font-weight: 500; }
+.find-prompt .hint { color: var(--text-3); }
+.find-prompt .tx { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.find-hit { display: flex; gap: 8px; width: 100%; text-align: left; border: 0; background: transparent; font: inherit; color: var(--text); cursor: pointer; padding: 4px 8px; border-radius: 4px; }
+.find-hit:hover { background: var(--bg-soft); }
+.find-hit.cur { background: var(--accent-soft); }
+.find-hit .k { flex: none; width: 4.5em; color: var(--text-3); font-size: var(--font-ui); }
+.find-hit .x { flex: 1; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.find-hit mark { background: color-mix(in srgb, var(--warn) 35%, transparent); color: inherit; }
+.find-gap { display: block; width: 100%; border: 0; border-block: 1px dashed var(--border); background: transparent; color: var(--text-3); font-size: 11px; margin: 4px auto; padding: 1px 0; cursor: pointer; }
+.find-gap:hover { color: var(--text); }
+.find-more { text-align: center; padding: 8px; }

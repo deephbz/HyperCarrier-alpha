@@ -1,3 +1,4 @@
+import "../test/home.mjs";
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { assertEntriesPreserved } from '@hypercarrier/pi-sim';

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Purpose: regenerate the exploration wireflow from a disposable synthetic Pi hub.
-// No endpoint argument is accepted. All browser mutations terminate in fixtureSocket.
+// No endpoint argument is accepted. All browser mutations terminate in the browser fixture (routeFixture).
 import { spawn } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -8,8 +8,9 @@ import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { chromium } from 'playwright';
+import { launchOptions } from './browser.mjs';
 import { recipes, thread } from './recipes.mjs';
-import { fixtureSocket } from './fixtures.mjs';
+import { routeFixture } from './fixtures.mjs';
 import { renderGrid } from './render.mjs';
 import { setup } from './setup.mjs';
 
@@ -23,7 +24,7 @@ const audit = { requests: [], forwardedMutations: 0, externalRequests: [], pageE
 const child = spawn(process.execPath, ['scripts/pi-demo.ts'], { cwd: app, detached: true, env: { ...process.env, HOME: temp, AMPI_HOME: join(temp, 'home'), AMPI_HUB_CONFIG: join(temp, 'home/hub.json'), PI_CODING_AGENT_DIR: join(temp, 'agent'), DEMO_DIR: join(temp, 'demo'), PORT: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
 let browser, browserServer;
 async function launchBrowser() {
-  browserServer = await chromium.launchServer({ headless: true, timeout: 60_000, ...(process.env.UX_CHROME_CHANNEL ? { channel: process.env.UX_CHROME_CHANNEL } : {}) });
+  browserServer = await chromium.launchServer(launchOptions({ timeout: 60_000 }));
   return chromium.connect(browserServer.wsEndpoint(), { timeout: 60_000 });
 }
 async function closeBrowser() {
@@ -106,7 +107,7 @@ try {
       if (url.origin !== new URL(hubURL).origin) { audit.externalRequests.push(url.origin); return route.abort(); }
       return route.continue();
     });
-    await p.routeWebSocket('**/ws', ws => fixtureSocket(ws, r, audit));
+    await routeFixture(p, r, audit);
     p.on('pageerror', e => audit.pageErrors.push({ state: r.id, message: e.message }));
     await p.goto(hubURL + r.route);
     await p.locator('.app').waitFor();
@@ -116,7 +117,7 @@ try {
     if (r.family === 'Team' && !['loading-view', 'error-view'].includes(r.variant)) await p.waitForFunction(() => document.querySelector('.ptb section,.ptb-notice,.ptb-hint'));
     if (r.family === 'Arc' && !['loading-view', 'missing'].includes(r.variant)) await p.locator('.cos-toolbar button').waitFor();
     if (r.family === 'Timeline' && !['loading', 'error', 'empty'].includes(r.variant)) await p.locator('.cos-band-label').first().waitFor();
-    await setup(p, r);
+    await setup(p, r, { demo: join(temp, 'demo') });
     await deadline(p.evaluate(() => document.fonts.ready), `${r.id} fonts`);
     await deadline(p.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)))), `${r.id} layout`);
     const es = await elements(p);
@@ -157,17 +158,13 @@ function checkedTransitions() { return [
   { from: 'S04.a', to: 'S04.b', matches: /^Hide continuations$/ },
   { from: 'S04.a', to: 'S04.c', matches: /^Models$/ },
   { from: 'S04.a', to: 'S04.d', matches: /^Diagnosis/ },
-  { from: 'S04.a', to: 'S04.k', matches: /^Recap$/ },
-  { from: 'S04.a', to: 'S04.l', matches: /^Transcript mode: full transcript$/ },
+  { from: 'S04.a', to: 'S04.l', matches: /^Chat$/ },
   { from: 'S04.a', to: 'S04.q', matches: /^Previous user message$/ },
-  { from: 'S04.k', to: 'S04.s', matches: /^Recap$/ },
-  { from: 'S04.s', to: 'S04.t', matches: /^Recap$/ },
   { from: 'S04.l', to: 'S04.u', matches: /^(?:\d+ tool calls?|thinking) ·/ },
   { from: 'S05.a', to: 'S05.c', matches: /^Graph$/ },
   { from: 'S06.d', to: 'S06.e', matches: /^Build arc$/ },
   { from: 'S07.a', to: 'S07.b', matches: /^New workspace$/ },
-  { from: 'S01.a', to: 'S01.h', matches: /^Zoom in$/ },
-  { from: 'S01.a', to: 'S08.a', matches: /^Add host$|^\+ Add host/ },
+  { from: 'S01.a', to: 'S08.a', matches: /^Remote host \(\?\)$/ },
   { from: 'S09.a', to: 'S09.d', matches: /^Synthetic API key$/ },
   { from: 'S09.a', to: 'S09.e', matches: /^Synthetic subscription$/ },
 ]; }
@@ -184,7 +181,7 @@ function makeEdges(nodes) {
       target = panel === 'rarebit' ? 'S04.a' : panel === 'team' ? 'S05.a' : canonical.get(e.href.split('?')[0]) ?? (e.href.includes('/t/') ? 'S03.a' : e.href.includes('/arcs/') ? 'S06.d' : n.id);
       kind = 'navigation'; evidence = 'declared href; representative destination';
     } else {
-      const rules = [[/^More actions$/, 'S03.i'], [/^Models$/, 'S04.c'], [/^Diagnosis/, 'S04.d'], [/^Graph$/, 'S05.c'], [/^List$/, 'S05.a'], [/^New workspace$/, 'S07.b'], [/^\+ New agent|^New agent beside|^New thread|^\+ New thread/, 'S07.a'], [/^Close pane…|^Stop Pi and free/, 'S07.d'], [/^Add host$|^\+ Add host/, 'S08.a'], [/^Hide continuations$/, 'S04.b'], [/^Transcript mode: full transcript$/, 'S04.l'], [/^Recap$/, 'S04.k'], [/^Ask$/, 'S04.i'], [/^End$/, 'S04.a'], [/^Build arc$/, 'S06.e']];
+      const rules = [[/^More actions$/, 'S03.i'], [/^Models$/, 'S04.c'], [/^Diagnosis/, 'S04.d'], [/^Graph$/, 'S05.c'], [/^List$/, 'S05.a'], [/^New workspace$/, 'S07.b'], [/^\+ New agent|^New agent beside|^New thread|^\+ New thread/, 'S07.a'], [/^Close pane…|^Stop Pi and free/, 'S07.d'], [/^Remote host \(\?\)$/, 'S08.a'], [/^Hide continuations$/, 'S04.b'], [/^Chat$/, 'S04.l'], [/^Full$/, 'S04.a'], [/^Ask$/, 'S04.i'], [/^End$/, 'S04.a'], [/^Build arc$/, 'S06.e']];
       const matched = rules.find(([test]) => test.test(name)); if (matched) target = matched[1];
       if (/^Cancel$|^Close$|^Done$/.test(name)) target = n.family === 'Settings' ? 'S02.d' : n.family.includes('dialogs') ? 'S03.a' : n.id;
     }

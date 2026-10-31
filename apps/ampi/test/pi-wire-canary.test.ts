@@ -97,12 +97,13 @@ async function startHub(f: Fixture) {
 					label: "devbox",
 					kind: "pi-local",
 					cacheDir: join(f.dir, "cache"),
+					// The fixture Sessions date from 2026-01-01; without this window the Host may evict them before the test opens them.
+					recentMs: Number.MAX_SAFE_INTEGER,
 					agentConfig: { agentDir: f.agentDir, pollMs: 30, discoverMs: 150, teams: false, controlStatusMs: 300 },
 					askCommand: [process.execPath, "-e", "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(s.length+':'+s.split('\\n')[0]))"],
 					env: { HOME: f.dir, HERDR_BIN: join(f.dir, "herdr"), FAKE_HERDR_STATE: join(f.dir, "state.json"), FAKE_HERDR_LOG: join(f.dir, "calls.jsonl") },
 				},
 			],
-			backend: "pi",
 		},
 		{ token: TOKEN },
 	);
@@ -126,7 +127,7 @@ function tapFrames(browser: Browser) {
 	};
 	browser.ws.on("message", (data) => {
 		const text = String(data), m = JSON.parse(text);
-		const source = m.t === "res" ? names.get(`res:${m.id}`) : "sid" in m ? names.get(`sid:${m.sid}`) : m.t === "hosts" ? "hosts frame" : undefined;
+		const source = m.t === "res" ? names.get(`res:${m.id}`) : "sid" in m ? names.get(`sid:${m.sid}`) : m.t === "hosts" || m.t === "pins" ? `${m.t} frame` : undefined;
 		frames.push({ source: source ?? `frame ${m.t}`, text });
 	});
 	return {
@@ -208,7 +209,7 @@ function scanOnce() {
 				outcomes[`${op} ${JSON.stringify(args).slice(0, 60)}`] = r.ok ? "ok" : `error: ${r.e.slice(0, 80)}`;
 			}
 			let hubId = 900_000;
-			const hubTable: { [K in keyof HubOps]: HubOps[K]["args"] } = { "hosts.reconnect": { id: "devbox" }, "hosts.add": { target: "not a host" }, "hosts.remove": { id: "devbox" } };
+			const hubTable: { [K in keyof HubOps]: HubOps[K]["args"] } = { "hosts.reconnect": { id: "devbox" }, "hosts.remove": { id: "devbox" }, "pins.set": { host: "devbox", threadId: "canary", pinned: false }, "pins.hint": { host: "devbox", threadId: "canary" } };
 			for (const [op, args] of Object.entries(hubTable)) {
 				browser.ws.send(JSON.stringify({ t: "hub", id: hubId++, op, args }));
 				outcomes[`hub ${op}`] = "sent";
@@ -226,7 +227,7 @@ test("wire canary: no frame carries any native-field sentinel", async () => {
 	const { leaks, outcomes, sources } = await scanOnce();
 	assert.deepEqual(leaks, [], `leaks: ${leaks.join("; ")} · sources ${sources.join(", ")} · ops ${JSON.stringify(outcomes)}`);
 	// Every topic and op answered: a source that never sent a frame was not scanned.
-	assert.equal(sources.length, 31, `scanned sources: ${sources.join(", ")}`);
+	assert.equal(sources.length, 33, `scanned sources: ${sources.join(", ")}`);
 });
 
 /** The pre-bump DERIVATION_VERSION: every index row written by a build before A24 step 5 carries it. */

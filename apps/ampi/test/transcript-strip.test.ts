@@ -18,7 +18,8 @@ import { engineSkip } from "./engines.ts";
 // its Host, thread and version directly.
 
 const web = fileURLToPath(new URL("../web", import.meta.url));
-const ORIGIN = "http://ampi.test";
+// A secure context: the Composer draws its send IDs from crypto.randomUUID.
+const ORIGIN = "http://localhost";
 
 async function stripScript(): Promise<string> {
 	const entry = join(web, "transcript-strip-test-entry.js");
@@ -30,12 +31,18 @@ async function stripScript(): Promise<string> {
 				import React from 'react';
 				import { createRoot } from 'react-dom/client';
 				import { ThreadView } from ${JSON.stringify(join(web, "src/components/ThreadView.tsx"))};
-				import { CompanionScrollbar } from ${JSON.stringify(join(web, "src/components/CompanionScrollbar.tsx"))};
+				import { CompanionScrollbar, NO_PLACE, usePromptRail, useThreadOutline } from ${JSON.stringify(join(web, "src/components/CompanionScrollbar.tsx"))};
 				import { hub } from ${JSON.stringify(join(web, "src/client.ts"))};
 				const root = createRoot(document.getElementById('root'));
 				const h = React.createElement;
+				// The strip as ThreadView mounts it: one outline request per thread version, no rendered prompts, and a rail
+				// only when usePromptRail gives a layout.
+				const Strip = ({ host, threadId, version }) => {
+					const state = useThreadOutline(host, threadId, version), rail = usePromptRail(state.outline, NO_PLACE, undefined);
+					return rail.layout ? h(CompanionScrollbar, { host, threadId, state, place: NO_PLACE, layout: rail.layout, strip: rail.strip }) : null;
+				};
 				if (window.MODE === 'strip') {
-					const render = () => root.render(h('div', { style: { display: 'flex', height: '400px' } }, h(CompanionScrollbar, window.PROPS)));
+					const render = () => root.render(h('div', { style: { display: 'flex', height: '400px' } }, h(Strip, window.PROPS)));
 					window.setProps = (props) => { window.PROPS = props; render(); };
 					// ThreadView passes a version only from a snapshot, so the strip never asks before the hub connects.
 					const start = setInterval(() => { if (hub.connected) { clearInterval(start); render(); } }, 10);
@@ -188,13 +195,17 @@ for (const engine of ENGINES) test(`${engine}: stream, append and window slide w
 	assert.equal(await page.locator(".companion-scrollbar").count(), 1);
 });
 
-/** The strip's parts: anything besides dashes would be a position cue; and each dash's top in percent. */
-const stripParts = (page: Page) => page.locator(".companion-scrollbar").evaluate((nav) => ({
-	others: [...nav.children].filter((c) => !c.matches("a[data-user-mark]")).length,
-	tops: Object.fromEntries([...nav.querySelectorAll<HTMLElement>("a[data-user-mark]")].map((a) => [a.dataset.userMark!, parseFloat(a.style.top)])),
-}));
-/** Browsers serialize a style percent to about six significant digits. */
-const near = (a: number, b: number) => Math.abs(a - b) < 1e-4;
+/** The strip's parts: anything besides dashes would be a position cue; dash ids in DOM order; dashes with an inline position. */
+const stripParts = (page: Page) => page.locator(".companion-scrollbar").evaluate((nav) => {
+	const dashes = [...nav.querySelectorAll<HTMLElement>("a[data-user-mark]")];
+	return {
+		others: [...nav.children].filter((c) => !c.matches("a[data-user-mark]")).length,
+		ids: dashes.map((a) => a.dataset.userMark!),
+		placed: dashes.filter((a) => a.style.top !== "").length,
+	};
+});
+const ordinal = (id: string) => id === "e0" ? 0 : Number(id.slice(1));
+const ascending = (ids: string[]) => ids.every((id, i) => i === 0 || ordinal(ids[i - 1]!) < ordinal(id));
 
 for (const engine of ENGINES) for (const [zoom, region] of [[1, 1], [1.3, 1], [1.3, 1.2]] as const) test(`${engine} ${zoom}/${region}: one strip; hover, focus and wheel keep layout`, { skip: engineSkip(engine) }, async (t) => {
 	const { page } = await open(t, engine, { zoom, region });
@@ -231,7 +242,7 @@ for (const engine of ENGINES) for (const [zoom, region] of [[1, 1], [1.3, 1], [1
 	assert.equal((await stripParts(page)).others, 0);
 });
 
-for (const engine of ENGINES) test(`${engine}: widely separated omitted segments: dashes stay at outline ordinals and no position is estimated`, { skip: engineSkip(engine) }, async (t) => {
+for (const engine of ENGINES) test(`${engine}: widely separated omitted segments: dashes keep outline order and no position is estimated`, { skip: engineSkip(engine) }, async (t) => {
 	const { page, publish } = await open(t, engine);
 	await page.locator('[data-outline-version="v200"]').waitFor();
 	// An 1100-entry branch served as e0..e58 and e999..e1099: the assistant e999 renders right after the user e58.
@@ -249,8 +260,10 @@ for (const engine of ENGINES) test(`${engine}: widely separated omitted segments
 	assert.ok(visible.includes("e999"), `visible: ${visible}`);
 	const parts = await stripParts(page);
 	assert.equal(parts.others, 0, "no band or other position cue");
-	assert.equal(Object.keys(parts.tops).length, 550);
-	for (const id of ["e58", "e1000", "e1098"]) assert.ok(near(parts.tops[id]!, 100 * Number(id.slice(1)) / 1100), `${id} at ${parts.tops[id]}%`);
+	assert.equal(parts.ids.length, 550);
+	assert.ok(ascending(parts.ids), "dashes follow outline order");
+	for (const id of ["e58", "e1000", "e1098"]) assert.ok(parts.ids.includes(id), `${id} has a dash`);
+	assert.equal(parts.placed, 0, "no dash carries an estimated position");
 });
 
 for (const engine of ENGINES) test(`${engine}: a window with no rendered user entry keeps every dash and shows no position cue`, { skip: engineSkip(engine) }, async (t) => {
@@ -263,8 +276,9 @@ for (const engine of ENGINES) test(`${engine}: a window with no rendered user en
 	await frames(page);
 	const parts = await stripParts(page);
 	assert.equal(parts.others, 0, "no band or other position cue");
-	assert.equal(Object.keys(parts.tops).length, 100);
-	assert.ok(near(parts.tops["e100"]!, 50));
+	assert.equal(parts.ids.length, 100);
+	assert.ok(ascending(parts.ids), "dashes follow outline order");
+	assert.equal(parts.placed, 0, "no dash carries an estimated position");
 	assert.equal(await busy(page), "false");
 });
 
@@ -276,12 +290,16 @@ for (const engine of ENGINES) test(`${engine}: a branch replaced while its outli
 	publish({ ...snap(202), sourceVersion: "b202", entries: view(202).entries.map((e, i) => i === 0 ? e : { ...e, id: `f${i}` }) });
 	await page.locator('[data-entry="f201"]').waitFor({ state: "attached" });
 	assert.equal(await busy(page), "true");
-	const old = page.locator('[data-user-mark="e100"]');
+	// A sampled-in dash of the old branch; the rail hides the others (railLayout). The reader's place settles first,
+	// because the prompts on screen move the sample.
+	await waitFrames(page, 3);
+	const id = (await page.locator('[data-user-mark^="e"]:not(.skip):not([data-user-mark="e0"])').last().getAttribute("data-user-mark"))!;
+	const old = page.locator(`[data-user-mark="${id}"]`);
 	assert.equal(await old.getAttribute("href"), null);
 	assert.equal(await old.getAttribute("aria-disabled"), "true");
 	assert.equal(await old.evaluate((a) => getComputedStyle(a).pointerEvents), "none");
 	const paint = (id: string) => page.locator(`[data-user-mark="${id}"] span`).evaluate((n) => { const s = getComputedStyle(n); return `${s.backgroundColor} ${s.opacity}`; });
-	const dim = await paint("e100");
+	const dim = await paint(id);
 	const box = (await old.boundingBox())!;
 	await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
 	assert.equal(await old.evaluate((a) => a.matches(":hover")), false, "a kept dash takes no hover");
@@ -293,58 +311,73 @@ for (const engine of ENGINES) test(`${engine}: a branch replaced while its outli
 	await page.locator('[data-outline-version="b202"]').waitFor();
 	assert.equal(await old.count(), 0);
 	assert.notEqual(await paint("e0"), dim, "a busy dash paints dimmer than a linked one");
-	assert.equal(await paint("e0"), await paint("f100"));
-	await page.locator('[data-user-mark="f100"]').click();
-	await page.waitForFunction(() => location.hash.includes("e=f100"));
+	// The new branch has one more prompt, so its sample can differ: click an idle dash it shows.
+	const fresh = (await page.locator('[data-user-mark^="f"]:not(.skip):not(.in)').last().getAttribute("data-user-mark"))!;
+	assert.equal(await paint("e0"), await paint(fresh));
+	await page.locator(`[data-user-mark="${fresh}"]`).click();
+	await page.waitForFunction((id) => location.hash.includes(`e=${id}`), fresh);
 });
 
 for (const engine of ENGINES) test(`${engine}: strip identity: branch switch keeps dashes until replaced; thread switch drops them; late replies are ignored`, { skip: engineSkip(engine) }, async (t) => {
 	const props = (threadId: string, version: string, host = "devbox") => ({ host, threadId, version });
-	const { page, publish, outlines, hold, release } = await open(t, engine, { strip: props("t1", "v10"), initial: outline(10, "v10") });
+	const { page, publish, outlines, hold, release } = await open(t, engine, { strip: props("t1", "v10"), initial: outline(20, "v10") });
+	// The users of outline(n, ·, prefix): a rail needs at least 8, so these outlines hold 8 to 14.
+	const ids = (n: number, prefix = "e") => outline(n, "", prefix).users.map((u) => u.id);
 	const dashes = () => page.locator("[data-user-mark]").evaluateAll((all) => all.map((a) => (a as HTMLElement).dataset.userMark));
 	await page.locator('[data-outline-version="v10"]').waitFor();
-	assert.deepEqual(await dashes(), ["e0", "e2", "e4", "e6", "e8"]);
+	assert.deepEqual(await dashes(), ids(20));
 	await sample(page);
 	// Branch switch: the same thread at a new version with other users. The old dashes stay until the reply.
-	outlines.set("b12", outline(12, "b12", "f")); hold.add("b12");
+	outlines.set("b12", outline(24, "b12", "f")); hold.add("b12");
 	publish({ key: "b12", props: props("t1", "b12") });
 	await waitFrames(page, 3);
-	assert.deepEqual(await dashes(), ["e0", "e2", "e4", "e6", "e8"]);
+	assert.deepEqual(await dashes(), ids(20));
 	assert.equal(await busy(page), "true");
 	release("b12");
 	await page.locator('[data-outline-version="b12"]').waitFor();
-	assert.deepEqual(await dashes(), ["e0", "f2", "f4", "f6", "f8", "f10"]);
+	assert.deepEqual(await dashes(), ids(24, "f"));
 	const s = await sampled(page);
-	assert.equal(s.min, 5, "no empty frame across the branch switch");
+	assert.equal(s.min, 10, "no empty frame across the branch switch");
 	assert.equal(await page.evaluate(() => ((window as any).__tagged as Element[]).filter((a) => a.isConnected).map((a) => (a as HTMLElement).dataset.userMark)).then((ids) => ids.join()), "e0", "the shared user keeps its node");
 	// A request for t1 is in flight when the thread changes: the dashes go at once, and the late t1 reply never lands.
-	outlines.set("t1-14", outline(14, "v14")); hold.add("t1-14");
+	outlines.set("t1-14", outline(28, "v14")); hold.add("t1-14");
 	publish({ key: "t1-14", props: props("t1", "v14") });
-	outlines.set("t2", outline(6, "w6", "g")); hold.add("t2");
-	publish({ key: "t2", props: props("t2", "w6") });
+	outlines.set("t2", outline(16, "w8", "g")); hold.add("t2");
+	publish({ key: "t2", props: props("t2", "w8") });
 	await frames(page);
 	assert.deepEqual(await dashes(), [], "a thread switch drops the old thread's dashes");
 	release("t1-14");
 	await waitFrames(page, 3);
 	assert.deepEqual(await dashes(), []);
 	release("t2");
-	await page.locator('[data-outline-version="w6"]').waitFor();
-	assert.deepEqual(await dashes(), ["e0", "g2", "g4"]);
+	await page.locator('[data-outline-version="w8"]').waitFor();
+	assert.deepEqual(await dashes(), ids(16, "g"));
 	// Out of order on one thread: the newer reply wins and the older one is ignored.
-	outlines.set("w8", outline(8, "w8", "g")); hold.add("w8");
-	publish({ key: "w8", props: props("t2", "w8") });
-	outlines.set("w10", outline(10, "w10", "g"));
+	outlines.set("w10", outline(20, "w10", "g")); hold.add("w10");
 	publish({ key: "w10", props: props("t2", "w10") });
-	await page.locator('[data-outline-version="w10"]').waitFor();
-	release("w8");
+	outlines.set("w12", outline(24, "w12", "g"));
+	publish({ key: "w12", props: props("t2", "w12") });
+	await page.locator('[data-outline-version="w12"]').waitFor();
+	release("w10");
 	await waitFrames(page, 3);
-	assert.equal(await page.locator('[data-outline-version="w10"]').count(), 1);
+	assert.equal(await page.locator('[data-outline-version="w12"]').count(), 1);
 	// A Host change with the same thread id is another thread.
-	outlines.set("other", outline(4, "x4", "h")); hold.add("other");
-	publish({ key: "other", props: props("t2", "x4", "other") });
+	outlines.set("other", outline(16, "x8", "h")); hold.add("other");
+	publish({ key: "other", props: props("t2", "x8", "other") });
 	await frames(page);
 	assert.deepEqual(await dashes(), []);
 	release("other");
-	await page.locator('[data-outline-version="x4"]').waitFor();
-	assert.deepEqual(await dashes(), ["e0", "h2"]);
+	await page.locator('[data-outline-version="x8"]').waitFor();
+	assert.deepEqual(await dashes(), ids(16, "h"));
+});
+
+for (const engine of ENGINES) test(`${engine}: the header names the Find icon`, { skip: engineSkip(engine) }, async (t) => {
+	const idle = (await open(t, engine)).page;
+	const find = idle.getByRole("button", { name: "Find in this Session", exact: true });
+	await find.waitFor();
+	assert.equal((await find.innerText()).trim(), "", "the Find button shows an icon, not a word");
+	assert.equal(await find.getAttribute("aria-expanded"), "false");
+	await find.click();
+	await idle.getByRole("search", { name: "Find in this Session" }).waitFor();
+	assert.equal(await find.getAttribute("aria-expanded"), "true");
 });

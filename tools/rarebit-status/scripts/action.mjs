@@ -3,7 +3,6 @@ import { currentPaneId } from "./lib.mjs";
 import {
   clearRarebitPane,
   compactRarebitView,
-  notifyRarebit,
   refreshAllRarebits,
   refreshRarebitPane,
 } from "./rarebit.mjs";
@@ -20,9 +19,6 @@ try {
       break;
     case "refresh-all":
       result = await refreshAllRarebits("action:refresh-all");
-      break;
-    case "show-notification":
-      result = await notifyRarebit(paneId);
       break;
     case "clear-current":
       clearRarebitPane(paneId, "action:clear-current");

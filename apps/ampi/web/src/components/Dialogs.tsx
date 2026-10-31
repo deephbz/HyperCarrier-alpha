@@ -1,13 +1,22 @@
-import { Fragment, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { hub } from "../client.ts";
+import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { hostSetupPrompt } from "../../../src/shared/host-setup.ts";
+import { findHost, hub, type HostState } from "../client.ts";
+import { scaleOf } from "../display.ts";
 import { MOD, go } from "../util.ts";
-import { COMPOSER_KEYS } from "../composer-keys.ts";
+import { COMPOSER_KEYS, freshPress } from "../composer-keys.ts";
 import { dispatchKeyAction, keyAvailable, KEYMAP, registerOverlay, type KeyBinding } from "../keymap.ts";
 import type { Overlay } from "../focus.ts";
 import { PAGES } from "../views/registry.ts";
 import { carrier, navigate } from "../nav.ts";
 import { href } from "../util.ts";
-import type { HostThreads } from "./Sidebar.tsx";
+import { FormRow } from "./FormRow.tsx";
+import { hoverIntent } from "./Popover.tsx";
+import { Segmented } from "./Segmented.tsx";
+import { paletteSessions } from "./palette-sessions.ts";
+import { servesHostOps, type HostThreads } from "./Sidebar.tsx";
+import { hostLabel } from "./host-label.ts";
+import { proseRows, type HostProse, type ProseRow } from "./palette-prose.ts";
 
 /** The opener of the open Modal. A Modal opened from inside another (palette switching) inherits it. */
 let modalOpener: HTMLElement | null = null;
@@ -42,7 +51,7 @@ export function Modal({ children, onClose, label = "AmPi dialog", overlay = "dia
 		const revealError = () => {
 			const alert = modal.querySelector<HTMLElement>('[role="alert"]');
 			const text = alert?.textContent ?? null;
-			if (text && text !== alertText) alert?.scrollIntoView({ block: "nearest" });
+			if (text && text !== alertText) reveal(modal, alert!);
 			alertText = text;
 		};
 		const observer = new MutationObserver(revealError);
@@ -57,113 +66,156 @@ export function Modal({ children, onClose, label = "AmPi dialog", overlay = "dia
 			if (opener.current?.isConnected) opener.current.focus({ preventScroll: true });
 		};
 	}, [titleId]);
-	return (
+	// Like a Popover, it renders in a body portal, outside every region's display zoom and every scroller.
+	return createPortal(
 		<div className="modal-back" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
 			<div ref={ref} className="modal quiet-scroll" role="dialog" aria-modal="true" aria-label={label} tabIndex={-1}>
 				{children}
 			</div>
-		</div>
+		</div>,
+		document.body,
 	);
 }
 
-export function AddHostDialog({ onClose }: { onClose: () => void }) {
-	const [target, setTarget] = useState("");
-	const [label, setLabel] = useState("");
-	const [error, setError] = useState<string>();
-	const [busy, setBusy] = useState(false);
-	const add = async () => {
-		setBusy(true);
-		setError(undefined);
-		try {
-			await hub.hub("hosts.add", { target, label: label || target });
-			onClose();
-		} catch (e) {
-			setError((e as Error).message);
-			setBusy(false);
-		}
-	};
+/** Scrolls `item` into the view of `modal` only; `scrollIntoView` would also scroll the page's clipped ancestors. */
+function reveal(modal: HTMLElement, item: HTMLElement) {
+	const box = modal.getBoundingClientRect(), r = item.getBoundingClientRect();
+	const by = r.top < box.top ? r.top - box.top : r.bottom > box.bottom ? Math.min(r.bottom - box.bottom, r.top - box.top) : 0;
+	if (by) modal.scrollTop += by / scaleOf(modal);
+}
+
+/** "Remote host (?)": the copyable prompt an agent follows to add a remote Host. The window adds no Host itself. */
+export function HostSetupDialog({ onClose }: { onClose: () => void }) {
+	const [copied, setCopied] = useState<"ok" | "failed">();
+	const prompt = hostSetupPrompt(hub.config);
 	return (
 		<Modal onClose={onClose}>
 			<h2>Add a remote host</h2>
 			<p className="hint" style={{ marginTop: 0 }}>
-				AmPi reaches remote nodes over SSH (key-based, non-interactive) and runs the bridge there. No port is opened on the remote host.
+				Copy this prompt into a coding agent on this machine. The agent sets up SSH and the remote machine, adds the Host to{" "}
+				<code>hub.json</code>, and restarts the hub. To remove a Host, delete its entry there and restart the hub.
 			</p>
-			<div className="field">
-				SSH destination
-				<input value={target} placeholder="me@devbox or a Host alias" onChange={(e) => setTarget(e.target.value)} aria-label="SSH destination" />
-			</div>
-			<div className="field">
-				Label
-				<input value={label} placeholder="devbox" onChange={(e) => setLabel(e.target.value)} aria-label="Label" />
-			</div>
-			<p className="hint">
-				The remote login runs <code>ampi bridge</code>, which starts that host's node if needed. A different command or
-				SSH options go in <code>~/.ampi/hub.json</code>.
-			</p>
-			{error && <div className="err-box" role="alert">{error} Check the SSH destination and try again.</div>}
+			<pre className="host-setup-prompt" style={{ whiteSpace: "pre-wrap", maxHeight: "40vh", overflow: "auto" }} data-host-setup>
+				{prompt}
+			</pre>
+			{copied === "failed" && <div className="err-box" role="alert">The browser refused the copy. Select the text and copy it.</div>}
 			<div className="actions">
 				<button className="btn" onClick={onClose}>
-					Cancel
+					Close
 				</button>
-				<button className="btn primary" onClick={() => void add()} disabled={!target || busy}>
-					{busy ? "Adding…" : "Add host"}
+				<button
+					className="btn primary"
+					onClick={() => void navigator.clipboard.writeText(prompt).then(() => setCopied("ok"), () => setCopied("failed"))}
+				>
+					{copied === "ok" ? "Copied" : "Copy prompt"}
 				</button>
 			</div>
 		</Modal>
 	);
 }
 
+/** The ⌘K palette's two searches: Session names and titles (local), or prose in retained copies (each Host's `sessions.search`). */
+export type PaletteScope = "sessions" | "prose";
+let lastScope: PaletteScope = "sessions";
+const SCOPES = [["sessions", "Sessions"], ["prose", "Prose"]] as const;
+
 export function Palette({ data, onClose, query = "", onQuery }: { data: HostThreads[]; onClose: () => void; query?: string; onQuery?: (query: string) => void }) {
 	const [q, setQState] = useState(query);
 	const setQ = (value: string) => { setQState(value); onQuery?.(value); };
+	const [scope, setScopeState] = useState(lastScope);
+	const setScope = (next: PaletteScope) => { lastScope = next; setScopeState(next); setIndex(0); };
 	const [index, setIndex] = useState(0);
-	const rows = useMemo(() => {
-		const all = data.flatMap((d) => d.threads.map((t) => ({ host: d.host, t })));
-		const needle = q.trim().toLowerCase();
-		const fields = (t: HostThreads["threads"][number]) => [t.team?.teamId ?? "", t.team?.worker ?? "", t.title ?? ""];
-		const rank = (t: HostThreads["threads"][number]) => fields(t).reduce((best, value) => {
-			const lower = value.toLowerCase();
-			if (!needle || !lower.includes(needle)) return best;
-			const at = lower.indexOf(needle);
-			return Math.min(best, at === 0 ? 0 : /[\s/_-]$/.test(lower[at - 1] ?? "") ? 1 : 2);
-		}, 3);
-		return all.filter(({ t }) => rank(t) < 3).sort((a, b) => rank(a.t) - rank(b.t) || b.t.updatedAt - a.t.updatedAt).slice(0, 30);
-	}, [data, q]);
+	const sessions = useMemo(() => paletteSessions(data, q), [data, q]);
+	const searchHosts = useMemo(() => {
+		const all = data.map((d) => d.host);
+		return all.filter(servesHostOps).map((host) => ({ ...host, label: hostLabel(host, all) }));
+	}, [data]);
+	const prose = useProseSearch(scope === "prose" ? q : "", searchHosts);
+	// The hub's hit title can be a raw thread id; the loaded Session list holds the title the sidebar shows.
+	const titles = useMemo(() => new Map(data.flatMap((d) => d.threads.map((t) => [`${d.host.link}|${t.id}`, t.title] as const))), [data]);
+	const count = scope === "sessions" ? sessions.length : prose.rows.length;
 	const pick = (i: number) => {
-		const row = rows[i];
+		if (scope === "sessions") {
+			const row = sessions[i];
+			if (!row) return;
+			onClose();
+			go(row.host.link, row.t.id);
+			return;
+		}
+		const row = prose.rows[i];
 		if (!row) return;
 		onClose();
-		go(row.host.link, row.t.id);
+		// The entry link takes the existing reveal path: the transcript scrolls to and opens the matching message.
+		navigate(href.thread(row.host, row.threadId, { entry: row.entry }));
 	};
 	return (
-		<Modal onClose={onClose} label="Jump to a Session" overlay="palette">
-			<input
-				className="search"
-				aria-label="Find a Session"
-				autoFocus
-				placeholder="Team, Worker, or Session name…"
-				value={q}
-				onChange={(e) => {
-					setQ(e.target.value);
-					setIndex(0);
-				}}
-				onKeyDown={(e) => {
-					if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-						e.preventDefault();
-						setIndex(Math.max(0, Math.min(rows.length - 1, index + (e.key === "ArrowDown" ? 1 : -1))));
-					} else if (e.key === "Enter") pick(index);
-				}}
-			/>
+		<Modal onClose={onClose} label="Search Sessions or prose" overlay="palette">
+			<FormRow role="search" aria-label="Search Sessions or prose" field={
+				<input
+					className="search"
+					aria-label="Find a Session"
+					autoFocus
+					placeholder={scope === "sessions" ? "Team, Worker, or Session name…" : "Words from your prompts or agent replies…"}
+					value={q}
+					maxLength={500}
+					onChange={(e) => {
+						setQ(e.target.value);
+						setIndex(0);
+					}}
+					onKeyDown={(e) => {
+						if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+							e.preventDefault();
+							setIndex(Math.max(0, Math.min(count - 1, index + (e.key === "ArrowDown" ? 1 : -1))));
+						} else if (e.key === "Enter") pick(index);
+						else if (e.key === "Tab" && !e.altKey && !e.metaKey && !e.ctrlKey) {
+							e.preventDefault();
+							setScope(scope === "sessions" ? "prose" : "sessions");
+						}
+					}}
+				/>
+			}>
+				<Segmented label="Search scope" value={scope} options={SCOPES} onChange={setScope} />
+			</FormRow>
 			<div className="quiet-scroll" style={{ marginTop: 8, maxHeight: "50vh", overflowY: "auto" }}>
-				{rows.map(({ host, t }, i) => (
-					<button key={`${host.link}|${t.id}`} className={`palette-item ${i === index ? "on" : ""}`} onMouseEnter={() => setIndex(i)} onClick={() => pick(i)} title={t.title || "Untitled Session"}>
+				{scope === "sessions" && sessions.map(({ host, t }, i) => (
+					<button key={`${host.link}|${t.id}`} className={`palette-item ${i === index ? "on" : ""}`} {...hoverIntent(() => setIndex(i))} onClick={() => pick(i)} title={t.title || "Untitled Session"}>
 						<span className="palette-title" dir="auto">{t.team?.teamId ? `${t.team.teamId} / ${t.team.worker ?? "Lead"}` : t.title || "Untitled Session"}</span>
 					</button>
 				))}
-				{rows.length === 0 && <div className="empty">No Sessions match. Try a title or directory.</div>}
+				{scope === "sessions" && sessions.length === 0 && <div className="empty">{q.trim() ? "No Sessions match. Try a Team, Worker, or Session name." : "No Sessions yet."}</div>}
+				{scope === "prose" && prose.rows.map((row, i) => (
+					<button key={`${row.host}|${row.threadId}|${row.entry}`} className={`palette-item prose-hit ${i === index ? "on" : ""}`} data-target={href.thread(row.host, row.threadId, { entry: row.entry })} {...hoverIntent(() => setIndex(i))} onClick={() => pick(i)} title={row.title}>
+						<span className="palette-title" dir="auto"><b>{titles.get(`${row.host}|${row.threadId}`) || row.title}</b>{searchHosts.length > 1 ? <span className="hint"> · {row.hostLabel}</span> : null}<br /><span className="palette-snippet">{row.snippet}</span></span>
+					</button>
+				))}
+				{scope === "prose" && prose.notes.map((note) => <div key={note} className="hint" role="status">{note}</div>)}
+				{scope === "prose" && prose.rows.length === 0 && <div className="empty">{!q.trim() ? "Type words to search prose." : prose.busy ? "Searching…" : "No prose matches."}</div>}
+			</div>
+			<div className="palette-foot hint" title={scope === "prose" ? prose.scope : undefined}>
+				↑↓ move · ↵ open · Tab {scope === "sessions" ? "Prose" : "Sessions"} · Esc close{scope === "prose" ? " · your prompts, agent replies and summaries; no tools or thinking" : ""}
 			</div>
 		</Modal>
 	);
+}
+
+/** Searches the retained prose of each Host that serves Host operations as the query settles; a newer query discards older answers. */
+function useProseSearch(query: string, hosts: HostState[]): { rows: ProseRow[]; notes: string[]; scope?: string; busy: boolean } {
+	const [state, setState] = useState<{ rows: ProseRow[]; notes: string[]; scope?: string; busy: boolean }>({ rows: [], notes: [], busy: false });
+	const generation = useRef(0);
+	const needle = query.trim();
+	useEffect(() => {
+		const token = ++generation.current;
+		if (!needle) { setState({ rows: [], notes: [], busy: false }); return; }
+		setState((s) => ({ ...s, busy: true }));
+		const timer = setTimeout(() => {
+			void Promise.all(hosts.map(async (host): Promise<HostProse> => {
+				try { return { host, value: await hub.request(host.link, "sessions.search", { query: needle }) }; }
+				catch (e) { return { host, error: String(e) }; }
+			})).then((results) => { if (generation.current === token) setState({ ...proseRows(results), busy: false }); });
+		}, 200);
+		return () => clearTimeout(timer);
+	}, [needle, hosts]);
+	return state;
 }
 
 function bindingLabel(binding: KeyBinding) {

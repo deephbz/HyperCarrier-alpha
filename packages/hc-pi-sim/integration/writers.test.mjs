@@ -1,4 +1,5 @@
 // Audit the remaining HC request writer at its real provider boundary.
+import "../test/home.mjs";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SimWorld, magpieProfile } from '../src/index.mjs';

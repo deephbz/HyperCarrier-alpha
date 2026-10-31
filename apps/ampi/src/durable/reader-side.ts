@@ -342,7 +342,7 @@ export class DurableViews extends EventEmitter {
    threadId: copy.threadId, ref: data.session.ref, path: copy.sessionId, copyFile: copy.file,
    revision: copy.revision, bytes: data.bytes, sourceVersion: data.version, data, readError: copy.readError, summary,
    window: () => this.#store.tail(this.#source(copy), data, false).entries,
-   rarebits: (before, fullText) => this.#store.rarebits(copy.sessionId, copy.revision, before, fullText),
+   rarebits: (before, fullText, around) => this.#store.rarebits(copy.sessionId, copy.revision, before, fullText, around),
    rarebitSnapshot: (maxChars) => this.#store.rarebitSnapshot(copy.sessionId, maxChars),
    arcEvidence: (ids) => this.#store.arcEvidence(copy.sessionId, ids, data.version),
    nearest: (at) => this.#store.nearest(copy.sessionId, at),
@@ -395,9 +395,10 @@ export class DurableViews extends EventEmitter {
    "thread.outline": async (args) => this.#store.outline(known(args.threadId).sessionId),
    "thread.find": async (args) => {
     const copy = known(args.threadId);
-    if (!copy.data) throw new Error("Thread is not indexed yet");
+    // The thread value names no sourceVersion until the copy is read or rebuilt; its next frame announces the index.
+    if (!copy.data) return { indexing: true };
     const release = this.context.lease(copy.threadId);
-    try { const value = await this.#store.find(this.#source(copy), String(args.query ?? ""), copy.data.version); return { ...value, hits: value.hits.map(thread) } as never; }
+    try { const value = await this.#store.find(this.#source(copy), String(args.query ?? ""), copy.data.version, args); return { ...value, hits: value.hits.map(thread) }; }
     finally { release(); }
    },
    "thread.history": async (args) => this.#store.page(known(args.threadId).sessionId, { limit: Number(args.limit ?? 200), before: typeof args.before === "string" ? args.before : undefined,

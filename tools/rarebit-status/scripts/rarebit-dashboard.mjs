@@ -1,6 +1,4 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { currentPaneId } from "./lib.mjs";
 import {
   loadRarebitPane,
@@ -258,7 +256,7 @@ function render() {
         : "";
   const controls = searchMode
     ? `${ansi.bold}/${searchDraft}█${ansi.reset}  Enter search · Esc cancel · smart-case literal`
-    : `${range}${searchPosition} · j/k line · u/d page · g/G · / search · n/N match · Tab view · r/R refresh · a alert · q close`;
+    : `${range}${searchPosition} · j/k line · u/d page · g/G · / search · n/N match · Tab view · r/R refresh · q close`;
   process.stdout.write(
     `${ansi.clear}${ansi.bold}${ansi.magenta}RAREBIT STATUS${ansi.reset} · ${viewTabs}\n` +
       `${ansi.dim}Exact Pi Session evidence · pane ${paneId ?? "unavailable"}${ansi.reset}\n` +
@@ -273,20 +271,6 @@ function close() {
   closed = true;
   if (process.stdin.isTTY) process.stdin.setRawMode(false);
   process.stdout.write(`${ansi.show}${ansi.altOff}${ansi.reset}`);
-}
-
-function deferredNotification() {
-  const script = fileURLToPath(
-    new URL("./deferred-rarebit-toast.mjs", import.meta.url),
-  );
-  const child = spawn(process.execPath, [script, paneId ?? ""], {
-    detached: true,
-    stdio: "ignore",
-    env: process.env,
-  });
-  child.unref();
-  close();
-  process.exit(0);
 }
 
 async function reload({ report = false, all = false } = {}) {
@@ -414,11 +398,6 @@ function handleKey(input) {
   if (input === "R") {
     void reload({ report: true, all: true });
     return;
-  }
-  if (input === "a") {
-    status = "Closing deck; notification and sound will follow.";
-    render();
-    setTimeout(deferredNotification, 100);
   }
 }
 

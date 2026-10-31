@@ -1,5 +1,6 @@
+import assert from "node:assert/strict";
 import "./isolate.ts";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createConnection, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,12 +9,30 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
 import WebSocket from "ws";
+import { HubHome } from "../src/hub/home.ts";
 import { simProvider } from "../src/node/sim.ts";
 import { encodeFrame, lineReader } from "../src/shared/framing.ts";
 import type { NodeFrame, Topic } from "../src/shared/protocol.ts";
 
 export function tempHome(): string {
 	return mkdtempSync(join(tmpdir(), "ampi-test-"));
+}
+
+/** The home lock for one test hub, as `ampi hub` takes it; release it when the hub stops. */
+export function ownHome(dir = tempHome()): HubHome {
+	const home = HubHome.acquire(dir);
+	assert.ok(home instanceof HubHome, `the home is free: ${JSON.stringify(home)}`);
+	return home;
+}
+
+/**
+ * Write Pi's global settings.json in this test process's isolated agent directory; `undefined` removes it. Nodes in
+ * this process and the child nodes it spawns read the same directory (PI_CODING_AGENT_DIR).
+ */
+export function writePiSettings(settings: object | undefined): void {
+	const file = join(process.env.PI_CODING_AGENT_DIR!, "settings.json");
+	if (settings === undefined) rmSync(file, { force: true });
+	else writeFileSync(file, JSON.stringify(settings));
 }
 
 /**
@@ -163,6 +182,8 @@ export class Browser {
 	gaps: string[] = [];
 	snaps = new Map<number, number>();
 	hosts: any[] = [];
+	/** The hosts frame's `config`: the hub.json the hub read at start. */
+	config: string | undefined;
 	stale = new Set<number>();
 	/** The last `end` or `pending` frame of each subscription. */
 	closing = new Map<number, { t: "end" | "pending"; reason: string }>();
@@ -175,7 +196,7 @@ export class Browser {
 		ws.on("message", (data) => {
 			const frame = JSON.parse(String(data));
 			if (frame.t === "res") this.#waiters.get(frame.id)?.(frame);
-			else if (frame.t === "hosts") this.hosts = frame.hosts;
+			else if (frame.t === "hosts") (this.hosts = frame.hosts), (this.config = frame.config);
 			else if (frame.t === "stale") this.stale.add(frame.sid);
 			else if (frame.t === "end" || frame.t === "pending") this.closing.set(frame.sid, { t: frame.t, reason: frame.reason });
 			else if (frame.t === "snap") {

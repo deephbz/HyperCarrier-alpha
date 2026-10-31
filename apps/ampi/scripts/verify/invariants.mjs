@@ -5,7 +5,7 @@
 //   node scripts/verify/invariants.mjs --all      exhaustive lane: every recipe at 1024, 1280 and 1600, light and dark
 //   --only S03.a,seed-e   pick states            --rows abc   pick rows            --web <dist>   serve another web build
 //
-// States come from scripts/ux/recipes.mjs and reach the page through fixtureSocket and setup.mjs, as in capture.mjs.
+// States come from scripts/ux/recipes.mjs and reach the page through routeFixture and setup.mjs, as in capture.mjs.
 // The demo hub serves only HTTP. `--web` swaps the served index and assets, so a seed's pre-fix build can be checked
 // with this checkout's runner. Feature doc: .pi/skills/verify-ampi/features/ui-invariants.md.
 import { mkdirSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
@@ -13,7 +13,7 @@ import { loadavg } from 'node:os';
 import { extname, join, resolve } from 'node:path';
 import { chromium } from 'playwright';
 import { recipes, thread } from '../ux/recipes.mjs';
-import { fixtureSocket } from '../ux/fixtures.mjs';
+import { routeFixture } from '../ux/fixtures.mjs';
 import { setup } from '../ux/setup.mjs';
 import { launch, doctor, cleanup, keyOf, redact, tieToProcess } from './hub.mjs';
 import { threadsSnapshot } from './live-rows.mjs';
@@ -144,7 +144,7 @@ try {
     });
     const p = await context.newPage();
     p.setDefaultTimeout(8000);
-    await p.routeWebSocket('**/ws', ws => fixtureSocket(relabel(ws, s), s, audit));
+    await routeFixture(p, s, audit, { through: ws => relabel(ws, s) });
     p.on('pageerror', e => audit.pageErrors.push({ state: s.id, message: e.message }));
     let findings = [], error, stimulus;
     try {
@@ -163,7 +163,7 @@ try {
         if (Date.now() > until) throw new Error(`the hub lists ${day} of ${s.sessions} added Sessions`);
         await new Promise(r => setTimeout(r, 250));
       }
-      await setup(p, s);
+      await setup(p, s, { demo: state.demo });
       const before = s.extra === 'expand-teams' ? await p.evaluate(rowBoxes, { rowSelector: AMPI.keyedRowSelector, key: AMPI.rowKey }) : undefined;
       await extra(p, s);
       if (s.extra === 'hover-model') stimulus = await p.locator('.session-metadata').first().evaluate(e => { const b = e.getBoundingClientRect(); return { card: [b.left, b.top, b.right, b.bottom].map(Math.round), viewport: [innerWidth, innerHeight] }; });

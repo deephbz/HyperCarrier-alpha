@@ -7,7 +7,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { RarebitDoc } from "@hypercarrier/rarebit-durable";
 import { runDaemon } from "../src/node/daemon.ts";
 import { hydrate } from "../src/plugins.ts";
-import { TestClient } from "./helpers.ts";
+import { TestClient, writePiSettings } from "./helpers.ts";
 import { parseThreadKey } from "../src/node/runtime.ts";
 import { tempHome } from "./helpers.ts";
 import { kill, SIM, startNode } from "./crash-fixtures.ts";
@@ -20,9 +20,9 @@ for (const name of ["compact", "auto-compact"]) test(`crash-g: /${name} recovers
 	const home = tempHome();
 	const log = join(home, "entries.jsonl");
 	// A short verbatim tail, so one long answer is enough to compact.
-	const keep = { AMPI_COMPACT_KEEP_RECENT: "200" };
+	writePiSettings({ compaction: { keepRecentTokens: 200 } });
 	// The fault kills the node right after `conversation.compact` returns: the intent is stored, the reply is not.
-	let { child, client } = await startNode(home, 5000, { ...keep, AMPI_FAULT: "after-command-effect", AMPI_ENTRY_LOG: log });
+	let { child, client } = await startNode(home, 5000, { AMPI_FAULT: "after-command-effect", AMPI_ENTRY_LOG: log });
 	try {
 		const threads = client.sub({ kind: "threads" });
 		const a = await client.req("thread.create", { requestId: "crash-g", cwd: home, model: SIM, place: { workspace: "new", label: "G" }, prompt: "/sim long 10" });
@@ -36,7 +36,7 @@ for (const name of ["compact", "auto-compact"]) test(`crash-g: /${name} recovers
 		assert.equal(await Promise.race([exited.then(() => "exited"), lost.then((r) => `reply ${r}`)]), "exited", "the node dies before it replies");
 		client.close();
 
-		({ child, client } = await startNode(home, 5000, { ...keep, AMPI_ENTRY_LOG: log }));
+		({ child, client } = await startNode(home, 5000, { AMPI_ENTRY_LOG: log }));
 		const retry = await client.req("thread.command", frame);
 		assert.deepEqual([retry.via, retry.disposition, retry.evidence], ["node", "handled", "compaction_started"]);
 		assert.deepEqual(await client.req("thread.command", frame), retry, "the stored reply answers later retries");
@@ -53,6 +53,7 @@ for (const name of ["compact", "auto-compact"]) test(`crash-g: /${name} recovers
 		client.close();
 	} finally {
 		await kill(child);
+		writePiSettings(undefined);
 	}
 });
 

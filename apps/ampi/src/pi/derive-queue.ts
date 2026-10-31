@@ -23,8 +23,10 @@ function counter() {
 	return { track, read: (): DeriveQueue => ({ pending, done, drainedAt }) };
 }
 
-const derives = counter(), builds = counter();
+const derives = counter(), builds = counter(), roleWaits = counter();
 /** Session derive jobs (working set). */
 export const trackDerive = derives.track, deriveQueue = derives.read;
 /** Arc Builds of either trigger (cos.arc). */
 export const trackBuild = builds.track, buildQueue = builds.read;
+/** Automatic Builds held back until the Worker role is known (cos.arc). A wait is not a Build: it may end without one. */
+export const trackRoleWait = roleWaits.track, roleWaitQueue = roleWaits.read;

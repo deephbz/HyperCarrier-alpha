@@ -1,3 +1,4 @@
+import "../../test/home.mjs";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

@@ -1,3 +1,4 @@
+import "./home.mjs";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -24,7 +25,7 @@ function fixture() {
 }
 async function state(name, mutate, code) { await test(name, () => { const f = fixture(); try { mutate(f); assert.throws(() => verifyComposition({ root: f.root }), (error) => error.code === code); } finally { f.cleanup(); } }); }
 test("verifies a clean Colorstack source and exact selection through a removed OS temp bundle", () => { const f = fixture(); try { const result = verifyComposition({ root: f.root, debug: true }); assert.equal(result.record.component, "colorstack"); assert.ok(!result.trace.outputRoot.startsWith(f.root)); assert.equal(existsSync(result.trace.outputRoot), false); } finally { f.cleanup(); } });
-test("CLI default is compact verified JSON while debug carries record, selection, and trace", () => { const script = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../verify-colorstack-composition.mjs"); const plain = execFileSync(process.execPath, [script], { encoding: "utf8" }); const debug = execFileSync(process.execPath, [script, "--debug"], { encoding: "utf8" }); assert.deepEqual(JSON.parse(plain), { component: "colorstack", revision: "ede8ba66482b2897dd8be939f88571b24c5caf96", status: "verified" }); assert.doesNotMatch(plain, /\n  /); const traced = JSON.parse(debug); assert.ok(traced.record && traced.selection && traced.trace); });
+test("CLI default is compact verified JSON while debug carries record, selection, and trace", () => { const script = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../verify-colorstack-composition.mjs"); const plain = execFileSync(process.execPath, [script], { encoding: "utf8" }); const debug = execFileSync(process.execPath, [script, "--debug"], { encoding: "utf8" }); assert.deepEqual(JSON.parse(plain), { component: "colorstack", revision: "a4b18392b975979505f5d54ab96d6f1194d6c026", status: "verified" }); assert.doesNotMatch(plain, /\n  /); const traced = JSON.parse(debug); assert.ok(traced.record && traced.selection && traced.trace); });
 await state("distinguishes missing and uninitialized source", ({ root }) => rmSync(path.join(root, "config/colorstack"), { recursive: true }), "missing-submodule");
 await state("distinguishes uninitialized source", ({ child }) => rmSync(path.join(child, ".git"), { recursive: true }), "uninitialized-submodule");
 await state("distinguishes dirty source", ({ child }) => writeFileSync(path.join(child, "dirty"), "x"), "dirty-submodule");

@@ -62,8 +62,10 @@ export async function readingPlace(j) {
     await frames();
   };
   const lens = async folded => {
-    const button = p.getByRole('button', { name: 'Transcript mode: ' + (folded ? 'full transcript' : 'conversation only'), exact: true });
-    if (await button.count()) await button.click();
+    // The Transcript mode segments: Chat is the conversation lens, Full the whole transcript.
+    const mode = p.getByRole('group', { name: 'Transcript mode' }).getByRole('button', { name: folded ? 'Chat' : 'Full', exact: true });
+    if (await mode.getAttribute('aria-pressed') !== 'true') await mode.click();
+    await p.getByRole('group', { name: 'Transcript mode' }).getByRole('button', { name: folded ? 'Chat' : 'Full', exact: true, pressed: true }).waitFor();
     await p.mouse.move(10, 10);
     await frames();
   };

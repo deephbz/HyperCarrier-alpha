@@ -52,13 +52,13 @@ test("needs you: retired Team and Rarebit sources from old nodes do not ask the 
  assert.equal(util.needsYou(retired), undefined);
  assert.deepEqual(step(thread(), retired), [], "a blocked Task raises no notification");
  assert.equal(util.needsYou({ ...retired, arc: arc(decision) }), "Arc: 1 open decision");
- const page = renderToStaticMarkup(createElement(overview as never, { data: [{ host, threads: [retired], stale: false }], onNew() {}, onAddHost() {}, onHelp() {} }));
+ const page = renderToStaticMarkup(createElement(overview as never, { data: [{ host, threads: [retired], stale: false }], onNew() {}, onHostSetup() {}, onHelp() {} }));
  assert.match(page, /Needs you <span class="hint">0<\/span>/);
  assert.equal(needsYouCount([{ host, threads: [retired], stale: false }] as never), 0);
  for (const active of [{ ...retired, arc: arc(decision) }, { ...retired, lastError: "provider failed" }]) {
   const data = [{ host, threads: [active], stale: false }] as never;
   assert.equal(needsYouCount(data), 1);
-  const shown = renderToStaticMarkup(createElement(overview as never, { data, onNew() {}, onAddHost() {}, onHelp() {} }));
+  const shown = renderToStaticMarkup(createElement(overview as never, { data, onNew() {}, onHostSetup() {}, onHelp() {} }));
   assert.match(shown, /Needs you <span class="hint">1<\/span>/);
   assert.deepEqual(step(retired, active).map((n) => n.title), ["Needs you: Worker"]);
  }
@@ -126,7 +126,7 @@ test("needs you: away, resolving one of two asks stays silent; a grown count or 
 
 test("needs you: Overview groups only the asks of threads that need the owner; a closed thread's kept Arc ask is history", () => {
 	const data = (threads: ThreadSummary[]) => [{ host: { id: "devbox", label: "devbox", kind: "pi-local", status: "connected", attempts: 0, link: "devbox#pi" }, threads, stale: false }];
-	const page = (threads: ThreadSummary[]) => renderToStaticMarkup(createElement(overview as never, { data: data(threads), onNew() {}, onAddHost() {}, onHelp() {} }));
+	const page = (threads: ThreadSummary[]) => renderToStaticMarkup(createElement(overview as never, { data: data(threads), onNew() {}, onHostSetup() {}, onHelp() {} }));
 	const open = page([thread({ arc: arc(decision) })]);
 	assert.match(open, /data-kind="decision"/);
 	assert.match(open, /Needs you <span class="hint">1<\/span>/);
@@ -150,7 +150,7 @@ test("needs you: the macOS shell gets the thread tag, so a later Needs you repla
 test("Timeline: current Needs-you agrees with Overview; Team blockers and historical errors stay facts without a waiting flag", () => {
  const row = (summary: ThreadSummary) => {
   const session = { host: host.link, threadId: summary.id, ref: `${host.link}/${summary.id}`, title: summary.title, start: 0, end: 1000, live: true, blocked: false, waiting: false, marks: [[500, "old-error", "error"]], buckets: [], entries: [[500, "old-error"]], summary };
-  return renderToStaticMarkup(createElement(timelineStream as never, { label: "Worker", band: { key: session.ref, title: session.title, members: [session], target: session, team: false, buckets: [], start: 0, end: 1000 }, from: 0, to: 1000, bucketMs: 1000, unit: 1, scale: 0, color: 0, focus: false, now: 1000, onHover() {}, seen: new Map(), total: 0 }));
+  return renderToStaticMarkup(createElement(timelineStream as never, { label: "Worker", band: { key: session.ref, group: { key: session.ref, team: false, members: [session], start: 0, end: 1000 }, title: session.title, members: [session], target: session, team: false, buckets: [], start: 0, end: 1000 }, from: 0, to: 1000, bucketMs: 1000, unit: 1, scale: 0, color: 0, focus: false, now: 1000, onHover() {}, seen: new Map(), total: 0 }));
  };
  const blocked = thread({ attention: [{ source: "Team", reason: "Task api blocked" }] });
  assert.doesNotMatch(row(blocked), /cos-waiting|cos-wait-label/);
@@ -166,7 +166,7 @@ test("Timeline: current Needs-you agrees with Overview; Team blockers and histor
  assert.deepEqual(step(thread(), archived), []);
  const data = [{ host, threads: [archived, thread({ id: "quiet.1", title: "Quiet" })], stale: false }] as never;
  assert.equal(needsYouCount(data), 0);
- const page = renderToStaticMarkup(createElement(overview as never, { data, onNew() {}, onAddHost() {}, onHelp() {} }));
+ const page = renderToStaticMarkup(createElement(overview as never, { data, onNew() {}, onHostSetup() {}, onHelp() {} }));
  assert.match(page, /Needs you <span class="hint">0<\/span>/);
 });
 

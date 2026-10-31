@@ -1,8 +1,9 @@
-import { type ReactNode, useState } from "react";
+import type { ReactNode } from "react";
 import type { ToolArgsPreview } from "../../../src/shared/protocol.ts";
 import { toolCallState } from "../../../src/shared/tool-state.ts";
+import { useRevealOpen } from "./reveal-open.ts";
 
-export type ToolResult = { text: string; isError: boolean; truncated?: boolean };
+export type ToolResult = { text: string; isError: boolean; truncated?: boolean; /** The tool-result entry, for a link that targets it. */ entry?: string };
 export type LiveSlot = { status: "pending" | "running" | "done"; output?: string };
 
 export function Diff({ patch }: { patch: string }) {
@@ -63,6 +64,7 @@ export function ToolCall({
 	outputSource,
 	callOpen = false,
 	active = false,
+	reveal,
 }: {
 	name: string;
 	/** Null when the source entry alone has the arguments. */
@@ -76,11 +78,13 @@ export function ToolCall({
 	/** Evidence for toolCallState: the call is still open in the transcript, and the Session runs a turn. */
 	callOpen?: boolean;
 	active?: boolean;
+	/** A reveal request for this call's result (ThreadView): each new request opens the body. */
+	reveal?: number;
 }) {
 	const state = toolCallState({ result, open: callOpen, active });
 	const running = state === "running";
 	const isEdit = name === "edit" || name === "write";
-	const [open, setOpen] = useState<boolean | undefined>(undefined);
+	const [open, setOpen] = useRevealOpen(reveal);
 	const expanded = open ?? (running || result?.isError === true || (isEdit && name === "edit"));
 	const output = result?.text ?? live?.output ?? "";
 	// A running call with no output yet shows what it runs; bash and read otherwise show only their output.
@@ -100,7 +104,7 @@ export function ToolCall({
 					.join("\n")
 			: "";
 	return (
-		<div className="tool">
+		<div className="tool" data-result-entry={result?.entry}>
 			<div className={`tool-head disclosure${running ? " busy" : ""}`} onClick={() => setOpen(!expanded)} role="button" aria-expanded={expanded}>
 				{running && <span className="spinner" />}
 				<span className="name">{name}</span>

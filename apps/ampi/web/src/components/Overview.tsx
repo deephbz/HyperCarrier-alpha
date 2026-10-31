@@ -6,7 +6,8 @@ import { useKeepPlace } from "../keep-place.ts";
 import { hasRealModel, useModels } from "../models.ts";
 import { openAccounts } from "./Accounts.tsx";
 import { ONBOARDING_KEY } from "./Dialogs.tsx";
-import { awayLine } from "./host-fold.ts";
+import { useNow } from "../client.ts";
+import { linkLine, linkView } from "./host-fold.ts";
 import { hostLabel } from "./host-label.ts";
 import { ActivityIcon, type HostThreads, ThreadBadges, isPiHost } from "./Sidebar.tsx";
 import { emptyNote, reading, unavailable } from "../host-lists.ts";
@@ -29,13 +30,13 @@ function Step({ done, title, children, action }: { done: boolean | undefined; ti
  * First-run checklist, computed from real state rather than ticked by hand: the local node answers, a real model is
  * signed in, a thread exists, a remote host is added. It stays until every required step is done or the owner hides it.
  */
-function Onboarding({ data, onNew, onAddHost, onHelp }: { data: HostThreads[]; onNew: () => void; onAddHost: () => void; onHelp: () => void }) {
+function Onboarding({ data, onNew, onHostSetup, onHelp }: { data: HostThreads[]; onNew: () => void; onHostSetup: () => void; onHelp: () => void }) {
 	const [hidden, setHidden] = useState(() => localStorage.getItem(ONBOARDING_KEY) === "1");
 	const local = data.find((d) => d.host.kind === "local") ?? data[0];
 	const connected = local?.host.status === "connected";
 	const real = hasRealModel(useModels(local?.host.link, connected));
 	const anyThread = data.some((d) => d.threads.some((t) => t.kind === "thread"));
-	const remote = data.find((d) => d.host.kind === "ssh");
+	const remote = data.find((d) => d.host.kind === "ssh" || d.host.kind === "pi-ssh");
 	const required = connected && real === true && anyThread;
 	if (hidden || required) return null;
 	return (
@@ -89,16 +90,16 @@ function Onboarding({ data, onNew, onAddHost, onHelp }: { data: HostThreads[]; o
 			</Step>
 			<Step
 				done={remote !== undefined}
-				title="Optional: add a Linux machine over SSH"
+				title="Optional: add a remote machine over SSH"
 				action={
-					<button className="btn small" onClick={onAddHost}>
-						Add host
+					<button className="btn small" onClick={onHostSetup}>
+						Remote host (?)
 					</button>
 				}
 			>
 				{remote
 					? `${hostLabel(remote.host, data.map((d) => d.host))} is added.`
-					: "It needs key-based SSH, Node 22.19 or newer, and AmPi installed there (ampi doctor on that machine checks it). Sign in to models per host."}
+					: "Copy the setup prompt into a coding agent; it sets up SSH and the machine, then adds the Host to hub.json."}
 			</Step>
 		</div>
 	);
@@ -138,10 +139,11 @@ function List({ rows, empty, reason, link, id, page, onPage }: ListProps & { id:
  * The return-to-desk view (O1): what needs the owner and why, what is running, and what changed, across hosts. The
  * axes stay separate (P5): a thread can be running and need attention; idle never means done.
  */
-export function Overview({ data, onNew, onAddHost, onHelp }: { data: HostThreads[]; onNew: () => void; onAddHost: () => void; onHelp: () => void }) {
+export function Overview({ data, onNew, onHostSetup, onHelp }: { data: HostThreads[]; onNew: () => void; onHostSetup: () => void; onHelp: () => void }) {
 	const scroller = useRef<HTMLDivElement>(null);
 	const pinned = useRef(false);
 	const keepPlace = useKeepPlace(scroller, "[data-place]", "data-place", pinned);
+	const now = useNow(data.some((d) => d.host.status !== "connected"));
 	const [pages, setPages] = useState<Record<string, number>>({});
 	const paging = (id: string) => ({ id, page: pages[id] ?? 0, onPage: (page: number, pager: HTMLElement) => { keepPlace.capture({ anchor: pager }); setPages((old) => ({ ...old, [id]: page })); } });
 	const [since, setSince] = useState(() => Number(localStorage.getItem("ampi.overview.lastSeen")) || undefined);
@@ -200,7 +202,7 @@ export function Overview({ data, onNew, onAddHost, onHelp }: { data: HostThreads
 			</div>
 			<div className="scroll" ref={scroller} onScroll={keepPlace.onScroll} onWheel={keepPlace.onWheel} data-page-scroller tabIndex={-1}>
 				<div className="overview">
-					{!piOnly && <Onboarding data={data} onNew={onNew} onAddHost={onAddHost} onHelp={onHelp} />}
+					{!piOnly && <Onboarding data={data} onNew={onNew} onHostSetup={onHostSetup} onHelp={onHelp} />}
 					<section className="attention-summary" aria-label="Activity since your last visit">
 						<h1>{since ? "Since you last checked Overview" : "Recent activity"}</h1>
 						<p>{loading ? "Reading Sessions…" : <>{changed.toLocaleString()} Session{changed === 1 ? "" : "s"} updated {since ? `since ${new Date(since).toLocaleString()}` : "in the last 24 hours"}. {needs.length > 0 ? `${needs.length.toLocaleString()} ${needs.length === 1 ? "has" : "have"} a signal that ${needs.length === 1 ? "it needs" : "they need"} you.` : "No Session has a positive signal that it needs you."}</>}</p>
@@ -215,9 +217,7 @@ export function Overview({ data, onNew, onAddHost, onHelp }: { data: HostThreads
 								<span className="hint">
 									{host.status === "connected"
 										? reading(d) ? "Reading Sessions…" : d.error ? d.error : `${host.node?.hostname ? `${host.node.hostname} · ` : ""}${rows.filter((r) => r.host === host.link && isBusyT(r.t)).length} running · ${rows.filter((r) => r.host === host.link).length.toLocaleString()} Sessions in scope`
-										: host.status === "connecting"
-											? "connecting…"
-											: awayLine(host)}
+										: linkLine(linkView(host, now))}
 								</span>
 							</div>
 						); })}
@@ -260,7 +260,7 @@ export function Overview({ data, onNew, onAddHost, onHelp }: { data: HostThreads
 							<List {...paging("quiet")}
 								rows={quiet}
 								empty="Every idle thread appears finished."
-								reason={(t) => (t.arc ? (t.arc.stale ? `Arc out of date · ${t.arc.newMessages} new since build` : "Arc: work still open") : t.rarebit ? `Summary ${t.rarebit.fresh ? t.rarebit.status.replace("_", " ") : "out of date"}` : t.ref ? "no Arc yet" : "no Summary yet")}
+								reason={(t) => (t.arc ? (t.arc.stale ? `Arc out of date · ${t.arc.newMessages} new since build` : "Arc: work still open") : t.rarebit ? (t.rarebit.status === "error" ? "Summary failed" : t.rarebit.fresh ? "Summary up to date" : "Summary out of date") : t.ref ? "no Arc yet" : "no Summary yet")}
 							/>
 						</div>
 						<div className="ov-card" data-card="recent">

@@ -3,7 +3,14 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { bounded, deferred, fixture } from "./composer-fixture.ts";
 
-test("two unknown sends survive reconnect and Session switch; retries precede new text with original IDs", async (t) => {
+// Draft custody (composer-drafts.ts): a send that fails late waits beside the newer draft as a held message. Only a
+// whole restore into an empty draft keeps its key and request, so only that retry is placed at most once.
+const held = (f: { page: import("playwright").Page }, text?: string) => {
+	const rows = f.page.locator(".composer-feedback.returned");
+	return text === undefined ? rows : rows.filter({ hasText: text });
+};
+
+test("two unknown sends survive reconnect and Session switch; each retries alone under its original key", async (t) => {
 	const admitted: any[] = [];
 	const bothAdmitted = deferred<void>();
 	let disconnect: (() => void) | undefined;
@@ -32,72 +39,42 @@ test("two unknown sends survive reconnect and Session switch; retries precede ne
 	await bounded(bothAdmitted.promise);
 	assert.equal(admitted.length, 2);
 	disconnect!();
-	await f.page.waitForFunction(() => document.querySelector("textarea")?.value === "First\n\nSecond\n\nNew draft");
+	await held(f, "First").waitFor();
+	await held(f, "Second").waitFor();
+	assert.equal(await f.input.inputValue(), "New draft", "a late outcome never writes over the newer draft");
 	const { threadId: other } = await f.wire.req("devbox", "thread.create", {
 		requestId: "other-session", cwd: f.home, model: { provider: "ampi-sim", modelId: "sim-1" },
 	});
 	await f.page.evaluate((id) => (window as any).switchThread(id), other);
 	await f.page.waitForFunction(() => document.querySelector("textarea")?.value === "");
+	assert.equal(await held(f).count(), 0, "held messages stay with their Session");
 	await f.page.evaluate((id) => (window as any).switchThread(id), f.threadId);
-	await f.page.waitForFunction(() => document.querySelector("textarea")?.value === "First\n\nSecond\n\nNew draft");
+	await f.page.waitForFunction(() => document.querySelector("textarea")?.value === "New draft");
+	assert.equal(await held(f).count(), 2);
 	await f.input.press("Enter");
-	const last = await f.submit(4);
-	assert.equal((await f.reply(last.id!)).ok, true);
+	assert.equal((await f.reply((await f.submit(2)).id!)).ok, true);
+	for (const [i, text] of [[3, "First"], [4, "Second"]] as const) {
+		await held(f, text).getByRole("button", { name: "Restore" }).click();
+		await f.page.waitForFunction((value) => document.querySelector("textarea")?.value === value, text);
+		await f.input.press("Enter");
+		await f.submit(i);
+	}
 	const sends = f.sent.filter((frame) => frame.op === "thread.submit");
-	assert.deepEqual(sends.map((frame) => frame.args.content), ["First", "Second", "First", "Second", "New draft"]);
-	assert.equal(sends[0]!.args.requestId, sends[2]!.args.requestId);
-	assert.equal(sends[1]!.args.requestId, sends[3]!.args.requestId);
-	assert.deepEqual(sends[2]!.args, sends[0]!.args);
-	assert.deepEqual(sends[3]!.args, sends[1]!.args);
+	assert.deepEqual(sends.map((frame) => frame.args.content), ["First", "Second", "New draft", "First", "Second"]);
+	assert.deepEqual(sends[3]!.args, sends[0]!.args, "a whole restore retries the same request under the same key");
+	assert.deepEqual(sends[4]!.args, sends[1]!.args);
 	assert.equal(sends[0]!.args.whenBusy, "steer");
 	assert.equal(sends[1]!.args.whenBusy, "followUp");
+	assert.ok(![sends[0]!.args.requestId, sends[1]!.args.requestId].includes(sends[2]!.args.requestId));
 	assert.notEqual(sends[0]!.args.requestId, sends[1]!.args.requestId);
-	for (let i = 0; i < 2; i++) assert.equal((await f.reply(sends[i + 2]!.id!)).value.submission, admitted[i].value.submission);
+	for (let i = 0; i < 2; i++) assert.equal((await f.reply(sends[i + 3]!.id!)).value.submission, admitted[i].value.submission);
 	const view = await f.wire.until<any>(topic, (v) => v.entries?.some((e: any) => e.kind === "user" && e.text === "New draft"), 1500);
 	assert.deepEqual(view.entries.filter((e: any) => e.kind === "user").map((e: any) => e.text), ["First", "Second", "New draft"]);
 	assert.deepEqual(f.errors, []);
 });
 
-test("a late failure retains the newer draft; a failed first retry stops the remaining batch", async (t) => {
-	const held = [deferred<() => void>(), deferred<() => void>()];
-	let seen = 0, receipts = 0;
-	const f = await fixture(t, 100_000, false, false, (client) => {
-		const server = client.connectToServer();
-		const holds = new Set<number>();
-		client.onMessage((message) => {
-			const frame = JSON.parse(String(message));
-			if (frame.op === "thread.submit" && seen++ < 2) holds.add(frame.id);
-			server.send(message);
-		});
-		server.onMessage((message) => {
-			const frame = JSON.parse(String(message));
-			if (frame.t === "res" && holds.has(frame.id)) {
-				held[receipts++]!.resolve(() => client.send(JSON.stringify({ t: "res", id: frame.id, ok: false, error: { code: "timeout", message: "Admission reply lost" } })));
-				return;
-			}
-			client.send(message);
-		});
-	});
-	await f.enter("Old send");
-	await f.wire.until<any>(f.wire.sub("devbox", { kind: "thread", threadId: f.threadId }), (v) => v.entries?.some((e: any) => e.kind === "user"), 1500);
-	await f.input.fill("New typed draft");
-	(await bounded(held[0]!.promise))();
-	await f.page.waitForFunction(() => document.querySelector("textarea")?.value === "Old send\n\nNew typed draft");
-	const first = f.sent.find((frame) => frame.op === "thread.submit")!;
-	await f.input.press("Enter");
-	const retry = await f.submit(1);
-	assert.equal(retry.args.requestId, first.args.requestId);
-	// The second real receipt is deliberately withheld. New typed text has not been sent ahead of it.
-	await f.input.fill("Even newer draft");
-	assert.equal(f.sent.filter((frame) => frame.op === "thread.submit").length, 2);
-	(await bounded(held[1]!.promise))();
-	await f.page.waitForFunction(() => document.querySelector("textarea")?.value === "Old send\n\nNew typed draft\n\nEven newer draft");
-	assert.equal(f.sent.filter((frame) => frame.op === "thread.submit").length, 2);
-	assert.deepEqual(f.errors, []);
-});
-
-test("a failure released while Session A is absent preserves A's retry and B's newer draft", async (t) => {
-	const held = deferred<() => void>();
+test("a late failure keeps the newer draft; restoring it into that draft sends a new message under a new key", async (t) => {
+	const failed = deferred<() => void>();
 	let first: number | undefined;
 	const f = await fixture(t, 100_000, false, false, (client) => {
 		const server = client.connectToServer();
@@ -109,14 +86,50 @@ test("a failure released while Session A is absent preserves A's retry and B's n
 		server.onMessage((message) => {
 			const frame = JSON.parse(String(message));
 			if (frame.t === "res" && frame.id === first) {
-				held.resolve(() => client.send(JSON.stringify({ t: "res", id: frame.id, ok: false, error: { code: "future_transport_error", message: "Outcome is not confirmed" } })));
+				failed.resolve(() => client.send(JSON.stringify({ t: "res", id: frame.id, ok: false, error: { code: "timeout", message: "Admission reply lost" } })));
+				return;
+			}
+			client.send(message);
+		});
+	});
+	await f.enter("Old send");
+	await f.wire.until<any>(f.wire.sub("devbox", { kind: "thread", threadId: f.threadId }), (v) => v.entries?.some((e: any) => e.kind === "user"), 1500);
+	await f.input.fill("New typed draft");
+	(await bounded(failed.promise))();
+	await held(f, "Old send").waitFor();
+	assert.equal(await f.input.inputValue(), "New typed draft");
+	await held(f, "Old send").getByRole("button", { name: "Restore" }).click();
+	await f.page.waitForFunction(() => document.querySelector("textarea")?.value === "Old send\n\nNew typed draft");
+	assert.equal(await held(f).count(), 0);
+	await f.input.press("Enter");
+	const merged = await f.submit(1);
+	assert.equal(merged.args.content, "Old send\n\nNew typed draft");
+	assert.notEqual(merged.args.requestId, (await f.submit(0)).args.requestId, "a merged payload is a new message");
+	assert.equal(f.sent.filter((frame) => frame.op === "thread.submit").length, 2, "nothing retries by itself");
+	assert.deepEqual(f.errors, []);
+});
+
+test("a failure released while Session A is absent is held in A; B's newer draft stays", async (t) => {
+	const released = deferred<() => void>();
+	let first: number | undefined;
+	const f = await fixture(t, 100_000, false, false, (client) => {
+		const server = client.connectToServer();
+		client.onMessage((message) => {
+			const frame = JSON.parse(String(message));
+			if (frame.op === "thread.submit" && first === undefined) first = frame.id;
+			server.send(message);
+		});
+		server.onMessage((message) => {
+			const frame = JSON.parse(String(message));
+			if (frame.t === "res" && frame.id === first) {
+				released.resolve(() => client.send(JSON.stringify({ t: "res", id: frame.id, ok: false, error: { code: "future_transport_error", message: "Outcome is not confirmed" } })));
 				return;
 			}
 			client.send(message);
 		});
 	});
 	await f.enter("A's input");
-	const release = await bounded(held.promise);
+	const release = await bounded(released.promise);
 	const original = await f.submit(0);
 	const { threadId: other } = await f.wire.req("devbox", "thread.create", {
 		requestId: "late-failure-other", cwd: f.home, model: { provider: "ampi-sim", modelId: "sim-1" },
@@ -129,7 +142,11 @@ test("a failure released while Session A is absent preserves A's retry and B's n
 	// A failure must not write through the mounted B component's state.
 	await f.page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
 	assert.equal(await f.input.inputValue(), "B's newer draft");
+	assert.equal(await held(f).count(), 0);
 	await f.page.evaluate((id) => (window as any).switchThread(id), f.threadId);
+	await held(f, "A's input").waitFor();
+	assert.equal(await f.input.inputValue(), "", "off screen, the failure is held, not put into the draft");
+	await held(f, "A's input").getByRole("button", { name: "Restore" }).click();
 	await f.page.waitForFunction(() => document.querySelector("textarea")?.value === "A's input");
 	await f.input.press("Enter");
 	const retry = await f.submit(1);

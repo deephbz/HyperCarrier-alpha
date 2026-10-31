@@ -7,13 +7,13 @@ import { runDaemon } from "../src/node/daemon.ts";
 import { type NodePlugin, parseThreadKey } from "../src/node/runtime.ts";
 import { hydrate } from "../src/plugins.ts";
 import { RarebitDoc } from "@hypercarrier/rarebit-durable";
-import { TestClient, tempHome } from "./helpers.ts";
+import { TestClient, tempHome, writePiSettings } from "./helpers.ts";
 
 import { Type } from "@earendil-works/pi-ai";
 import { fauxProvider, fauxAssistantMessage as answer, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { defineTask, defineTool, ToolTask } from "@earendil-works/pi-durable";
 import { createTeamRuntime, abortExpectedRun, open } from "@hypercarrier/pi-team-durable/authority";
-import { EscDoc } from "../src/node/runtime.ts";
+import { EscDoc, MetaDoc } from "../src/node/runtime.ts";
 import { teamPlugin } from "../src/plugins/team.ts";
 
 const SIM = { provider: "ampi-sim", modelId: "sim-1" };
@@ -75,7 +75,7 @@ async function closeDuringCompaction(withHc: boolean) {
 	const hold = compactionHold();
 	// Without the HC extension, durable's native summary compacts; the compact plugin's settings still apply.
 	const production = (await hydrate()).map((plugin) => (withHc ? plugin : { ...plugin, extensions: plugin.extensions.filter((extension) => extension.name !== "hc-compact") }));
-	process.env.AMPI_COMPACT_KEEP_RECENT = "20";
+	writePiSettings({ compaction: { keepRecentTokens: 20 } });
 	const daemon = await runDaemon({ home, simTokensPerSecond: 50000, plugins: [hold.plugin, ...production] });
 	try {
 		const client = await TestClient.connect(daemon.socket);
@@ -99,7 +99,7 @@ async function closeDuringCompaction(withHc: boolean) {
 		client.close();
 	} finally {
 		await daemon.stop();
-		delete process.env.AMPI_COMPACT_KEEP_RECENT;
+		writePiSettings(undefined);
 	}
 }
 
@@ -210,18 +210,32 @@ test("a failed Close commit: the stream it held starts after the failure and the
 		const held = hold.arm();
 		const { threadId } = await client.req("thread.create", { cwd: home, model: SIM, prompt: "Name three rollback risks" });
 		await held;
-		const { store } = await daemon.runtime.thread(threadId);
+		const { store, conversationId } = await daemon.runtime.thread(threadId);
 		// The Close commit releases the run, so its stream reaches the gate while Close is in progress, then fails.
+		// Other commits share the store (Team state, the thread record), so the fault picks Close's commit by its
+		// write: the one commit that marks this conversation closed. It rolls that commit back; every other passes.
 		const commit = store.harness.commit.bind(store.harness);
+		const closing = Symbol("Close commit");
 		let heldAtCommit: number | undefined;
-		store.harness.commit = (async () => {
-			store.harness.commit = commit;
-			hold.state.counting = true;
-			hold.state.release();
-			await sleep(300);
-			heldAtCommit = hold.state.streams;
-			throw new Error("injected Close commit failure");
+		store.harness.commit = (async (work: Parameters<typeof commit>[0], context: Parameters<typeof commit>[1]) => {
+			try {
+				return await commit(async (tx) => {
+					const result = await work(tx);
+					if ((await tx.doc(MetaDoc)).convs[conversationId]?.closed) throw closing;
+					return result;
+				}, context);
+			} catch (error) {
+				if (error !== closing) throw error;
+				store.harness.commit = commit;
+				hold.state.counting = true;
+				hold.state.release();
+				await sleep(300);
+				heldAtCommit = hold.state.streams;
+				throw new Error("injected Close commit failure");
+			}
 		}) as typeof store.harness.commit;
+		// A commit that runs before Close's commit passes through and leaves the fault for Close.
+		await store.harness.commit(async () => undefined, BACKGROUND_CONTEXT);
 		await assert.rejects(client.req("thread.close", { threadId }), /injected Close commit failure/);
 		assert.equal(heldAtCommit, 0, "the stream waits while Close is in progress");
 		const done = await client.until<any>(threads, (v) => v.threads[threadId]?.activity === "idle" && /rollback|risk/i.test(v.threads[threadId]?.preview ?? ""));
@@ -493,7 +507,7 @@ for(const boundary of ['close','stop'] as const)for(const [kind,stage] of cases)
 
 for (const nested of [false, true]) test(`tool owner guard window: ${nested ? "nested executeTool" : "direct tool"} after a later hook`, async () => {
 	const home = tempHome();
-	const held = latch(), release = latch(), settled = latch();
+	const held = latch(), release = latch(), settled = latch(), sweepAfterLeaf = latch();
 	let executions = 0, ownerClosed = false, holdArmed = false, controlExecutions = 0;
 	let leafResult: unknown;
 	const leaf = defineTool({
@@ -554,6 +568,15 @@ for (const nested of [false, true]) test(`tool owner guard window: ${nested ? "n
 		}
 		assert.equal(controlExecutions, 2, "a root and a Worker with a live owner execute tools");
 		holdArmed = true;
+		// Close's commit schedules a refresh at once, and its sweep marks the closed chain. That stop aborts the held
+		// tool before the hook releases, so the execute check never runs. The window under test is the time before any
+		// stop marks: every inspection after Close's commit, as the sweep and the refresh make, waits until the leaf
+		// settles. Close inspects before its commit, so Close itself does not wait.
+		const inspect = lead.store.harness.inspect.bind(lead.store.harness);
+		lead.store.harness.inspect = (async (context: Parameters<typeof inspect>[0]) => {
+			if ((await lead.store.harness.snapshot(MetaDoc, BACKGROUND_CONTEXT))?.convs[lead.conversationId]?.closed) await sweepAfterLeaf.promise;
+			return inspect(context);
+		}) as typeof inspect;
 		await client.req("thread.submit", {
 			threadId: lead.store.threadKey(worker.conversationId!),
 			content: `/sim tool ${nested ? "window_outer" : "window_leaf"} {}`,
@@ -570,6 +593,8 @@ for (const nested of [false, true]) test(`tool owner guard window: ${nested ? "n
 		let settledBeforeDeadline = true;
 		try { await bounded(settled.promise, "leaf afterTool"); }
 		catch { settledBeforeDeadline = false; }
+		sweepAfterLeaf.resolve();
+		lead.store.harness.inspect = inspect;
 		console.log(JSON.stringify({ window: nested ? "nested" : "direct", executionsAfterOwnerClose: executions, controlExecutions, settledBeforeDeadline }));
 		if (!settledBeforeDeadline) {
 			const inspection = await lead.store.harness.inspect(BACKGROUND_CONTEXT);
@@ -584,6 +609,7 @@ for (const nested of [false, true]) test(`tool owner guard window: ${nested ? "n
 	} finally {
 		delete process.env.AMPI_FAULT;
 		release.resolve();
+		sweepAfterLeaf.resolve();
 		client.close();
 		await daemon.stop();
 	}

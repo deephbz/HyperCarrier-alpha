@@ -7,7 +7,6 @@ import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { type ModelPurpose, resolveHelperModel, useHubConfig } from "../src/hub/helper-models.ts";
 import { cosDemo } from "../scripts/demo/cos.ts";
-import type { DemoContext } from "../scripts/demo/index.ts";
 import { ask } from "../src/pi/ask.ts";
 import { WorkingSet } from "../src/pi/working-set.ts";
 import type { Source } from "../src/pi/working-set-types.ts";
@@ -28,7 +27,7 @@ const stop = (id: string, parentId: string, text: string, n: number) => ({ type:
 test("arc build store snapshot: a worker commit between two Rarebit pages leaves the Build on its start version (failure: a mixed read failed or mixed the Build)", async (t) => {
 	const dir = mkdtempSync(join(tmpdir(), "ampi-arc-store-"));
 	t.after(() => rmSync(dir, { recursive: true, force: true }));
-	cosDemo({ dir, agentDir: join(dir, "agent") } as DemoContext);
+	cosDemo({ dir, agentDir: join(dir, "agent"), now: Date.now(), sessions: {} });
 	const model = [process.execPath, join(dir, "cos-model.cjs")];
 	const source: Source = { host: "fixture", cacheDir: join(dir, "cache"), path: "/synthetic/session.jsonl", file: join(dir, "copy.jsonl") };
 	mkdirSync(source.cacheDir);

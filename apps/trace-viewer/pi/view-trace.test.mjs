@@ -1,3 +1,4 @@
+import "../test/home.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import viewTraceExtension, { traceViewerUrl } from "./view-trace.mjs";

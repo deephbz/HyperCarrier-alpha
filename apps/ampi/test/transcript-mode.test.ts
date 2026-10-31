@@ -18,11 +18,11 @@ for (const engine of ENGINES) test(`transcript mode keeps the reading place with
 	await composer.fill("unsent transcript-mode draft");
 	await composer.focus();
 	await page.keyboard.press("Control+T");
-	await page.getByRole("button", { name: "Transcript mode: conversation only" }).waitFor();
+	await page.getByRole("button", { name: "Chat", exact: true, pressed: true }).waitFor();
 	assert.equal(await composer.evaluate((node) => node === document.activeElement), true, "Ctrl+T keeps Composer focus");
 	assert.equal(await composer.inputValue(), "unsent transcript-mode draft");
 	await page.keyboard.press("l");
-	assert.equal(await page.getByRole("button", { name: "Transcript mode: conversation only" }).count(), 1, "L does not toggle in Composer");
+	assert.equal(await page.getByRole("button", { name: "Chat", exact: true, pressed: true }).count(), 1, "L does not toggle in Composer");
 	assert.equal(await composer.inputValue(), "unsent transcript-mode draftl");
 	await composer.fill("unsent transcript-mode draft");
 	await composer.focus();
@@ -31,10 +31,10 @@ for (const engine of ENGINES) test(`transcript mode keeps the reading place with
 		node.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyT", key: "t", metaKey: true, bubbles: true }));
 		delete (window as any).webkit;
 	});
-	await page.getByRole("button", { name: "Transcript mode: full transcript" }).waitFor();
+	await page.getByRole("button", { name: "Full", exact: true, pressed: true }).waitFor();
 	assert.equal(await composer.evaluate((node) => node === document.activeElement), true, "Cmd+T keeps Composer focus in app mode");
 	assert.equal(await composer.inputValue(), "unsent transcript-mode draft");
-	const control = page.getByRole("button", { name: "Transcript mode: full transcript" });
+	const control = page.getByRole("button", { name: "Chat", exact: true });
 	await page.evaluate(() => { const el = document.querySelector<HTMLElement>('[data-region="transcript"]')!; el.scrollTop = 850; });
 	await frames(page);
 	const anchor = async () => page.evaluate(() => {
@@ -46,7 +46,7 @@ for (const engine of ENGINES) test(`transcript mode keeps the reading place with
 	const before = await anchor();
 	await page.getByText("transcript tool output").waitFor();
 	await control.click();
-	await page.getByRole("button", { name: "Transcript mode: conversation only" }).waitFor();
+	await page.getByRole("button", { name: "Chat", exact: true, pressed: true }).waitFor();
 	await frames(page);
 	const after = await page.locator(`[data-entry="${before.id}"]`).evaluate((node) => {
 		const el = document.querySelector<HTMLElement>('[data-region="transcript"]')!;
@@ -59,7 +59,7 @@ for (const engine of ENGINES) test(`transcript mode keeps the reading place with
 	await folded.getByText("1 error").waitFor();
 	assert.equal(await page.getByText("transcript tool output").isVisible(), false, "conversation mode folds tool output");
 	const reverse = await anchor();
-	await page.getByRole("button", { name: "Transcript mode: conversation only" }).click();
+	await page.getByRole("button", { name: "Full", exact: true }).click();
 	await page.getByText("transcript tool output").waitFor();
 	const reverseAfter = await page.locator(`[data-entry="${reverse.id}"]`).evaluate((node) => {
 		const el = document.querySelector<HTMLElement>('[data-region="transcript"]')!;
@@ -67,8 +67,8 @@ for (const engine of ENGINES) test(`transcript mode keeps the reading place with
 	});
 	assert.ok(Math.abs(reverseAfter - reverse.offset) <= 1, `reverse anchor drift ${reverse.offset} → ${reverseAfter}`);
 	assert.equal(await page.evaluate(() => localStorage.getItem("ampi.transcript.mode")), "full");
-	await page.getByRole("button", { name: "Transcript mode: full transcript" }).click();
-	await page.getByRole("button", { name: "Transcript mode: conversation only" }).waitFor();
+	await page.getByRole("button", { name: "Chat", exact: true }).click();
+	await page.getByRole("button", { name: "Chat", exact: true, pressed: true }).waitFor();
 	assert.equal(await page.evaluate(() => localStorage.getItem("ampi.transcript.mode")), "conversation");
 	await page.evaluate(() => { (window as any).ENTRY = "test-tool-result"; (window as any).parentTicks = true; });
 	await page.locator(".rb-tools[open]").waitFor();
@@ -105,7 +105,7 @@ for (const engine of ENGINES) test(`transcript mode keeps the reading place with
 	assert.ok(order.indexOf(head) > 0, `the reader's window starts at ${head}, inside the history`);
 	await page.reload();
 	await scroller.waitFor();
-	await page.getByRole("button", { name: "Transcript mode: conversation only" }).waitFor();
+	await page.getByRole("button", { name: "Chat", exact: true, pressed: true }).waitFor();
 	// Complete: the window reaches back to where the reader's window started.
 	await page.waitForFunction(({ order, head }) => { const at = (window as any).__transcriptModeT3?.head; return at !== undefined && order.indexOf(at) <= order.indexOf(head); }, { order, head });
 	await frames(page);

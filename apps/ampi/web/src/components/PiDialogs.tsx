@@ -6,9 +6,12 @@ import type { ThreadSummary } from "../../../src/shared/protocol.ts";
 import { findHost, hub, type HostState, useTopic } from "../client.ts";
 import { useFeeds } from "../context.ts";
 import { MOD, go } from "../util.ts";
+import { freshPress } from "../composer-keys.ts";
 import { Modal } from "./Dialogs.tsx";
+import { Segmented } from "./Segmented.tsx";
 import { hostLabel, hostLabelFor, isPiHost } from "./host-label.ts";
 import type { ModelChoice } from "./ThreadView.tsx";
+import { newId } from "../ids.ts";
 
 type Place = "right" | "down" | "beside" | "new";
 const LAST_KEY = "ampi.newAgent";
@@ -46,7 +49,7 @@ export function NewAgentDialog({ hosts, defaultHost, beside, onClose }: { hosts:
 	const [note, setNote] = useState<string>();
 	const [started, setStarted] = useState<string>();
 	// One ID per dialog: a double submit or a retry after a lost response must not start a second agent.
-	const [requestId] = useState(() => crypto.randomUUID());
+	const [requestId] = useState(() => newId());
 	const first = useRef(true);
 	useEffect(() => {
 		if (!first.current) {
@@ -104,11 +107,6 @@ export function NewAgentDialog({ hosts, defaultHost, beside, onClose }: { hosts:
 			setBusy(false);
 		}
 	};
-	const option = (value: Place, text: string) => (
-		<button key={value} className={place === value ? "on" : ""} aria-pressed={place === value} onClick={() => setPlace(value)}>
-			{text}
-		</button>
-	);
 	return (
 		<Modal onClose={onClose}>
 			<h2>New agent</h2>
@@ -125,10 +123,7 @@ export function NewAgentDialog({ hosts, defaultHost, beside, onClose }: { hosts:
 			</div>
 			<div className="field">
 				Where
-				<div className="seg" role="group" aria-label="Where">
-					{besideHere && (pi ? [option("right", "Beside, right"), option("down", "Beside, below")] : option("beside", "Beside this thread, in its tab"))}
-					{option("new", pi ? "New workspace" : "New tab")}
-				</div>
+				<Segmented label="Where" value={place} onChange={setPlace} options={[...(besideHere ? (pi ? [["right", "Beside, right"], ["down", "Beside, below"]] as const : [["beside", "Beside this thread, in its tab"]] as const) : []), ["new", pi ? "New workspace" : "New tab"] as const]} />
 			</div>
 			<div className="field">
 				Working directory
@@ -177,7 +172,7 @@ export function NewAgentDialog({ hosts, defaultHost, beside, onClose }: { hosts:
 					onChange={(e) => setPrompt(e.target.value)}
 					aria-label="First message"
 					onKeyDown={(e) => {
-						if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void create();
+						if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && freshPress(e.nativeEvent)) void create();
 					}}
 				/>
 			</div>
@@ -308,7 +303,7 @@ export function ResumeAgentDialog({ host, summary, onClose }: { host: string; su
 	const [direction, setDirection] = useState<"right" | "down">("right");
 	const [error, setError] = useState<string>();
 	const [busy, setBusy] = useState(false);
-	const [requestId] = useState(() => crypto.randomUUID());
+	const [requestId] = useState(() => newId());
 	const resume = async () => {
 		setBusy(true);
 		setError(undefined);
@@ -340,14 +335,7 @@ export function ResumeAgentDialog({ host, summary, onClose }: { host: string; su
 				</select>
 			</div>
 			{beside && (
-				<div className="seg" role="group" aria-label="Split">
-					<button className={direction === "right" ? "on" : ""} aria-pressed={direction === "right"} onClick={() => setDirection("right")}>
-						Right
-					</button>
-					<button className={direction === "down" ? "on" : ""} aria-pressed={direction === "down"} onClick={() => setDirection("down")}>
-						Below
-					</button>
-				</div>
+				<Segmented label="Split" value={direction} onChange={setDirection} options={[["right", "Right"], ["down", "Below"]]} />
 			)}
 			{error && <div className="err-box" role="alert">{error} Check the Host connection and try again.</div>}
 			<div className="actions">

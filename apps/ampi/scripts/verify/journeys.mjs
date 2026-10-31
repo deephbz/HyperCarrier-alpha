@@ -13,10 +13,12 @@ import { fileURLToPath } from 'node:url';
 import { thread, timeline, arc } from '../ux/recipes.mjs';
 import { threadsSnapshot, topicSnapshot, paneCoverage, agentWatch } from './live-rows.mjs';
 import { app, checkout } from './hub.mjs';
+import { timelineTeams } from './timeline-teams.mjs';
 import { readingPlace } from './reading-place.mjs';
 import { teamQueue } from './team-queue.mjs';
+import { navAnchors } from './nav-anchors.mjs';
 import { arcFloor } from '../../src/pi/views/cos-arc-rules.ts';
-import { fixtureSocket } from '../ux/fixtures.mjs';
+import { routeFixture } from '../ux/fixtures.mjs';
 import { messageFixture, checkMessageFilters } from './team-messages.mjs';
 
 const num = text => Number(String(text).replace(/[^\d]/g, ''));
@@ -555,7 +557,7 @@ function a21Rows(state) {
  * Session file, descriptor and pane sit in the disposable demo dir; the socket sits under /tmp for the short path a
  * Unix socket needs. Nothing reaches a real agent.
  */
-// `old` serves a control from before A27: status has no commands capability and the command ops are unknown.
+// `old` serves a control from before A27: status has no commands or images capability and the command ops are unknown.
 async function addCommandSession(state, { id = 'sess-verify-a27', pane = 'w1:p27', old = false } = {}) {
   const t = new Date().toISOString(), ms = Date.parse(t);
   const dir = join(state.demo, `agent/sessions/--work-${id}--`);
@@ -572,7 +574,7 @@ async function addCommandSession(state, { id = 'sess-verify-a27', pane = 'w1:p27
   let model = models[0].ref, n = 0;
   const nonce = `n-a27-${process.pid}`, socket = `/tmp/ampi-a27-${process.pid}-${Date.now() % 1e6}.sock`, requests = [];
   const reply = req => {
-    if (req.op === 'status') return { ok: true, value: { sessionId: id, sessionFile: file, nonce, idle: true, compacting: false, pending: { steer: 0, followUp: 0 }, ...(old ? {} : { commands: 1 }) } };
+    if (req.op === 'status') return { ok: true, value: { sessionId: id, sessionFile: file, nonce, idle: true, compacting: false, pending: { steer: 0, followUp: 0 }, ...(old ? {} : { commands: 1, images: 1 }) } };
     if (old && (req.op === 'commands' || req.op === 'command')) return { ok: false, error: { code: 'unknown_op', message: `unknown op ${req.op}` } };
     if (req.op === 'commands') return { ok: true, value: {
       commands: [
@@ -590,7 +592,8 @@ async function addCommandSession(state, { id = 'sess-verify-a27', pane = 'w1:p27
     }
     if (req.op === 'submit') {
       const entry = `${id}-u${++n}`;
-      append({ type: 'message', id: entry, message: { role: 'user', content: [{ type: 'text', text: req.text }], timestamp: Date.now() } });
+      const images = (old ? [] : req.images ?? []).map(({ data, mimeType }) => ({ type: 'image', data, mimeType }));
+      append({ type: 'message', id: entry, message: { role: 'user', content: [{ type: 'text', text: req.text }, ...images], timestamp: Date.now() } });
       return { ok: true, evidence: 'started', entryId: entry };
     }
     return { ok: false, error: { code: 'unknown_op', message: `unknown op ${req.op}` } };
@@ -857,15 +860,16 @@ export const journeys = [
         await measure('wheeled');
         // Other journeys add Sessions to the shared hub, so a row can land after the last tick and raise the end.
         // Keep wheeling until the sidebar is at its end and its height held since the previous poll.
-        let lastMax = -1;
+        // A row can also land after the held sample, so the held sample at the end is the proof.
+        let lastMax = -1, atEnd;
         await assertEventually(async () => {
           const m = await measure('wait'), held = m.max === lastMax;
           lastMax = m.max;
-          if (m.max > 0 && m.top >= m.max - 1 && held) return true;
+          if (m.max > 0 && m.top >= m.max - 1 && held) return (atEnd = m), true;
           await p.mouse.wheel(0, 400);
           return false;
         }, 'sidebar did not reach its end', 10_000).catch(() => {});
-        const m = await measure('final');
+        const m = atEnd ?? await measure('final');
         const fail = async message => Object.assign(new Error(message), { detail: { samples, rows: await sidebarRows(side) } });
         if (!(m.max > 0)) throw await fail('sidebar does not overflow at 540 px');
         if (!(m.top >= m.max - 1)) throw await fail(`sidebar stopped at ${m.top} of ${m.max}`);
@@ -961,6 +965,10 @@ export const journeys = [
     },
   },
   {
+    id: 'T2teams', feature: 't2-timeline.md', title: 'Toggle Teams on the Timeline without losing the place',
+    run: j => timelineTeams(j, addFixture),
+  },
+  {
     id: 'T3', feature: 't3-open-session.md', title: 'Open an important Session',
     async run(j) {
       const p = j.page;
@@ -1026,7 +1034,7 @@ export const journeys = [
       });
       await j.step('bounded-exact-filters','Filter a synthetic durable Team message projection',async()=>{
         const audit={requests:[]};
-        await p.routeWebSocket('**/ws',ws=>fixtureSocket(ws,{teamMessages:messageFixture()},audit));
+        await routeFixture(p,{teamMessages:messageFixture()},audit);
         await p.reload();
         const result=await checkMessageFilters(p);
         return {...result,requests:audit.requests};
@@ -1167,13 +1175,13 @@ export const journeys = [
         return { thread };
       });
       // A scroll event arrives a frame after the scroll. A render in between must not pull a reader who left the bottom back
-      // to it. The Find button renders the Session view in the same task as the scroll, so this check is deterministic.
+      // to it. The Find icon renders the Session view in the same task as the scroll, so this check is deterministic.
       await j.step('scroll-survives-render', 'Scroll from the bottom to the top; a render before the scroll event keeps the top', async () => {
         const scroller = p.locator('[data-region="transcript"]');
         const frames = () => p.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
         await scroller.evaluate(el => { el.scrollTop = el.scrollHeight; });
         await frames();
-        const find = p.locator('button', { hasText: /^Find$/ }).first();
+        const find = p.getByRole('button', { name: 'Find in this Session', exact: true }).first();
         const after = await scroller.evaluate(async (el, button) => {
           el.scrollTop = 0;
           button.click();
@@ -1348,6 +1356,11 @@ export const journeys = [
     run: readingPlace,
   },
   {
+    id: 'T3nav', feature: 't3nav-reveal-message.md', title: 'Reveal the linked message from every source on a long Session',
+    optIn: true, budgetMs: 300_000, // Seeds and indexes a 30,000-entry Session, then waits for the index to settle.
+    run: navAnchors,
+  },
+  {
     id: 'T3r', feature: 't3-open-session.md', title: 'Open a direct Session route before the Host lists the Session',
     async run(j) {
       const p = j.page;
@@ -1387,6 +1400,13 @@ export const journeys = [
       const p = j.page, box = p.getByRole('textbox', { name: 'Message the agent' });
       const s = await addFixture(j, () => addCommandSession(j.state), r => [r.thread]);
       let old;
+      // A synthetic 1x1 PNG pasted as the clipboard file a screenshot paste gives.
+      const pastePng = () => box.evaluate(el => {
+        const bytes = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAwS2OUAAAAABJRU5ErkJggg=='), c => c.charCodeAt(0));
+        const data = new DataTransfer();
+        data.items.add(new File([bytes], 'shot.png', { type: 'image/png' }));
+        el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+      });
       try {
         await j.step('open', 'Open the live A27 Session; its composer shows the control and the model card shows Sonnet', async () => {
           await j.goto(`#/h/devbox/t/${encodeURIComponent(s.thread)}`);
@@ -1435,6 +1455,42 @@ export const journeys = [
           await assertEventually(async () => s.userTexts().includes('/model is a word'), 'the escaped message did not reach Pi as text', 10_000);
           return { users: s.userTexts() };
         });
+        await j.step('quote', 'Triple-click the reply A27 ready., choose Quote, type a note and press Enter, then press Enter in the composer; Pi gets one submit with the blockquote and the note', async () => {
+          const submits = () => s.requests.filter(r => r.op === 'submit').length, before = submits();
+          // The escape step waits for the Session file only; a row that renders during the triple-click extends the selection.
+          await p.locator('.transcript').getByText('/model is a word', { exact: true }).waitFor({ timeout: 10_000 });
+          await j.settle();
+          await p.locator('.transcript').getByText('A27 ready.', { exact: true }).click({ clickCount: 3 });
+          await p.getByRole('button', { name: 'Quote q' }).click();
+          const note = p.getByRole('textbox', { name: 'Quote note (optional)' });
+          await note.fill('Why ready?');
+          await note.press('Enter');
+          await assertEventually(async () => (await box.inputValue()).startsWith('> A27 ready.'), 'the quote did not reach the draft', 10_000);
+          const draft = await box.inputValue();
+          assert.equal(draft.trim(), '> A27 ready.\n\nWhy ready?', 'the draft is not the blockquote and the note');
+          // The Composer takes focus one frame after the draft commits.
+          await assertEventually(async () => box.evaluate(el => el === document.activeElement), 'the composer does not have focus after Quote', 5_000);
+          await box.press('Enter');
+          await assertEventually(async () => s.userTexts().some(t => t.startsWith('> A27 ready.')), 'the quote did not reach Pi', 10_000);
+          assert.equal(submits() - before, 1, 'the multiline quote reached Pi as more than one submit');
+          return { draft, sent: s.userTexts().find(t => t.startsWith('> A27 ready.')) };
+        });
+        await j.step('image', 'Paste a PNG into the composer, type What is this? and press Enter; Pi gets one submit with the text and the image, and the transcript row counts the image', async () => {
+          const submits = () => s.requests.filter(r => r.op === 'submit'), before = submits().length;
+          await pastePng();
+          await p.locator('.attachments .attachment').first().waitFor({ timeout: 10_000 });
+          await box.fill('What is this?');
+          await box.press('Enter');
+          await assertEventually(async () => submits().length > before, 'the image message did not reach Pi', 10_000);
+          const sent = submits().slice(before);
+          assert.equal(sent.length, 1, 'the image message reached Pi as more than one submit');
+          assert.deepEqual([sent[0].text, sent[0].images?.map(i => i.mimeType)], ['What is this?', ['image/png']], 'Pi did not get the text and the image in one submit');
+          // The Pi Session reader keeps no image bytes, so a Pi transcript shows the count only.
+          const row = p.locator('.transcript').getByText('1 image(s)', { exact: true });
+          await row.first().waitFor({ timeout: 10_000 });
+          assert.equal(await p.locator('.attachments .attachment').count(), 0, 'the attachment stayed after a send');
+          return { text: sent[0].text, images: sent[0].images.length, row: await row.count() };
+        });
         await j.step('old-control', 'Open a Session whose control predates A27, type /model anthropic/claude-opus-5-5 and press Enter; AmPi says the control is too old, nothing reaches Pi, and the draft stays', async () => {
           old ??= await addFixture(j, () => addCommandSession(j.state, { id: 'sess-verify-a27-old', pane: 'w1:p28', old: true }), r => [r.thread]);
           await j.goto(`#/h/devbox/t/${encodeURIComponent(old.thread)}`);
@@ -1449,6 +1505,17 @@ export const journeys = [
           assert.match(text, /too old for slash commands.*Nothing was sent\./s, `the composer shows no too-old notice: "${text}"`);
           assert.equal(await box.inputValue(), '/model anthropic/claude-opus-5-5', 'the draft was not kept');
           return { choice: text, ops: old.requests.map(r => r.op) };
+        });
+        await j.step('old-control-image', 'Paste a PNG into the old-control Session; AmPi says to update pi-hc-control at once, attaches nothing, and keeps the draft', async () => {
+          await pastePng();
+          const alert = p.locator('.composer-feedback.error');
+          await alert.waitFor({ timeout: 10_000 });
+          const text = await alert.innerText();
+          assert.match(text, /cannot take images from AmPi yet: update pi-hc-control/, `the composer shows no update notice: "${text}"`);
+          assert.equal(await p.locator('.attachments .attachment').count(), 0, 'the old-control Session took an attachment');
+          assert.equal(await box.inputValue(), '/model anthropic/claude-opus-5-5', 'the draft was not kept');
+          assert.equal(old.requests.filter(r => r.op === 'submit').length, 0, 'the paste reached the old control');
+          return { alert: text };
         });
         await j.step('old-control-updated', 'Update the old control in place, then press Enter on the kept draft; the command runs, the model card shows Opus, and nothing reaches Pi as text', async () => {
           old.upgrade();
@@ -1839,36 +1906,36 @@ export const journeys = [
       const p = j.page;
       await autoBuildsSettled(j.state);
       await j.goto('#/v/overview');
-      await j.step('fleet-search', 'Open Search copied prose in the sidebar and search a phrase from one Session\'s first turn', async () => {
-        const box = p.locator('details.fleet-search');
-        await box.locator('summary').click();
+      await j.step('palette-prose', 'Open the sidebar search, choose Prose, and search a phrase from one Session\'s first turn', async () => {
+        await p.getByRole('button', { name: /^Search Sessions or prose/ }).click();
+        const box = p.getByRole('dialog', { name: 'Search Sessions or prose' });
+        await box.getByRole('button', { name: 'Prose', exact: true }).click();
         // The big Session's first human turn; no other demo Session says it.
-        await box.getByRole('textbox', { name: 'Search copied prose' }).fill('keep the Rarebit selector honest');
-        await box.getByRole('textbox', { name: 'Search copied prose' }).press('Enter');
-        const status = box.getByRole('status').first();
-        await status.waitFor({ timeout: 15_000 });
-        const text = await status.innerText();
-        const hits = num(/^(\d+) results/.exec(text)?.[1] ?? '');
-        assert(hits >= 1, `fleet search: ${text}`);
-        const hit = box.locator('a[href*="pi%3Asess-big"]').first();
-        const target = await hit.getAttribute('href');
+        await box.getByRole('textbox', { name: 'Find a Session' }).fill('keep the Rarebit selector honest');
+        const hit = box.locator('.prose-hit[data-target*="pi%3Asess-big"]').first();
+        await hit.waitFor({ timeout: 15_000 });
+        const hits = await box.locator('.prose-hit').count();
+        const text = `${hits} results`;
+        assert(hits >= 1, `palette prose search: ${text}`);
+        const target = await hit.getAttribute('data-target');
         await hit.click();
         await p.waitForURL(/\/t\/pi%3Asess-big\?e=/);
         return { status: text, target };
       }, { expectSide: s => assert.equal(s.askCalls, 0, 'search called the model') });
-      await j.step('find-in-session', 'Choose the Find icon in the Session toolbar and search a tool-call phrase', async () => {
+      await j.step('find-in-session', 'Choose the Find icon in the Session toolbar, search a phrase, add tools (⌥T) and step to a match', async () => {
         await p.locator('.composer').waitFor();
         await p.getByRole('button', { name: 'Find in this Session', exact: true }).click();
-        const find = p.getByRole('region', { name: 'Find in this Session' });
+        const find = p.getByRole('search', { name: 'Find in this Session' });
         const input = find.getByRole('textbox', { name: 'Find in Session' });
         await input.fill('step 570');
-        await input.press('Enter');
+        await input.press('Alt+t');
+        await find.getByRole('button', { name: /✓ Tools/ }).waitFor();
         const status = find.getByRole('status');
-        await status.waitFor({ timeout: 15_000 });
+        await p.waitForFunction(el => /^[1-9]\d* \/ [1-9]\d*$/.test(el.textContent), await status.elementHandle(), { timeout: 15_000 });
+        await input.press('Enter');
         const text = await status.innerText();
-        assert.match(text, /^[1-9]\d* matching entries · \d+ scanned/);
-        const target = await find.locator('a').first().getAttribute('href');
-        assert.match(target, /\/t\/pi%3Asess-big\?e=/);
+        await p.waitForURL(/\/t\/pi%3Asess-big\?e=/);
+        const target = p.url();
         return { status: text, target };
       }, { expectSide: s => assert.equal(s.askCalls, 0, 'find called the model') });
     },
@@ -1975,17 +2042,17 @@ export const journeys = [
           return first && { entry: first.dataset.entry, y: Math.round(first.getBoundingClientRect().top - box.top) };
         });
         const before = await mark();
-        await p.getByRole('button', { name: 'Transcript mode: full transcript', exact: true }).click();
-        await p.getByRole('button', { name: 'Transcript mode: conversation only', exact: true }).waitFor();
-        await p.getByRole('button', { name: 'Transcript mode: conversation only', exact: true }).click();
-        await p.getByRole('button', { name: 'Transcript mode: full transcript', exact: true }).waitFor();
+        await p.getByRole('button', { name: 'Chat', exact: true }).click();
+        await p.getByRole('button', { name: 'Chat', exact: true, pressed: true }).waitFor();
+        await p.getByRole('button', { name: 'Full', exact: true }).click();
+        await p.getByRole('button', { name: 'Full', exact: true, pressed: true }).waitFor();
         await j.settle();
         const after = await scroll.evaluate((e, id) => { const el = e.querySelector(`[data-entry="${CSS.escape(id)}"]`); return el && Math.round(el.getBoundingClientRect().top - e.getBoundingClientRect().top); }, before.entry);
         assert(after !== null && Math.abs(after - before.y) <= 4, `entry ${before.entry} moved ${before.y} → ${after}`);
         return { entry: before.entry, before: before.y, after };
       });
       await j.step('tool-run-line', 'Turn on the conversation lens and read a folded tool run', async () => {
-        await p.getByRole('button', { name: 'Transcript mode: full transcript', exact: true }).click();
+        await p.getByRole('button', { name: 'Chat', exact: true }).click();
         // Thinking-only runs fold as "thinking · 20s · …"; read the first run that has tool calls.
         const summary = p.locator('.rb-tools summary').filter({ hasText: /^\d+ tool calls?\b/ }).first();
         await summary.waitFor();
@@ -2018,7 +2085,7 @@ export const journeys = [
         await assertEventually(async () => (await threadsOf(j.state)).some(t => t.id === thread), `the hub does not list ${thread}`, 20_000);
         await j.goto(`#/h/devbox/t/${encodeURIComponent(thread)}`);
         await p.getByText('A26b-after', { exact: false }).first().waitFor({ timeout: 20_000 });
-        await p.getByRole('button', { name: 'Transcript mode: full transcript', exact: true }).waitFor();
+        await p.getByRole('button', { name: 'Full', exact: true, pressed: true }).waitFor();
         const notices = await p.locator('.msg.notice').count();
         assert.equal(notices, 4, `the full transcript shows ${notices} extension messages`);
         return { thread, notices };
@@ -2026,8 +2093,8 @@ export const journeys = [
       // Outside a run, nothing but user and assistant text renders.
       const loose = () => p.locator('.msg.notice, .compaction, .tool').evaluateAll(els => els.filter(e => !e.closest('.rb-tools')).map(e => e.textContent.slice(0, 60)));
       await j.step('one-run', 'Turn on the conversation lens and read the folded run', async () => {
-        await p.getByRole('button', { name: 'Transcript mode: full transcript', exact: true }).click();
-        await p.getByRole('button', { name: 'Transcript mode: conversation only', exact: true }).waitFor();
+        await p.getByRole('button', { name: 'Chat', exact: true }).click();
+        await p.getByRole('button', { name: 'Chat', exact: true, pressed: true }).waitFor();
         await j.settle();
         const summaries = (await p.locator('.rb-tools summary').allInnerTexts()).map(t => t.replace(/\s+/g, ' '));
         assert.equal(summaries.length, 1, `runs: ${JSON.stringify(summaries)}`);
@@ -2097,6 +2164,148 @@ export const journeys = [
         await assertEventually(async () => (await workers()) > 0 && (await p.locator('.side-scroll [data-worker-count]').count()) === 0, 'Expand all left Teams folded');
         return { label: await all.innerText(), workers: await workers(), foldedBefore: folded };
       }, { expectSide: s => assert.equal(s.herdrTotal, 0, 'folding Teams sent a Herdr action'), alone: false });
+    },
+  },
+  {
+    id: 'P', feature: 'p-pins.md', title: 'Pin Sessions to the top of the sidebar, in every window',
+    async run(j) {
+      // Pins are hub-wide and other journeys share this hub, so each step removes the pins it adds.
+      const p = j.page, pinned = pg => pg.locator('[data-pinned] .pin-row');
+      const pinRow = (pg, id) => pg.locator(`[data-pinned] .pin-row[data-pin="${id}"]`);
+      /** One hub op over a fresh socket of `pg`; resolves the reply and the last pins frame. */
+      const hubOp = (pg, op, args) => pg.evaluate(([op, args]) => new Promise((done, fail) => {
+        const ws = new WebSocket(`ws://${location.host}/ws`); let pins;
+        ws.onopen = () => ws.send(JSON.stringify({ t: 'hub', id: 1, op, args }));
+        ws.onmessage = e => { const f = JSON.parse(e.data); if (f.t === 'pins') pins = f.pins; if (f.t === 'res') { ws.close(); done({ ok: f.ok, error: f.error, pins }); } };
+        ws.onerror = () => fail(new Error('hub socket failed'));
+      }), [op, args]);
+      // A pin is keyed by threadId alone, so an unpin with any host removes it; older hubs refuse an unpin with no host.
+      const unpin = async id => { const r = await hubOp(p, 'pins.set', { host: 'verify', threadId: id, pinned: false }); assert(r.ok, `unpin ${id}: ${r.error}`); return r.pins ?? []; };
+      const pinsNow = () => unpin('verify:none');
+      /** A second window of the same browser profile: it shares the hub cookie, so it sees the same hub. */
+      const window2 = async (options = {}) => {
+        const ctx = await p.context().browser().newContext({ locale: 'en-GB', timezoneId: 'UTC', reducedMotion: 'reduce', ...options });
+        await ctx.addCookies(await p.context().cookies());
+        const page = await ctx.newPage();
+        page.setDefaultTimeout(8000);
+        return { page, close: () => ctx.close() };
+      };
+      await j.goto('#/v/overview');
+      const rows = p.locator('.side-scroll .row[data-thread]');
+      await assertEventually(async () => (await rows.count()) >= 2, 'the sidebar lists fewer than 2 Sessions', 20_000);
+      const [a, b] = await rows.evaluateAll(r => r.slice(0, 2).map(x => x.dataset.thread));
+      // The Host route key (HostState `link`, such as devbox#pi), as the row's href encodes it.
+      const linkOf = async id => decodeURIComponent((await p.locator(`.side-scroll .row[data-thread="${id}"] a.title`).first().getAttribute('href')).split('/')[2]);
+      await j.step('menu-pins-everywhere', 'Right-click a Session row and choose Pin to top; a second window shows the pin', async () => {
+        await rows.first().click({ button: 'right' });
+        const label = await p.locator('.row-menu button').innerText();
+        await p.locator('.row-menu button').click();
+        await assertEventually(async () => (await pinRow(p, a).count()) === 1, 'the pin row did not appear');
+        const w = await window2();
+        try {
+          await w.page.goto(`${j.state.origin}/#/v/overview`);
+          await assertEventually(async () => (await pinRow(w.page, a).count()) === 1, 'the second window does not show the pin', 15_000);
+          return { label, thread: a, hint: (await pinsNow()).find(x => x.threadId === a)?.host };
+        } finally { await w.close(); }
+      });
+      await j.step('star-unpins-elsewhere', 'In a second window, open the pinned Session and clear its star; the first window drops the pin', async () => {
+        const w = await window2();
+        try {
+          await w.page.goto(`${j.state.origin}/#/h/${encodeURIComponent(await linkOf(a))}/t/${encodeURIComponent(a)}`);
+          const star = w.page.locator('.pin-star');
+          await assertEventually(async () => (await star.getAttribute('aria-pressed')) === 'true', 'the star does not show the pin', 15_000);
+          await star.click();
+          await assertEventually(async () => (await pinRow(p, a).count()) === 0, 'the first window still shows the pin');
+          return { pressed: await star.getAttribute('aria-pressed') };
+        } finally { await w.close(); }
+      });
+      await j.step('one-row-per-session', 'Pin two Sessions; keys still visit each Session once and one row is current', async () => {
+        await hubOp(p, 'pins.set', { host: await linkOf(a), threadId: a, pinned: true, intent: 'owner', title: '' });
+        await hubOp(p, 'pins.set', { host: await linkOf(b), threadId: b, pinned: true, intent: 'owner', title: '' });
+        try {
+          await rows.first().locator('a.title').click();
+          await assertEventually(async () => (await pinned(p).count()) >= 2, 'the two pins did not show');
+          const ids = await p.$$eval('aside [data-nav-row]', r => r.map(x => x.dataset.navId ?? x.dataset.navPage ?? x.dataset.termRow ?? '?').filter(x => x !== '?'));
+          const dup = ids.filter((x, i) => ids.indexOf(x) !== i);
+          assert.deepEqual(dup, [], 'two sidebar rows share a nav id');
+          assert.equal(await p.locator('aside [aria-current="page"]').count(), 1, 'the pin row also claims aria-current');
+          return { navRows: ids.length, pins: ids.filter(x => x.startsWith('pin:')) };
+        } finally {
+          await unpin(a);
+          await unpin(b);
+        }
+      });
+      await j.step('stale-hint', 'Pin a listed Session under an old Host id; the row opens it on the Host that lists it and the hint moves', async () => {
+        const real = await linkOf(a);
+        await hubOp(p, 'pins.set', { host: 'verify-old-host', threadId: a, pinned: true, intent: 'owner', title: '' });
+        try {
+          const link = pinRow(p, a).locator('a.title');
+          await assertEventually(async () => ((await link.getAttribute('href')) ?? '').includes(`/h/${encodeURIComponent(real)}/`), 'the pin does not open on the listing Host');
+          await assertEventually(async () => (await pinsNow()).find(x => x.threadId === a)?.host === real, 'the hub kept the old host hint');
+          return { href: await link.getAttribute('href'), hint: real };
+        } finally { await unpin(a); }
+      });
+      await j.step('gone', 'Pin a Session no Host lists; the row is dimmed "Not found on <host>" and × removes it', async () => {
+        const id = 'pi:verify-gone';
+        await hubOp(p, 'pins.set', { host: 'verify-removed-host', threadId: id, pinned: true, intent: 'owner', title: 'old migration run' });
+        try {
+          const row = pinRow(p, id);
+          await assertEventually(async () => (await row.getAttribute('class') ?? '').includes('gone'), 'the pin is not dimmed as gone', 15_000);
+          const text = await row.innerText();
+          assert.match(text, /old migration run/);
+          assert.match(text, /Not found on verify-removed-host/);
+          await row.hover();
+          await row.locator('.pin-x').click();
+          await assertEventually(async () => (await row.count()) === 0, '× did not remove the pin');
+          return { text };
+        } finally { await unpin(id); }
+      });
+      await j.step('touch', 'On a phone viewport the star pins the open Session and each pin row shows its × without hover', async () => {
+        const w = await window2({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+        try {
+          await w.page.goto(`${j.state.origin}/#/h/${encodeURIComponent(await linkOf(a))}/t/${encodeURIComponent(a)}`);
+          // A phone opens with the sidebar over the Session; the owner hides it to reach the top bar.
+          const star = w.page.locator('.pin-star');
+          // The star takes the tap only when nothing covers its center.
+          const tapStar = async pressed => {
+            await w.page.locator('[aria-label="Hide sidebar"]').tap();
+            await assertEventually(() => star.evaluate(e => { const b = e.getBoundingClientRect(); return e.contains(document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2)); }), 'the sidebar still covers the star');
+            // The star must show the opposite state first, so a stale read cannot pass for the tap's result.
+            await assertEventually(async () => (await star.getAttribute('aria-pressed')) === String(pressed !== 'true'), `the star was already aria-pressed=${pressed} before the tap`);
+            await star.tap();
+            await assertEventually(async () => (await star.getAttribute('aria-pressed')) === pressed, `the star did not turn aria-pressed=${pressed}`);
+          };
+          await tapStar('true');
+          await assertEventually(async () => (await pinsNow()).some(x => x.threadId === a), 'the star tap did not pin');
+          await w.page.locator('[aria-label="Show sidebar"]').tap();
+          const x = await w.page.locator(`[data-pinned] .pin-row[data-pin="${a}"] .pin-x`).evaluate(e => ({ display: getComputedStyle(e).display, width: Math.round(e.getBoundingClientRect().width) }));
+          assert.notEqual(x.display, 'none', 'the × hides on touch');
+          await tapStar('false');
+          await assertEventually(async () => !(await pinsNow()).some(x => x.threadId === a), 'the second star tap did not unpin');
+          return { x };
+        } finally { await w.close(); await unpin(a); }
+      });
+      // Headless Chromium does not turn a Shift+F10 key press into a contextmenu event, so the step sends the event a
+      // key-opened menu gets: a contextmenu at (0, 0) on the focused row.
+      await j.step('menu-key', 'Focus a Session row and open its context menu from the keyboard; the menu opens under the row and Escape closes it', async () => {
+        const row = rows.first();
+        await row.locator('a.title').focus();
+        await p.evaluate(() => document.activeElement.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 0, clientY: 0 })));
+        const menu = p.locator('.row-menu');
+        await assertEventually(async () => (await menu.count()) === 1, 'a key-opened context menu did not open the row menu');
+        const [rowBox, menuBox] = [await row.boundingBox(), await menu.boundingBox()];
+        assert(Math.abs(menuBox.y - (rowBox.y + rowBox.height)) <= 2, `the menu opens at y=${menuBox.y}, not under the row (bottom ${rowBox.y + rowBox.height})`);
+        const label = await menu.locator('button').innerText();
+        assert.equal(await p.evaluate(() => document.activeElement?.closest('.row-menu') != null), true, 'the menu item does not take focus');
+        await p.keyboard.press('Escape');
+        await assertEventually(async () => (await menu.count()) === 0, 'Escape did not close the row menu');
+        return { label, rowBottom: rowBox.y + rowBox.height, menuTop: menuBox.y };
+      });
+      await j.step('no-leftover', 'Read the hub pins; this journey left none of its pins', async () => {
+        const left = (await pinsNow()).filter(x => [a, b, 'pi:verify-gone'].includes(x.threadId));
+        assert.deepEqual(left, [], 'this journey left pins on the shared hub');
+        return { left: left.length };
+      });
     },
   },
   {
@@ -2235,7 +2444,7 @@ export const journeys = [
       await j.step('find', 'Press ⌘F; Find in this Session opens with its textbox focused; Escape closes it', async () => {
         await focusTranscript();
         await p.keyboard.press('ControlOrMeta+f');
-        const find = p.getByRole('region', { name: 'Find in this Session' });
+        const find = p.getByRole('search', { name: 'Find in this Session' });
         await find.waitFor({ timeout: 10_000 });
         assert.equal(await p.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Find in Session');
         await p.keyboard.press('Escape');
@@ -2291,7 +2500,7 @@ export const journeys = [
         await dialog.waitFor({ timeout: 10_000 });
         assert.equal(await p.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Find a command');
         const text = await dialog.innerText();
-        for (const label of ['Toggle sidebar', 'Focus composer', 'Jump to a Session']) assert(text.includes(label), `${label} missing from the command palette`);
+        for (const label of ['Toggle sidebar', 'Focus composer', 'Search Sessions or prose']) assert(text.includes(label), `${label} missing from the command palette`);
         await p.keyboard.press('Escape');
         await dialog.waitFor({ state: 'detached', timeout: 10_000 });
         return { listed: true };
@@ -2399,7 +2608,7 @@ export const journeys = [
         return { from: ['sidebar', 'panel'] };
       });
       await j.step('find-cancel', 'From the transcript and the composer: ⌘F then Escape returns focus to where it was', async () => {
-        const find = p.getByRole('region', { name: 'Find in this Session' });
+        const find = p.getByRole('search', { name: 'Find in this Session' });
         for (const start of ['transcript', 'composer']) {
           await startIn(start);
           await p.keyboard.press('ControlOrMeta+f');
@@ -2408,15 +2617,14 @@ export const journeys = [
           await find.waitFor({ state: 'detached', timeout: 10_000 });
           await regionIs(start, `cancelling find did not return focus to the ${start}`);
         }
-        // R18: Esc on a result link, not only in the input, closes the bar and returns focus.
+        // R18: Esc on a bar control, not only in the input, closes the bar and returns focus.
         await startIn('composer');
         await p.keyboard.press('ControlOrMeta+f');
         await find.getByRole('textbox', { name: 'Find in Session' }).fill('step 570');
-        await find.getByRole('textbox', { name: 'Find in Session' }).press('Enter');
-        await find.locator('a').first().focus({ timeout: 15_000 });
+        await find.getByRole('button', { name: 'Close Find' }).focus({ timeout: 15_000 });
         await p.keyboard.press('Escape');
         await find.waitFor({ state: 'detached', timeout: 10_000 });
-        await regionIs('composer', 'Escape on a find result did not return focus to the composer');
+        await regionIs('composer', 'Escape on a find bar control did not return focus to the composer');
         return { returned: true, fromLink: true };
       });
       await j.step('modal-blocks', 'With the Session palette open: ⌘B does nothing, ⌘⇧K switches palettes and keeps the query, ⌘⇧K again closes', async () => {

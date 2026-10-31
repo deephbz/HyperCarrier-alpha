@@ -8,7 +8,6 @@ import { test } from "node:test";
 import { type ModelPurpose, resolveHelperModel, useHubConfig } from "../src/hub/helper-models.ts";
 import { piModelRegistry } from "../src/pi/model-registry.ts";
 import { cosDemo } from "../scripts/demo/cos.ts";
-import type { DemoContext } from "../scripts/demo/index.ts";
 import { ask } from "../src/pi/ask.ts";
 import type { Chunk } from "../src/pi/views/cos-arc-chunks.ts";
 import { buildArc, buildLog, cosArc, type ArcValue } from "../src/pi/views/cos-arc.ts";
@@ -21,7 +20,7 @@ useHubConfig(undefined, HELPER_MODELS);
 // A fake `pi --mode json` answers as the requested model, with the offline demo model's text and a cached-prompt usage record.
 
 const root = mkdtempSync(join(tmpdir(), "ampi-ask-usage-"));
-cosDemo({ dir: root, agentDir: join(root, "agent") } as DemoContext);
+cosDemo({ dir: root, agentDir: join(root, "agent"), now: Date.now(), sessions: {} });
 const USAGE = { input: 3, output: 50, cacheRead: 12_000, cacheWrite: 800, totalTokens: 12_853, cost: { total: 0.02 } };
 const fakePi = join(root, "fake-pi");
 writeFileSync(fakePi, `#!${process.execPath}

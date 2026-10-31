@@ -1,3 +1,4 @@
+import "../../../scripts/test/home.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
@@ -15,7 +16,6 @@ import {
   nativeAvailabilityForError,
   projectRarebitConsumerStatus,
   projectionTokens,
-  rarebitNotificationSound,
   readMaterializationArtifact,
   reconcileRarebitPane,
   reportRarebitPane,
@@ -215,14 +215,14 @@ test("deck renders the package-owned marker and Summary grammar", () => {
       { status: "needs_attention", sourcePending: false },
       palette,
     ).text,
-    "<yellow><bold>◆! needs you</>",
+    "summarized",
   );
   assert.equal(
     terminalSummaryPresentation(
       { status: "needs_attention", sourcePending: true },
       palette,
     ).text,
-    "needs you · source pending",
+    "summarized · source pending",
   );
   assert.equal(
     terminalSummaryPresentation(
@@ -240,10 +240,9 @@ test("deck renders the package-owned marker and Summary grammar", () => {
   );
 });
 
-test("sidebar projection uses mutually exclusive visual-tone tokens", () => {
+test("sidebar projection uses mutually exclusive visual-tone tokens and no attention token (D24)", () => {
   const emptyStates = {
     rarebit_state_neutral: null,
-    rarebit_state_attention: null,
     rarebit_state_muted: null,
     rarebit_state_diagnostic: null,
   };
@@ -252,10 +251,9 @@ test("sidebar projection uses mutually exclusive visual-tone tokens", () => {
       summary: { status: "needs_attention", sourcePending: false },
     }),
     {
-      rarebit_attention: "◆!",
       rarebit_error: null,
       ...emptyStates,
-      rarebit_state_attention: "needs you",
+      rarebit_state_neutral: "summarized",
     },
   );
   assert.deepEqual(
@@ -263,16 +261,14 @@ test("sidebar projection uses mutually exclusive visual-tone tokens", () => {
       summary: { status: "needs_attention", sourcePending: true },
     }),
     {
-      rarebit_attention: null,
       rarebit_error: null,
       ...emptyStates,
-      rarebit_state_neutral: "needs you · source pending",
+      rarebit_state_neutral: "summarized · source pending",
     },
   );
   assert.deepEqual(
     projectionTokens({ summary: { status: "finished", sourcePending: false } }),
     {
-      rarebit_attention: null,
       rarebit_error: null,
       ...emptyStates,
       rarebit_state_neutral: "appears finished",
@@ -283,7 +279,6 @@ test("sidebar projection uses mutually exclusive visual-tone tokens", () => {
       summary: { status: "ineligible", sourcePending: false },
     }),
     {
-      rarebit_attention: null,
       rarebit_error: null,
       ...emptyStates,
       rarebit_state_muted: "ineligible",
@@ -292,7 +287,6 @@ test("sidebar projection uses mutually exclusive visual-tone tokens", () => {
   assert.deepEqual(
     projectionTokens({ summary: { status: "error", sourcePending: false } }),
     {
-      rarebit_attention: null,
       rarebit_error: "×",
       ...emptyStates,
       rarebit_state_diagnostic: "error",
@@ -470,7 +464,7 @@ test("Herdr uses the package reader result and preserves its explicit unreadable
   assert.equal(incomplete.retry.reason, "materialization_unreadable");
 });
 
-test("maps runtime evidence to producer expectations and gates notification sound", () => {
+test("maps runtime evidence to producer expectations", () => {
   assert.equal(
     eventExpectation("pane.agent_status_changed", {
       data: { agent_status: "working" },
@@ -488,27 +482,6 @@ test("maps runtime evidence to producer expectations and gates notification soun
       "snapshot",
     );
   assert.equal(eventExpectation("pane.agent_detected", {}), "snapshot");
-  assert.equal(
-    rarebitNotificationSound({
-      status: "needs_attention",
-      sourcePending: false,
-    }),
-    "request",
-  );
-  assert.equal(
-    rarebitNotificationSound({
-      status: "needs_attention",
-      sourcePending: true,
-    }),
-    "none",
-  );
-  assert.equal(
-    rarebitNotificationSound({
-      status: "user_requested",
-      sourcePending: false,
-    }),
-    "none",
-  );
 });
 
 test("reconciler publishes native/request and settled/final upgrades, including a delayed final receipt", async () => {

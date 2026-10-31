@@ -33,15 +33,33 @@ test("pi host: 96-hour eviction respects open/live pins, removes copied payloads
  assert.ok((await browser.req("devbox", "thread.history", { threadId: "pi:sess-a" })).entries.length);
  browser.ws.send(JSON.stringify({ t: "unsub", sid: thread }));
  await browser.until<any>(threads, (v) => !v.threads["pi:sess-a"]);
+ // The eviction drops the copy before its index write lands, so a discovery publish can show the drop first.
+ const evictedBy = Date.now() + 3000;
+ while (index()[f.sessionA] && Date.now() < evictedBy) await new Promise((resolve) => setTimeout(resolve, 10));
  assert.equal(index()[f.sessionA], undefined); assert.ok(existsSync(f.sessionA), "native evidence is untouched");
  assert.ok(index()[f.sessionB], "live old Session stays copied");
  const expired = browser.sub("devbox", { kind: "thread", threadId: "pi:sess-a" });
  await browser.until<any>(expired, (v) => /outside retained scope/.test(v.agent.readError ?? ""));
+ await assert.rejects(browser.req("devbox", "thread.find", { threadId: "pi:sess-a", query: "files" }), { code: "not_found" }, "an evicted copy is no transient Indexing");
  hub.link("devbox")!.reconnect();
  await new Promise((resolve) => setTimeout(resolve, 1600));
  assert.equal(index()[f.sessionA], undefined, "reconnect cannot recopy an unchanged expired source");
  appendFileSync(f.sessionA, line({ type: "message", id: "new", parentId: "r1", timestamp: new Date().toISOString(), message: { role: "user", content: "fresh again" } }));
  await browser.until<any>(expired, (v) => v.entries.some((e: any) => e.id === "new"));
+});
+
+test("pi host: Find before the Host indexes a Session answers Indexing; the thread frame that indexes it follows", async (t) => {
+	const { f, browser } = await setup(t);
+	const threads = browser.sub("devbox", { kind: "threads" });
+	await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.live);
+	const ask = () => browser.req("devbox", "thread.find", { threadId: "pi:sess-c", query: "selector" });
+	assert.deepEqual(await ask(), { indexing: true });
+	const thread = browser.sub("devbox", { kind: "thread", threadId: "pi:sess-c" });
+	const sessionC = join(f.sessionA, "..", "c.jsonl");
+	writeFileSync(sessionC, line({ type: "session", version: 3, id: "sess-c", timestamp: iso(0), cwd: "/work" }) + user("u1", null, 1, "check the selector"));
+	f.setState({ ...f.state, agents: [...f.state.agents, { pane_id: "w1:p4", workspace_id: "w1", tab_id: "w1:tB", name: "w1:p4", cwd: "/work", agent_status: "idle", focused: false, agent: "pi", agent_session: { kind: "path", agent: "pi", value: sessionC } }] });
+	await browser.until<any>(thread, (v) => Boolean(v.sourceVersion));
+	assert.equal((await ask()).total, 1, "the unchanged request answers once the Host announces the index");
 });
 
 test("pi host: submit goes through the control socket with its evidence; without one, keys say they prove less", async (t) => {

@@ -167,7 +167,7 @@ export async function doctor(state) {
   return { ok: checks.every(c => c.ok), checks };
 }
 
-/** The keyed /api/health body: Host states and the `derive` and `builds` job counters. */
+/** The keyed /api/health body: Host states and the `derive`, `builds` and `roleWaits` job counters. */
 export async function health(state) {
   return (await fetch(`${state.origin}/api/health`, { headers: { authorization: `Bearer ${keyOf(state)}` }, signal: AbortSignal.timeout(2000) })).json();
 }
@@ -176,10 +176,10 @@ export async function health(state) {
 export const buildsStarted = async state => { const b = (await health(state)).builds ?? { pending: 0, done: 0 }; return b.pending + b.done; };
 
 /**
- * Waits until the hub's background jobs (/api/health `derive` and `builds`) are drained and their counts hold for
- * `stableMs`. Hub-start Builds call the model, so a step that counts model calls must start after them.
- * `builds` = true waits for running Builds only. A hub from before the Build counter reports no `builds` and
- * waits on derive alone.
+ * Waits until the hub's background jobs (/api/health `derive`, `builds` and `roleWaits`) are drained and their counts
+ * hold for `stableMs`. Hub-start Builds call the model, so a step that counts model calls must start after them. A role
+ * wait can still start a Build, so both modes wait on it. `builds` = true waits for running Builds and role waits only.
+ * A hub from before a counter reports none for it.
  */
 export async function settled(state, { stableMs = 1500, timeout = 60_000, builds = false } = {}) {
   const until = Date.now() + timeout;
@@ -187,13 +187,13 @@ export async function settled(state, { stableMs = 1500, timeout = 60_000, builds
   for (;;) {
     try {
       const h = await health(state);
-      const b = h.builds ?? { pending: 0, done: 0 }, d = h.derive ?? { pending: 0, done: 0 };
-      seen = `derive pending ${d.pending} done ${d.done}; builds pending ${b.pending} done ${b.done}`;
-      if (builds) { if (!b.pending) return seen; }
+      const none = { pending: 0, done: 0 }, b = h.builds ?? none, d = h.derive ?? none, w = h.roleWaits ?? none;
+      seen = `derive pending ${d.pending} done ${d.done}; builds pending ${b.pending} done ${b.done}; role waits pending ${w.pending}`;
+      if (builds) { if (!b.pending && !w.pending) return seen; }
       else {
-        const now = `${d.pending}/${d.done}/${b.pending}/${b.done}`;
+        const now = `${d.pending}/${d.done}/${b.pending}/${b.done}/${w.pending}/${w.done}`;
         if (now !== last) { last = now; since = Date.now(); }
-        if (!d.pending && !b.pending && Date.now() - since >= stableMs) return seen;
+        if (!d.pending && !b.pending && !w.pending && Date.now() - since >= stableMs) return seen;
       }
     } catch (error) { seen = `health failed: ${error.message}`; }
     if (Date.now() > until) throw new Error(`Hub background jobs did not settle within ${timeout / 1000} s (${seen}).`);

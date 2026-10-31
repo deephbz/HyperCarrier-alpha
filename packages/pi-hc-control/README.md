@@ -38,6 +38,15 @@ clients and pipelined requests are allowed. Ops: `status`, `submit`, `abort`,
 `commands`, `command`. `status.commands = 1` announces the last two; an older
 control answers them `unknown_op`.
 
+`submit` takes `text`, `deliverAs`, and optional `images`: at most 8
+`{ data, mimeType }` objects with base64 `data` and a PNG, JPEG, GIF, or WebP
+`mimeType`, at most 6 MiB of base64 in total. `text` may be empty when images
+are attached. The images reach Pi in the same user message as the text, and
+Pi may resize them. `status.images = 1` announces this field with exactly the
+limits that `control.mjs` exports as `IMAGE_LIMITS`; other limits need a new
+version. An older control ignores the field, so a client must check the
+capability before it sends images.
+
 ## Acknowledgements
 
 `pi.sendUserMessage()` returns nothing and reports failures only to Pi's error
@@ -59,7 +68,9 @@ An `admitted` reply names a `submission` ID. Pi takes queued input back only
 all at once: its interactive abort and dequeue move the queue into the editor
 draft, and Pi never sends it. So the extension tracks each admitted submission
 until Pi is idle with nothing pending. Then it is `delivered` (with `entryId`),
-`returned` (the editor draft holds its text), or `dropped`. `status.submissions`
+`returned` (the editor draft holds its text), or `dropped`. A submission
+with images names their count in `images`; Pi returns text only, so its
+images are lost, and one with no text is never `returned`. `status.submissions`
 lists queued submissions and the last 20 settled ones, text clipped to 16 KiB
 (`truncated`). An `abort` reply lists `submissions` that were queued when it
 began, with their outcome.
@@ -67,7 +78,7 @@ began, with their outcome.
 `status.pending` mirrors Pi's queue from observed `input` and user
 `message_start` events and resets whenever Pi reports nothing pending. `held`
 reports an active C1 lease. Error codes: `bad_request`, `too_large` (text over
-1 MiB), `unknown_op`, `busy_compacting`, `not_admitted`, `abort_timeout`,
+1 MiB or images over 6 MiB), `unknown_op`, `busy_compacting`, `not_admitted`, `abort_timeout`,
 `closed`, `internal`.
 
 ## Slash commands

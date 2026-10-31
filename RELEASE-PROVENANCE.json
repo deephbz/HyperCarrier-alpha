@@ -1,19 +1,19 @@
 {
   "schemaVersion": 1,
   "sourceRepository": "HyperCarrier",
-  "sourceCommit": "4ec4114c2a542f8861a627b5dad0a67a4bf34cd0",
-  "sourceTree": "e362e127d5f98c9931c7115a2b507eb34d8b5d01",
+  "sourceCommit": "e85f91b6ae287a83564ad18f42278255bc747396",
+  "sourceTree": "56b4ab5b1f762189f4947fd34eb051d9b715658f",
   "sourceWorktreeDirty": false,
-  "exportContentSha256": "1fb51b0cb335e54bb5848571ab63bbcb3d15ed5d8b448ad2b250410c0e1dc035",
-  "exportManifestSha256": "117dd3ec27caa4725a528a22eee75794b0d6471c2b81b6dff9b7176f5504cca1",
+  "exportContentSha256": "428ee4503661e41ef6f4bf95129a5f74e14601adcdd5413b94be461eec7ba576",
+  "exportManifestSha256": "850f85864a1640ce83e7c05f8429d0412b8413e6e877ca895c7f508f7d80273e",
   "dependencies": [],
   "submodules": [
     {
       "name": "packages/pi-team-bright",
       "path": "packages/pi-team-bright",
       "repository": "https://github.com/deephbz/pi-team-bright.git",
-      "commit": "05bcb55b0ceb1cf974b706dd67890609e1e61c77",
-      "tree": "1aa6b77f31a1f7cf26e58a26172c5e41f3037dd0",
+      "commit": "16551cb52cd1cd4177cdf4f4bbe8999cdf213ab1",
+      "tree": "0e2fc375960fc72d3da7d0874d5f577d0ad31f1e",
       "identity": {
         "kind": "npm-package",
         "name": "@hypercarrier/pi-team-bright",
@@ -24,8 +24,8 @@
       "name": "packages/pi-openai-blackmagic-compact",
       "path": "packages/pi-openai-blackmagic-compact",
       "repository": "https://github.com/deephbz/pi-openai-blackmagic-compact.git",
-      "commit": "580563ac31452444b1fecac29fa93e5e2c5ac58e",
-      "tree": "927f4cf550566447a62d55663076516a5f6e754e",
+      "commit": "c113df09c416f207ffb9b206e6c9d3b8be767d05",
+      "tree": "b8acc0adecdbd58d6cadc3038d6cb0e80d7917aa",
       "identity": {
         "kind": "npm-package",
         "name": "@hypercarrier/pi-openai-blackmagic-compact",
@@ -36,8 +36,8 @@
       "name": "config/colorstack",
       "path": "config/colorstack",
       "repository": "https://github.com/deephbz/colorstack.git",
-      "commit": "ede8ba66482b2897dd8be939f88571b24c5caf96",
-      "tree": "6fead2cb1c228fedd5ec5a03d4755fad0480be4f",
+      "commit": "a4b18392b975979505f5d54ab96d6f1194d6c026",
+      "tree": "fafd22b8ec0e1b007227d350a21a4766100d4aa6",
       "identity": {
         "kind": "python-project",
         "name": "colorstack",
@@ -48,20 +48,20 @@
       "name": "packages/hc-rarebit",
       "path": "packages/hc-rarebit",
       "repository": "https://github.com/deephbz/rarebit.git",
-      "commit": "1eead8768bc2beb1a6957ebc41baa2b8e28db728",
-      "tree": "5508257c8661979e32ac966c6e5926b9b478e28d",
+      "commit": "b3274fdf0c23660830ad4b17635d9aea388d80bd",
+      "tree": "eb98345e7778ca2b66a8012c06978e19abfe8e94",
       "identity": {
         "kind": "npm-package",
         "name": "@hypercarrier/rarebit",
-        "version": "0.5.2"
+        "version": "0.6.0"
       }
     },
     {
       "name": "apps/trace-analytics",
       "path": "apps/trace-analytics",
       "repository": "https://github.com/deephbz/trace-analytics.git",
-      "commit": "6b7c216f361c755c13b91dfa10b35173d2ff4f83",
-      "tree": "7ed51b0ae5aab54a0a531f5bc39f30cce160302c",
+      "commit": "ad0d126869c491c30eba67ac54abfc47165e78aa",
+      "tree": "f3528d51b89cb60d32adb793a39b6efbc334d66c",
       "identity": {
         "kind": "npm-package",
         "name": "trace-analytics",
@@ -72,24 +72,24 @@
       "name": "packages/rarebit-durable",
       "path": "packages/rarebit-durable",
       "repository": "https://github.com/deephbz/rarebit-durable.git",
-      "commit": "857d73072c8d9238f1279c722fb0549b4c36191d",
-      "tree": "c2c40e58e75af285dd91aa18ef6c16aaa3ca1ad7",
+      "commit": "ca720e6f93d051b44bb15abe74002d37fcbdf5b5",
+      "tree": "18d2c7b092a0e1fa6a2e203443965ac3d718a697",
       "identity": {
         "kind": "npm-package",
         "name": "@hypercarrier/rarebit-durable",
-        "version": "0.1.1"
+        "version": "0.1.2"
       }
     },
     {
       "name": "packages/auto-compact-durable",
       "path": "packages/auto-compact-durable",
       "repository": "https://github.com/deephbz/auto-compact-durable.git",
-      "commit": "b7be5923b45167d6c258af230f4366ac04352a16",
-      "tree": "bd4bebce1add559dcd406174b6954b8c695976e6",
+      "commit": "6bf465a258aa6b3bef5623c9a67d9aac4e4582ca",
+      "tree": "8a08f8773cfc94ae61be37319eb525e62165dd78",
       "identity": {
         "kind": "npm-package",
         "name": "@hypercarrier/auto-compact-durable",
-        "version": "0.1.1"
+        "version": "0.1.2"
       }
     },
     {

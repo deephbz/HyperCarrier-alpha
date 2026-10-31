@@ -12,13 +12,13 @@ Configure these fields in Pi's `auto_compact` namespace:
 {
   "auto_compact": {
     "preservation": "artifact-handoff",
-    "method": "native",
+    "method": "keepset",
     "execution": "foreground"
   }
 }
 ```
 
-These values preserve the existing defaults. `/auto-compact status` reports
+These values are the defaults. `/auto-compact status` reports
 the effective selection. `/auto-compact off` still enforces W through plain
 native compaction, regardless of the selected method.
 
@@ -149,7 +149,10 @@ planning shows the model output ceiling. Session request settings can lower it.
 - [`./extension`](src/extension.mjs) registers the Pi extension.
 - [`./controller`](src/controller.mjs) owns lifecycle state and Pi effects.
 - [`./command`](src/command.mjs) owns command parsing and completion.
-- [`./settings`](src/settings.mjs) owns settings resolution and persistence.
+- [`./settings`](src/settings.mjs) owns settings files: reading and persistence.
+- [`./resolve`](src/resolve.mjs) owns settings resolution: defaults, merge
+  and validation, with no file access. Other hosts, such as the AmPi durable
+  node, call it so one file means the same in both.
 
 [`src/presentation.mjs`](src/presentation.mjs) renders human projections, and
 [`src/threshold.mjs`](src/threshold.mjs) owns threshold validity. They are
@@ -162,7 +165,7 @@ an independent lifecycle controller.
 
 ### Lifecycle and handoff
 
-This section describes the default artifact-handoff/native/foreground mode.
+This section describes the artifact-handoff/native/foreground mode.
 With preservation `none`, native execution moves directly to `ready`.
 Background execution always moves directly to `ready`. Foreground custom methods wait for the live planning tool.
 

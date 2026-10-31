@@ -6,7 +6,8 @@ import { dirname, join } from "node:path";
 import type { PiTeamTask } from "../../src/pi/views/team.ts";
 import { cosDemo } from "./cos.ts";
 
-export type DemoContext = { dir: string; agentDir: string; sessions: Record<string, { name: string; file: string; id: string; cwd: string }> };
+/** `now` is the seed clock (DEMO_NOW): every demo writer dates its files from it, so one seed writes the same bytes. */
+export type DemoContext = { dir: string; agentDir: string; now: number; sessions: Record<string, { name: string; file: string; id: string; cwd: string }> };
 
 function teamDemo({ dir }: DemoContext): string {
 	const task = (id: string, title: string, status: string, owner: string, deps: string[] = []): PiTeamTask => ({ id, title, status, owner, deps, ready: status === "ready" });
@@ -41,16 +42,16 @@ export async function readTaskSnapshot({teamName}) {
 }`;
 }
 
-function rarebit({ sessions }: DemoContext): string {
+function rarebit({ sessions, now }: DemoContext): string {
 	const line = (value: unknown) => `${JSON.stringify(value)}\n`;
-	const header = (id: string) => line({ type: "session", version: 3, id, timestamp: new Date().toISOString(), cwd: "/work/demo" });
+	const header = (id: string) => line({ type: "session", version: 3, id, timestamp: new Date(now).toISOString(), cwd: "/work/demo" });
 	writeFileSync(join(dirname(sessions.loose!.file), "rarebit-empty.jsonl"), header("sess-rarebit-empty"));
-	writeFileSync(join(dirname(sessions.loose!.file), "rarebit-error.jsonl"), header("sess-rarebit-error") + line({ type: "message", id: "demo-u", parentId: null, timestamp: new Date().toISOString(), message: { role: "user", content: "A deliberately malformed synthetic Session copy, for the error state." } }) + "{malformed demo line}\n");
+	writeFileSync(join(dirname(sessions.loose!.file), "rarebit-error.jsonl"), header("sess-rarebit-error") + line({ type: "message", id: "demo-u", parentId: null, timestamp: new Date(now).toISOString(), message: { role: "user", content: "A deliberately malformed synthetic Session copy, for the error state." } }) + "{malformed demo line}\n");
 	return "";
 }
 
-function typographyDemo({ sessions }: DemoContext): string {
-	const timestamp = new Date().toISOString();
+function typographyDemo({ sessions, now }: DemoContext): string {
+	const timestamp = new Date(now).toISOString();
 	const rows = [
 		{ type: "session", version: 3, id: "sess-typography", timestamp, cwd: "/work/synthetic" },
 		{ type: "session_info", id: "font-title", parentId: null, timestamp, name: "Typography · 日本語 · Übersetzungen" },
@@ -61,9 +62,9 @@ function typographyDemo({ sessions }: DemoContext): string {
 	return "";
 }
 
-function lensDemo({ sessions }: DemoContext): string {
+function lensDemo({ sessions, now }: DemoContext): string {
 	for (const [name, count] of [["lens-runs", 7], ["lens-window", 160]] as const) {
-		const start = new Date();
+		const start = new Date(now);
 		start.setHours(14, 2, 0, 0);
 		let parent: string | null = null;
 		let sequence = 0;

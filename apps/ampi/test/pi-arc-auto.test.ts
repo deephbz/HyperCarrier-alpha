@@ -7,8 +7,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { type ModelPurpose, resolveHelperModel, useHubConfig } from "../src/hub/helper-models.ts";
 import { cosDemo } from "../scripts/demo/cos.ts";
-import type { DemoContext } from "../scripts/demo/index.ts";
 import { ask } from "../src/pi/ask.ts";
+import { buildQueue, roleWaitQueue } from "../src/pi/derive-queue.ts";
 import type { Chunk } from "../src/pi/views/cos-arc-chunks.ts";
 import { ARC_BUSY_WAIT, AUTO_BUILD_INTERVAL_MS, arcClock, autoBuild, autoJitterMs, buildArc, buildLog, cosArc, type ArcValue } from "../src/pi/views/cos-arc.ts";
 import type { PiViewContext, PiViewSession } from "../src/pi/views/types.ts";
@@ -20,7 +20,7 @@ useHubConfig(undefined, HELPER_MODELS);
 // The automatic Arc trigger (D16, owner option A) through the real ask runner and the offline demo model.
 
 const root = mkdtempSync(join(tmpdir(), "ampi-arc-auto-"));
-cosDemo({ dir: root, agentDir: join(root, "agent") } as DemoContext);
+cosDemo({ dir: root, agentDir: join(root, "agent"), now: Date.now(), sessions: {} });
 const model = [process.execPath, join(root, "cos-model.cjs")];
 const T = Date.parse("2026-10-19T00:00:00.000Z");
 const chunks: Chunk[] = Array.from({ length: 8 }, (_, i) => ({ id: `c${i}`, index: i, hash: `h${i}`, startAt: new Date(T + i * 60_000).toISOString(), endAt: new Date(T + i * 60_000 + 30_000).toISOString(), firstEntryId: `u${i}`, lastEntryId: `a${i}`, firstAsk: `Step ${i}`, lastOwnerEntryId: `u${i}`, ownerTurns: 1, entries: 2, toolCalls: 0, where: null, idleBeforeMs: null, compactionEntryId: null }));
@@ -619,17 +619,22 @@ test("arc auto build: opening a Worker's outdated Arc does not rebuild it (failu
 	} finally { c.restore(); }
 });
 
-test("arc auto build: before the first Teams frame a stop waits for the role, then builds when no Worker role arrives or after 30 s (failure: a Worker built before its role was read, or an unread role pended forever)", async () => {
+// The verify harness and the preview wait for hub-start Builds through /api/health, so it counts the role wait in
+// `roleWaits`. `builds` counts Builds only: verify/run.mjs fails a step in which `builds` grows without a Build.
+test("arc auto build: before the first Teams frame a stop waits for the role, then builds when no Worker role arrives or after 30 s (failure: a Worker built before its role was read, an unread role pended forever, or /api/health missed the wait or counted it as a Build)", async () => {
+	const idle = roleWaitQueue().pending, started = () => buildQueue().pending + buildQueue().done;
 	for (const arrives of [true, false]) {
 		const s = { current: session({ id: `pi:sess-unknown-${arrives}` }) };
 		const { ctx, run } = context(`worker-unknown-${arrives}`, s);
 		const known = { v: false };
 		Object.assign(ctx, { rolesKnown: () => known.v });
-		const c = fakeClock(T + 14_400_000);
+		const c = fakeClock(T + 14_400_000), before = started();
 		try {
 			const t0 = c.t;
 			assert.equal(autoBuild(ctx, s.current), false, "an unknown role does not build");
 			assert.equal(run.calls, 0);
+			assert.equal(roleWaitQueue().pending, idle + 1, "/api/health counts the wait");
+			assert.equal(started(), before, "the wait is not a Build");
 			assert.equal(c.scheduled.length, 1, "one re-check timer");
 			assert.ok(c.scheduled[0]!.ms <= 5_000, "the re-check comes within 5 s");
 			if (arrives) {
@@ -647,6 +652,7 @@ test("arc auto build: before the first Teams frame a stop waits for the role, th
 		} finally { c.restore(); }
 		await settled(ctx, s.current);
 		assert.equal(run.calls, CALLS);
+		assert.equal(roleWaitQueue().pending, idle, "the wait settles in /api/health");
 	}
 	// A Worker role that arrives within the bound stops the Build.
 	const s = { current: session({ id: "pi:sess-unknown-worker" }) };
@@ -654,12 +660,17 @@ test("arc auto build: before the first Teams frame a stop waits for the role, th
 	const known = { v: false };
 	Object.assign(ctx, { rolesKnown: () => known.v });
 	const c = fakeClock(T + 18_000_000);
+	const before = started();
 	try {
 		autoBuild(ctx, s.current);
+		assert.equal(roleWaitQueue().pending, idle + 1, "/api/health counts the wait");
 		known.v = true; s.current = session({ id: "pi:sess-unknown-worker", summary: worker });
 		const next = c.scheduled.at(-1)!; c.t += next.ms; next.run();
 		assert.equal(run.calls, 0);
 		assert.equal(arcValue(ctx, s.current).autoOff, "worker");
 		assert.equal(arcValue(ctx, s.current).nextAutoAt, null);
 	} finally { c.restore(); }
+	await Promise.resolve();
+	assert.equal(roleWaitQueue().pending, idle, "a wait that ends without a Build settles in /api/health");
+	assert.equal(started(), before, "a wait that ends without a Build starts no Build in /api/health (verify/run.mjs: unattributable)");
 });

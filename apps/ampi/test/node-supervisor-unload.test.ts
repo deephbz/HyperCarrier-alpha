@@ -106,3 +106,34 @@ test("supervisor unload: a clean unload or a service not loaded removes the unit
 	}
 	assert.match(readFileSync(fake.log, "utf8"), /launchctl bootout gui\/\d+\/\S+\nlaunchctl print gui\/\d+\/\S+\nsystemctl --user disable --now \S+\nsystemctl --user show -p LoadState --value \S+\nsystemctl --user disable --now/);
 });
+
+test("supervisor: a launchd reinstall waits for bootout to finish before bootstrap", () => {
+	// launchd keeps the old service loaded for a while after bootout returns; a bootstrap then fails with error 5.
+	const home = tempHome();
+	const bin = join(home, "fake-bin");
+	const log = join(home, "fake.log");
+	const gone = join(home, "unloaded-at");
+	mkdirSync(bin, { recursive: true });
+	writeFileSync(join(bin, "launchctl"), `#!/bin/sh
+echo "launchctl $*" >> "${log}"
+now=$(perl -MTime::HiRes=time -e 'printf "%d", time*1000')
+case "$1" in
+	bootout) echo $((now + 1000)) > "${gone}"; exit 0 ;;
+	print) [ -f "${gone}" ] && [ "$now" -lt "$(cat "${gone}")" ] && exit 0; exit 113 ;;
+	bootstrap) [ -f "${gone}" ] && [ "$now" -lt "$(cat "${gone}")" ] && { echo "Bootstrap failed: 5: Input/output error" >&2; exit 5; }; exit 0 ;;
+esac
+exit 0
+`);
+	chmodSync(join(bin, "launchctl"), 0o755);
+	const saved = process.env.PATH;
+	process.env.PATH = `${bin}:${saved}`;
+	try {
+		installService(home, { platform: "launchd", unitDir: join(home, "units"), env: { PATH: "/bin" } });
+	} finally {
+		process.env.PATH = saved;
+	}
+	const calls = readFileSync(log, "utf8").trim().split("\n").map((line) => line.split(" ")[1]);
+	assert.equal(calls[0], "bootout");
+	assert.equal(calls.at(-1), "bootstrap");
+	assert.ok(calls.includes("print"), "install polled launchd before bootstrap");
+});

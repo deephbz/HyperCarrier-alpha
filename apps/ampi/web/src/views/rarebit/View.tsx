@@ -1,10 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { RarebitFailure, RarebitItem, RarebitSide, RarebitValue } from "../../../../src/pi/views/rarebit.ts";
 import { hub, useTopic } from "../../client.ts";
 import { useKeepPlace } from "../../keep-place.ts";
+import { revealStore } from "../../nav.ts";
 import { toCss, toScreen } from "../../display.ts";
 import { Markdown } from "../../components/Markdown.tsx";
 import { clock, href, tokens } from "../../util.ts";
+import { freshPress } from "../../composer-keys.ts";
 import { rarebitState, useRarebitState } from "./state.ts";
 import { buildDetail, buildText } from "../cos/builds.ts";
 import "./rarebit.css";
@@ -33,8 +35,14 @@ function Copy({ text, label = "Copy", icon = false }: { text: string; label?: st
 
 export function RarebitView({ host, threadId, entry }: { host: string; threadId: string; entry?: string }) {
 	const [before, setBefore] = useState<string>();
-	useEffect(() => setBefore(undefined), [host, threadId]);
-	const { value: result, stale, error } = useTopic(host, { kind: "view", view: "rarebit", threadId, ...(before ? { before } : {}) });
+	// A linked entry outside the loaded page: the hub serves the page that holds it until the reader pages away.
+	const [around, setAround] = useState<string>();
+	useEffect(() => { setBefore(undefined); setAround(undefined); }, [host, threadId]);
+	const page = (cursor?: string) => { setAround(undefined); setBefore(cursor); };
+	const { value: result, stale, error } = useTopic(host, { kind: "view", view: "rarebit", threadId, ...(around ? { around } : before ? { before } : {}) });
+	// The reveal request for this Session's linked entry (nav.ts): each followed link asks again.
+	const request = useSyncExternalStore(revealStore.subscribe, revealStore.get);
+	const want = request && entry && request.thread === threadId && request.entry === entry ? request : undefined;
 	const failure = result && "error" in result ? `${result.error.code}: ${result.error.message}` : error;
 	const value = result && "items" in result ? result : undefined;
 	const [state, set] = useRarebitState(host, threadId);
@@ -42,7 +50,8 @@ export function RarebitView({ host, threadId, entry }: { host: string; threadId:
 	const input = useRef<HTMLTextAreaElement>(null);
 	const pinned = useRef(true);
 	const keepPlace = useKeepPlace(scroller, "[data-rarebit]", "data-rarebit", pinned);
-	const revealed = useRef<string | undefined>(undefined);
+	/** The last reveal request this panel served; a later Hide/Show or page change does not jump back to it. */
+	const revealed = useRef(0);
 	const [settings, setSettings] = useState(false);
 	const filtered = value?.items.filter((i) => !state.hide || i.kind !== "continuation") ?? [];
 	// An automatic Arc update shows after the stop it followed: model spend the owner did not ask for stays visible.
@@ -98,18 +107,27 @@ export function RarebitView({ host, threadId, entry }: { host: string; threadId:
 		keepPlace.capture();
 		set({ hide });
 	};
-	useLayoutEffect(() => { const el = scroller.current; if (el && keepPlace.following()) el.scrollTop = el.scrollHeight; }, [value, state.side, state.pending, state.hide]);
+	useLayoutEffect(() => { if (keepPlace.following()) keepPlace.follow(); }, [value, state.side, state.pending, state.hide]);
 	useEffect(() => {
-		// A linked entry is revealed once; a later Hide/Show must not jump back to it.
-		if (!entry || !value || revealed.current === entry) return;
+		// Each reveal request is served once; a later Hide/Show must not jump back to it.
+		if (!want || !value || revealed.current === want.seq) return;
+		const entry = want.entry;
+		if (!value.items.some((i) => i.id === entry)) {
+			// Not on this page: ask the hub for the page that holds it, then stop once it says what the entry is. While the
+			// Host indexes, each new value of the topic asks again.
+			if (around !== entry) { page(); setAround(entry); return; }
+			if (value.around?.id === entry && value.around.found !== "indexing") revealed.current = want.seq;
+			return;
+		}
 		if (state.hide && value.items.some((i) => i.id === entry && i.kind === "continuation")) { set({ hide: false }); return; }
 		const index = filtered.findIndex((i) => i.id === entry);
 		if (index < 0) return;
 		pinned.current = false;
-		revealed.current = entry;
+		revealed.current = want.seq;
 		set({ window: Math.max(60, filtered.length - index) });
-		requestAnimationFrame(() => scroller.current?.querySelector(`[data-rarebit="${CSS.escape(entry)}"]`)?.scrollIntoView({ block: "center" }));
-	}, [entry, Boolean(value), state.hide]);
+		setJump(entry);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [want?.seq, value, state.hide]);
 	const ask = async () => {
 		const current = rarebitState(host, threadId).get();
 		const question = current.draft.trim();
@@ -144,12 +162,18 @@ export function RarebitView({ host, threadId, entry }: { host: string; threadId:
 		</header>
 		<div className="rb-scroll quiet-scroll" ref={scroller} onWheel={keepPlace.onWheel} onScroll={() => { keepPlace.onScroll(); if (tailSpace) pinned.current = false; updateSteps(); }}>
 			{!value && !failure ? <p className="rb-state" role="status">Reading the Session…</p> : !count && !failure ? <p className="rb-state">No Rarebits yet. Human messages and agent prose appear here; tool traffic stays in the transcript.</p> : null}
-			{entry && value && !value.items.some((i) => i.id === entry) && <p className="rb-state">This entry is outside this Rarebit page or is not selected. Read it in the transcript.</p>}
+			{entry && value && !value.items.some((i) => i.id === entry) && <p className="rb-state" data-why={value.around?.id === entry ? value.around.found : "page"}>{
+				around === entry && value.around?.id !== entry ? "Loading the linked message's page…"
+				: value.around?.id === entry && value.around.found === "entry" ? "The linked entry is tool traffic or a notice, not a Rarebit message. The transcript shows it."
+				: value.around?.id === entry && value.around.found === "missing" ? "The linked entry is not on this Session's current branch."
+				: value.around?.id === entry && value.around.found === "indexing" ? "The linked entry is not indexed yet. The panel shows it when indexing reaches it."
+				: <>The linked message is outside this Rarebit page. <button className="link-button" onClick={() => { revealed.current = 0; setAround(entry); }}>Show it</button></>
+			}</p>}
 			{entry && hasSide && <p className="rb-state">End the side ask to return to the linked Rarebit.</p>}
 			{!hasSide && <>
 				<p className="rb-meta">Bounded conversation page · statistics cover the full copied branch.</p>
-				{value?.more && <button className="btn small" onClick={() => { setBefore(value.items[0]?.id); set({ window: 60 }); }}>Earlier page</button>}
-				{before && <button className="btn small" onClick={() => { setBefore(undefined); set({ window: 60 }); }}>Newest page</button>}
+				{value?.more && <button className="btn small" onClick={() => { page(value.items[0]?.id); set({ window: 60 }); }}>Earlier page</button>}
+				{(before || value?.before) && <button className="btn small" onClick={() => { page(); set({ window: 60 }); }}>Newest page</button>}
 				{start > 0 && <button className="btn ghost small rb-earlier" onClick={() => { pinned.current = false; set({ window: state.window + 60 }); scroller.current?.scrollTo({ top: 0 }); }}>Show 60 earlier · {start.toLocaleString()} remaining</button>}
 				{visible.map((item) => item.kind === "compaction" ? <div key={item.id} className="rb-compaction" data-rarebit={item.id}><a href={href.thread(host, threadId, { entry: item.id })}>── compacted {time(item.t)} · context restarts here ──</a>{item.t && <a className="rb-timeline" href={href.page("timeline", [], { host, thread: threadId, at: String(Date.parse(item.t)) })}>Timeline ↗</a>}</div> : <article key={item.id} className={`rb-message rb-${item.kind}${item.kind === "user" ? " you" : ""}${item.id === entry ? " rb-target" : ""}`} data-rarebit={item.id} data-kind={item.kind}>
 					<div className={item.kind === "user" ? "rb-message-heading you-label" : "rb-message-heading"}><span aria-label={MARK[item.kind]} title={MARK[item.kind]}>{GLYPH[item.kind]}</span><time dateTime={item.t ?? undefined} title={item.t ?? "Time unavailable"}>{messageTime(item.t)}</time><span className="rb-item-actions"><Copy text={item.text} icon /><a className="rb-icon" title="Transcript" aria-label="Transcript" href={href.thread(host, threadId, { entry: item.id, panel: "rarebit" })}><Icon name="transcript" /></a>{item.t && <a className="rb-icon" title="Timeline" aria-label="Timeline" href={href.page("timeline", [], { host, thread: threadId, at: String(Date.parse(item.t)) })}><Icon name="timeline" /></a>}</span></div>
@@ -169,7 +193,7 @@ export function RarebitView({ host, threadId, entry }: { host: string; threadId:
 		</div>
 		<footer className="rb-footer">
 			<div className="rb-toolbar">{hasSide && <span className="rb-meta">Temporary side thread</span>}<button className="btn ghost small" onClick={() => { pinned.current = false; setTailSpace(0); if (!hasSide) set({ window: filtered.length }); requestAnimationFrame(() => scroller.current?.scrollTo({ top: 0 })); }}>↑ Top</button><button className="btn ghost small" title="Previous user message" aria-label="Previous user message" disabled={hasSide || steps.prev === undefined || steps.prev < 0} onClick={() => step(steps.prev)}>Prev</button><button className="btn ghost small" title="Next user message" aria-label="Next user message" disabled={hasSide || steps.next === undefined || steps.next < 0} onClick={() => step(steps.next)}>Next</button><button className="btn ghost small" onClick={() => { pinned.current = true; setTailSpace(0); set({ window: 60 }); requestAnimationFrame(() => scroller.current?.scrollTo({ top: scroller.current.scrollHeight })); }}>↓ Bottom</button></div>
-			<form className="rb-ask" onSubmit={(e) => { e.preventDefault(); void ask(); }}><textarea ref={input} className="quiet-scroll" data-scrollbar="none" aria-label={state.side ? "Follow up on the side" : "Ask on the side"} placeholder={state.side ? "Follow up…" : "Ask on the side (Rarebits only)…"} rows={2} maxLength={20_000} value={state.draft} onChange={(e) => set({ draft: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void ask(); } }} /><button className="btn" type="submit" disabled={!state.draft.trim() || Boolean(state.pending) || !count}>Ask</button></form>
+			<form className="rb-ask" onSubmit={(e) => { e.preventDefault(); void ask(); }}><textarea ref={input} className="quiet-scroll" data-scrollbar="none" aria-label={state.side ? "Follow up on the side" : "Ask on the side"} placeholder={state.side ? "Follow up…" : "Ask on the side (Rarebits only)…"} rows={2} maxLength={20_000} value={state.draft} onChange={(e) => set({ draft: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); if (freshPress(e.nativeEvent)) void ask(); } }} /><button className="btn" type="submit" disabled={!state.draft.trim() || Boolean(state.pending) || !count}>Ask</button></form>
 		</footer>
 	</div>;
 }

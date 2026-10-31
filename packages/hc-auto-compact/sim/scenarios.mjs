@@ -89,7 +89,7 @@ export async function foreground({ method = 'summary', held = false, ...options 
 }
 
 export async function nativeCompaction({ fail = false, ...options } = {}) {
-  const world = await createWorld({ auto: { preservation: 'none' }, settings: { compaction: { enabled: false, reserveTokens: 1024, keepRecentTokens: 100 } },
+  const world = await createWorld({ auto: { method: 'native', preservation: 'none' }, settings: { compaction: { enabled: false, reserveTokens: 1024, keepRecentTokens: 100 } },
     compat: nativeCompat, ...options, replies: [{ text: longText }, { text: 'Recent response' },
       ...(fail ? [{ status: 400, error: 'Synthetic summary rejected' }] : []), { text: 'Native state summary' }, { text: 'Resumed' }] });
   try {
@@ -109,7 +109,7 @@ export async function nativeCompaction({ fail = false, ...options } = {}) {
 
 export async function threshold({ threshold = 90, budget = 10000, input = 8000, delayMs = 0, ...options } = {}) {
   const crossed = input + 1 >= budget * threshold / 100;
-  const world = await createWorld({ auto: { threshold, budget_tokens: budget }, compat: nativeCompat, ...options,
+  const world = await createWorld({ auto: { method: 'native', threshold, budget_tokens: budget }, compat: nativeCompat, ...options,
     replies: [{ text: 'Usage evidence', usage: { input, output: 1 }, delayMs }, ...(crossed ? [{ text: 'Handoff evidence' }] : [])] });
   try {
     await world.prompt('Threshold goal');

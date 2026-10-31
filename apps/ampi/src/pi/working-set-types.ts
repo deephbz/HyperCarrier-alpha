@@ -2,6 +2,7 @@
 import type { PiEntry } from "../shared/protocol.ts";
 import { CHUNKER_VERSION, EXCERPT_VERSION, type Chunk } from "./views/cos-arc-chunks.ts";
 import type { Kinds, RarebitItem } from "./views/rarebit.ts";
+import type { FindAsk } from "./search.ts";
 
 /** Bump when the entry index changes; every Session then rebuilds its entries. */
 export const DERIVATION_VERSION = 8;
@@ -13,7 +14,7 @@ export const derivedVersion = (source: string) => `${DERIVATION_VERSION}/${CHUNK
 /** Whether a stored derived version used these index rules (any chunk rules); otherwise the entries rebuild. */
 export const sameIndex = (version: string) => version.startsWith(`${DERIVATION_VERSION}:`) || version.startsWith(`${DERIVATION_VERSION}/`);
 /** Bump when `derive` adds or changes a Session summary field; unchanged Sessions then re-derive without an index rebuild. */
-export const SUMMARY_VERSION = 3;
+export const SUMMARY_VERSION = 5;
 export const WINDOW_ENTRIES = 400;
 /** UTF-8 bytes in one page of a full projected entry. */
 export const ENTRY_PAGE_BYTES = 64 * 1024;
@@ -30,7 +31,7 @@ export type Source = { host: string; cacheDir: string; file: string; path: strin
 export type WorkerJob =
  | { op: "init"; cacheDir: string }
  | { op: "derive"; source: Source; urgent?: boolean }
- | { op: "find"; source: Source; query: string; version: string }
+ | { op: "find"; source: Source; query: string; version: string; ask?: FindAsk }
  | { op: "forget"; source: Source; version: string; watermark?: unknown };
 export type Series = {
  start: number; end: number; buckets: [number, number, number][];
@@ -43,6 +44,8 @@ export type Derived = {
  summaryVersion?: number;
  /** `cost` sums the entries' prices; `priced` says whether any entry reported one (else the figure is no price). */
  cost: number; priced: boolean; model?: string; contextTokens?: number; cacheHit?: number; preview?: string;
+ /** The active branch's latest hc-auto-compact `/auto-compact budget` override; absent for the default. */
+ budgetOverride?: number;
  /** Tool calls of the last turn that are still open (src/shared/tool-state.ts). */
  openCalls?: number;
  timeline: Series;

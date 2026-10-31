@@ -23,7 +23,7 @@ async function setup(t: { after: (fn: () => unknown) => void }, text = "Hello") 
 		+ line({ type: "compaction", id: "k1", parentId: "a2", timestamp: "2026-10-18T10:01:00Z", summary: "Keep it.", firstKeptEntryId: "a2" })
 		+ row("u2", "k1", "user", "More")
 		+ row("err", "u2", "assistant", "", { stopReason: "error", errorMessage: "Provider unavailable" }));
-	const hub = new Hub({ backend: "pi", hosts: [{
+	const hub = new Hub({ hosts: [{
 		id: "synthetic-host", label: "synthetic-host", kind: "pi-local", cacheDir: join(f.dir, "cache"),
 		askCommand: [process.execPath, "-e", `let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{if(/Question: "fail"/.test(s))process.exit(3);console.log(s);});`],
 		agentConfig: { agentDir: f.agentDir, teams: false, pollMs: 30, discoverMs: 150 },

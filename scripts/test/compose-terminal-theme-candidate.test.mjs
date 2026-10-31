@@ -1,3 +1,4 @@
+import "./home.mjs";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -20,7 +21,7 @@ test("composes a verified candidate with exact token injections, receipt digests
   const box = sandbox(); try {
     const result = compose(box); assert.deepEqual(result, { status: "composed", outputRoot: box.out, receipt: "composition-receipt.json" });
     const receipt = JSON.parse(readFileSync(path.join(box.out, "composition-receipt.json"))), templates = resolveTemplates(root); validateSchema(receipt, JSON.parse(readFileSync(path.join(root, "config/schemas/terminal-theme-composition-receipt.schema.json")))); assert.equal(receipt.schemaVersion, 1); assert.equal(receipt.templates.herdr.path, path.relative(root, templates.herdr)); assert.equal(receipt.templates.ghostty.path, path.relative(root, templates.ghostty)); assert.equal(receipt.validators.herdr.binary.result, "herdr-1.0"); assert.equal(receipt.validators.ghostty.binary.result, "ghostty-1.0"); assert.equal(receipt.validators.herdr.executable, path.join(box.dir, "herdr")); assert.deepEqual(receipt.validators.ghostty.arguments, ["+validate-config", "--config-file=config/ghostty/config"]); assert.equal(Object.keys(receipt.outputDigests).length, 11); assert.equal(receipt.candidateDigests.herdr, sha256(path.join(box.out, receipt.candidatePaths.herdr))); assert.equal(receipt.candidateDigests.ghostty, sha256(path.join(box.out, receipt.candidatePaths.ghostty))); assert.equal(receipt.candidateDigests.ghosttyTheme, sha256(path.join(box.out, receipt.candidatePaths.ghosttyTheme)));
-    const herdr = readFileSync(path.join(box.out, "config/herdr/config.toml"), "utf8"); assert.match(herdr, /\$rarebit_attention", fg = "#[0-9a-f]{6}", bold = true/); assert.match(herdr, /\$rarebit_state_muted", fg = "#[0-9a-f]{6}", dim = true/); assert.doesNotMatch(herdr, /\$rarebit_state"[^}]*fg/); assert.match(herdr, /HC Colorstack generated Herdr REGION: BEGIN/);
+    const herdr = readFileSync(path.join(box.out, "config/herdr/config.toml"), "utf8"); assert.match(herdr, /\$rarebit_error", fg = "#[0-9a-f]{6}", bold = true/); assert.doesNotMatch(herdr, /rarebit_(state_)?attention/); assert.match(herdr, /\$rarebit_state_muted", fg = "#[0-9a-f]{6}", dim = true/); assert.doesNotMatch(herdr, /\$rarebit_state"[^}]*fg/); assert.match(herdr, /HC Colorstack generated Herdr REGION: BEGIN/);
     const ghostty = readFileSync(path.join(box.out, "config/ghostty/config"), "utf8"); assert.equal(ghostty.trimEnd().split("\n").at(-1), "config-file = themes/colorstack"); assert.equal(readFileSync(path.join(box.out, "colorstack/outputs/ghostty-theme"), "utf8"), readFileSync(path.join(box.out, "config/ghostty/themes/colorstack"), "utf8"));
   } finally { box.close(); }
 });
@@ -34,7 +35,7 @@ test("resolves exactly one private or projected template layout and keeps explic
 
 test("binding covers exactly executable Summary tones and injection does not alter marks or labels", () => {
   const binding = JSON.parse(readFileSync(path.join(root, "config/colorstack-rarebit-herdr-binding.json"))); assert.deepEqual(Object.keys(binding.summaryTones).sort(), [...new Set(Object.values(RAREBIT_SUMMARY_PRESENTATION).map(({ tone }) => tone))].sort());
-  const before = JSON.parse(JSON.stringify(RAREBIT_SUMMARY_PRESENTATION)); injectRarebitTokens('{ token = "$rarebit_attention", bold = true } { token = "$rarebit_state" }', { "$rarebit_attention": "#abcdef" }); assert.deepEqual(RAREBIT_SUMMARY_PRESENTATION, before);
+  const before = JSON.parse(JSON.stringify(RAREBIT_SUMMARY_PRESENTATION)); injectRarebitTokens('{ token = "$rarebit_error", bold = true } { token = "$rarebit_state" }', { "$rarebit_error": "#abcdef" }); assert.deepEqual(RAREBIT_SUMMARY_PRESENTATION, before);
 });
 
 test("canonicalizes a platform temporary alias and permits a symlink ancestor below a real direct parent", () => {

@@ -17,6 +17,21 @@ export function hostLabel(host: Labelled, hosts: readonly Labelled[]): string {
 }
 
 /**
+ * The Host source a route names: its link key, or a Host ID that one source serves. When two sources serve the Host
+ * ID, a thread ID names the source: `pi:` for Pi, any other for durable.
+ */
+export function findHost<H extends { id: string; link: string }>(hosts: readonly H[], key: string | undefined, thread?: string): H | undefined {
+	if (key === undefined) return undefined;
+	const exact = hosts.find((h) => h.link === key);
+	if (exact) return exact;
+	const byId = hosts.filter((h) => h.id === key);
+	if (byId.length === 1) return byId[0];
+	if (thread === undefined) return undefined;
+	const source = thread.startsWith("pi:") ? "pi" : "durable";
+	return byId.find((h) => h.link === `${key}#${source}`);
+}
+
+/**
  * The label for a route key: a link key (`<id>#pi`, `<id>#durable`) or a bare Host ID. The owner never sees the link
  * key: a key that names no listed Host shows its Host ID.
  */

@@ -1,16 +1,19 @@
-import { useEffect, useImperativeHandle, useLayoutEffect, type Ref, useRef, useState, useSyncExternalStore } from "react";
-import type { PiThreadView, SlashCommands, ThreadSummary, EditQueuedResult, QueueOrigin } from "../../../src/shared/protocol.ts";
+import { type ReactNode, useEffect, useImperativeHandle, useLayoutEffect, type Ref, type SetStateAction, useRef, useState, useSyncExternalStore } from "react";
+import type { ImageLimits, PiThreadView, SlashCommands, ThreadSummary, EditQueuedResult, QueueOrigin } from "../../../src/shared/protocol.ts";
+import { admitImages, base64Length, rejectionLine } from "../../../src/shared/image-admission.ts";
 import { teamBadge } from "../../../src/shared/team-origin.ts";
 import { hub, useHosts } from "../client.ts";
 import { hostErrorMessage, sendOutcome } from "../composer-outcomes.ts";
 import { hostLabelFor } from "./host-label.ts";
 import { COMPOSER_BUSY_HINT, composerSubmission } from "../composer-keys.ts";
-import { EMPTY_DRAFT, appendDraftQuote, draftParts, editDraftImages, editDraftText, prependDraftText, refuseIntent, restoreIntents, type ComposerDraft, type SendIntent, appendDraftText, dismissNotice, carriedDraft } from "../composer-drafts.ts";
+import { type Custody, type Draft, type Outcome, type SendIntent, appendDraftQuote, appendDraftText, carriedDraft, dismissNotice, editDraft, giveBack, isEmpty, noticeKeyed, outcomeText, prependDraftText, restoreReturned, takeDraft } from "../composer-drafts.ts";
 import { openAccounts } from "./Accounts.tsx";
 import { ModelHudCard } from "./ModelHudCard.tsx";
+import { Popover, hoverIntent } from "./Popover.tsx";
 import { MOD, closedState, go, tokens } from "../util.ts";
 import { toCss } from "../display.ts";
 import type { ModelChoice } from "./ThreadView.tsx";
+import { newId } from "../ids.ts";
 
 // biome-ignore lint: live and inbox docs are loosely typed JSON
 type Any = any;
@@ -18,8 +21,6 @@ type Any = any;
 export const THINKING = ["off", "minimal", "low", "medium", "high", "xhigh"];
 
 type Image = { data: string; mimeType: string; name: string };
-const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 export type ComposerActions = { panel?: string; openPanel: (name: string) => void };
 
@@ -27,8 +28,22 @@ export type ComposerActions = { panel?: string; openPanel: (name: string) => voi
 type Command = { name: string; args?: string; help: string; disabled?: boolean; run?: (arg: string) => Promise<void> | void };
 /** The host's command list for one thread and control state (`for`). */
 type PiCommands = { for: string; state: "loading" } | { for: string; state: "ready"; value: SlashCommands } | { for: string; state: "failed"; code: string; message: string };
+/**
+ * The one presenter of a returned submission's outcome (composer-drafts.ts): a held record, or a notice on text in the
+ * draft. An uncertain outcome never reads as a refusal.
+ */
+function OutcomeLine({ outcome, keyed, held = false, what, actions }: { outcome: Outcome; keyed: boolean; held?: boolean; what?: ReactNode; actions: ReactNode }) {
+	return (
+		<div className={`composer-feedback outcome ${outcome.uncertain ? "uncertain" : "error"}${held ? " returned" : ""} quiet-scroll`} data-scrollbar="none" role="alert" data-outcome={outcome.uncertain ? "uncertain" : "refused"}>
+			<span>{outcomeText(outcome, keyed)}{what && " "}{what}</span>
+			{actions}
+		</div>
+	);
+}
 /** An inline decision the composer asks for, with the draft kept. */
 type Choice = { message: string; actions: { label: string; run: () => unknown }[] };
+/** A submission on its way out: its intent records the busy mode and, once known, the request that carries it. */
+type Sending = Draft<Image> & { intent: SendIntent };
 /**
  * A queued message the owner edits in place: its thread and ID, mode, the text it showed when editing began, and the
  * new text. `editId` names the last save attempt and stays while its text does, so a retry is the same edit.
@@ -96,7 +111,7 @@ function commands(ctx: {
 				const { threadId: created } = await hub.request(host, "thread.create", {
 					cwd: agent?.cwd ?? ctx.summary?.cwd,
 					...(ref && slash > 0 ? { model: { provider: ref.slice(0, slash), modelId: ref.slice(slash + 1) } } : {}),
-					requestId: crypto.randomUUID(),
+					requestId: newId(),
 					...(arg.trim() ? { prompt: arg.trim() } : {}),
 				});
 				go(host, created);
@@ -127,8 +142,6 @@ function commands(ctx: {
 
 function readImage(file: File): Promise<Image> {
 	return new Promise((resolve, reject) => {
-		if (!IMAGE_TYPES.includes(file.type)) return reject(new Error(`${file.name || "That file"} is not a PNG, JPEG, GIF, or WebP image`));
-		if (file.size > MAX_IMAGE_BYTES) return reject(new Error(`${file.name || "The image"} is larger than 5 MB`));
 		const reader = new FileReader();
 		reader.onload = () => resolve({ data: String(reader.result).split(",")[1] ?? "", mimeType: file.type, name: file.name || "pasted image" });
 		reader.onerror = () => reject(reader.error ?? new Error("Could not read the image"));
@@ -150,26 +163,42 @@ export function ContextMeter({ summary, budget }: { summary?: ThreadSummary; bud
 	);
 }
 
-const DRAFTS = new Map<string, ComposerDraft>();
+/**
+ * Draft custody per Session (composer-drafts.ts): the draft with its images and request key, the messages that came
+ * back unsent, and the draft's notices. Leaving a Session (Back, ⌘0, a switch) and coming back keeps them. Memory
+ * only: a reload loses them.
+ */
+const CUSTODY = new Map<string, Custody<Image>>();
 const draftListeners = new Set<() => void>();
-let sendOrder = 0;
-const subscribeDrafts = (listener: () => void) => { draftListeners.add(listener); return () => { draftListeners.delete(listener); }; };
-function updateDraft(key: string, change: (draft: ComposerDraft) => ComposerDraft): void {
-	const next = change(DRAFTS.get(key) ?? EMPTY_DRAFT);
-	if (next.text || next.images.length || next.spans.length || next.commandResult) DRAFTS.set(key, next);
-	else DRAFTS.delete(key);
+function custodyOf(key: string): Custody<Image> {
+	let custody = CUSTODY.get(key);
+	if (!custody) CUSTODY.set(key, (custody = { draft: { text: "", images: [], key: newId() }, returned: [] }));
+	return custody;
+}
+function updateCustody(key: string, next: (custody: Custody<Image>) => Custody<Image>) {
+	const prev = custodyOf(key);
+	const value = next(prev);
+	if (value === prev) return;
+	CUSTODY.set(key, value);
 	for (const listener of draftListeners) listener();
 }
+function updateDraft(key: string, next: SetStateAction<string>) {
+	updateCustody(key, (custody) => editDraft(custody, { text: typeof next === "function" ? next(custody.draft.text) : next }, newId));
+}
+const subscribeDrafts = (listener: () => void) => {
+	draftListeners.add(listener);
+	return () => void draftListeners.delete(listener);
+};
 
-/** Add a quote through the same per-Session draft store used by the composer. */
+/** Appends a transcript quote, and an optional note, to a Session's draft, whether or not its composer is mounted. */
 export function quoteDraft(host: string, threadId: string, selection: string, note: string): void {
-	updateDraft(`${host}/${threadId}`, (draft) => appendDraftQuote(draft, selection, note));
+	updateDraft(`${host}/${threadId}`, (text) => appendDraftQuote({ text }, selection, note).text);
 }
 
 /** A fork of a closed thread continues its unsent draft; the source keeps its copy, and a draft in the fork wins. */
 export function carryDraft(host: string, from: string, to: string): void {
-	const draft = carriedDraft(DRAFTS.get(`${host}/${from}`), DRAFTS.get(`${host}/${to}`));
-	if (draft) updateDraft(`${host}/${to}`, () => draft);
+	const carried = carriedDraft(CUSTODY.get(`${host}/${from}`), CUSTODY.get(`${host}/${to}`), newId);
+	if (carried) updateCustody(`${host}/${to}`, () => carried);
 }
 
 /** A legacy closed thread stays readable as archived; its last reason remains visible as history. */
@@ -254,7 +283,7 @@ export function Composer({
 	summary?: ThreadSummary;
 	models: ModelChoice[];
 	actions: ComposerActions;
-	/** A Pi Session (D15): only messages, steer, queue, and interrupt; no models, images, or node commands. */
+	/** A Pi Session (D15): only messages, images through its live control, steer, queue, and interrupt; no node commands. */
 	pi?: boolean;
 	composerRef?: Ref<ComposerHandle>;
 }) {
@@ -264,8 +293,9 @@ export function Composer({
 	const draftKey = `${host}/${threadId}`;
 	const actionsRef = useRef(actions);
 	actionsRef.current = actions;
-	const draft = useSyncExternalStore(subscribeDrafts, () => DRAFTS.get(draftKey) ?? EMPTY_DRAFT);
-	const { text, images, commandResult } = draft;
+	const custody = useSyncExternalStore(subscribeDrafts, () => custodyOf(draftKey));
+	const { text, images } = custody.draft;
+	const { commandResult } = custody;
 	const originRef = useRef<{ key: string; active: boolean }>({ key: draftKey, active: true });
 	if (originRef.current.key !== draftKey) originRef.current = { key: draftKey, active: true };
 	useEffect(() => {
@@ -273,8 +303,40 @@ export function Composer({
 		origin.active = true;
 		return () => { origin.active = false; };
 	}, [draftKey]);
-	const setText = (value: string | ((text: string) => string)) => updateDraft(draftKey, (current) => editDraftText(current, typeof value === "function" ? value(current.text) : value));
-	const setImages = (value: Image[] | ((images: Image[]) => Image[])) => updateDraft(draftKey, (current) => editDraftImages(current, typeof value === "function" ? value(current.images) : value));
+	const setText = (next: SetStateAction<string>) => updateDraft(draftKey, next);
+	const setImages = (next: (prev: Image[]) => Image[]) => updateCustody(draftKey, (c) => editDraft(c, { images: next(c.draft.images) }, newId));
+	/**
+	 * Takes the draft as this submission's own content, key, and intent; the draft is empty under a new key. One draft
+	 * yields at most one submission: a second activation in the same tick finds an empty draft, and an empty draft yields none.
+	 */
+	const take = (): Draft<Image> | undefined => {
+		let submission = custodyOf(draftKey).draft;
+		if (isEmpty(submission)) return undefined;
+		updateCustody(draftKey, (c) => {
+			const [next, taken] = takeDraft(c, newId());
+			submission = taken;
+			return next;
+		});
+		return submission;
+	};
+	/**
+	 * A submission that failed comes back with its outcome: into an empty draft of the Session on screen, otherwise held
+	 * beside the draft. Custody keeps the outcome, so it shows wherever and whenever the owner next sees the submission.
+	 * `say`: false when a choice names the refusal instead.
+	 */
+	const returnSubmission = (submission: Draft<Image>, outcome: Outcome, say = true): string => {
+		const id = newId();
+		const hold = !originRef.current.active || originRef.current.key !== draftKey;
+		updateCustody(draftKey, (c) => giveBack(c, submission, { id, outcome, newKey: newId, hold, quiet: !say }));
+		return id;
+	};
+	/** A choice acts on the submission it was offered for: held, it leaves the returned list; restored, it is the draft. */
+	const reclaim = (id: string) => (): Draft<Image> | undefined => {
+		const held = custodyOf(draftKey).returned.find((r) => r.id === id);
+		if (!held) return take();
+		updateCustody(draftKey, (c) => ({ ...c, returned: c.returned.filter((r) => r !== held) }));
+		return held;
+	};
 	const [error, setError] = useState<string>();
 	const [note, setNote] = useState<string>();
 	const [pick, setPick] = useState(0);
@@ -282,6 +344,7 @@ export function Composer({
 	const [choice, setChoice] = useState<Choice>();
 	const [piCommands, setPiCommands] = useState<PiCommands>();
 	const ref = useRef<HTMLTextAreaElement>(null);
+	const box = useRef<HTMLDivElement>(null);
 	useImperativeHandle(composerRef, () => ({
 		quote(text, note) {
 			quoteDraft(host, threadId, text, note);
@@ -292,6 +355,7 @@ export function Composer({
 			});
 		},
 	}), [host, threadId]);
+	const fileInput = useRef<HTMLInputElement>(null);
 	const restored = useRef(new Set<string>());
 	const busy = Boolean((view.live as Any)?.run);
 	// Stop covers every live work kind of the thread: a run, and a compaction that runs without one.
@@ -350,7 +414,7 @@ export function Composer({
 	const commandSource = pi ? "Pi" : "this thread";
 	const commandsHint = !wantsCommands || loaded?.state === "ready" ? undefined
 		: !loaded || loaded.state === "loading" ? `Commands unavailable: loading the list from ${commandSource}…`
-		: pi && loaded.code === "no_control" ? "No control socket: Enter types the command into the Pi pane, and Pi runs it there"
+		: pi && loaded.code === "no_control" ? "No control socket: Enter types a Pi command into the Pi pane's empty input box, and Pi runs it there"
 		: loaded.code === "commands_unsupported" ? loaded.message
 		: `Commands unavailable: ${hostErrorMessage(loaded, hostLabel)}`;
 	const local = pi ? [] : commands({ host, threadId, view, summary, actions, say: setNote });
@@ -370,7 +434,6 @@ export function Composer({
 	const slash = /^\/(\S*)$/.exec(text) ?? (modelRefs.length ? /^\/(model \S*)$/.exec(text) : null);
 	const matches = slash ? menu.filter((c) => c.name.toLowerCase().startsWith(slash[1]!.toLowerCase())) : [];
 	useEffect(() => {
-		ref.current?.focus();
 		setEditing(undefined);
 	}, [threadId]);
 	useEffect(() => setPick(0), [slash?.[1]]);
@@ -395,17 +458,27 @@ export function Composer({
 		measure.remove();
 		el.style.height = `${Math.min(height, toCss(window.innerHeight * 0.4, el))}px`;
 	}, [text]);
+	// The Session's image capability, or why it has none. admitImages decides every offered file against it.
+	// Keys cannot type an image into a pane: a Pi Session takes images only through a live control that takes them.
+	const capability: ImageLimits | string = summary?.images
+		?? (!pi ? "this AmPi node is too old to take images; restart it"
+			: summary?.control ? "this Pi Session cannot take images from AmPi yet: update pi-hc-control and /reload in the Pi pane"
+			: "this Session has no live control socket, so AmPi cannot send images; paste them in the Pi pane");
+	const takesImages = typeof capability !== "string";
+	// Attached images plus files still being read, so two quick drops cannot both pass the same limit.
+	const reading = useRef<{ base64: number }[]>([]);
 	const attach = async (files: Iterable<File>) => {
 		if (closed) return;
-		setError(undefined);
-		for (const file of files) {
-			try {
-				const image = await readImage(file);
-				setImages((prev) => (prev.length >= 8 ? prev : [...prev, image]));
-			} catch (e) {
-				setError(otherError(e as Error));
-			}
-		}
+		const offered = [...files].map((file) => ({ file, name: file.name || "pasted image", type: file.type, base64: base64Length(file.size) }));
+		const { accepted, rejected } = admitImages([...custodyOf(draftKey).draft.images.map((i) => ({ base64: i.data.length })), ...reading.current], offered, capability);
+		setError(rejectionLine(rejected));
+		reading.current = [...reading.current, ...accepted];
+		const read = await Promise.allSettled(accepted.map((o) => readImage(o.file)));
+		reading.current = reading.current.filter((o) => !accepted.includes(o as (typeof accepted)[number]));
+		const added = read.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+		if (added.length) setImages((prev) => [...prev, ...added]);
+		const failed = read.flatMap((r, i) => (r.status === "rejected" ? [accepted[i]!.name] : []));
+		if (failed.length) setError([rejectionLine(rejected), `${failed.join(", ")} could not be read`].filter(Boolean).join(" · "));
 	};
 	const runCommand = async (content: string): Promise<boolean> => {
 		const match = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(content);
@@ -414,117 +487,126 @@ export function Composer({
 		await command.run(match![2] ?? "");
 		return true;
 	};
-	const offerText = (message: string, whenBusy: "followUp" | "steer") =>
+	/** The choice sends only the submission it claims; a second click finds none. */
+	const offerText = (message: string, whenBusy: "followUp" | "steer", claim: () => Draft<Image> | undefined) =>
 		setChoice({
 			message: `${message}. Nothing was sent.`,
 			actions: [
-				{ label: "Send as text", run: () => send(whenBusy, undefined, { literal: true }) },
+				{ label: "Send as text", run: () => { const s = claim(); if (s) void dispatch(s, whenBusy, { literal: true }); } },
 				{ label: "Edit", run: () => ref.current?.focus() },
 			],
 		});
-	/** The send owns its key before discovery or admission can await another reply. */
-	const runTyped = async (item: SendIntent, route: Extract<NonNullable<SendIntent["route"]>, { kind: "command" }>): Promise<void> => {
+	/** The send records its route before it awaits, so a retry under the same key repeats the same request. */
+	const runTyped = async (item: Sending, route: Extract<NonNullable<SendIntent["route"]>, { kind: "command" }>): Promise<void> => {
 		const { name, args, abort: abortTurn } = route;
-		const { text: content, whenBusy } = item;
-		item.route = route;
+		const { whenBusy } = item.intent;
+		item.intent.route = route;
 		const origin = originRef.current;
-		try {
-			const ack = await hub.request(host, "thread.command", { threadId, name, ...(args ? { args } : {}), key: item.id, whenBusy, ...(abortTurn ? { abort: true } : {}) });
-			const notice = ack.notice ?? (ack.disposition === "started" ? "Started a turn" : ack.disposition === "queued" ? "Queued" : `Sent /${name} to ${commandSource}`);
-			let currentCommand = false;
-			updateDraft(draftKey, (current) => {
-				if (current.commandResult?.id !== item.id) return current;
-				currentCommand = true;
-				return { ...current, commandResult: { id: item.id, notice, body: ack.body } };
-			});
-			if (origin.active && originRef.current === origin) {
-				commandsRequest.current = undefined;
-				loadedRef.current = undefined;
-				setPiCommands(undefined);
-				if (currentCommand && (ack.panel === "team" || ack.panel === "rarebit") && actionsRef.current.panel !== ack.panel) actionsRef.current.openPanel(ack.panel);
-			}
-		} catch (e) {
-			const { code, message } = e as Error & { code?: string };
-			if (pi && code === "no_control") return deliver(item, content);
-			if (code === "busy" && (name === "compact" || (name === "auto-compact" && /^run(?:\s|$)/.test(args))))
-				setChoice({
-					message: "Compact stops the running turn. Stop and compact?",
-					actions: [
-						{ label: "Stop and compact", run: () => send(whenBusy, undefined, { abort: true }) },
-						{ label: "Cancel", run: () => ref.current?.focus() },
-					],
-				});
-			if (code === "commands_unsupported") offerText(message.replace(/\.$/, ""), whenBusy);
-			throw e;
+		const ack = await hub.request(host, "thread.command", { threadId, name, ...(args ? { args } : {}), key: item.key, whenBusy, ...(abortTurn ? { abort: true } : {}) });
+		// Say what the acknowledgement proves (D15): keys show only that the command was typed into the pane.
+		const notice = ack.evidence === "sent" ? `Typed /${name} into the Pi pane (no receipt; its result shows there)` : ack.notice ?? (ack.disposition === "started" ? "Started a turn" : ack.disposition === "queued" ? "Queued" : `Sent /${name} to ${commandSource}`);
+		let currentCommand = false;
+		updateCustody(draftKey, (current) => {
+			if (current.commandResult?.id !== item.key) return current;
+			currentCommand = true;
+			return { ...current, commandResult: { id: item.key, notice, body: ack.body } };
+		});
+		if (origin.active && originRef.current === origin) {
+			commandsRequest.current = undefined;
+			loadedRef.current = undefined;
+			setPiCommands(undefined);
+			if (currentCommand && (ack.panel === "team" || ack.panel === "rarebit") && actionsRef.current.panel !== ack.panel) actionsRef.current.openPanel(ack.panel);
 		}
 	};
-	/** A slash draft: false only for Pi's pane fallback. */
-	const hostCommand = async (item: SendIntent, abortTurn = false): Promise<boolean> => {
-		const content = item.text.trim(), whenBusy = item.whenBusy;
+	/**
+	 * A slash submission: false when it is not a command. A command that this composer cannot send throws: code
+	 * `command_choice` or `commands_unsupported` offers to send the text as a message instead. A `/name` never becomes
+	 * a message here: only `//` and the owner's "Send as text" choice send slash text as a message.
+	 */
+	const hostCommand = async (item: Sending, abortTurn = false): Promise<boolean> => {
+		const content = item.text.trim();
 		const match = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(content);
+		if (!match && pi) throw Object.assign(new Error("No command name follows the /"), { code: "command_choice" });
 		if (!match) return false;
 		const name = match[1]!;
 		if (name === "stop") { await abort(); return true; }
+		// Enter can come before the list arrives: wait for it. A failed list is fetched again.
 		const current = loadedRef.current?.state === "ready" ? loadedRef.current : await loadCommands();
-		if (pi && current.state === "failed" && current.code === "no_control") return false;
+		// No control, no list: the Host's agent types the command into the pane, where Pi's TUI runs it.
+		if (pi && current.state === "failed" && current.code === "no_control") {
+			await runTyped(item, { kind: "command", name, args: match[2]?.trim() ?? "", ...(abortTurn ? { abort: true } : {}) });
+			return true;
+		}
 		if (current.state !== "ready") {
-			if (current.state === "failed" && current.code === "commands_unsupported") {
-				offerText(current.message.replace(/\.$/, ""), whenBusy);
-				throw Object.assign(new Error(current.message), { code: "commands_unsupported" });
-			}
-			throw new Error(`Commands unavailable: ${current.state === "failed" ? current.message : `the list did not load from ${commandSource}`}.`);
+			if (current.state === "failed" && current.code === "commands_unsupported") throw Object.assign(new Error(current.message), { code: "commands_unsupported" });
+			throw Object.assign(new Error(`Commands unavailable: ${current.state === "failed" ? current.message : `the list did not load from ${commandSource}`}.`), { code: "unsupported" });
 		}
 		const known = current.value.commands.find((c) => c.name === name);
 		if (known?.supported) await runTyped(item, { kind: "command", name, args: match[2]?.trim() ?? "", ...(abortTurn ? { abort: true } : {}) });
 		else if (!pi && await runCommand(content)) return true;
-		else if (!known) {
-			offerText(`${pi ? "Pi" : "This thread"} has no /${name} command`, whenBusy);
-			throw Object.assign(new Error("Unknown command"), { code: "command_choice" });
-		} else throw Object.assign(new Error(pi ? `/${name} works only in the Pi pane.` : `/${name} is unavailable on this thread.`), { code: "unsupported" });
+		else if (!known) throw Object.assign(new Error(`${pi ? "Pi" : "This thread"} has no /${name} command`), { code: "command_choice" });
+		else throw Object.assign(new Error(pi ? `/${name} works only in the Pi pane.` : `/${name} is unavailable on this thread.`), { code: "unsupported" });
 		return true;
 	};
-	/** Snapshot all parts before awaiting. A failure stops this batch and restores its unsent parts. */
-	const send = async (whenBusy: "followUp" | "steer", replacement?: string, options: { literal?: boolean; abort?: boolean } = {}) => {
+	/** Sends the draft; `command` replaces its text when Enter picks a partly typed slash command. */
+	const send = async (whenBusy: "followUp" | "steer", command?: string) => {
 		if (closed) return;
-		if (replacement !== undefined) setText(replacement);
-		const current = DRAFTS.get(draftKey) ?? EMPTY_DRAFT;
-		const parts = draftParts(current).filter((part) => part.text.trim() || part.images.length);
-		if (!parts.length) return;
-		const batch = parts.map((part): SendIntent => part.intent ?? { id: crypto.randomUUID(), order: ++sendOrder, text: part.text, images: part.images, whenBusy });
-		const command = batch.findLast((item) => !item.images.length && /^\/(?!\/)/.test(item.text.trim()) && !options.literal);
-		updateDraft(draftKey, () => ({ ...EMPTY_DRAFT, commandResult: command ? { id: command.id } : current.commandResult }));
+		if (command !== undefined) setText(command);
+		// Take before any await: the draft is this submission's alone, and a second activation finds it empty.
+		const submission = take();
+		if (!submission) return;
 		setNote(undefined);
 		setError(undefined);
 		setChoice(undefined);
-		for (let index = 0; index < batch.length; index++) {
-			const item = batch[index]!;
-			try {
-				if (item.route?.kind === "command") await runTyped(item, item.route);
-				else if (item.route?.kind === "message") await deliver(item, item.route.content);
-				else if (options.literal) await deliver(item, item.text);
-				else if (!item.images.length && item.text.trim().startsWith("//")) await deliver(item, item.text.replace(/^(\s*)\//, "$1"));
-				else if (!item.images.length && item.text.trim().startsWith("/") && await hostCommand(item, options.abort)) { /* handled */ }
-				else await deliver(item, item.text);
-			} catch (e) {
-				const failure = e as Error & { code?: string };
-				const { code } = failure;
-				const outcome = sendOutcome(failure, hostLabel, pi);
-				updateDraft(draftKey, (newer) => {
-					const restored = restoreIntents(newer, batch.slice(index));
-					return outcome.finalRefusal ? refuseIntent(restored, item.id) : restored;
+		await dispatch(submission, whenBusy);
+	};
+	/**
+	 * Sends one submission under its key. A retry follows the intent's route. A failure gives the submission back with
+	 * its key and intent only when the outcome is unknown; a final refusal gives it back as a new message.
+	 */
+	const dispatch = async (submission: Draft<Image>, whenBusy: "followUp" | "steer", options: { literal?: boolean; abort?: boolean } = {}) => {
+		const item: Sending = { ...submission, intent: submission.intent ? { ...submission.intent } : { whenBusy } };
+		const { route } = item.intent;
+		// A command's answer belongs to the latest command sent: a retry under a new key shows its own answer.
+		const command = route ? route.kind === "command" : !options.literal && !item.images.length && /^\/(?!\/)/.test(item.text.trim());
+		if (command) updateCustody(draftKey, (c) => ({ ...c, commandResult: { id: item.key } }));
+		try {
+			if (route?.kind === "command") await runTyped(item, route);
+			else if (route?.kind === "message") await deliver(item, route.content, route.asText);
+			else if (options.literal) await deliver(item, item.text, true);
+			else if (!item.images.length && item.text.trim().startsWith("//")) await deliver(item, item.text.replace(/^(\s*)\//, "$1"), true);
+			else if (!item.images.length && item.text.trim().startsWith("/") && await hostCommand(item, options.abort)) { /* handled */ }
+			else await deliver(item, item.text);
+		} catch (e) {
+			const failure = e as Error & { code?: string };
+			const { code } = failure;
+			const outcome = sendOutcome(failure, hostLabel, pi);
+			const offer = code === "command_choice" || code === "commands_unsupported" || (pi && code === "unknown_command");
+			const sent = item.intent.route;
+			const compact = code === "busy" && sent?.kind === "command" && (sent.name === "compact" || (sent.name === "auto-compact" && /^run(?:\s|$)/.test(sent.args)));
+			const claim = reclaim(returnSubmission(item, outcome, !(offer || compact)));
+			if (offer) offerText(failure.message.replace(/\.$/, ""), item.intent.whenBusy, claim);
+			else if (compact)
+				setChoice({
+					message: "Compact stops the running turn. Stop and compact?",
+					actions: [
+						{ label: "Stop and compact", run: () => { const s = claim(); if (s) void dispatch(s, item.intent.whenBusy, { abort: true }); } },
+						{ label: "Cancel", run: () => ref.current?.focus() },
+					],
 				});
-				if (!["command_choice", "commands_unsupported"].includes(code ?? "") && !(code === "busy" && item.route?.kind === "command" && (item.route.name === "compact" || (item.route.name === "auto-compact" && /^run(?:\s|$)/.test(item.route.args))))) setError(outcome.text);
-				return;
-			}
 		}
 	};
-	/** The editor text and payload stay separate so an escaped slash retries the same request. */
-	const deliver = async (item: SendIntent, content: string) => {
-		item.route = { kind: "message", content };
-		const { images: sent, whenBusy } = item;
+	/**
+	 * The editor text and the payload stay separate, so an escaped slash retries the same request. `asText` marks slash
+	 * text that the owner chose to send as a message.
+	 */
+	const deliver = async (item: Sending, content: string, asText?: true) => {
+		item.intent.route = { kind: "message", content, ...(asText ? { asText } : {}) };
+		const { images: sent } = item;
+		const { whenBusy } = item.intent;
 		const wasArchived = summary?.archived;
 		const ack = await hub.request(host, "thread.submit", {
-			threadId, content, whenBusy, requestId: item.id,
+			threadId, content, whenBusy, requestId: item.key, ...(asText ? { asText } : {}),
 			...(sent.length ? { images: sent.map(({ data, mimeType }) => ({ data, mimeType })) } : {}),
 		});
 		if (wasArchived) setNote("Unarchived");
@@ -561,18 +643,33 @@ export function Composer({
 					restored.current.add(key);
 					return [submission.text];
 				});
-				if (texts.length) updateDraft(draftKey, (current) => prependDraftText(current, texts.join("\n\n")));
+				// Stop proves none was sent, so the texts carry no retry identity and rekey the draft.
+				if (texts.length) updateCustody(draftKey, (c) => prependDraftText(c, texts.join("\n\n"), newId));
 				if (returned || lost || team || compactions || stopping) setNote([lead, compactNote, returned ? `${plural(returned)} ${OUTCOMES.durable.returned!.note}, not sent` : "", teamNote, lost ? `${plural(lost)} not returned; check the transcript` : ""].filter(Boolean).join("; "));
 				return;
 			}
-			if (returned || lost) setNote(["Stopped", returned ? `${plural(returned)} ${OUTCOMES.pi.returned!.note}, not sent` : "", lost ? `${plural(lost)} dropped by Pi` : ""].filter(Boolean).join("; "));
+			// Pi returns text only: images of a returned message are lost.
+			const lostImages = ack?.submissions?.reduce((n, s) => n + (s.state === "returned" && !s.origin ? s.images ?? 0 : 0), 0) ?? 0;
+			if (returned || lost) setNote(["Stopped", returned ? `${plural(returned)} ${OUTCOMES.pi.returned!.note}, not sent` : "", lostImages ? `${lostImages === 1 ? "1 image" : `${lostImages} images`} lost` : "", lost ? `${plural(lost)} dropped by Pi` : ""].filter(Boolean).join("; "));
 		} catch (e) {
 			setError(otherError(e as Error));
 		}
 	};
+	/** Moves a held message into the draft; images the Session cannot also take stay held, with the reason. */
+	const restore = (id: string) => {
+		const offered = (list: readonly Image[]) => list.map((image) => ({ image, name: image.name, type: image.mimeType, base64: image.data.length }));
+		let line: string | undefined;
+		updateCustody(draftKey, (c) => restoreReturned(c, id, (current, incoming) => {
+			const { accepted, rejected } = admitImages(offered(current), offered(incoming), capability);
+			line = rejectionLine(rejected);
+			return { accepted: accepted.map((o) => o.image), rejected: rejected.map((r) => r.file.image) };
+		}, newId));
+		setError(line);
+		ref.current?.focus();
+	};
 	// Puts a returned message into this composer; Pi's input box keeps its own copy, so nothing is sent twice by itself.
 	const recover = (content: string) => {
-		updateDraft(draftKey, (current) => prependDraftText(current, content));
+		updateCustody(draftKey, (c) => prependDraftText(c, content, newId));
 		ref.current?.focus();
 	};
 	/**
@@ -588,7 +685,7 @@ export function Composer({
 		if (edit.text === edit.expected) return setEditing(undefined);
 		if (!edit.text.trim()) return setError("A queued message cannot be empty. Use × to withdraw it.");
 		const reused = Boolean(edit.editId && edit.sentText === edit.text);
-		const editId = reused ? edit.editId! : crypto.randomUUID();
+		const editId = reused ? edit.editId! : newId();
 		const saving = { ...edit, editId, sentText: edit.text, saving: true };
 		const editDraftKey = draftKey;
 		const here = () => threadRef.current === edit.threadId;
@@ -596,7 +693,7 @@ export function Composer({
 		const own = () => here() && editingRef.current?.editId === editId;
 		const settle = (next: QueuedEdit | undefined) => setEditing((current) => (current?.editId === editId ? next : current));
 		// A warning stays with the text in that thread's draft, so it outlives this composer.
-		const keep = (warning?: string) => updateDraft(editDraftKey, (current) => appendDraftText(current, edit.text, warning));
+		const keep = (outcome?: Outcome) => updateCustody(editDraftKey, (c) => appendDraftText(c, edit.text, newId, outcome));
 		setEditing(saving);
 		setError(undefined);
 		let result: EditQueuedResult | undefined;
@@ -606,11 +703,11 @@ export function Composer({
 				result = await hub.request(host, "thread.editQueued", { threadId: edit.threadId, submissionId: edit.id, editId, expected: edit.expected, text: edit.text, retry: reused || attempt > 0 });
 			} catch (e) {
 				failure = e as Error & { code?: string };
-				if (sendOutcome(failure, hostLabel).finalRefusal) break;
+				if (!sendOutcome(failure, hostLabel).uncertain) break;
 			}
 		}
 		const late = !own();
-		const refused = !result && failure !== undefined && sendOutcome(failure, hostLabel).finalRefusal;
+		const refused = !result && failure !== undefined && !sendOutcome(failure, hostLabel).uncertain;
 		// The queue item's own ID is identity evidence; its text then shows whether the edit landed.
 		const queued = here() ? (((viewRef.current.inbox as Any)?.items ?? []) as Any[]).find((item) => String(item.id) === edit.id) : undefined;
 		if (!result && !refused && typeof queued?.content === "string" && queued.content === edit.text) result = { edited: true };
@@ -621,7 +718,7 @@ export function Composer({
 			settle(undefined);
 			const reason = result.reason === "taken" ? "The agent already took this message, so your edit was not sent." : "This queued message changed elsewhere, so your edit was not saved.";
 			// Text the owner did not type into this draft always carries its reason; off screen, the draft keeps it.
-			if (!here()) keep(`${reason} Your edited text is at the end of the composer.`);
+			if (!here()) keep({ uncertain: false, text: `${reason} Your edited text is at the end of the composer.` });
 			else {
 				keep();
 				setNote(`${reason} ${late ? "Your edited text was added to the end of the composer." : "Your edited text is in the composer."}`);
@@ -630,10 +727,10 @@ export function Composer({
 			settle({ ...saving, saving: false });
 			if (here()) setError(otherError(failure!));
 		} else if (refused) {
-			keep(`Not saved: ${hostErrorMessage(failure!, hostLabel).trimEnd().replace(/\.+$/, "")}. Your edited text is at the end of the composer; check the queue before you send.`);
+			keep({ uncertain: false, text: `Not saved: ${hostErrorMessage(failure!, hostLabel).trimEnd().replace(/\.+$/, "")}. Your edited text is at the end of the composer; check the queue before you send.` });
 		} else {
 			settle(undefined);
-			keep("Edit outcome unknown: your edited text is at the end of the composer; it may already have been sent. Check the queue before you send.");
+			keep({ uncertain: true, text: "Edit outcome unknown: your edited text is at the end of the composer; it may already have been sent. Check the queue before you send." });
 		}
 	};
 	return (
@@ -707,7 +804,7 @@ export function Composer({
 									<span className="text">{content}</span>
 								)}
 								{editing?.id === String(item.id) && <span className="outcome">{editing.saving ? "Saving…" : "Enter saves · Esc cancels"}</span>}
-								{outcome && <span className="outcome">{outcome.note}</span>}
+								{outcome && <span className="outcome">{outcome.note}{pi && item.state === "returned" && item.images ? `; its ${item.images === 1 ? "image is" : `${item.images} images are`} lost, attach again` : ""}</span>}
 								{!pi && !outcome && (item.mode === "steer" || item.mode === "followUp") && editing?.id !== String(item.id) && (
 									<button
 										className="btn ghost small"
@@ -735,7 +832,7 @@ export function Composer({
 				</div>
 			)}
 			{(matches.length > 0 || commandsHint) && (
-				<div className="slash-menu quiet-scroll" role="listbox" data-slash-menu>
+				<Popover className="slash-menu quiet-scroll" role="listbox" data-slash-menu anchor={() => box.current?.getBoundingClientRect()} side="above" gap={8} fit owner={box.current}>
 					{matches.map((c, i) => (
 						<div
 							key={c.name}
@@ -744,7 +841,7 @@ export function Composer({
 							className={`slash-item ${i === pick ? "on" : ""}`}
 							aria-disabled={c.disabled || undefined}
 							style={c.disabled ? { opacity: 0.55 } : undefined}
-							onMouseEnter={() => setPick(i)}
+							{...hoverIntent(() => setPick(i))}
 							onMouseDown={(e) => {
 								e.preventDefault();
 								setText(`/${c.name}${c.args ? " " : ""}`);
@@ -760,7 +857,7 @@ export function Composer({
 					<div className="hint slash-foot" data-commands-hint={commandsHint ? "" : undefined}>
 						{commandsHint ?? "Tab completes · //text sends /text as a message"}
 					</div>
-				</div>
+				</Popover>
 			)}
 			{/* Keyed on this thread's model: a thread started before sign-in stays on the simulator until switched. */}
 			{!pi && model.startsWith("ampi-sim/") && models.length > 0 && (
@@ -782,7 +879,20 @@ export function Composer({
 					)}
 				</div>
 			)}
-			<div className="composer" data-region="composer" tabIndex={-1}>
+			<div className="composer" ref={box} data-region="composer" tabIndex={-1}>
+				{custody.returned.map((held) => (
+					<OutcomeLine key={held.id} outcome={held.outcome} keyed={!!held.intent} held what={<>
+						{held.text.trim() && <q>{held.text.trim().length > 80 ? `${held.text.trim().slice(0, 80)}…` : held.text.trim()}</q>}
+						{held.images.length > 0 && ` with ${held.images.length === 1 ? "1 image" : `${held.images.length} images`}`}
+					</>} actions={<>
+						<button className="btn ghost small" title="Put this message back into the draft, ahead of what you typed since" onClick={() => restore(held.id)}>
+							Restore
+						</button>
+						<button className="btn ghost small" title="Discard this message" onClick={() => updateCustody(draftKey, (c) => ({ ...c, returned: c.returned.filter((r) => r.id !== held.id) }))}>
+							Discard
+						</button>
+					</>} />
+				))}
 				{images.length > 0 && (
 					<div className="attachments">
 						{images.map((image, i) => (
@@ -808,7 +918,7 @@ export function Composer({
 							? COMPOSER_BUSY_HINT
 							: pi
 								? summary?.control
-									? "Message the agent… (Enter starts a turn, Shift+Enter adds a line, / for commands)"
+									? `Message the agent… (Enter starts a turn, Shift+Enter adds a line, / for commands${takesImages ? ", paste or drop images" : ""})`
 									: "Message the agent… (Enter types it into the Herdr pane, Shift+Enter adds a line)"
 								: "Message the agent… (Enter sends, Shift+Enter adds a line, / for commands, paste or drop images)"
 					}
@@ -817,14 +927,14 @@ export function Composer({
 						setChoice(undefined);
 					}}
 					onPaste={(e) => {
-						const files = [...e.clipboardData.files].filter((f) => f.type.startsWith("image/"));
-						if (files.length) {
-							e.preventDefault();
-							void attach(files);
-						}
+						const files = [...e.clipboardData.files];
+						if (!files.length) return;
+						// Mixed text and image paste keeps the text; a bare file paste adds no text.
+						if (!e.clipboardData.types.includes("text/plain")) e.preventDefault();
+						void attach(files);
 					}}
 					onKeyDown={(e) => {
-						const whenBusy = composerSubmission({ key: e.key, altKey: e.altKey, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing });
+						const whenBusy = composerSubmission({ key: e.key, altKey: e.altKey, shiftKey: e.shiftKey, repeat: e.repeat, isComposing: e.nativeEvent.isComposing });
 						if (matches.length > 0 && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
 							e.preventDefault();
 							setPick((p) => (p + (e.key === "ArrowDown" ? 1 : matches.length - 1)) % matches.length);
@@ -832,6 +942,8 @@ export function Composer({
 							e.preventDefault();
 							const c = matches[pick]!;
 							setText(`/${c.name}${c.args ? " " : ""}`);
+						} else if (whenBusy === "held") {
+							e.preventDefault();
 						} else if (whenBusy) {
 							e.preventDefault();
 							// Enter on a partly typed command picks the highlighted one.
@@ -852,13 +964,12 @@ export function Composer({
 					}}
 				/>
 				{closed && <ClosedFeedback summary={summary!} />}
-				{draft.notices?.map((notice) => (
-					<div key={notice.id} className="quiet-scroll composer-feedback error" data-scrollbar="none" role="alert">
-						{notice.message}{" "}
-						<button className="btn ghost small" onClick={() => updateDraft(draftKey, (current) => dismissNotice(current, notice.id))}>
+				{custody.notices?.map((notice) => (
+					<OutcomeLine key={notice.id} outcome={notice.outcome} keyed={noticeKeyed(custody.draft, notice)} actions={
+						<button className="btn ghost small" onClick={() => updateCustody(draftKey, (c) => dismissNotice(c, notice.id))}>
 							Dismiss
 						</button>
-					</div>
+					} />
 				))}
 				{error && <div className="quiet-scroll composer-feedback error" data-scrollbar="none" role="alert">{error}</div>}
 				{commandResult?.notice && <div className="quiet-scroll composer-feedback" data-scrollbar="none" role="status" data-command-result>
@@ -866,7 +977,7 @@ export function Composer({
 						<summary>{commandResult.body.split("\n")[0] || commandResult.notice}</summary>
 						<div style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{commandResult.body.split("\n").slice(1).join("\n")}</div>
 					</details> : commandResult.notice}
-					<button className="btn ghost small" onClick={() => updateDraft(draftKey, (current) => ({ ...current, commandResult: undefined }))}>Dismiss</button>
+					<button className="btn ghost small" onClick={() => updateCustody(draftKey, ({ commandResult: _dismissed, ...c }) => c)}>Dismiss</button>
 				</div>}
 				{note && !error && <div className="quiet-scroll composer-feedback" data-scrollbar="none" role="status">{note}</div>}
 				{choice && (
@@ -880,6 +991,23 @@ export function Composer({
 					</div>
 				)}
 				<div className="composer-bar">
+					{/* A durable thread takes images by paste or drop only; a Pi Session whose control takes images also gets the button. */}
+					{pi && takesImages && (
+					<button className="btn ghost small" title="Attach images (or paste or drop them)" onClick={() => fileInput.current?.click()}>
+						＋ Image
+					</button>
+					)}
+					<input
+						ref={fileInput}
+						type="file"
+						accept={takesImages ? capability.types.join(",") : undefined}
+						multiple
+						hidden
+						onChange={(e) => {
+							if (e.target.files) void attach([...e.target.files]);
+							e.target.value = "";
+						}}
+					/>
 					<ModelControls host={host} threadId={threadId} summary={summary} models={models} model={model} thinkingLevel={agent?.thinkingLevel} closed={closed} pi={pi} />
 					<span className="grow" />
 					{summary && <ContextMeter summary={summary} />}

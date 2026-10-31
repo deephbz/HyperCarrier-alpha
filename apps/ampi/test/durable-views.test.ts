@@ -1,6 +1,6 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -138,6 +138,28 @@ test("durable views: a restart reuses the copy, and a deleted copy rebuilds from
  await views.forget(s.threads.root);
  await views.track(s.threads.root);
  assert.deepEqual(views.threadValue(s.threads.root)!.entries.map((e: any) => e.id), first.entries.map((e: any) => e.id));
+});
+
+test("durable Find answers Indexing until the copy is read, and again while a lost copy rebuilds", async (t) => {
+ const s = await synthetic(t);
+ let views = s.open();
+ const find = () => views.ops["thread.find"]({ threadId: s.threads.root, query: "check the build" } as never) as Promise<any>;
+ await assert.rejects(find(), { code: "not_found" }, "an untracked thread is unknown, not indexing");
+ let tracking = views.track(s.threads.root);
+ assert.deepEqual(await find(), { indexing: true });
+ assert.equal(views.threadValue(s.threads.root)!.sourceVersion, undefined, "no frame announces an index yet");
+ await tracking;
+ assert.ok(views.threadValue(s.threads.root)!.sourceVersion, "the next frame announces the index");
+ assert.ok((await find()).hits.length >= 1);
+
+ // A restart without the copy's meta keeps the derived head but must rebuild the copy.
+ await views.close();
+ for (const f of readdirSync(join(s.dir, "cache"))) if (f.endsWith(".meta.json")) rmSync(join(s.dir, "cache", f));
+ views = s.open();
+ tracking = views.track(s.threads.root);
+ assert.deepEqual(await find(), { indexing: true });
+ await tracking;
+ assert.ok((await find()).hits.length >= 1);
 });
 
 /** Times, IDs and versions vary per run; the golden keeps structure and text. */

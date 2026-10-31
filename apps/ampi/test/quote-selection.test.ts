@@ -248,7 +248,8 @@ for (const engine of ["chromium", "webkit"] as const) test(`Quote note follows i
   const got = await state();
   assert.ok(got.end, `${label}: the anchor renders`);
   assert.ok(got.end!.bottom < got.transcript.bottom - 60*got.scale, `${label}: the anchor sits clear of the transcript bottom`);
-  assert.ok(Math.abs(got.pill.left-Math.min(got.end!.right,got.width-360*got.scale))<2, `${label}: pill left ${got.pill.left} at anchor right ${got.end!.right}`);
+  // The pill starts at the anchor's right, or ends there when the viewport has no room; it stays inside the viewport.
+  assert.ok(Math.min(Math.abs(got.pill.left-got.end!.right),Math.abs(got.pill.right-got.end!.right))<2 && got.pill.left>=0 && got.pill.right<=got.width, `${label}: pill ${got.pill.left}-${got.pill.right} at anchor right ${got.end!.right}, viewport ${got.width}`);
   assert.ok(Math.abs(got.pill.top-(got.end!.bottom+4*got.scale))<2, `${label}: pill top ${got.pill.top} 4 px below anchor bottom ${got.end!.bottom}`);
   assert.equal(got.value,'Typed note',`${label}: draft kept`);
   assert.equal(got.focused,true,`${label}: focus kept`);
@@ -295,6 +296,17 @@ test("Quote Escape leaves Composer Escape ownership intact", async t => {
  assert.equal(await page.locator('.slash-menu').count(),0);
  assert.equal(await page.getByRole('textbox',{name:'Quote note (optional)'}).count(),1);
  assert.equal(await draft.inputValue(),'');
+});
+
+// A triple-click selects a paragraph and its break, so the range ends at offset 0 of the next entry; that entry adds no
+// text, and the selection still quotes the one entry.
+for (const engine of ["chromium", "webkit"] as const) test(`Quote offers a triple-clicked paragraph (${engine})`, { skip: engineSkip(engine) }, async t => {
+ const {page} = await open(t,"pi-local",engine);
+ await page.locator('[data-entry="e0"] .md p').click({clickCount:3});
+ const ends = await page.evaluate(() => { const r = window.getSelection()!.getRangeAt(0); const e = (n: Node) => (n instanceof Element ? n : n.parentElement)!.closest('[data-entry]')?.getAttribute('data-entry'); return [e(r.startContainer), e(r.endContainer)]; });
+ await page.getByRole('button',{name:'Quote q'}).click();
+ await page.getByRole('textbox',{name:'Quote note (optional)'}).press('Enter');
+ assert.equal(await page.locator('[data-region="composer"] textarea').inputValue(),'> First selected paragraph.\n\n', `selection ends ${ends.join(" → ")}`);
 });
 
 test("Quote includes body text but excludes selected entry chrome", async t => {

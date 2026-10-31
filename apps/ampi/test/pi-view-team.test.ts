@@ -28,7 +28,7 @@ export let readTaskSnapshot = ({teamName}) => read().tasks[teamName];
 export async function readObservationSnapshot() { const data = read(); readTaskSnapshot = data.missingReader ? undefined : ({teamName}) => read().tasks[teamName]; return data; }`);
 	const header = (id: string) => `${JSON.stringify({ type: "session", version: 3, id, cwd: "/work", timestamp: new Date().toISOString() })}\n`;
 	writeFileSync(f.sessionA, header("sess-a")); writeFileSync(f.sessionB, header("sess-b"));
-	const hub = new Hub({ backend: "pi", hosts: [{ id: "devbox", label: "devbox", kind: "pi-local", cacheDir: join(f.dir, "cache"),
+	const hub = new Hub({ hosts: [{ id: "devbox", label: "devbox", kind: "pi-local", cacheDir: join(f.dir, "cache"),
 		agentConfig: { agentDir: f.agentDir, pollMs: 30, discoverMs: 180, teamsMs: 150, ptbObservation: moduleFile },
 		env: { HOME: f.dir, HERDR_BIN: join(f.dir, "herdr"), FAKE_HERDR_STATE: join(f.dir, "state.json"), FAKE_HERDR_LOG: join(f.dir, "calls.jsonl") } }] }, { token });
 	const port = await hub.listen(0);
@@ -53,6 +53,11 @@ export async function readObservationSnapshot() { const data = read(); readTaskS
 	f.setState({ ...f.state, agents: f.state.agents.filter((a: any) => a.pane_id !== "w1:p1") });
 	const stopped = await browser.until<TeamValue>(alpha, v => v.teams[0]?.members[1]?.live === false);
 	assert.deepEqual(stopped.teams[0]!.members[1], { member: "worker", role: "teammate", threadId: "pi:sess-b", ref: "devbox/pi:sess-b", pane: "w1:p1", live: false, status: "not running" });
+	// A closed member keeps its Team in its summary and its Timeline lane, so the Timeline groups it with its lead.
+	const closed = await browser.until<any>(browser.sub("devbox", { kind: "threads" }), v => v.threads["pi:sess-b"]?.live === false);
+	assert.deepEqual(closed.threads["pi:sess-b"].team, { teamId: "alpha", role: "worker", worker: "worker" });
+	const lanes = await browser.until<any>(browser.sub("devbox", { kind: "view", view: "cos.timeline" }), v => v.sessions.some((s: any) => s.threadId === "pi:sess-b"));
+	assert.equal(lanes.sessions.find((s: any) => s.threadId === "pi:sess-b").team, "alpha");
 	// PTB can explicitly end a Membership on process shutdown; recorded identity still survives.
 	data.teams[0]!.memberships[1]!.lifecycle.state = "ended";
 	data.tasks.alpha.tasks[0]!.title = "Read after the worker stopped"; save();

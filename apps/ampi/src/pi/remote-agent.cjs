@@ -4,12 +4,15 @@
 // Config: HCM_CFG = base64 JSON. Stdout: one JSON frame per line. Stdin: one JSON command per line.
 //
 // Out: hello, reset/chunk (Session bytes), agents {agents, panes, layout}, teams, limits, ack, live, beat, status.
-// In:  {t:'submit', id, session, pane?, text, deliverAs: 'steer'|'followUp'}
+// In:  {t:'submit', id, session, pane?, text, deliverAs: 'steer'|'followUp', images?: [{data, mimeType}]}
+//        images go only through a live control that announces them (status.images); text may then be empty
 //      {t:'submit', id, pane, expectSession, text, deliverAs}   a spawned Session with no file yet (pane from the ledger)
 //      {t:'abort', id, session, pane?}
 //      {t:'commands', id, session}           slash commands, models and thinking levels from the live control
-//      {t:'command', id, session, name, args?, key?, abort?, deliverAs?}
-//                                            one typed slash command through the live control; never keys or text
+//      {t:'command', id, session, pane?, name, args?, key?, abort?, deliverAs?}
+//                                            one typed slash command: through the live control, or with none, typed into
+//                                            an empty editor in the bound pane with Enter, where Pi's TUI runs it; never
+//                                            a control submit
 //      {t:'screen', id, session, pane, ms}   stream a pane's screen for ms
 //      {t:'watch', panes:[...]}              live screen of watched panes while active
 //      {t:'spawn', id, requestId, sessionId | resume, cwd, beside?, direction?, label?, name?, prompt?}
@@ -25,6 +28,7 @@
 //   tailBytes       0 = ship whole Sessions
 //   pollMs, discoverMs, teamsMs, teams, ptbObservation, herdrSession
 //   agentDir        Pi agent dir (default $PI_CODING_AGENT_DIR or ~/.pi/agent)
+//   autoCompactResolve  hc-auto-compact's settings resolver as a data: module URL, from the hub (agent-modules.ts)
 //   controlStatusMs status query timeout per socket (default 500)
 //   controlSubmitMs submit/abort reply timeout (default 130000; the extension waits up to 120 s on compaction)
 //   keys.typeArgv   Herdr argv that types literal text without submitting.
@@ -376,6 +380,8 @@ async function probe(d) {
     const r = await controlRequest(d.socket, { id: `s${++controlSeq}`, op: 'status' }, controlStatusMs);
     const v = r?.ok ? r.value : null;
     if (!v || v.nonce !== d.nonce || path.resolve(v.sessionFile || '') !== d.sessionFile) return null;
+    // A new control endpoint (a restart or /reload) can serve other commands: forget the old list.
+    if (seenCommands.get(d.sessionFile)?.nonce !== d.nonce) seenCommands.delete(d.sessionFile);
     return { descriptor: d, value: v };
   } catch { return null; }
 }
@@ -394,17 +400,19 @@ const controlView = (r) => r ? {
   live: true, idle: !!r.value.idle, compacting: !!r.value.compacting,
   // The control serves typed slash commands (pi-hc-control `commands`/`command`).
   ...(r.value.commands === 1 ? { commands: true } : {}),
+  // Its submit carries images (pi-hc-control status.images).
+  ...(r.value.images === 1 ? { images: true } : {}),
   pending: { steer: r.value.pending?.steer ?? 0, followUp: r.value.pending?.followUp ?? 0 },
   // An older control extension tracks no submissions: leave the key out, so absence proves nothing.
   ...(Array.isArray(r.value.submissions) ? { submissions: r.value.submissions.map(submissionView) } : {}),
 } : null;
 // The endpoint's start: a Session with no file yet has no other age.
 const startedOf = (r) => { const at = Date.parse(r.descriptor.startedAt); return at ? { startedAt: at } : {}; };
-// A delivered submission is in the Session file; only undelivered ones carry their text to the hub.
+// The agent relays each submission record whole; the hub reads it (host.ts controlSubmission). A delivered
+// submission is in the Session file, so only its text stays here.
 function submissionView(s) {
-  const v = { submission: s.submission, deliverAs: s.deliverAs, state: s.state, at: s.at };
-  if (s.entryId) v.entryId = s.entryId;
-  if (s.state !== 'delivered') { v.text = s.text; if (s.truncated) v.truncated = true; }
+  if (s.state !== 'delivered') return s;
+  const { text, truncated, ...v } = s;
   return v;
 }
 
@@ -564,8 +572,8 @@ async function spawnedBinding(msg) {
 }
 const fill = (argv, vars) => argv.map((x) => x.replace(/\{(pane|text)\}/g, (_, k) => vars[k]));
 
-async function viaControl(msg, req) {
-  const r = await liveControlFor(msg.session);
+async function viaControl(msg, req, r) {
+  r ??= await liveControlFor(msg.session);
   if (!r) return false;
   try {
     const rep = await controlRequest(r.descriptor.socket, { id: `c${++controlSeq}`, ...req }, controlSubmitMs);
@@ -581,16 +589,21 @@ async function viaControl(msg, req) {
   return true;
 }
 
-// Typed slash commands go only through a live control that serves them: a command string must never reach Pi
-// as text or keys (packages/pi-hc-control README, Slash commands).
-async function viaCommandControl(msg, req) {
+// A typed slash command reaches Pi only as a command: through a live control that serves commands, or, with no live
+// control, as keys in the bound pane, where Pi's TUI runs it. It never goes through the control's submit, which
+// would record the command as a user message (packages/pi-hc-control README, Slash commands). This is the one
+// place that chooses, at the moment of sending, so no caller acts on an older answer about the control.
+async function viaCommandControl(msg, req, typed) {
   const r = msg.session ? await liveControlFor(msg.session) : null;
+  if (!r && typed) return commandKeys(msg, typed);
   if (!r) return fail(msg, 'control', 'no_control', 'This Session has no live control socket, so AmPi cannot run slash commands; use the Pi pane');
   if (r.value.commands !== 1) return fail(msg, 'control', 'commands_unsupported', "This Pi's control is too old for slash commands: update pi-hc-control and /reload in the Pi pane");
   try {
     const rep = await controlRequest(r.descriptor.socket, { id: `c${++controlSeq}`, ...req }, controlSubmitMs);
     if (rep.ok) {
       const { id: _id, ok: _ok, ...result } = rep;
+      if (req.op === 'commands' && Array.isArray(result.value?.commands))
+        seenCommands.set(r.descriptor.sessionFile, { nonce: r.descriptor.nonce, names: new Set(result.value.commands.filter((c) => c?.supported !== false).map((c) => c?.name)) });
       ackOf(msg, 'control', { ok: true, ...result });
     } else ackOf(msg, 'control', { ok: false, error: rep.error || { code: 'control_error', message: 'control refused' } });
   } catch (e) {
@@ -598,33 +611,96 @@ async function viaCommandControl(msg, req) {
     fail(msg, 'control', 'control_unconfirmed', String(e.message || e));
   }
 }
+// Pi 1.4.0's 24 built-in slash commands (core/slash-commands.js; not exported), split as pi-hc-control splits them,
+// so one table decides with a control and without one. A test keeps both lists equal to pi-hc-control's.
+// PI_BUILTINS: pi-hc-control's BUILTINS, which keys may type. PANE_ONLY: names the owner runs in the Pi pane.
+const PI_BUILTINS = ['model', 'thinking', 'name', 'compact'];
+const PANE_ONLY = ['settings', 'tree', 'scoped-models', 'export', 'import', 'share', 'bug', 'copy', 'session',
+  'changelog', 'hotkeys', 'fork', 'clone', 'trust', 'login', 'logout', 'new', 'resume', 'reload', 'quit'];
+// sessionFile -> { nonce, names }: the commands its control endpoint `nonce` listed as supported. probe() forgets it
+// when the endpoint changes.
+const seenCommands = new Map();
+
+/**
+ * Types a slash command into the Session's pane, where Pi's TUI runs it: only a name the control would run, and
+ * always with Enter, because Alt+Enter while streaming queues the text as a message. Keys carry no receipt.
+ */
+function commandKeys(msg, typed) {
+  if (PANE_ONLY.includes(msg.name)) return fail(msg, 'keys', 'unsupported_command', `/${msg.name} works only in the Pi pane.`);
+  if (!PI_BUILTINS.includes(msg.name) && !seenCommands.get(path.resolve(msg.session))?.names.has(msg.name))
+    return fail(msg, 'keys', 'unknown_command', `Pi has no /${msg.name} command that AmPi can type without a control socket`);
+  return viaKeys(msg, typed, 'steer', { disposition: 'dispatched', evidence: 'sent' }, true);
+}
+
+/**
+ * True when the screen shows Pi's editor empty. pi-tui's Editor draws its text between two full-width borders; an
+ * empty editor leaves one blank line between them. The bottom border is the last border on the screen and is a pure
+ * rule. While Pi works, the top border holds its status (`── ⠋ Working… ───`). A scroll label (`↑ 2 more`) means
+ * hidden lines. Any other shape counts as not empty. Derived from pi-tui and pi-coding-agent CustomEditor source,
+ * not from a recorded Herdr screen: provisional.
+ */
+function editorEmpty(stdout) {
+  let text = stdout;
+  try { const j = JSON.parse(stdout); text = j.result?.text ?? j.result?.output ?? stdout; } catch {}
+  const lines = String(text).split('\n').map((line) => line.trim());
+  const border = (line) => line.length >= 8 && /^─{2}.*─{2}$/.test(line);
+  const bottom = lines.findLastIndex(border);
+  if (bottom < 2 || !/^─+$/.test(lines[bottom])) return false;
+  const top = lines[bottom - 2];
+  return lines[bottom - 1] === '' && border(top) && !/\bmore\b/.test(top);
+}
+
 function slashCommand(msg) {
   const req = { op: 'command', name: msg.name };
   for (const k of ['args', 'key', 'abort', 'deliverAs']) if (msg[k] !== undefined) req[k] = msg[k];
-  return viaCommandControl(msg, req);
+  return viaCommandControl(msg, req, `/${msg.name}${msg.args ? ` ${msg.args}` : ''}`);
 }
 
+const MESSAGE_NEEDS_CONTROL = 'Pi would run this as a command; no live control to send it as text';
+
 async function submit(msg) {
-  if (typeof msg.text !== 'string' || !msg.text) return fail(msg, null, 'bad_request', 'text required');
+  const images = Array.isArray(msg.images) && msg.images.length ? msg.images : null;
+  if (typeof msg.text !== 'string' || (!msg.text && !images)) return fail(msg, null, 'bad_request', 'text required');
   const deliverAs = msg.deliverAs === 'followUp' ? 'followUp' : 'steer';
+  // Keys cannot carry an image, and an older control drops the field: never send the text without its images.
+  if (images) {
+    const r = msg.session ? await liveControlFor(msg.session) : null;
+    if (!r) return fail(msg, 'control', 'no_control', 'This Session has no live control socket, so AmPi cannot send images; paste them in the Pi pane');
+    if (r.value.images !== 1) return fail(msg, 'control', 'images_unsupported', "This Pi's control is too old for images: update pi-hc-control and /reload in the Pi pane");
+    return void await viaControl(msg, { op: 'submit', text: msg.text, deliverAs, images: images.map(({ data, mimeType }) => ({ data, mimeType })) }, r);
+  }
   if (msg.session && await viaControl(msg, { op: 'submit', text: msg.text, deliverAs })) return;
+  return viaKeys(msg, msg.text, deliverAs, { evidence: 'sent' });
+}
+
+/**
+ * The one keys path: types `text` into the Session's bound pane. Enter starts or steers a turn; a follow-up while
+ * busy queues it. Pi's editor sends its whole text on Enter, and runs it as a command when it starts with `/`. So the
+ * keys go only into an editor the pane shows empty, and slash text goes only as a `command`: keys cannot send it as
+ * a message. The owner can type into the pane between the read and the keys; nothing here can close that window.
+ */
+async function viaKeys(msg, text, deliverAs, ack, command = false) {
+  if (!command && text.trim().startsWith('/')) return fail(msg, 'keys', 'needs_control', MESSAGE_NEEDS_CONTROL);
   const b = msg.session ? await boundPane(msg) : await spawnedBinding(msg);
   if (b.error) return fail(msg, 'keys', ...b.error);
   // A blocked agent shows a dialog; typed text would answer it instead of reaching the editor.
   if (b.agent.agent_status === 'blocked') return fail(msg, 'keys', 'agent_blocked', 'agent is waiting on a dialog in its pane');
-  if (msg.text.trim().startsWith('/')) forceUntil.set(b.pane, Date.now() + 15000);
+  const screen = await herdrRun(['agent', 'read', b.pane, '--source', 'visible']);
+  if (screen.err) return fail(msg, 'keys', 'keys_failed', errText(screen.err, screen.stdout, screen.stderr));
+  if (!editorEmpty(screen.stdout)) return fail(msg, 'keys', 'editor_not_empty', "The Pi pane's input box is not empty, or AmPi cannot read it; clear it in the Pi pane or send from there");
+  if (command) forceUntil.set(b.pane, Date.now() + 15000);
   const busy = b.agent.agent_status === 'working';
   let r;
   if (deliverAs === 'followUp' && busy) {
     // Type into the editor (appending to any draft), then queue it as a follow-up.
-    r = await herdrRun(fill(keys.typeArgv, { pane: b.pane, text: msg.text }));
+    r = await herdrRun(fill(keys.typeArgv, { pane: b.pane, text }));
     if (!r.err) r = await herdrRun(['agent', 'send-keys', b.pane, ...keys.followUp]);
   } else {
     // Steer while busy, or start a turn while idle: Herdr types the text and presses Enter.
-    r = await herdrRun(['agent', 'prompt', b.pane, msg.text]);
+    r = await herdrRun(['agent', 'prompt', b.pane, text]);
   }
   if (r.err) return fail(msg, 'keys', 'keys_failed', errText(r.err, r.stdout, r.stderr));
-  ackOf(msg, 'keys', { ok: true, evidence: 'sent' });
+  ackOf(msg, 'keys', { ok: true, ...ack });
 }
 
 async function abort(msg) {
@@ -749,7 +825,9 @@ async function spawnAgent(msg) {
   // land in a shell: then the prompt is not sent.
   let submitted;
   if (msg.prompt && msg.prompt.trim()) {
-    if (state !== 'started') submitted = { error: { code: 'not_started', message: 'Pi was not confirmed ready in the pane; the prompt was not sent' } };
+    // A new pane's editor is empty; slash text would still run as a command (viaKeys).
+    if (msg.prompt.trim().startsWith('/')) submitted = { error: { code: 'needs_control', message: MESSAGE_NEEDS_CONTROL } };
+    else if (state !== 'started') submitted = { error: { code: 'not_started', message: 'Pi was not confirmed ready in the pane; the prompt was not sent' } };
     else {
       const typed = await herdrRun(['agent', 'prompt', pane, msg.prompt]);
       submitted = typed.err ? { error: { code: 'keys_failed', message: errText(typed.err, typed.stdout, typed.stderr) } } : { via: 'keys', evidence: 'sent' };
@@ -941,7 +1019,10 @@ function report(status, codes = []) {
 // Windows layer as Pi's model registry does: refreshed provider catalogs (models-store.json), then models.json
 // `models` entries, then models.json `modelOverrides`. Built-in catalogs never refreshed here and extension
 // providers are not visible. Sent only when the files change.
-let limitsKey = '', limitsSent = '';
+// The Auto Compact budget is hc-auto-compact's own resolution (resolve.mjs), which the hub sends as a data: module
+// (cfg.autoCompactResolve; apps/ampi/src/pi/agent-modules.ts). Each file's stamp is `mtime:size`, or `-` when it is
+// absent, as AmPi's fileStamp (src/node/pi-config.ts).
+let limitsKey = '', limitsSent = '', resolveAutoCompact = null;
 function readLimits() {
   const files = ['models-store.json', 'models.json', 'settings.json'].map((f) => path.join(agentDir, f));
   const key = files.map((f) => { try { const s = fs.statSync(f); return `${s.mtimeMs}:${s.size}`; } catch { return '-'; } }).join('|');
@@ -956,25 +1037,25 @@ function readLimits() {
     for (const m of p?.models || []) put(provider, m?.id, m?.contextWindow);
     for (const [id, o] of Object.entries(p?.modelOverrides || {})) put(provider, id, o?.contextWindow);
   }
-  // hc-auto-compact's global settings only: project settings apply to trusted projects, which this agent does not resolve.
-  const ac = settings?.auto_compact;
-  const tokens = (n) => Number.isSafeInteger(n) && n > 0 ? n : undefined;
-  const budget = ac && typeof ac === 'object' ? {
-    tokens: tokens(ac.budget_tokens),
-    models: Object.fromEntries(Object.entries(ac.modelOverrides || {}).map(([k, v]) => [k, tokens(v?.budget_tokens)]).filter(([, v]) => v)),
-  } : null;
+  // The global settings only: project settings apply to trusted projects, which this agent does not resolve.
+  // Without a budget the meter measures against the window.
+  const ac = resolveAutoCompact?.(settings).settings;
+  const perModel = Object.fromEntries(Object.entries(ac?.modelOverrides || {}).map(([k, v]) => [k, v.budget_tokens]));
+  const budget = ac?.budget_tokens !== undefined || Object.keys(perModel).length ? { tokens: ac.budget_tokens, models: perModel } : null;
   const msg = { t: 'limits', windows, budget };
   const sent = JSON.stringify(msg);
   if (sent !== limitsSent) { limitsSent = sent; out({ ...msg, at: Date.now() }); }
 }
 
 if (tracing) traceEvents.push({ ph: 'i', s: 'p', name: 'hello', cat: 'startup', ts: traceNow(), pid: process.pid, tid: 0 });
-out({ t: 'hello', host: cfg.host || os.hostname(), pid: process.pid, herdr: !!herdr, herdrSession, controlOps: ['commands', 'command'], control: (() => { try { return fs.readdirSync(controlDir).some((f) => f.endsWith('.json')); } catch { return false; } })(), at: Date.now() });
+out({ t: 'hello', host: cfg.host || os.hostname(), pid: process.pid, herdr: !!herdr, herdrSession, controlOps: ['commands', 'command', 'command.keys', 'submit.images'], control: (() => { try { return fs.readdirSync(controlDir).some((f) => f.endsWith('.json')); } catch { return false; } })(), at: Date.now() });
 for (const p of Object.keys(offsets)) track(p);
 discover();
-readLimits();
 setInterval(discover, discoverMs);
-setInterval(readLimits, discoverMs);
+// Limits start once the resolver loads. A resolver that fails to load leaves the meter on the window, and says why.
+import(cfg.autoCompactResolve).then((m) => { resolveAutoCompact = m.resolveAutoCompactSettings; }, (error) => {
+  process.stderr.write(`hc-auto-compact resolver: ${error?.message || error}\n`);
+}).then(() => { readLimits(); setInterval(readLimits, discoverMs); });
 setInterval(pump, pollMs);
 setInterval(liveTail, 1000);
 setTimeout(readTeams, 1500); // after the first agent list

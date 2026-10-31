@@ -1,6 +1,6 @@
 // Hub working set: compact materializations plus bounded live/LRU windows. Worker
 // ingestion owns full scans; navigation reads local indexed pages, never full files.
-import { fleetSearch, type SearchResult } from "./search.ts";
+import { fleetSearch, type FindAsk, type SearchResult } from "./search.ts";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -123,6 +123,20 @@ export class WorkingSet {
   this.db.exec("BEGIN"); this.#reading = true;
   try { return run(); } finally { this.#reading = false; this.db.exec("ROLLBACK"); }
  }
+ /**
+  * Replaces the read connection, so the next read sees the latest commit. A statement left active pins its
+  * connection's WAL snapshot (an abandoned cursor stays active until GC); closing the connection finalizes it.
+  * Rule: reopen only before a snapshot's first read, never inside snapshot(), so one snapshot's reads come from
+  * one connection. Every hub read is synchronous and holds no statement across an await, so outside a snapshot
+  * nothing still uses the old connection. Statements prepared on it end with it.
+  */
+ reopen(): void {
+  if (this.#reading) throw new Error("Working set: reopen inside a read snapshot");
+  if (!this.db || this.#closed) return;
+  const old = this.db;
+  this.db = readWorkingSet(this.cacheDir); this.#head = undefined;
+  old.close();
+ }
  load(path: string): Derived | undefined { if (!this.db) return undefined; const row = (this.#head ??= this.db.prepare('SELECT data FROM sessions WHERE path=?')).get(path); return row ? JSON.parse(String(row.data)) : undefined; }
  refresh(source: Source, onStart?: () => void, urgent = false): Promise<Derived | null> {
   return trackDerive(async () => {
@@ -135,10 +149,10 @@ export class WorkingSet {
  /** Moves a queued derivation of this Session ahead of the cold backlog. */
  urgent(source: Source): void { worker?.postMessage({ op: "urgent", cacheDir: source.cacheDir, path: source.path }); }
  search(query: string) { return fleetSearch(this.db, query); }
- async find(source: Source, query: string, version: string): Promise<SearchResult> {
+ async find(source: Source, query: string, version: string, ask: FindAsk = {}): Promise<SearchResult> {
   await this.ready;
   if (this.#closed) throw new Error("Working set stopped");
-  return request<SearchResult>({ op: "find", source, query, version });
+  return request<SearchResult>({ op: "find", source, query, version, ask });
  }
  invalidate(source: Source) { windows.delete(cacheKey(source)); }
  live(source: Source, live: boolean) { const w = windows.get(cacheKey(source)); if (w) { w.live = live; trim(); } }
@@ -154,21 +168,31 @@ export class WorkingSet {
   const data = this.load(path);
   if (!data) throw new Error("This Session is not indexed yet");
   if (version && version !== data.version) throw refusal(STALE_VERSION, "History changed; refresh this Session");
-  let end = Number.MAX_SAFE_INTEGER;
+  let end = Number.MAX_SAFE_INTEGER, target: number | undefined;
   if (before || around) {
    const row = this.db.prepare('SELECT position FROM entries WHERE path=? AND id=?').get(path, (before ?? around)!);
    if (!row) throw refusal(NOT_FOUND, "Entry is not on the current branch");
-   end = Number(row.position) + (around ? 21 : 0);
+   if (around) target = Number(row.position); else end = Number(row.position);
   }
   limit = Math.max(1, Math.min(WINDOW_ENTRIES, limit));
-  const rows = this.db.prepare("SELECT ui FROM entries WHERE path=? AND position < ? AND ui <> 'null' ORDER BY position DESC LIMIT ?").all(path, end, limit + 1);
-  const entries: PiEntry[] = []; let size = 0;
-  for (const row of rows.slice(0, limit)) {
+  const budget = WINDOW_BYTES - 1024;
+  // An `around` page always holds its target: the target and earlier rows take up to 3/4 of the budget first, then up
+  // to 20 later rows (at most half the page) fill what fits. Large later rows can never push the target out of the page.
+  const later = target === undefined ? [] : this.db.prepare("SELECT ui FROM entries WHERE path=? AND position > ? AND ui <> 'null' ORDER BY position LIMIT ?").all(path, target, Math.min(20, Math.floor((limit - 1) / 2)));
+  const rows = this.db.prepare("SELECT ui FROM entries WHERE path=? AND position < ? AND ui <> 'null' ORDER BY position DESC LIMIT ?").all(path, target === undefined ? end : target + 1, limit + 1);
+  const entries: PiEntry[] = []; let size = 0, kept = 0;
+  for (const row of rows.slice(0, Math.max(1, limit - later.length))) {
    const text = String(row.ui), bytes = Buffer.byteLength(text);
-   if (size + bytes > WINDOW_BYTES - 1024) break;
+   if (kept && size + bytes > (target === undefined ? budget : budget * 0.75)) break;
+   entries.push(JSON.parse(text)); size += bytes; kept++;
+  }
+  entries.reverse();
+  for (const row of later) {
+   const text = String(row.ui), bytes = Buffer.byteLength(text);
+   if (size + bytes > budget) break;
    entries.push(JSON.parse(text)); size += bytes;
   }
-  return { entries: entries.reverse(), more: rows.length > entries.length, version: data.version };
+  return { entries, more: rows.length > kept, version: data.version };
  }
  #outlines = new Map<string, ThreadOutline>();
  /** Navigation reads compact indexed rows once per version, never transcript bodies or paint windows. */
@@ -194,10 +218,24 @@ export class WorkingSet {
   const row = this.db.prepare("SELECT id FROM entries WHERE path=? AND t IS NOT NULL AND ui <> 'null' ORDER BY abs(t - ?) LIMIT 1").get(path, at);
   return row ? String(row.id) : undefined;
  }
- rarebits(path: string, revision: number, before?: string, fullText = false): RarebitValue { return this.snapshot(() => this.#rarebits(path, revision, before, fullText)); }
- #rarebits(path: string, revision: number, before?: string, fullText = false): RarebitValue {
+ rarebits(path: string, revision: number, before?: string, fullText = false, around?: string): RarebitValue { return this.snapshot(() => this.#rarebits(path, revision, before, fullText, around)); }
+ #rarebits(path: string, revision: number, before?: string, fullText = false, around?: string): RarebitValue {
   const data = this.load(path); if (!data) throw new Error("This Session is not indexed yet");
   if (data.invalidLines) throw new Error("The local Session copy could not be read. Reconnect the Host to receive new Session bytes.");
+  let found: "item" | "entry" | "missing" | undefined;
+  if (around) {
+   // A linked entry selects the page that holds it: the cursor is a newer Rarebit item up to 200 items or half the page's
+   // characters away, so the target stays inside the page; the newest page holds a target with fewer newer items.
+   const row = this.db.prepare('SELECT position, rarebit IS NOT NULL AS item FROM entries WHERE path=? AND id=?').get(path, around);
+   found = !row ? "missing" : row.item ? "item" : "entry";
+   before = undefined;
+   if (row) {
+    let n = 0, chars = 0;
+    for (const next of this.db.prepare(`SELECT id, min(coalesce(length(json_extract(rarebit,'$.text')),0), ${RAREBIT_PAGE_CHARS}) AS n FROM entries WHERE path=? AND rarebit IS NOT NULL AND position > ? ORDER BY position LIMIT 201`).iterate(path, row.position)) {
+     if (++n > 200 || (chars += Number(next.n)) > 100_000) { before = String(next.id); break; }
+    }
+   }
+  }
   const position = before ? this.db.prepare('SELECT position FROM entries WHERE path=? AND id=?').get(path, before)?.position : undefined;
   const items: RarebitItem[] = []; let chars = 0;
   // SQLite cuts a long text to RAREBIT_PAGE_CHARS code points before JS sees the row, so a large body is never parsed whole;
@@ -212,7 +250,7 @@ export class WorkingSet {
   items.reverse();
   const first = items[0]?.id;
   const more = Boolean(first && this.db.prepare('SELECT 1 FROM entries WHERE path=? AND rarebit IS NOT NULL AND position < (SELECT position FROM entries WHERE path=? AND id=?) LIMIT 1').get(path, path, first));
-  return { ...data.rarebit, items, revision, more, sourceVersion: data.version };
+  return { ...data.rarebit, items, revision, more, sourceVersion: data.version, ...(around ? { around: { id: around, found: found! }, ...(before ? { before } : {}) } : {}) };
  }
  rarebitSnapshot(path: string, maxChars: number) { return this.snapshot(() => this.#rarebitSnapshot(path, maxChars)); }
  #rarebitSnapshot(path: string, maxChars: number) {

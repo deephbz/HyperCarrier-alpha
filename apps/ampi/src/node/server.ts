@@ -16,6 +16,8 @@ import { type CommandArgs, listCommands, runCommand } from "./commands.ts";
 import { loadPrompts, loadSkills } from "./core-extension.ts";
 import { projectEntry, projectView, projectViewFields, type ReturnedState } from "./projection.ts";
 import { expandHome, NodeError, type NodeRuntime } from "./runtime.ts";
+import { IMAGE_MAGIC, NODE_IMAGE_LIMITS } from "./images.ts";
+import { admitImages, rejectionLine } from "../shared/image-admission.ts";
 import { claimSubmitKey, submitDigest } from "./submit-keys.ts";
 // @ts-ignore: shared reader wire is plain ESM.
 import { createReaderService } from "../../../trace-analytics/src/sources/durable-wire.mjs";
@@ -44,26 +46,20 @@ export function defineOp<K extends NodeOpName>(name: K, handler: (args: Record<s
 	ops.set(name, handler);
 }
 
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
-/** Magic bytes per accepted type: the label must match the bytes, or providers reject the image on every turn. */
-const IMAGE_MAGIC: Record<string, (b: Buffer) => boolean> = {
-	"image/png": (b) => b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
-	"image/jpeg": (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
-	"image/gif": (b) => b.subarray(0, 4).toString("latin1") === "GIF8",
-	"image/webp": (b) => b.subarray(0, 4).toString("latin1") === "RIFF" && b.subarray(8, 12).toString("latin1") === "WEBP",
-};
-
+/** Validates submitted images: admission under NODE_IMAGE_LIMITS (the Composer's same decision), then the bytes. */
 function imagesOf(value: unknown): { type: "image"; data: string; mimeType: string }[] {
 	if (value === undefined) return [];
-	if (!Array.isArray(value) || value.length > 8) throw new NodeError("bad_request", "images must be a list of at most 8 images");
-	return value.map((image: { data?: unknown; mimeType?: unknown }) => {
-		if (typeof image?.data !== "string" || typeof image.mimeType !== "string" || !IMAGE_MAGIC[image.mimeType])
-			throw new NodeError("bad_request", "each image needs base64 data and a png, jpeg, gif, or webp mimeType");
-		if (image.data.length * 0.75 > MAX_IMAGE_BYTES * 1.01) throw new NodeError("bad_request", "an image is larger than 5 MB");
-		const bytes = /^[A-Za-z0-9+/]*={0,2}$/.test(image.data) ? Buffer.from(image.data, "base64") : Buffer.alloc(0);
-		if (bytes.length === 0 || !IMAGE_MAGIC[image.mimeType]!(bytes)) throw new NodeError("bad_request", `the image data is not a valid ${image.mimeType.slice(6)} file`);
-		if (bytes.length > MAX_IMAGE_BYTES) throw new NodeError("bad_request", "an image is larger than 5 MB");
-		return { type: "image", data: image.data, mimeType: image.mimeType };
+	if (!Array.isArray(value)) throw new NodeError("bad_request", "images must be a list");
+	const offered = value.map((image: { data?: unknown; mimeType?: unknown }, i) => {
+		if (typeof image?.data !== "string" || typeof image.mimeType !== "string") throw new NodeError("bad_request", "each image needs base64 data and a mimeType");
+		return { name: `image ${i + 1}`, type: image.mimeType, base64: image.data.length, data: image.data };
+	});
+	const line = rejectionLine(admitImages([], offered, NODE_IMAGE_LIMITS).rejected);
+	if (line) throw new NodeError("bad_request", line);
+	return offered.map(({ type, data }) => {
+		const bytes = /^[A-Za-z0-9+/]*={0,2}$/.test(data) ? Buffer.from(data, "base64") : Buffer.alloc(0);
+		if (bytes.length === 0 || !IMAGE_MAGIC[type]!(bytes)) throw new NodeError("bad_request", `the image data is not a valid ${type.slice(6)} file`);
+		return { type: "image", data, mimeType: type };
 	});
 }
 
@@ -404,7 +400,8 @@ export class Connection {
 
 	async #request(id: number, op: string, args: Record<string, unknown>): Promise<void> {
 		const name = op.startsWith("reader.") ? op.slice(7) : "";
-		const handler = READER_OPS.has(name) ? () => this.#readerConnection()[name as ReaderOp](args) : ops.get(op);
+		const pluginOp = this.#runtime.plugins.find((plugin) => plugin.ops?.[op as NodeOpName])?.ops?.[op as NodeOpName] as OpHandler | undefined;
+		const handler = READER_OPS.has(name) ? () => this.#readerConnection()[name as ReaderOp](args) : (pluginOp ?? ops.get(op));
 		try {
 			if (!handler) throw new NodeError("unsupported", `This node does not serve ${op}`);
 			const value = await handler(args, this.#runtime);

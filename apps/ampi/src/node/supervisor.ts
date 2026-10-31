@@ -106,6 +106,8 @@ export type InstallOptions = {
 	unitDir?: string;
 	/** Load the unit into launchd or systemd (default true); tests write files only. */
 	load?: boolean;
+	/** How long a launchd reinstall waits for the old service and its node to go (default 15 s). */
+	unloadTimeoutMs?: number;
 	env?: NodeJS.ProcessEnv;
 };
 
@@ -150,7 +152,16 @@ export function installService(home: string, options: InstallOptions = {}): Supe
 	rmSync(autostartOffPath(home), { force: true });
 	if (options.load !== false) {
 		if (platform === "launchd") {
-			run(["launchctl", "bootout", `gui/${uid}/${spec.label}`], true);
+			// bootout returns before launchd has removed the service; a bootstrap until then fails with error 5.
+			const target = `gui/${uid}/${spec.label}`;
+			run(["launchctl", "bootout", target], true);
+			const deadline = Date.now() + (options.unloadTimeoutMs ?? 15_000);
+			while (loaded(marker, target)) {
+				if (Date.now() >= deadline) throw new Error(`launchd still has ${target} loaded after bootout. Check it with \`${supervisedHint(marker)}\`, then run \`ampi node install-service\` again.`);
+				Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+			}
+			const owner = ownerAfter(home, options.unloadTimeoutMs ?? 15_000);
+			if (owner !== undefined) throw new Error(`The old node still owns ${home} (pid ${owner || "unknown"}). Stop it with \`AMPI_HOME=${home} ampi stop\`, then run \`ampi node install-service\` again.`);
 			run(["launchctl", "bootstrap", `gui/${uid}`, unitPath]);
 		} else {
 			run(["systemctl", "--user", "daemon-reload"]);

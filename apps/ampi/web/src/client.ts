@@ -3,10 +3,15 @@
 
 import { native } from "./native.ts";
 import { applyImmutable, type Op } from "@earendil-works/chord/delta";
-import { useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import type { HostState as HubHostState } from "../../src/hub/hosts.ts";
-import { STALE_VERSION, type ClientOps, type HubOps, type Topic, type TopicValue } from "../../src/shared/protocol.ts";
+import { STALE_VERSION, type ClientOps, type HubOps, type Pin, type Topic, type TopicValue } from "../../src/shared/protocol.ts";
 import { perfMark, perfMarkOnce } from "./perf.ts";
+
+/** A Host source as the web sees it: `link` (`<id>#pi`, `<id>#durable`) names it in routes, requests and subscriptions. */
+export type HostState = HubHostState & { link: string };
+
+export { findHost } from "./components/host-label.ts";
 
 /** The wire code of a refused request (protocol.ts STALE_VERSION, NOT_FOUND, ...). */
 export const refusal = (error: unknown) => (error as { code?: string } | undefined)?.code;
@@ -29,23 +34,6 @@ export async function readVersioned<T>(read: (version: string | undefined) => Pr
 	}
 }
 
-/** A Host source as the web sees it: `link` (`<id>#pi`, `<id>#durable`) names it in routes, requests and subscriptions. */
-export type HostState = HubHostState & { link: string };
-
-/**
- * The Host source a route names: its link key, or a Host ID that one source serves. When two sources serve the Host
- * ID, a thread ID names the source: `pi:` for Pi, any other for durable.
- */
-export function findHost(hosts: HostState[], key: string | undefined, thread?: string): HostState | undefined {
-	if (key === undefined) return undefined;
-	const exact = hosts.find((h) => h.link === key);
-	if (exact) return exact;
-	const byId = hosts.filter((h) => h.id === key);
-	if (byId.length === 1) return byId[0];
-	if (thread === undefined) return undefined;
-	const source = thread.startsWith("pi:") ? "pi" : "durable";
-	return byId.find((h) => h.link === `${key}#${source}`);
-}
 /** An op's arguments as a rest tuple: optional when every field is. */
 type Args<A> = {} extends A ? [args?: A] : [args: A];
 
@@ -74,6 +62,10 @@ export class HubClient {
 	#bySid = new Map<number, Sub>();
 	#listeners = new Set<() => void>();
 	hosts: HostState[] = [];
+	/** The hub.json the hub read at start (hosts frame). */
+	config: string | undefined;
+	/** The hub's pinned Sessions (src/hub/pins.ts); replaced whole by each `pins` frame. */
+	pins: Pin[] = [];
 	connected = false;
 	#retry = 0;
 
@@ -125,6 +117,11 @@ export class HubClient {
 		switch (frame.t) {
 			case "hosts":
 				this.hosts = (frame.hosts as HubHostState[]).map((h) => ({ ...h, link: h.link ?? h.id }));
+				this.config = frame.config as string | undefined;
+				this.#emit();
+				return;
+			case "pins":
+				this.pins = frame.pins;
 				this.#emit();
 				return;
 			case "res": {
@@ -274,11 +271,44 @@ export class HubClient {
 const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
 export const hub = new HubClient(url);
 
+/** The clock for link elapsed and retry times: it ticks each second while `active` and holds otherwise. */
+export function useNow(active: boolean): number {
+	const [now, setNow] = useState(Date.now);
+	useEffect(() => {
+		if (!active) return;
+		setNow(Date.now());
+		const timer = setInterval(() => setNow(Date.now()), 1000);
+		return () => clearInterval(timer);
+	}, [active]);
+	return now;
+}
+
 export function useHosts(): { hosts: HostState[]; connected: boolean } {
 	const subscribe = (listener: () => void) => hub.subscribeHosts(listener);
 	const hosts = useSyncExternalStore(subscribe, () => hub.hosts);
 	const connected = useSyncExternalStore(subscribe, () => hub.connected);
 	return { hosts, connected };
+}
+
+/** The hub's pinned Sessions, in pin order. */
+export function usePins(): Pin[] {
+	return useSyncExternalStore((listener: () => void) => hub.subscribeHosts(listener), () => hub.pins);
+}
+
+/**
+ * Moves a pin's host hint to the Host that lists the Session. Only the hub changes the hint, and only for a Session
+ * that is still pinned; a refused hint changes nothing the owner chose, so it is not shown.
+ */
+export function hintPin(host: string, threadId: string): void {
+	void hub.hub("pins.hint", { host, threadId }).catch((error) => console.warn(`pin hint: ${(error as Error).message}`));
+}
+
+/**
+ * Sends the owner's intent for one Session, pinned or not, as the clicked control offered it; every window gets the new
+ * list. Only the star, the row menu and the × call it. A refusal reaches the owner as an alert.
+ */
+export function setPin(host: string, threadId: string, pinned: boolean, title?: string): void {
+	void hub.hub("pins.set", { host, threadId, pinned, intent: "owner", ...(title ? { title } : {}) }).catch((error) => alert(`Could not ${pinned ? "pin" : "unpin"}: ${(error as Error).message}`));
 }
 
 const EMPTY = { value: undefined, stale: true } as const;

@@ -150,7 +150,7 @@
    }
   },
   "summary": {
-   "summaryVersion": 3,
+   "summaryVersion": 5,
    "invalidLines": 0,
    "count": 14,
    "tip": "#11",
@@ -302,7 +302,7 @@
    }
   },
   "summary": {
-   "summaryVersion": 3,
+   "summaryVersion": 5,
    "invalidLines": 0,
    "count": 7,
    "tip": "#13",
@@ -400,7 +400,7 @@
    }
   },
   "summary": {
-   "summaryVersion": 3,
+   "summaryVersion": 5,
    "invalidLines": 0,
    "count": 3,
    "tip": "#15",

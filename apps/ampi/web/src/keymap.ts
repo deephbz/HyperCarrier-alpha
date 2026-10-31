@@ -38,7 +38,7 @@ export const KEYMAP: readonly KeyBinding[] = [
 	{ id: "panel.toggle", code: "KeyL", meta: true, label: "Toggle side panel", region: "global", palette: true, context: "in a Session" },
 	{ id: "panel.toggle", code: "Backslash", meta: true, label: "Toggle side panel", region: "global", palette: true, context: "in a Session" },
 	{ id: "focus.composer", code: "KeyI", meta: true, label: "Focus composer", region: "global", palette: true, context: "in a Session" },
-	{ id: "session.palette", code: "KeyK", meta: true, label: "Jump to a Session", region: "global", palette: true },
+	{ id: "session.palette", code: "KeyK", meta: true, label: "Search Sessions or prose", region: "global", palette: true },
 	{ id: "command.palette", code: "KeyK", meta: true, shift: true, label: "Open command palette", region: "global", palette: true },
 	{ id: "find", code: "KeyF", meta: true, label: "Find in this Session", region: "global", context: "in a Pi Session" },
 	{ id: "overview", code: "Digit0", meta: true, label: "Overview", region: "global", palette: true },

@@ -7,7 +7,7 @@
 import { type Context, withCancel } from "@earendil-works/chord/context";
 import { type ConversationId, type Harness, InboxDoc, type SubmissionId, type TaskId } from "@earendil-works/pi-durable";
 import type { ControlSubmission } from "../shared/protocol.ts";
-import { contentText, queueOrigin } from "./projection.ts";
+import { contentText, countImages, queueOrigin } from "./projection.ts";
 
 /**
  * A stored stop decision. `conversations`: fence each one; every live task it owns, background tasks included, and
@@ -31,15 +31,16 @@ export type Marked = { conversations: Set<string>; tasks: Set<string>; submissio
  * Safe before resume(); settlement is separate.
  */
 /**
- * What a returned input reports: the owner's text, or a Team input's origin without its text. The composer restores
- * text into the owner's draft, and a Team input is not the owner's to send.
+ * What a returned input reports: the owner's text, or a Team input's origin without its text, and its image count. The
+ * composer restores text into the owner's draft, and a Team input is not the owner's to send. Pi returns no images, so
+ * the count tells the owner to attach them again.
  */
-export function returnedInput(item: { mode: string; content?: unknown; entry?: unknown } | undefined): Pick<ControlSubmission, "text" | "origin"> {
+export function returnedInput(item: { mode: string; content?: unknown; entry?: unknown } | undefined): Pick<ControlSubmission, "text" | "origin" | "images"> {
 	if (!item || item.mode === "write") return {};
 	const text = contentText(item.content as never);
 	const origin = queueOrigin(item.entry as never, text);
-	if (origin) return { origin };
-	return text ? { text } : {};
+	const images = countImages(item.content as never);
+	return { ...(origin ? { origin } : text ? { text } : {}), ...(images ? { images } : {}) };
 }
 
 export async function markStops(harness: Harness, intents: readonly StopIntent[], context: Context): Promise<Marked> {

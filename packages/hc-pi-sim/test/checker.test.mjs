@@ -1,3 +1,4 @@
+import "./home.mjs";
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { checkCacheHistory, cacheShape, fc, explore } from '../src/index.mjs';

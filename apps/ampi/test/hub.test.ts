@@ -9,15 +9,14 @@ import { parsePiModels, piModelRegistry, setListTimeout } from "../src/pi/model-
 import { Hub, hubProof, loadHubConfig } from "../src/hub/hub.ts";
 import { runDaemon } from "../src/node/daemon.ts";
 import { hydrate } from "../src/plugins.ts";
-import { Browser, tempHome } from "./helpers.ts";
+import { Browser, ownHome, tempHome, writePiSettings } from "./helpers.ts";
 
 const SIM = { provider: "ampi-sim", modelId: "sim-1" };
 const TOKEN = "a".repeat(64);
 
 
 test("hub: replicas stay exact through compaction, a repeated sub never doubles a stream, foreign origins are refused", async () => {
-	process.env.AMPI_WORKING_BUDGET = "2500";
-	process.env.AMPI_COMPACT_KEEP_RECENT = "200";
+	writePiSettings({ auto_compact: { budget_tokens: 2500 }, compaction: { keepRecentTokens: 200 } });
 	const home = tempHome();
 	const daemon = await runDaemon({ home, simTokensPerSecond: 50000, plugins: await hydrate() });
 	const hub = new Hub({ hosts: [{ id: "local", label: "Local", kind: "local", home }] }, { token: TOKEN });
@@ -73,8 +72,7 @@ test("hub: replicas stay exact through compaction, a repeated sub never doubles 
 	} finally {
 		await hub.close();
 		await daemon.stop();
-		delete process.env.AMPI_WORKING_BUDGET;
-		delete process.env.AMPI_COMPACT_KEEP_RECENT;
+		writePiSettings(undefined);
 	}
 });
 
@@ -192,11 +190,13 @@ test("hub Pi model registry: the --list-models table parses, an unreadable list 
 	}
 });
 
-test("hub.json: a Host add or remove re-reads the file and changes only hosts, so an owner's models edit survives; a malformed file fails the change with its path and is never rewritten (failure: hosts.add saved the startup snapshot)", async () => {
+test("hub.json: a Host remove re-reads the file and changes only hosts, so an owner's models edit survives; a malformed file fails the change with its path and is never rewritten (failure: hosts.add saved the startup snapshot)", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "ampi-hubjson-")), file = join(dir, "hub.json");
-	const startup = { hosts: [], models: { arcLabels: "p/a" } };
+	const hosts = [{ id: "gone.invalid", label: "gone", kind: "pi-ssh" }, { id: "kept.invalid", label: "kept", kind: "pi-ssh" }];
+	const startup = { hosts, models: { arcLabels: "p/a" } };
 	writeFileSync(file, JSON.stringify({ ...startup, note: "owner key" }));
-	const hub = new Hub(structuredClone(startup), { configPath: file, token: TOKEN });
+	const home = ownHome(dir);
+	const hub = new Hub(structuredClone(startup) as never, { configPath: file, token: TOKEN, home });
 	const port = await hub.listen(0);
 	try {
 		const browser = await Browser.open(port, undefined, `ampi_k_${port}=${TOKEN}`);
@@ -210,30 +210,24 @@ test("hub.json: a Host add or remove re-reads the file and changes only hosts, s
 		const edit = (change: (config: any) => void) => { const config = disk(); change(config); writeFileSync(file, JSON.stringify(config)); };
 		// The owner edits models while the hub runs; the next Host change must keep the edit.
 		edit((c) => { c.models.arcLabels = "p/b"; });
-		const added = await hubOp("hosts.add", { target: "ampi-test.invalid" });
-		assert.equal(added.ok, true, JSON.stringify(added));
-		assert.deepEqual(disk().models, { arcLabels: "p/b" }, "hosts.add kept the owner's models edit");
-		assert.equal(disk().note, "owner key");
-		assert.deepEqual(disk().hosts.map((h: any) => h.target), ["ampi-test.invalid"]);
-		assert.equal(helperModel("arcLabels", undefined, file), "p/b");
-		edit((c) => { c.models.arcSynthesis = "p/c"; });
-		const removed = await hubOp("hosts.remove", { id: added.value.id });
+		const removed = await hubOp("hosts.remove", { id: "gone.invalid" });
 		assert.equal(removed.ok, true, JSON.stringify(removed));
-		assert.deepEqual(disk(), { hosts: [], models: { arcLabels: "p/b", arcSynthesis: "p/c" }, note: "owner key" }, "hosts.remove kept every other key");
-		assert.equal(helperModel("arcSynthesis", undefined, file), "p/c");
+		assert.deepEqual(disk(), { hosts: [hosts[1]], models: { arcLabels: "p/b" }, note: "owner key" }, "hosts.remove kept every other key");
+		assert.equal(helperModel("arcLabels", undefined, file), "p/b");
+		// The window adds no Host: setup is an agent prompt that edits hub.json.
+		const added = await hubOp("hosts.add", { target: "new.invalid" });
+		assert.equal(added.ok, false);
 		// A file that no longer parses fails the change with its path; the hub neither writes it nor changes its Hosts.
-		const kept = await hubOp("hosts.add", { target: "kept.invalid" });
 		writeFileSync(file, "{ not json");
-		const refused = await hubOp("hosts.add", { target: "refused.invalid" });
+		const refused = await hubOp("hosts.remove", { id: "kept.invalid" });
 		assert.equal(refused.ok, false);
 		assert.match(refused.error.message, new RegExp(file.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-		const refusedRemove = await hubOp("hosts.remove", { id: kept.value.id });
-		assert.equal(refusedRemove.ok, false);
-		assert.match(refusedRemove.error.message, /not valid JSON/);
+		assert.match(refused.error.message, /not valid JSON/);
 		assert.equal(readFileSync(file, "utf8"), "{ not json", "a malformed file is never rewritten");
-		assert.deepEqual(hub.hostStates().map((h) => h.id), [kept.value.id], "the refused add and remove changed no Host");
+		assert.deepEqual(hub.hostStates().map((h) => h.id), ["kept.invalid"], "the refused remove changed no Host");
 		browser.ws.close();
 	} finally {
 		await hub.close();
+		home.release();
 	}
 });

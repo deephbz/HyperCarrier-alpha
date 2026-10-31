@@ -397,20 +397,36 @@ export function createAutoCompactController(pi, options = {}) {
     };
   };
 
+  // Republishes the slot from the current settings, override, model and
+  // control state. It keeps the last usage; reading usage scans the Session.
+  // An unchanged value is not sent again.
   const refreshBudgetState = () => {
     if (!budgetSlot?.value || budgetGeneration !== sessionGeneration) return;
     const { mode, phase, held, ...value } = budgetSlot.value;
-    budgetSlot = {
-      ...budgetSlot,
-      asOf: Date.now(),
-      value: { ...value, ...budgetControlState() },
+    const budget = budgetContext?.model?.contextWindow
+      ? budgetFor(budgetContext)
+      : undefined;
+    const next = {
+      ...value,
+      ...(budget && Number.isFinite(budget.window) && budget.window > 0
+        ? { limit: budget.window, capacity: budget.modelWindow }
+        : {}),
+      ...budgetControlState(),
+      threshold: settingsSnapshot.settings.threshold,
     };
+    const previous = budgetSlot.value;
+    if (Object.keys(next).length === Object.keys(previous).length &&
+        Object.keys(next).every((key) => next[key] === previous[key])) return;
+    budgetSlot = { ...budgetSlot, asOf: Date.now(), value: next };
     emitBudgetSlot();
     renderBudgetFallback(budgetContext);
   };
 
-  const setBudgetFooter = (ctx, effective = settingsSnapshot) => {
-    const used = contextUsage(ctx)?.tokens;
+  const setBudgetFooter = (
+    ctx,
+    effective = settingsSnapshot,
+    used = contextUsage(ctx)?.tokens,
+  ) => {
     const budget = budgetFor(ctx, effective);
     budgetContext = ctx;
     budgetGeneration = sessionGeneration;
@@ -616,7 +632,10 @@ export function createAutoCompactController(pi, options = {}) {
     };
     if (!candidate && generation === sessionGeneration && intent !== selectionIntentSequence)
       return loadEffective(ctx, undefined, publish);
-    if (publish && generation === sessionGeneration && intent === selectionIntentSequence) settingsSnapshot = effective;
+    if (publish && generation === sessionGeneration && intent === selectionIntentSequence) {
+      settingsSnapshot = effective;
+      refreshBudgetState();
+    }
     return effective;
   };
 
@@ -1338,6 +1357,17 @@ export function createAutoCompactController(pi, options = {}) {
       finishPickup(ctx);
     }
   };
+
+  // Pi persists a message after extensions see message_end, so getContextUsage
+  // still lacks it here. The response's own usage is Pi's context measure.
+  pi.on("message_end", (event, ctx) => {
+    const message = event.message;
+    if (message?.role !== "assistant" || ["aborted", "error"].includes(message.stopReason)) return;
+    const usage = message.usage ?? {};
+    const used = usage.totalTokens ||
+      (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+    if (used > 0) setBudgetFooter(ctx, settingsSnapshot, used);
+  });
 
   pi.on("message_start", (event, ctx) => {
     activateDeliveredQueuedHandoff(event.message, ctx);

@@ -58,17 +58,18 @@ raw selected/native text when native JSONL is unavailable. The sidebar never
 publishes operational `syncing`; it preserves existing metadata until a
 truthful producer projection exists.
 
-The deck imports marks, labels, tones, and attention gating from the package's
+The deck imports marks, labels, and tones from the package's
 `rarebit-visual-language.mjs` contract. It owns only terminal-safe ANSI styling,
 layout, and interaction, so every selected user message keeps the same visual
 role and ordinary `finished` remains neutral. Sidebar projection uses mutually
-exclusive neutral, attention, muted, and diagnostic state tokens because Herdr
-styles token names, not values. Separate attention and error mark tokens keep
-verified attention amber, ineligibility dim, and diagnostics red without
-semantic inference in configuration.
+exclusive neutral, muted, and diagnostic state tokens because Herdr styles
+token names, not values. A separate error mark token keeps ineligibility dim
+and diagnostics red without semantic inference in configuration. No token
+presents `needs_attention` as attention (D24). Every refresh still clears the
+retired `rarebit_attention` and `rarebit_state_attention` tokens.
 
-The manifest exposes five real actions: `rarebit-status.open`, current/all
-refresh, current clear, and current notification. It has three pane-agent
+The manifest exposes four real actions: `rarebit-status.open`, current/all
+refresh, and current clear. It has three pane-agent
 lifecycle events and one popup pane, `rarebit-deck`.
 
 ## Canonical local milestone
@@ -148,8 +149,7 @@ herdr plugin action invoke "${plugin_id}.open"
 ```
 
 The deck must show the exact `session_file` and `sidecar`; a sidecar-only
-request is `request recorded · source pending`, with no raw selected text or
-attention sound.
+request is `request recorded · source pending`, with no raw selected text.
 
 Rollback is reversible and leaves versioned source/sidecars intact:
 
@@ -179,7 +179,7 @@ find "$state_dir" -type f -name '*.lock' -print
 
 - `herdr-plugin.toml` — plugin manifest.
 - `scripts/rarebit.mjs` — artifact observation, producer projection adapter,
-  reconciliation, presentation, and notifications.
+  reconciliation, and presentation.
 - `scripts/rarebit-dashboard.mjs` — the two-tab Summary/timeline deck.
 - `scripts/visual.mjs` — terminal rendering of the package-owned visual mapping.
 - `scripts/open.mjs`, `scripts/action.mjs`, `scripts/event.mjs`,

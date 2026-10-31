@@ -45,6 +45,9 @@ export function prepareCheckout(from, sha, log = console.log) {
     const linked = nodeModuleDirs(from).filter(rel => existsSync(join(dir, rel)));
     for (const rel of linked) link(join(from, rel, 'node_modules'), join(dir, rel, 'node_modules'));
     log(`checkout ${revision.slice(0, 12)} at ${dir}: submodules ${scope.join(', ') || 'none'}; node_modules from ${from} (${linked.length} dirs)`);
+    // Pinned packages export `dist`, which root `prepare` builds after `npm ci`. A fresh checkout has none.
+    const pinned = join(dir, 'scripts/build-pinned-packages.mjs');
+    if (existsSync(pinned)) execFileSync(process.execPath, [pinned], { cwd: dir, stdio: ['ignore', 'ignore', 'inherit'] });
     execFileSync('npm', ['run', '--silent', 'build:web'], { cwd: join(dir, 'apps/ampi'), stdio: ['ignore', 'ignore', 'inherit'] });
     return { dir, revision, remove };
   } catch (error) { remove(); throw error; }

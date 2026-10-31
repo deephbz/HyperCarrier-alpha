@@ -1,8 +1,8 @@
-import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
-import { toCss } from "../display.ts";
+import { useEffect, useRef, useState, type RefObject } from "react";
+import { Popover, at } from "./Popover.tsx";
 
-/** The selection end (`right`, `bottom`) and the transcript bottom (`limit`) are screen px from rects. */
-type Anchor = { right: number; bottom: number; limit: number };
+/** The selection end (`right`, `bottom`) is screen px from rects. */
+type Anchor = { right: number; bottom: number };
 /** `entry` and `fragment` name the selected entry part, so the anchor survives a re-render of that part. */
 type Pick = Anchor & { text: string; range: Range; entry: string; fragment: string };
 
@@ -11,9 +11,22 @@ const BODIES = '[data-quote-body], .md, .thinking .body, .tool-body pre, .tool-b
 function selected(root: HTMLElement): Pick | undefined {
  const selection = window.getSelection();
  if (!selection || selection.isCollapsed || selection.rangeCount !== 1 || !selection.toString().trim()) return;
- const range = selection.getRangeAt(0);
+ let range = selection.getRangeAt(0);
  const entry = (node: Node) => (node instanceof Element ? node : node.parentElement)?.closest('[data-entry]');
- const start = entry(range.startContainer), end = entry(range.endContainer);
+ let start = entry(range.startContainer), end = entry(range.endContainer);
+ // A triple-click ends the range at offset 0 of the next entry. When one edge entry holds all the selected text, the
+ // selection is that entry's part of the range.
+ if (start && end && start !== end) {
+  const all = range.toString().trim();
+  const part = (el: Element) => {
+   const clipped = document.createRange();clipped.selectNodeContents(el);
+   if (range.compareBoundaryPoints(Range.START_TO_START,clipped) > 0) clipped.setStart(range.startContainer,range.startOffset);
+   if (range.compareBoundaryPoints(Range.END_TO_END,clipped) < 0) clipped.setEnd(range.endContainer,range.endOffset);
+   return clipped;
+  };
+  const only = [start, end].map(part).find(clipped => clipped.toString().trim() === all);
+  if (only) {range = only;start = end = entry(only.startContainer);}
+ }
  if (!start || start !== end || !root.contains(start)) return;
  // Intersect the selection with prose and expanded payloads, never entry controls or tool headers.
  const text = [...start.querySelectorAll<HTMLElement>(BODIES)]
@@ -26,8 +39,9 @@ function selected(root: HTMLElement): Pick | undefined {
    const copy = document.createElement('div');copy.append(clipped.cloneContents());
    copy.style.cssText = 'position:fixed;left:-100000px;white-space:pre-wrap';
    document.body.append(copy);
+   // A selected paragraph break adds blank lines at the edges; the map below drops them.
    const text = copy.innerText;copy.remove();return text;
-  }).filter(text => text.trim()).join('\n\n');
+  }).filter(text => text.trim()).map(text => text.replace(/^(?:[ \t]*\n)+|\s+$/g,'')).join('\n\n');
  if (!text.trim()) return;
  const position = placement(root, range);
  return position && {text,range:range.cloneRange(),entry:start.getAttribute('data-entry') ?? '',fragment:start.getAttribute('data-fragment') ?? '',...position};
@@ -38,7 +52,7 @@ function placement(root: HTMLElement, range: Range): Anchor | undefined {
  const bounds = root.getBoundingClientRect();
  const rect = [...range.getClientRects()].filter(r => r.bottom > Math.max(bounds.top,0) && r.top < Math.min(bounds.bottom,window.innerHeight) && r.right > bounds.left && r.left < bounds.right).at(-1);
  if (!rect) return;
- return {right:rect.right,bottom:rect.bottom,limit:bounds.bottom};
+ return {right:rect.right,bottom:rect.bottom};
 }
 
 /**
@@ -73,18 +87,13 @@ function anchorRange(root: HTMLElement, pick: Pick): Range | undefined {
 /** A box whose anchor is out of view or gone keeps its last place, moved inside the transcript as it is now. */
 function held(root: HTMLElement, {right,bottom}: Anchor): Anchor {
  const bounds = root.getBoundingClientRect();
- return {right:Math.max(bounds.left,Math.min(right,bounds.right)),bottom:Math.max(bounds.top,Math.min(bottom,bounds.bottom)),limit:bounds.bottom};
-}
-
-/** The pill's fixed `left` and `top` are its own CSS px, which display zoom scales; the clamps are pill CSS px. */
-function place(pill: HTMLElement, {right,bottom,limit}: Anchor) {
- pill.style.left = `${Math.max(8,Math.min(toCss(right,pill),toCss(window.innerWidth,pill)-360))}px`;
- pill.style.top = `${Math.max(8,Math.min(toCss(bottom,pill)+4,toCss(limit,pill)-36,toCss(window.innerHeight,pill)-52))}px`;
+ return {right:Math.max(bounds.left,Math.min(right,bounds.right)),bottom:Math.max(bounds.top,Math.min(bottom,bounds.bottom))};
 }
 
 /**
  * A selection stays local until Enter adds it to the Session draft. An open note follows its anchor through scroll,
- * resize, display zoom and transcript reflow, and keeps its draft and focus.
+ * resize, display zoom and transcript reflow, and keeps its draft and focus. The pill is a Popover below the selection's
+ * end, inside the transcript.
  */
 export function QuoteSelection({onQuote,transcript}: {onQuote:(text:string,note:string)=>void;transcript:RefObject<HTMLDivElement | null>}) {
  const [pick,setPick] = useState<Pick>();
@@ -106,14 +115,12 @@ export function QuoteSelection({onQuote,transcript}: {onQuote:(text:string,note:
    if (!next) return;
    event.preventDefault();event.stopPropagation();setPick(next);setEditing(true);
   };
-  // Place the box at once: a zoom change moves it without moving the anchor's screen px.
   const follow = () => {
-   const last = current.current, box = pill.current;
+   const last = current.current;
    if (!last) return;
    const range = anchorRange(root,last), position = range && placement(root,range);
    const next = position ? {...last,...position,range} : {...last,...held(root,last)};
-   if (box) place(box,next);
-   if (next.range !== last.range || next.right !== last.right || next.bottom !== last.bottom || next.limit !== last.limit) {current.current = next;setPick(next);}
+   if (next.range !== last.range || next.right !== last.right || next.bottom !== last.bottom) {current.current = next;setPick(next);}
   };
   const reposition = () => {if (editing) follow();else setPick(selected(root));};
   // Transcript reflow (a new message, a streamed delta, a grown row) fires no scroll or resize; coalesce it per frame.
@@ -127,15 +134,14 @@ export function QuoteSelection({onQuote,transcript}: {onQuote:(text:string,note:
   for (const name of ["resize","ampi:display"]) window.addEventListener(name,reposition);
   return () => {mutations.disconnect();sizes.disconnect();cancelAnimationFrame(frame);document.removeEventListener("selectionchange",update);document.removeEventListener("keydown",key,true);root.removeEventListener("scroll",reposition);for (const name of ["resize","ampi:display"]) window.removeEventListener(name,reposition);};
  },[transcript,editing]);
- useLayoutEffect(() => {if (pick && pill.current) place(pill.current,pick);},[pick]);
- useEffect(() => {if (editing) input.current?.focus();},[editing]);
+ useEffect(() => {if (editing) input.current?.focus({preventScroll:true});},[editing]);
  if (!pick) return null;
- return <div ref={pill} className="quote-selection" style={{position:"fixed",zIndex:40}}>
+ return <Popover ref={pill} className="quote-selection" anchor={() => current.current && at(current.current.right,current.current.bottom)} gap={4} bounds={() => transcript.current?.getBoundingClientRect()}>
   {editing ? <form onSubmit={event => {
    event.preventDefault();
    onQuote(pick.text,note);
    cancel();
   }}><input ref={input} aria-label="Quote note (optional)" placeholder="Reply note (optional) · Enter adds quote to draft" value={note} onChange={event=>setNote(event.target.value)} /></form>
    : <button className="btn small" onMouseDown={event=>event.preventDefault()} onClick={()=>setEditing(true)}>Quote <kbd>q</kbd></button>}
- </div>;
+ </Popover>;
 }

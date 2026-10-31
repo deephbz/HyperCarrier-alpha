@@ -24,6 +24,9 @@ async function componentScript(): Promise<string> {
 				import React from 'react';
 				import { createRoot } from 'react-dom/client';
 				import { ThreadView } from ${JSON.stringify(join(web, "src/components/ThreadView.tsx"))};
+				import { arriveEntry, installNavLinks } from ${JSON.stringify(join(web, "src/nav.ts"))};
+				// Like App: a route's entry is a reveal request (nav.ts).
+				installNavLinks(); arriveEntry(); window.addEventListener('hashchange', arriveEntry);
 				const summary = { id: ${JSON.stringify(THREAD)}, title: 'Scroll hold', createdAt: 0, updatedAt: 0, kind: 'thread', activity: 'idle', queued: 0, costUsd: 0 };
 				const root = createRoot(document.getElementById('root'));
                 const render = () => root.render(React.createElement('div', { className: 'main-slot', style: { height: '600px' } },
@@ -74,7 +77,15 @@ for(const kind of ['pi-local','local']) test('companion '+kind+': whole-branch j
  await page.locator('[data-outline-version="v400"]').waitFor();
  assert.equal(await marks.count(),200);
  assert.equal(await page.locator('[data-entry="e0"]').count(),0);
- assert.equal(await page.locator('[data-user-mark="e200"]').evaluate(el=>(el as HTMLElement).style.top),'50%');
+ // The rail stacks one dash per prompt in prompt order, with no track; prompts beyond its room are sampled, not piled.
+ const rail=await page.locator('.companion-scrollbar').evaluate(el=>{
+  const shown=[...el.querySelectorAll<HTMLElement>('[data-user-mark]')].filter(a=>a.getBoundingClientRect().height>0);
+  const tops=shown.map(a=>a.getBoundingClientRect().top);
+  return {bg:getComputedStyle(el).backgroundColor,shown:shown.length,room:Math.floor(el.clientHeight/6),ordered:tops.every((t,i)=>!i||t>tops[i-1]!),pitch:tops.length>1?Math.min(...tops.slice(1).map((t,i)=>t-tops[i]!)):6};
+ });
+ assert.equal(rail.bg,'rgba(0, 0, 0, 0)','the rail draws no track');
+ assert.ok(rail.shown>0 && rail.shown<=rail.room+2,JSON.stringify(rail));
+ assert.ok(rail.ordered && rail.pitch>=5.9,JSON.stringify(rail));
  assert.equal(await page.locator('[data-user-mark="e0"]').getAttribute('title'),'Question 0');
  await page.locator('[data-user-mark="e0"]').click();
  await page.waitForFunction(()=>document.querySelector('[data-entry="e0"]')?.classList.contains('flash'));

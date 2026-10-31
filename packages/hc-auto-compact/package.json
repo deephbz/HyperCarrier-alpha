@@ -15,7 +15,7 @@
     "test:e2e": "node scripts/e2e-rpc.mjs"
   },
   "dependencies": {
-    "@hypercarrier/rarebit": "0.5.2",
+    "@hypercarrier/rarebit": "0.6.0",
     "proper-lockfile": "4.1.2"
   },
   "devDependencies": {
@@ -36,6 +36,10 @@
     "./command": "./src/command.mjs",
     "./controller": "./src/controller.mjs",
     "./settings": "./src/settings.mjs",
+    "./resolve": {
+      "types": "./src/resolve.d.ts",
+      "default": "./src/resolve.mjs"
+    },
     "./extension": "./src/extension.mjs"
   },
   "files": [

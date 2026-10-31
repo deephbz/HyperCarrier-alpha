@@ -76,7 +76,7 @@ test("pi host: while the Host is away, the last copy stays readable and actions 
 	await hub.close();
 	// A new hub over the same copies, whose Host cannot be reached.
 	const away = new Hub(
-		{ hosts: [{ id: "devbox", label: "devbox", kind: "pi-local", cacheDir: join(f.dir, "cache"), remoteNode: "/bin/false", recentMs: Number.MAX_SAFE_INTEGER }], backend: "pi" },
+		{ hosts: [{ id: "devbox", label: "devbox", kind: "pi-local", cacheDir: join(f.dir, "cache"), remoteNode: "/bin/false", recentMs: Number.MAX_SAFE_INTEGER }] },
 		{ token: TOKEN },
 	);
 	const port = await away.listen(0);
@@ -151,7 +151,7 @@ test("pi host: a live control descriptor makes a Session present before its file
 	assert.deepEqual([merged.threads["pi:sess-e"].live, merged.threads["pi:sess-e"].control, merged.threads["pi:sess-e"].preview], [true, true, "first words"]);
 });
 
-test("pi host: slash commands go only to a control that serves them; every older tier refuses at once", async (t) => {
+test("pi host: a slash command goes to a control that serves it or as keys to the pane, never as a message", async (t) => {
 	const { f, browser } = await setup(t);
 	const ctl = await control(f, f.sessionA, { commands: true });
 	t.after(() => ctl.close());
@@ -164,14 +164,183 @@ test("pi host: slash commands go only to a control that serves them; every older
 	assert.deepEqual(ctl.requests.filter((r) => r.op === "command").map(({ id: _id, ...r }) => r), [{ op: "command", name: "model", args: "m2", key: "k-1" }]);
 	// The control's error detail reaches the composer, so an ambiguous id can name its matches.
 	await assert.rejects(browser.req("devbox", "thread.command", { threadId: "pi:sess-a", name: "model", args: "x" }), (e: any) => e.code === "bad_args" && e.matches?.join() === "p/x,q/x");
-	// A pane with no control: the composer falls back to keys, which Pi's TUI runs natively.
-	await assert.rejects(browser.req("devbox", "thread.commands", { threadId: "pi:sess-b" }), (e: any) => e.code === "no_control");
-	assert.ok(!f.herdrCalls().some((c) => c.includes("/model")), "no command reached a pane as keys");
-	assert.equal(ctl.requests.filter((r) => r.op === "submit").length, 0, "no command reached Pi as text");
+	assert.ok(!f.herdrCalls().some((c) => c.join(" ").includes("/model")), "a command with a live control reached a pane as keys");
+	assert.equal(ctl.requests.filter((r) => r.op === "submit").length, 0, "no command reached Pi as a message");
 });
 
-test("pi host: an old control or an old remote agent answers commands_unsupported without sending the command", async (t) => {
-	// An old remote agent: the same agent with its hello stripped of controlOps.
+/** Pi's editor as the pane shows it: its text between two full-width rules, then the footer. */
+const piScreen = (editor: string, top = "─".repeat(40)) => ["assistant text", "─".repeat(40), top, editor, "─".repeat(40), "~/work  p/m1"].join("\n");
+
+/** sess-a has a live control that served its list; sess-b has none. */
+async function noControl(t: any) {
+	const { f, browser } = await setup(t);
+	const ctl = await control(f, f.sessionA, { commands: true });
+	t.after(() => ctl.close());
+	const threads = browser.sub("devbox", { kind: "threads" });
+	await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.control === true && v.threads["pi:sess-b"]?.live === true);
+	await browser.req("devbox", "thread.commands", { threadId: "pi:sess-a" });
+	const setPane = (pane: string, fields: Record<string, unknown>) => {
+		const state = f.state;
+		Object.assign(state.agents.find((a: any) => a.pane_id === pane), fields);
+		f.setState(state);
+	};
+	// Every Herdr write that carries slash text: what reached a pane.
+	const typed = () => f.herdrCalls().filter((c) => c.some((a) => a.startsWith("/")));
+	const command = (threadId: string, name: string, args?: string) => browser.req("devbox", "thread.command", { threadId, name, ...(args ? { args } : {}) });
+	return { f, browser, ctl, threads, setPane, typed, command };
+}
+
+test("pi host: with no control a command is typed with Enter, even while Pi works, and carries no receipt", async (t) => {
+	const { f, browser, ctl, setPane, typed, command } = await noControl(t);
+	await assert.rejects(browser.req("devbox", "thread.commands", { threadId: "pi:sess-b" }), (e: any) => e.code === "no_control");
+	// Enter runs a built-in even while Pi streams; Alt+Enter would queue the text as a message. While Pi works, its
+	// status sits in the editor's top border.
+	setPane("w1:p1", { agent_status: "working", screen: piScreen("", `── ⠋ Working ${"─".repeat(27)}`) });
+	const ack = await browser.req("devbox", "thread.command", { threadId: "pi:sess-b", name: "model", args: "m2", key: "k-2", whenBusy: "followUp" });
+	assert.ok(!f.herdrCalls().some((c) => c.includes("alt+enter")), "a command is never queued with Alt+Enter");
+	assert.deepEqual(typed(), [["agent", "prompt", "w1:p1", "/model m2"]]);
+	assert.deepEqual([ack.via, ack.disposition, ack.evidence], ["keys", "dispatched", "sent"], "keys carry no receipt");
+	// A name from this Session's last command list stays known after its control goes away. The Host can still show
+	// the control as live; it passes the pane anyway, and the agent finds no control when it sends.
+	setPane("w1:p2", { agent_status: "idle", screen: piScreen("") });
+	await ctl.close();
+	await command("pi:sess-a", "review", "now");
+	assert.deepEqual(typed().at(-1), ["agent", "prompt", "w1:p2", "/review now"]);
+	assert.equal(ctl.requests.filter((r) => r.op === "submit").length, 0, "no command reached Pi as a message");
+});
+
+test("pi host: with no control a command is typed only into an empty editor", async (t) => {
+	const { setPane, typed, command } = await noControl(t);
+	// Leftover text would merge with the keys into one message.
+	setPane("w1:p1", { screen: piScreen("half a thought") });
+	await assert.rejects(command("pi:sess-b", "model", "m3"), (e: any) => e.code === "editor_not_empty");
+	// More than one editor line and a dialog also refuse before any keys.
+	setPane("w1:p1", { screen: piScreen("half a thought\nsecond line") });
+	await assert.rejects(command("pi:sess-b", "model", "m3"), (e: any) => e.code === "editor_not_empty");
+	setPane("w1:p1", { screen: piScreen(""), agent_status: "blocked" });
+	await assert.rejects(command("pi:sess-b", "model", "m3"), (e: any) => e.code === "agent_blocked");
+	// A screen that does not show Pi's editor is not proof of an empty one.
+	setPane("w1:p1", { screen: "", agent_status: "idle" });
+	await assert.rejects(command("pi:sess-b", "model", "m3"), (e: any) => e.code === "editor_not_empty");
+	// A scroll label in the top border means hidden lines above an empty-looking one.
+	setPane("w1:p1", { screen: piScreen("", `─── ↑ 2 more ${"─".repeat(27)}`) });
+	await assert.rejects(command("pi:sess-b", "model", "m3"), (e: any) => e.code === "editor_not_empty");
+	assert.deepEqual(typed(), [], "no command reached a pane");
+});
+
+/**
+ * Synthetic copies of real `herdr agent read <pane> --source visible` output from Pi 1.4.0 in Herdr 0.9.5: startup
+ * header, a notice box drawn with rules, the editor between two full-width borders, the footer. While Pi works, its
+ * status sits in the top border; a scrolled editor labels its hidden lines in a border.
+ */
+const W = 80;
+const RULE = "─".repeat(W);
+const label = (text: string) => {
+	const start = Math.floor((W - text.length) / 2);
+	return "─".repeat(start) + text + "─".repeat(W - start - text.length);
+};
+const WORKING = `── ⠇ Working ${"─".repeat(W - 13)}`;
+const realScreen = (top: string, editor: string[], bottom = RULE) => [
+	"", " ▀▀█  v1.4.0", " █▀ █ escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash · ctrl+o more", "",
+	RULE, " Package Updates Available", " - example-package", RULE, "", "89", "",
+	top, ...editor, bottom, "~/work • probe", `↑2 ↓801 W2.4k $0.028 0.3%/1.0M${" ".repeat(30)}(p) p/m1 • medium`, "",
+].join("\n");
+const lines = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => `line ${from + i}`);
+const SCREENS: [string, string, boolean][] = [
+	["idle, empty", realScreen(RULE, [""]), true],
+	["working, empty", realScreen(WORKING, [""]), true],
+	["idle, draft", realScreen(RULE, ["half a thought"]), false],
+	["working, draft", realScreen(WORKING, ["draft while working"]), false],
+	["multi-line draft", realScreen(RULE, ["half a thought", "second line"]), false],
+	["scrolled, lines above", realScreen(label(" ↑ 6 more "), lines(7, 18)), false],
+	["scrolled, lines below", realScreen(RULE, lines(1, 12), label(" ↓ 6 more ")), false],
+];
+
+test("pi host: the editor check reads every real Pi screen shape", async (t) => {
+	const { setPane, typed, command } = await noControl(t);
+	for (const [name, screen, empty] of SCREENS) {
+		setPane("w1:p1", { agent_status: name.startsWith("working") ? "working" : "idle", screen });
+		const before = typed().length;
+		if (empty) await command("pi:sess-b", "model", "m2");
+		else await assert.rejects(command("pi:sess-b", "model", "m2"), (e: any) => e.code === "editor_not_empty", name);
+		assert.equal(typed().length - before, empty ? 1 : 0, name);
+	}
+});
+
+test("pi host: with no control a message is typed only into an empty editor, and slash text never as a message", async (t) => {
+	const { f, browser, setPane } = await noControl(t);
+	const submit = (content: string, asText?: true) => browser.req("devbox", "thread.submit", { threadId: "pi:sess-b", content, whenBusy: "steer", ...(asText ? { asText } : {}) });
+	const reached = (text: string) => f.herdrCalls().filter((c) => c.some((a) => a.includes(text)));
+	// Leftover text and the typed message would merge into one message.
+	setPane("w1:p1", { screen: piScreen("half a thought") });
+	await assert.rejects(submit("hello"), (e: any) => e.code === "editor_not_empty");
+	assert.deepEqual(reached("hello"), [], "a message reached a pane with leftover text");
+	// Keys have no way to send slash text as a message: Pi would run it.
+	setPane("w1:p1", { screen: piScreen("") });
+	await assert.rejects(submit("/model x", true), (e: any) => e.code === "needs_control" && /no live control/.test(e.message));
+	assert.deepEqual(reached("/model x"), [], "slash text reached a pane as a message");
+	await submit("hello");
+	assert.deepEqual(reached("hello"), [["agent", "prompt", "w1:p1", "hello"]]);
+});
+
+test("pi host: slash text is a message only when the page marks it, before any route", async (t) => {
+	const { f, browser } = await setup(t);
+	const ctl = await control(f, f.sessionA, { commands: true });
+	t.after(() => ctl.close());
+	const threads = browser.sub("devbox", { kind: "threads" });
+	await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.control === true && v.threads["pi:sess-b"]?.live === true);
+	const submit = (threadId: string, asText?: true) => browser.req("devbox", "thread.submit", { threadId, content: "/model x", whenBusy: "steer", ...(asText ? { asText } : {}) });
+	const before = f.herdrCalls().length;
+	for (const threadId of ["pi:sess-a", "pi:sess-b"])
+		await assert.rejects(submit(threadId), (e: any) => e.code === "unsupported" && e.message === "This page is older than the hub. Reload it.");
+	assert.equal(ctl.requests.filter((r) => r.op === "submit").length, 0, "an unmarked slash submit reached the control");
+	assert.equal(f.herdrCalls().length, before, "an unmarked slash submit reached Herdr");
+	await submit("pi:sess-a", true);
+	assert.deepEqual(ctl.requests.filter((r) => r.op === "submit").map((r) => r.text), ["/model x"], "a marked slash submit goes as text");
+});
+
+test("pi host: with no control a name Pi runs only in its pane is refused as with a control", async (t) => {
+	const { typed, command } = await noControl(t);
+	for (const name of ["quit", "new"])
+		await assert.rejects(command("pi:sess-b", name), (e: any) => e.code === "unsupported_command" && e.message === `/${name} works only in the Pi pane.`);
+	assert.deepEqual(typed(), [], "a pane-only command reached a pane");
+});
+
+test("pi host: a new control endpoint for the Session drops the command names the old one listed", async (t) => {
+	const { f, browser, ctl, threads, typed, command } = await noControl(t);
+	await ctl.close();
+	await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.control !== true);
+	const next = await control(f, f.sessionA, { commands: true, nonce: "n-next" });
+	t.after(() => next.close());
+	await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.control === true);
+	await next.close();
+	await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.control !== true);
+	await assert.rejects(command("pi:sess-a", "review"), (e: any) => e.code === "unknown_command");
+	assert.deepEqual(typed(), []);
+});
+
+test("pi host: with no control a name Pi does not run is refused before any keys", async (t) => {
+	const { f, setPane, typed, command } = await noControl(t);
+	setPane("w1:p1", { screen: piScreen("") });
+	const before = f.herdrCalls().length;
+	await assert.rejects(command("pi:sess-b", "modle", "m3"), (e: any) => e.code === "unknown_command");
+	// A name seen in another Session's list is not one this Pi runs.
+	await assert.rejects(command("pi:sess-b", "review"), (e: any) => e.code === "unknown_command");
+	assert.equal(f.herdrCalls().length, before, "an unknown name reached the pane");
+	assert.deepEqual(typed(), []);
+});
+
+test("pi host: the agent splits Pi's built-ins exactly as pi-hc-control does", () => {
+	const names = (source: string, list: string) => [...new RegExp(`const ${list} = \\[([\\s\\S]*?)\\];`).exec(source)![1]!.matchAll(/\[?["']([a-z-]+)["']/g)].map((m) => m[1]);
+	const control = readFileSync(new URL("../../../packages/pi-hc-control/src/control.mjs", import.meta.url), "utf8");
+	const builtins = [...new RegExp("const BUILTINS = \\[([\\s\\S]*?)\\n\\];").exec(control)![1]!.matchAll(/^\s*\["([a-z-]+)"/gm)].map((m) => m[1]);
+	const agent = readFileSync(new URL("../src/pi/remote-agent.cjs", import.meta.url), "utf8");
+	assert.deepEqual(names(agent, "PI_BUILTINS"), builtins);
+	assert.deepEqual(names(agent, "PANE_ONLY"), names(control, "PANE_ONLY"));
+});
+
+/** An old remote agent: the same agent with its hello stripped of controlOps. */
+function oldAgent() {
 	const wrapper = join(fixture().dir, "old-agent.cjs");
 	writeFileSync(wrapper, `#!${process.execPath}
 const agent = require("child_process").spawn(process.execPath, process.argv.slice(2), { stdio: ["inherit", "pipe", "inherit"] });
@@ -189,6 +358,11 @@ agent.on("exit", (code) => process.exit(code ?? 1));
 process.on("SIGTERM", () => { agent.kill(); process.exit(143); });
 `);
 	chmodSync(wrapper, 0o755);
+	return wrapper;
+}
+
+test("pi host: an old control or an old remote agent answers commands_unsupported without sending the command", async (t) => {
+	const wrapper = oldAgent();
 	for (const [label, host, commands] of [["old remote agent", { remoteNode: wrapper }, true], ["old control", {}, false]] as const) {
 		const { f, browser } = await setup(t, host);
 		const ctl = await control(f, f.sessionA, { commands });
@@ -199,9 +373,53 @@ process.on("SIGTERM", () => { agent.kill(); process.exit(143); });
 		await assert.rejects(browser.req("devbox", "thread.command", { threadId: "pi:sess-a", name: "model", args: "m2" }), /too old for slash commands/, label);
 		assert.ok(Date.now() - started < 2000, `${label}: answered in ${Date.now() - started} ms`);
 		assert.deepEqual(ctl.requests.filter((r) => r.op !== "status"), [], `${label}: nothing reached the control`);
-		// A pane with no control falls back to keys whatever the agent's version, so it must not read as too old.
+		// A Session without a control: an old agent cannot type a command into the pane, so it is too old at once.
 		await browser.until<any>(threads, (v) => v.threads["pi:sess-b"]?.live === true);
-		await assert.rejects(browser.req("devbox", "thread.commands", { threadId: "pi:sess-b" }), (e: any) => e.code === "no_control", `${label}: a Session without a control`);
+		const old = label === "old remote agent";
+		await assert.rejects(browser.req("devbox", "thread.commands", { threadId: "pi:sess-b" }), (e: any) => e.code === (old ? "commands_unsupported" : "no_control"), `${label}: a list without a control`);
+		const asked = Date.now();
+		if (old) await assert.rejects(browser.req("devbox", "thread.command", { threadId: "pi:sess-b", name: "model", args: "m2" }), /too old/, `${label}: a command without a control`);
+		assert.ok(Date.now() - asked < 2000, `${label}: answered in ${Date.now() - asked} ms`);
+		assert.ok(!f.herdrCalls().some((c) => c.some((a) => a.startsWith("/model"))), `${label}: no command reached a pane`);
+	}
+});
+
+const PNG = { data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAwS2OUAAAAABJRU5ErkJggg==", mimeType: "image/png" };
+
+test("pi host: images go only to a control that takes them; keys, an older tier, or too large a set refuse at once", async (t) => {
+	const { f, browser } = await setup(t);
+	const ctl = await control(f, f.sessionA, { images: true });
+	t.after(() => ctl.close());
+	const threads = browser.sub("devbox", { kind: "threads" });
+	await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.control === true && v.threads["pi:sess-b"]?.live === true);
+	// The summary offers images exactly where a send can succeed.
+	await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.images?.count === 8 && v.threads["pi:sess-b"]?.images === undefined);
+	const ack = await browser.req("devbox", "thread.submit", { threadId: "pi:sess-a", content: "see this", images: [PNG], whenBusy: "steer" });
+	assert.equal(ack.evidence, "admitted");
+	// An image alone is a message too.
+	await browser.req("devbox", "thread.submit", { threadId: "pi:sess-a", content: "", images: [PNG, PNG], whenBusy: "followUp" });
+	assert.deepEqual(ctl.requests.filter((r) => r.op === "submit").map(({ id: _id, ...r }) => r), [
+		{ op: "submit", text: "see this", deliverAs: "steer", images: [PNG] },
+		{ op: "submit", text: "", deliverAs: "followUp", images: [PNG, PNG] },
+	]);
+	const big = { data: "A".repeat(6 * 1024 * 1024 + 4), mimeType: "image/png" };
+	await assert.rejects(browser.req("devbox", "thread.submit", { threadId: "pi:sess-a", content: "x", images: [big], whenBusy: "steer" }), (e: any) => e.code === "too_large");
+	// A pane with no control: keys cannot type an image, and the text must not go without it.
+	await assert.rejects(browser.req("devbox", "thread.submit", { threadId: "pi:sess-b", content: "see this", images: [PNG], whenBusy: "steer" }), (e: any) => e.code === "no_control");
+	assert.ok(!f.herdrCalls().some((c) => c.includes("see this")), "no text reached a pane as keys");
+	assert.equal(ctl.requests.filter((r) => r.op === "submit").length, 2);
+});
+
+test("pi host: an old control or an old remote agent answers images_unsupported without sending the text", async (t) => {
+	for (const [label, host, images, message] of [["old remote agent", { remoteNode: oldAgent() }, true, /AmPi agent .* too old to send images/], ["old control", {}, false, /update pi-hc-control/]] as const) {
+		const { f, browser } = await setup(t, host);
+		const ctl = await control(f, f.sessionA, { images });
+		t.after(() => ctl.close());
+		const threads = browser.sub("devbox", { kind: "threads" });
+		await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.control === true);
+		assert.equal((await browser.until<any>(threads, (v) => v.threads["pi:sess-a"])).threads["pi:sess-a"].images, undefined, `${label}: the summary offers images`);
+		await assert.rejects(browser.req("devbox", "thread.submit", { threadId: "pi:sess-a", content: "see this", images: [PNG], whenBusy: "steer" }), (e: any) => e.code === "images_unsupported" && message.test(e.message), label);
+		assert.deepEqual(ctl.requests.filter((r) => r.op !== "status"), [], `${label}: nothing reached the control`);
 	}
 });
 

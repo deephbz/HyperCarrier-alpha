@@ -3,7 +3,7 @@
 // walks what a commit changed.
 
 import { clipInjected } from "../shared/entry-shapes.ts";
-import type { Activity, InjectedMessage, PiQueuedItem, QueueOrigin, ThreadField } from "../shared/protocol.ts";
+import type { Activity, Every, InjectedMessage, PiQueuedItem, QueueOrigin, ThreadField } from "../shared/protocol.ts";
 import type { ConversationView, EntryRecord, JsonValue } from "./durable-types.ts";
 import { noticeMessage, queueOrigin } from "../shared/team-origin.ts";
 
@@ -92,7 +92,7 @@ export function contentText(content: AnyContent | undefined): string {
 		.join("\n");
 }
 
-function countImages(content: AnyContent | undefined): number {
+export function countImages(content: AnyContent | undefined): number {
 	if (content === undefined || typeof content === "string") return 0;
 	return content.filter((part) => part.type === "image").length;
 }
@@ -226,7 +226,8 @@ export function activityOf(live: any): Activity {
 }
 
 export const RETURNED_KIND = "ampi.returned";
-export type ReturnedState = { items: { id: string; mode: "steer" | "followUp"; content: string; at: number; origin?: QueueOrigin }[] };
+/** `images`: how many images the input carried; the owner attaches them again. */
+export type ReturnedState = { items: { id: string; mode: "steer" | "followUp"; content: string; at: number; images?: number; origin?: QueueOrigin }[] };
 
 export { queueOrigin, TEAM_TASK_ID_LIMIT } from "../shared/team-origin.ts";
 
@@ -234,16 +235,18 @@ export { queueOrigin, TEAM_TASK_ID_LIMIT } from "../shared/team-origin.ts";
  * The inbox a Pi Session shows: inputs still queued, then inputs Esc returned, each with its state. Queued text comes
  * from `pi.inbox`; passive writes are not owner input and stay out. Each item keeps the origin its entry data names.
  */
+/** The one projection of an inbox item: typed with Every, so it names each PiQueuedItem field. */
+const queuedItem = (item: Every<PiQueuedItem>): PiQueuedItem => Object.fromEntries(Object.entries(item).filter(([, value]) => value !== undefined)) as PiQueuedItem;
+
 function projectInbox(inbox: JsonValue | undefined, returned: ReturnedState | undefined): { items: PiQueuedItem[] } {
 	// biome-ignore lint: native inbox items are loosely typed here
 	const queued = (((inbox as any)?.items ?? []) as any[])
 		.filter((item) => item.mode !== "write")
-		.map((item): PiQueuedItem => {
+		.map((item) => {
 			const content = contentText(item.content);
-			const origin = queueOrigin(item.entry, content);
-			return { id: String(item.id), mode: item.mode, content, state: "queued", ...(origin ? { origin } : {}) };
+			return queuedItem({ id: String(item.id), mode: item.mode, content, state: "queued", truncated: undefined, images: countImages(item.content) || undefined, origin: queueOrigin(item.entry, content) });
 		});
-	const back = (returned?.items ?? []).map((item): PiQueuedItem => ({ id: item.id, mode: item.mode, content: item.content, state: "returned", ...(item.origin ? { origin: item.origin } : {}) }));
+	const back = (returned?.items ?? []).map((item) => queuedItem({ id: item.id, mode: item.mode, content: item.content, state: "returned", truncated: undefined, images: item.images, origin: item.origin }));
 	return { items: [...back, ...queued] };
 }
 
