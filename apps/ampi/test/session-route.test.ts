@@ -17,9 +17,13 @@ for (const [engine, type, path] of ENGINES) test(`session route ${engine}: an ol
 	await row.waitFor();
 	const title = await row.innerText();
 	const start = await page.evaluate(() => history.length);
+	// The reader's place is the top visible row and its offset. scrollTop is not: the first paint shows a short window,
+	// and when the window grows, rows added above raise scrollTop while the reader's view stays where it was.
 	const look = () => page.evaluate(() => {
 		const el = document.querySelector<HTMLElement>("[data-region=transcript]");
-		return { hash: location.hash, entries: history.length, mounted: el?.dataset.probe === "kept", top: Math.round(el?.scrollTop ?? -1) };
+		const top = el?.getBoundingClientRect().top ?? 0;
+		const row = [...(el?.querySelectorAll<HTMLElement>("[data-entry]") ?? [])].find((r) => r.getBoundingClientRect().bottom > top + 1);
+		return { hash: location.hash, entries: history.length, mounted: el?.dataset.probe === "kept", place: row && `${row.dataset.entry}@${Math.round(row.getBoundingClientRect().top - top)}` };
 	});
 
 	// A pasted older link: the paste is the browser's own step; the arrival rewrites it in place.
@@ -34,8 +38,12 @@ for (const [engine, type, path] of ENGINES) test(`session route ${engine}: an ol
 	});
 	await page.waitForTimeout(300);
 	const opened = await look();
-	assert.deepEqual({ ...opened, top: undefined }, { hash: ROUTE, entries: start + 1, mounted: true, top: undefined });
-	assert.ok(opened.top > 0, "the transcript scrolled away from both ends");
+	assert.deepEqual({ ...opened, place: undefined }, { hash: ROUTE, entries: start + 1, mounted: true, place: undefined });
+	assert.ok(await page.evaluate(() => {
+		const el = document.querySelector<HTMLElement>("[data-region=transcript]")!;
+		return el.scrollTop > 0 && el.scrollTop < el.scrollHeight - el.clientHeight - 1;
+	}), "the transcript scrolled away from both ends");
+	assert.ok(opened.place, "a row is in view");
 	assert.equal(await row.getAttribute("href"), ROUTE);
 	assert.equal(await row.getAttribute("aria-current"), "page");
 

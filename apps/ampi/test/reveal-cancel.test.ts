@@ -14,6 +14,9 @@ import { findChrome } from "../scripts/perf/browser.mjs";
 // served tail, so the reveal waits for thread.history; the reply comes 2 s later, after the reader's move or after a
 // change the reader did not start. Real ThreadView, stylesheet and hash navigation; synthetic hub frames.
 // Known gap: a text-selection drag that autoscrolls the transcript is not a reader move here, and does not end the request.
+// Known gap: the history cue ("Loading entry…") above the transcript stays until the reply, after the reader's move ended
+// the request. Its 37 px row moves a reader away from the end on screen. The scroll tests below compare scrollTop until
+// that is fixed (docs/current/now.md, Deferred).
 const web = fileURLToPath(new URL("../web", import.meta.url));
 const THREAD = "pi:s1";
 const DELAY = 2000;
@@ -108,6 +111,14 @@ async function reveal(page: Page, history: Promise<void>) {
 }
 
 const place = (page: Page) => page.locator(".scroll").evaluate((el) => ({ top: el.scrollTop, end: el.scrollHeight - el.scrollTop - el.clientHeight <= 2 }));
+/** The entry across the transcript's middle line, and its top on screen. The screen keeps it when a row above the
+ * transcript comes or goes; scrollTop does not. */
+const anchor = (page: Page) => page.locator(".scroll").evaluate((el) => {
+	const box = el.getBoundingClientRect(), line = box.top + box.height / 2;
+	const row = [...el.querySelectorAll<HTMLElement>("[data-entry]")].find((r) => r.getBoundingClientRect().bottom > line)!;
+	return { id: row.dataset.entry!, top: row.getBoundingClientRect().top };
+});
+const screenTop = (page: Page, id: string) => page.locator(`[data-entry="${id}"]`).evaluate((el) => el.getBoundingClientRect().top);
 const targetInView = (page: Page) => page.evaluate((id) => {
 	const el = document.querySelector(`[data-entry="${id}"]`), box = document.querySelector(".scroll")!.getBoundingClientRect();
 	if (!el) return false;
@@ -136,10 +147,12 @@ test("reveal cancel: a Find close before the history reply leaves the reader in 
 	// The Find result asks for the reveal of its match.
 	await history;
 	await page.getByRole("button", { name: "Close Find", exact: true }).click();
-	const before = await place(page);
+	assert.equal((await place(page)).end, true, "Find opened at the newest end");
+	const before = await anchor(page);
 	await afterReply();
 	assert.equal(await targetInView(page), false, "the late reply does not move the reader");
-	assert.ok(Math.abs((await place(page)).top - before.top) <= 2, "the reader stays where Find left them");
+	assert.equal((await place(page)).end, true, "the reader stays at the newest end");
+	assert.ok(Math.abs((await screenTop(page, before.id)) - before.top) <= 2, "the reader stays where Find left them");
 });
 
 const scrolls: [string, (page: Page) => Promise<void>][] = [
@@ -154,6 +167,8 @@ for (const [name, scroll] of scrolls) test(`reveal cancel: ${name} before the hi
 	const { page, history, afterReply } = await open(t);
 	await reveal(page, history);
 	await scroll(page);
+	// On a slow runner the scroll lands later than 300 ms after the move: wait for it to leave the end, then to settle.
+	await page.waitForFunction(() => { const el = document.querySelector(".scroll")!; return el.scrollHeight - el.scrollTop - el.clientHeight > 2; });
 	await page.waitForTimeout(300);
 	const before = await place(page);
 	assert.equal(before.end, false);
