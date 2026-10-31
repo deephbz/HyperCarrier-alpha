@@ -18,6 +18,7 @@ repair changes the model-facing tool contract.
 | AC6 | Provider failure or abort does not fabricate a successful compaction. An explicit retry can complete. Check summaries, tool results, and notices. |
 | AC7 | Finalized entries retain identity and content through compaction and navigation. Check entry snapshots independently of the controller. |
 | AC8 | A Session or tree boundary does not carry pending held text into another target. Check native entries and recovery notices. Old custom/budget entries remain readable. |
+| AC10 | The `context.budget` slot shows each assistant response's usage and the current settings and Session budget before the turn ends. Check the slot that a tool sees while it runs. |
 | AC9 | Same seed and scenario replay the normalized history. Record minimal failing scenarios, request evidence, Pi version, virtual time, and wall time. |
 
 ## Run

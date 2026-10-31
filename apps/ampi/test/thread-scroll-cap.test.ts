@@ -25,7 +25,7 @@ for (const [backend, lens] of [["pi", false], ["pi", true]] as const) {
 	for (const place of ["one or two screens up", "mid-thread"] as const) {
 		test(`scroll hold: at the ${CAP}-entry source cap, ${backend}${lens ? " conversation-only" : ""}, each arrival evicts the oldest entry and a reader ${place} stays in place`, async (t) => {
 			const { page, send } = await open(t, CAP, backend);
-			if (lens) { await page.getByRole("button", { name: "Transcript lens: full transcript" }).click(); await frames(page); }
+			if (lens) { await page.getByRole("button", { name: "Chat", exact: true }).click(); await frames(page); }
 			if (place === "mid-thread") {
 				// The reader scrolls up until the paint window holds the whole served window: its held first entry is the oldest.
 				await page.waitForFunction(async () => {
@@ -59,7 +59,7 @@ for (const [backend, lens] of [["pi", false], ["pi", true]] as const) {
 for (const [backend, lens] of [["pi", false], ["pi", true]] as const) {
 	test(`scroll hold: at the ${CAP}-entry source cap, ${backend}${lens ? " conversation-only" : ""}, batches of 120 that evict the held first entry keep a reader near the window top in place`, async (t) => {
 		const { page, send } = await open(t, CAP, backend);
-		if (lens) { await page.getByRole("button", { name: "Transcript lens: full transcript" }).click(); await frames(page); }
+		if (lens) { await page.getByRole("button", { name: "Chat", exact: true }).click(); await frames(page); }
 		await page.evaluate(() => { document.querySelector<HTMLElement>("[data-region=transcript]")!.scrollTop = 300; });
 		await frames(page);
 		await page.waitForTimeout(100);

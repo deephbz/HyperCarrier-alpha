@@ -5,6 +5,7 @@ import { clock, money, tokens } from "../util.ts";
 import { TeamPanel } from "./TeamPanel.tsx";
 import { ChangesPanel } from "./ChangesPanel.tsx";
 import { ShellDock } from "./ShellDock.tsx";
+import { Segmented } from "./Segmented.tsx";
 
 export const PANELS: [string, string][] = [
 	["team", "Team"],
@@ -109,13 +110,7 @@ export function Panel({ name, host, threadId, summary, setPanel }: { name: strin
 	return (
 		<aside className={`panel ${name === "shell" || name === "changes" ? "wide" : ""}`} data-panel-name={name}>
 			<div className="panel-tabs">
-				<div className="seg">
-					{PANELS.map(([tab, label]) => (
-						<button key={tab} className={tab === name ? "on" : ""} onClick={() => setPanel(tab)}>
-							{label}
-						</button>
-					))}
-				</div>
+				<Segmented label="Panel" value={name} options={PANELS} onChange={setPanel} />
 				<span style={{ flex: 1 }} />
 				<button className="btn ghost small" onClick={() => setPanel(undefined)} title="Close panel">
 					✕

@@ -49,7 +49,7 @@ export function useAttention(data: HostThreads[], current?: { host?: string; thr
 	useEffect(() => {
 		const now = new Map<string, ThreadSummary>();
 		for (const { host, threads } of data)
-			for (const t of threads) now.set(`${host.id}|${t.id}`, t);
+			for (const t of threads) now.set(`${host.link}|${t.id}`, t);
 		setBadge(needsYouCount(data));
 		const before = previous.current;
 		previous.current = now;
@@ -65,15 +65,15 @@ export function notices(before: Map<string, ThreadSummary>, data: HostThreads[],
 	const hosts = data.map((d) => d.host);
 	for (const { host, threads } of data)
 		for (const t of threads) {
-			const was = before.get(`${host.id}|${t.id}`);
+			const was = before.get(`${host.link}|${t.id}`);
 			// History raises neither Needs you nor Finished notifications.
 			if (!was || !isAttentionEligible(t)) continue;
-			const viewing = !away && current?.host === host.id && current?.thread === t.id;
+			const viewing = !away && current?.host === host.link && current?.thread === t.id;
 			if (viewing) continue;
 			const reason = needsYou(t);
-			if (reason && (newSignal(was, t) || asksGrew(was, t))) out.push({ title: `Needs you: ${t.title}`, body: `${host.label} · ${reason}${t.lastError ? ` — ${t.lastError}` : ""}`, host: host.id, threadId: t.id });
+			if (reason && (newSignal(was, t) || asksGrew(was, t))) out.push({ title: `Needs you: ${t.title}`, body: `${host.label} · ${reason}${t.lastError ? ` — ${t.lastError}` : ""}`, host: host.link, threadId: t.id });
 			else if (away && isBusy(was) && !isBusy(t) && t.kind !== "worker" && !reason)
-				out.push({ title: `Finished: ${t.title}`, body: `${host.label} · ${t.preview ?? "the agent settled"}`, host: host.id, threadId: t.id });
+				out.push({ title: `Finished: ${t.title}`, body: `${host.label} · ${t.preview ?? "the agent settled"}`, host: host.link, threadId: t.id });
 		}
 	return out;
 }

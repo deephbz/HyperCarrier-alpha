@@ -1,6 +1,6 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { closeSync, openSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -8,14 +8,18 @@ import { tempHome } from "./helpers.ts";
 
 const BIN = join(import.meta.dirname, "..", "bin", "ampi.mjs");
 
-/** Runs `ampi hub` with its output sent to a 0644 file, as a launcher does, until it reports that it runs. */
-async function hubToFile(home: string, args: string[] = []): Promise<{ log: string; output: string }> {
+// A Pi-backend hub on a scratch home: no node daemon, and the real herdr is not on PATH.
+const hubEnv = (home: string): NodeJS.ProcessEnv => ({ HOME: home, AMPI_HOME: home, PI_CODING_AGENT_DIR: join(home, "pi"), AMPI_SELF: "test", PATH: `${dirname(process.execPath)}:/usr/bin:/bin` });
+
+/**
+ * Runs `ampi hub` with its output sent to a 0644 file, as a launcher does, until it reports that it runs; then runs
+ * `during` against the running hub and stops it.
+ */
+async function hubToFile(home: string, args: string[] = [], during?: (pid: number) => void, config = join(home, "hub.json")): Promise<{ log: string; output: string }> {
 	const log = join(home, "hub.log");
 	writeFileSync(log, "", { mode: 0o644 });
 	const fd = openSync(log, "a");
-	// A Pi-backend hub on a scratch home: no node daemon, and the real herdr is not on PATH.
-	const env: NodeJS.ProcessEnv = { HOME: home, AMPI_HOME: home, PI_CODING_AGENT_DIR: join(home, "pi"), AMPI_BACKEND: "pi", AMPI_SELF: "test", PATH: `${dirname(process.execPath)}:/usr/bin:/bin` };
-	const child = spawn(process.execPath, [BIN, "hub", "--port", "0", "--config", join(home, "hub.json"), ...args], { env, stdio: ["ignore", fd, fd] });
+	const child = spawn(process.execPath, [BIN, "hub", "--port", "0", "--config", config, ...args], { env: hubEnv(home), stdio: ["ignore", fd, fd] });
 	closeSync(fd);
 	try {
 		const deadline = Date.now() + 20_000;
@@ -24,6 +28,7 @@ async function hubToFile(home: string, args: string[] = []): Promise<{ log: stri
 			if (Date.now() > deadline) throw new Error(`hub did not start: ${readFileSync(log, "utf8")}`);
 			await new Promise((resolve) => setTimeout(resolve, 50));
 		}
+		during?.(child.pid!);
 		return { log, output: readFileSync(log, "utf8") };
 	} finally {
 		if (child.exitCode === null && child.signalCode === null) {
@@ -54,4 +59,31 @@ test("cli hub: redirected output hides the access key and its file becomes owner
 	assert.notEqual(next, key, "--rotate-key writes a new key");
 	assert.equal(statSync(join(home, "hub.token")).mode & 0o777, 0o600);
 	assert.doesNotMatch(rotated.output, /[0-9a-f]{64}/);
+});
+
+test("cli hub: a second hub on a home that a hub owns stops first and names the owner; doctor shows the owner", async () => {
+	const home = tempHome();
+	await hubToFile(home, [], (pid) => {
+		const files = ["hub.token", "hub.port"].map((name) => readFileSync(join(home, name), "utf8"));
+		const port = Number(files[1]);
+		const second = spawnSync(process.execPath, [BIN, "hub", "--port", "0", "--rotate-key", "--config", join(home, "hub.json")], { env: hubEnv(home), encoding: "utf8", timeout: 20_000 });
+		assert.equal(second.status, 1, second.stderr);
+		assert.match(second.stderr, new RegExp(`An AmPi hub already runs for .*\\(pid ${pid}, port ${port}\\)\\. Open it with: ampi open`));
+		assert.deepEqual(["hub.token", "hub.port"].map((name) => readFileSync(join(home, name), "utf8")), files, "the refused hub wrote no state, not even --rotate-key");
+		const doctor = spawnSync(process.execPath, [BIN, "doctor"], { env: hubEnv(home), encoding: "utf8", timeout: 30_000 });
+		assert.match(doctor.stdout, new RegExp(`✓ Hub pid ${pid} owns .* \\(port ${port}\\)`), doctor.stdout);
+		assert.match(doctor.stdout, /✓ Hub running/, doctor.stdout);
+	});
+});
+
+test("cli hub: a hub on another home that shares the running hub's hub.json directory stops first and names the owner", async () => {
+	const shared = join(tempHome(), "config");
+	const config = join(shared, "hub.json");
+	await hubToFile(tempHome(), [], (pid) => {
+		const other = tempHome();
+		const second = spawnSync(process.execPath, [BIN, "hub", "--port", "0", "--rotate-key", "--config", config], { env: hubEnv(other), encoding: "utf8", timeout: 20_000 });
+		assert.equal(second.status, 1, second.stderr);
+		assert.match(second.stderr, new RegExp(`Another AmPi hub \\(pid ${pid}\\) writes .*config, which this hub needs for its hub.json`));
+		assert.throws(() => readFileSync(join(other, "hub.token")), /ENOENT/, "the refused hub wrote no key");
+	}, config);
 });

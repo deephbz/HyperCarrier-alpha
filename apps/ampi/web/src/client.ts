@@ -3,12 +3,35 @@
 
 import { native } from "./native.ts";
 import { applyImmutable, type Op } from "@earendil-works/chord/delta";
-import { useSyncExternalStore } from "react";
-import type { HostState } from "../../src/hub/hosts.ts";
-import type { ClientOps, HubOps, Topic, TopicValue } from "../../src/shared/protocol.ts";
+import { useEffect, useState, useSyncExternalStore } from "react";
+import type { HostState as HubHostState } from "../../src/hub/hosts.ts";
+import { STALE_VERSION, type ClientOps, type HubOps, type Pin, type Topic, type TopicValue } from "../../src/shared/protocol.ts";
 import { perfMark, perfMarkOnce } from "./perf.ts";
 
-export type { HostState };
+export type HostState = HubHostState & { link: string };
+
+export { findHost } from "./components/host-label.ts";
+
+/** The wire code of a refused request (protocol.ts STALE_VERSION, NOT_FOUND, ...). */
+export const refusal = (error: unknown) => (error as { code?: string } | undefined)?.code;
+
+/** Reads of one versioned request before the caller's refresh: the first, then two at the version `next` returns. */
+export const STALE_READS = 3;
+/**
+ * A read pinned to a source version. A `stale_version` refusal reads again at the version `next` returns, at most
+ * STALE_READS reads. Then `refresh`, when given, replaces the caller's view once, and one last read follows it. Every
+ * other refusal, and the last stale one, reach the caller.
+ */
+export async function readVersioned<T>(read: (version: string | undefined) => Promise<T>, version: string | undefined, next: (stale: string | undefined) => Promise<string | undefined>, refresh?: () => void): Promise<T> {
+	for (let attempt = 1; ; attempt++) {
+		try { return await read(version); }
+		catch (error) {
+			if (refusal(error) !== STALE_VERSION || attempt > STALE_READS || (attempt === STALE_READS && !refresh)) throw error;
+			if (attempt === STALE_READS) refresh!();
+			version = await next(version);
+		}
+	}
+}
 /** An op's arguments as a rest tuple: optional when every field is. */
 type Args<A> = {} extends A ? [args?: A] : [args: A];
 
@@ -37,6 +60,10 @@ export class HubClient {
 	#bySid = new Map<number, Sub>();
 	#listeners = new Set<() => void>();
 	hosts: HostState[] = [];
+	/** The hub.json the hub read at start (hosts frame). */
+	config: string | undefined;
+	/** The hub's pinned Sessions (src/hub/pins.ts); replaced whole by each `pins` frame. */
+	pins: Pin[] = [];
 	connected = false;
 	#retry = 0;
 
@@ -87,7 +114,12 @@ export class HubClient {
 	#frame(frame: any): void {
 		switch (frame.t) {
 			case "hosts":
-				this.hosts = frame.hosts;
+				this.hosts = (frame.hosts as HubHostState[]).map((h) => ({ ...h, link: h.link ?? h.id }));
+				this.config = frame.config as string | undefined;
+				this.#emit();
+				return;
+			case "pins":
+				this.pins = frame.pins;
 				this.#emit();
 				return;
 			case "res": {
@@ -110,13 +142,8 @@ export class HubClient {
 			case "ops": {
 				const sub = this.#bySid.get(frame.sid);
 				if (!sub || sub.value === undefined || sub.n === -1) return;
-				if (frame.n !== sub.n + 1) {
-					// A gap or a duplicate stream: this replica no longer matches the node. Start over from a snapshot.
-					sub.n = -1;
-					this.#send({ t: "unsub", sid: sub.sid });
-					this.#send({ t: "sub", sid: sub.sid, host: sub.host, topic: sub.topic });
-					return;
-				}
+				// A gap or a duplicate stream: this replica no longer matches the node. Start over from a snapshot.
+				if (frame.n !== sub.n + 1) return this.#restart(sub);
 				sub.n = frame.n;
 				this.#update(sub, { value: applyImmutable(sub.value, frame.ops as Op[]) });
 				return;
@@ -134,6 +161,19 @@ export class HubClient {
 				return;
 			}
 		}
+	}
+
+	#restart(sub: Sub): void {
+		sub.n = -1;
+		this.#send({ t: "unsub", sid: sub.sid });
+		this.#send({ t: "sub", sid: sub.sid, host: sub.host, topic: sub.topic });
+	}
+
+	/** Replaces an open replica with a fresh snapshot, as after a stream gap. False when no one holds the topic. */
+	refresh(host: string, topic: Topic): boolean {
+		const sub = this.subsByKey.get(`${host}|${JSON.stringify(topic)}`);
+		if (sub) this.#restart(sub);
+		return Boolean(sub);
 	}
 
 	#update(sub: Sub, change: Partial<Pick<Sub, "value" | "stale" | "error">>): void {
@@ -229,11 +269,44 @@ export class HubClient {
 const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`;
 export const hub = new HubClient(url);
 
+/** The clock for link elapsed and retry times: it ticks each second while `active` and holds otherwise. */
+export function useNow(active: boolean): number {
+	const [now, setNow] = useState(Date.now);
+	useEffect(() => {
+		if (!active) return;
+		setNow(Date.now());
+		const timer = setInterval(() => setNow(Date.now()), 1000);
+		return () => clearInterval(timer);
+	}, [active]);
+	return now;
+}
+
 export function useHosts(): { hosts: HostState[]; connected: boolean } {
 	const subscribe = (listener: () => void) => hub.subscribeHosts(listener);
 	const hosts = useSyncExternalStore(subscribe, () => hub.hosts);
 	const connected = useSyncExternalStore(subscribe, () => hub.connected);
 	return { hosts, connected };
+}
+
+/** The hub's pinned Sessions, in pin order. */
+export function usePins(): Pin[] {
+	return useSyncExternalStore((listener: () => void) => hub.subscribeHosts(listener), () => hub.pins);
+}
+
+/**
+ * Moves a pin's host hint to the Host that lists the Session. Only the hub changes the hint, and only for a Session
+ * that is still pinned; a refused hint changes nothing the owner chose, so it is not shown.
+ */
+export function hintPin(host: string, threadId: string): void {
+	void hub.hub("pins.hint", { host, threadId }).catch((error) => console.warn(`pin hint: ${(error as Error).message}`));
+}
+
+/**
+ * Sends the owner's intent for one Session, pinned or not, as the clicked control offered it; every window gets the new
+ * list. Only the star, the row menu and the × call it. A refusal reaches the owner as an alert.
+ */
+export function setPin(host: string, threadId: string, pinned: boolean, title?: string): void {
+	void hub.hub("pins.set", { host, threadId, pinned, intent: "owner", ...(title ? { title } : {}) }).catch((error) => alert(`Could not ${pinned ? "pin" : "unpin"}: ${(error as Error).message}`));
 }
 
 const EMPTY = { value: undefined, stale: true } as const;

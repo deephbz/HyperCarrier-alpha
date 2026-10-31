@@ -72,7 +72,7 @@ async function hostFixture(t: { after(fn: () => unknown): void }) {
  const f = fixture(); const old = "2026-01-01T00:00:00Z";
  writeFileSync(f.sessionA, header("sess-a", old) + message("e0", null, "retention evidence", old));
  writeFileSync(f.sessionB, header("sess-b", old) + message("e0", null, "live evidence", old));
- const hub = new Hub({ backend: "pi", hosts: [{ id: "fixture", label: "fixture", kind: "pi-local", cacheDir: join(f.dir, "cache"), agentConfig: { agentDir: f.agentDir, pollMs: 30, discoverMs: 150, teams: false }, env: { HOME: f.dir, HERDR_BIN: join(f.dir, "herdr"), FAKE_HERDR_STATE: join(f.dir, "state.json"), FAKE_HERDR_LOG: join(f.dir, "calls.jsonl") } }] }, { token: "c".repeat(64) });
+ const hub = new Hub({ hosts: [{ id: "fixture", label: "fixture", kind: "pi-local", cacheDir: join(f.dir, "cache"), agentConfig: { agentDir: f.agentDir, pollMs: 30, discoverMs: 150, teams: false }, env: { HOME: f.dir, HERDR_BIN: join(f.dir, "herdr"), FAKE_HERDR_STATE: join(f.dir, "state.json"), FAKE_HERDR_LOG: join(f.dir, "calls.jsonl") } }] }, { token: "c".repeat(64) });
  const port = await hub.listen(0); const browser = await Browser.open(port, undefined, `ampi_k_${port}=${"c".repeat(64)}`);
  t.after(async () => { browser.ws.close(); await hub.close(); rmSync(f.dir, { recursive: true, force: true }); });
  const threads = browser.sub("fixture", { kind: "threads" });
@@ -88,7 +88,7 @@ test("retention A: unknown liveness, unknown freshness, live and recent Sessions
  writeFileSync(state, JSON.stringify({ t: "agents", agents: [] }));
  writeFileSync(script, `#!${process.execPath}\nconst fs=require('fs');const out=x=>console.log(JSON.stringify(x));for(const f of ${JSON.stringify(frames)})out(f);let last='';setInterval(()=>{const s=fs.readFileSync(${JSON.stringify(state)},'utf8');if(s!==last){last=s;const f=JSON.parse(s);if(f.exit)process.exit(0);out(f)}},10);let b='';process.stdin.on('data',d=>{b+=d;let i;while((i=b.indexOf('\\n'))>=0){const f=JSON.parse(b.slice(0,i));b=b.slice(i+1);if(f.t==='forget'){fs.appendFileSync(${JSON.stringify(log)},JSON.stringify(f)+'\\n');out({t:'ack',id:f.id,ok:false,error:{code:'source_unknown',message:'fixture refused'}})}}});\n`);
  chmodSync(script, 0o755);
- const hub = new Hub({ backend: "pi", hosts: [{ id: "fixture", label: "fixture", kind: "pi-local", cacheDir: join(dir, "cache"), remoteNode: script }] }, { token: "c".repeat(64) });
+ const hub = new Hub({ hosts: [{ id: "fixture", label: "fixture", kind: "pi-local", cacheDir: join(dir, "cache"), remoteNode: script }] }, { token: "c".repeat(64) });
  const port = await hub.listen(0), browser = await Browser.open(port, undefined, `ampi_k_${port}=${"c".repeat(64)}`);
  t.after(async () => { browser.ws.close(); await hub.close(); rmSync(dir, { recursive: true, force: true }); });
  const sid = browser.sub("fixture", { kind: "threads" });

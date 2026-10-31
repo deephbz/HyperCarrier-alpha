@@ -133,7 +133,16 @@ export type ThreadSummary = {
 	live?: boolean;
 	/** Pi backend: actions go through the control extension (admission evidence), not keys. */
 	control?: boolean;
+	/** The Session takes images in a message, under its carrier's limits. Absent: it takes none. */
+	images?: ImageLimits;
 };
+
+/**
+ * A carrier's image limits for one message, in the units it checks (base64 characters as sent). The carrier owns
+ * them and the Composer admits files only against them: Pi's from pi-hc-control `IMAGE_LIMITS`, the AmPi node's
+ * from its submit check. A missing per-image or total limit means the carrier sets none.
+ */
+export type ImageLimits = { count: number; types: string[]; perImageBase64?: number; totalBase64?: number };
 
 /** Herdr's workspace → tab → pane order on a Pi Host. */
 export type HerdrLayout = { workspaces: { id: string; label?: string; tabs: { id: string; label?: string; panes: string[] }[] }[] };
@@ -193,7 +202,10 @@ export type PiEntry = { bodyAvailable?: boolean } & (
 	| ({ id: string; kind: "custom"; entryKind: string; ts?: number; message: InjectedMessage } & PiClipped)
 );
 /** One undelivered submission as the composer shows it. */
-export type PiQueuedItem = { id: string; mode: string; content: string; state: ControlSubmission["state"] | "unknown"; truncated?: boolean };
+/** Each field of `T`, optional ones included: a projection typed with it fails to compile when it leaves a field out. */
+export type Every<T> = { [K in keyof Required<T>]: T[K] | undefined };
+/** One undelivered submission as the composer shows it. `images`: how many images it carried; Pi returns text only, so a returned message loses them. */
+export type PiQueuedItem = { id: string; mode: string; content: string; state: ControlSubmission["state"] | "unknown"; truncated?: boolean; images?: number };
 /** A Pi Session's thread topic. `live.run` is present while the Session runs a turn. */
 export type PiThreadView = {
 	/** Content key for bounded Pi pages and body reads. */
@@ -226,7 +238,7 @@ export type None = {};
  * `returned`: it left the queue undelivered and Pi's editor draft holds it (abort, dequeue). `dropped`: it left
  * undelivered and the draft does not hold it. Delivered ones carry no text: the Session file has it.
  */
-export type ControlSubmission = { submission: string; deliverAs: "steer" | "followUp"; state: "queued" | "delivered" | "returned" | "dropped"; at: number; entryId?: string; text?: string; truncated?: boolean };
+export type ControlSubmission = { submission: string; deliverAs: "steer" | "followUp"; state: "queued" | "delivered" | "returned" | "dropped"; at: number; entryId?: string; text?: string; truncated?: boolean; images?: number };
 /**
  * An action's reply: how it was delivered, its evidence, the Session entry it made when the Host names one, the
  * queued submission it made, and, for abort, what became of each queued submission.
@@ -264,14 +276,34 @@ export type ThreadResumed = { threadId: string; pane: string; evidence?: string;
 export type ThreadOutline = { version: string; totalEntries: number; users: { id: string; ordinal: number; firstLine: string }[]; truncated: boolean };
 
 export type HistoryPage = { entries: PiEntry[]; more: boolean; version?: string };
+/**
+ * A read pinned to a `version` (`thread.history`, `thread.entry`) refuses with one of two codes:
+ * - `stale_version`: the Session moved past that version. The read can succeed again at the newer version.
+ * - `not_found`: the entry is not on the Session's current branch.
+ * A `thread.history` miss while the Host still indexes the Session refuses with `indexing` instead: the entry may be in
+ * bytes not indexed yet, so the read can succeed at a later version.
+ */
+export const STALE_VERSION = "stale_version";
+export const NOT_FOUND = "not_found";
+export const INDEXING = "indexing";
 /** One page of an entry's projected text; `next` is the offset of the following page. */
 export type EntryPage = { text: string; next: number; more: boolean; version: string };
 export type FleetSearchResult = SearchResult & { hostStatus: HostState["status"] };
+/**
+ * `thread.find` before the Host has indexed the Session. The state is transient: the Host's next `thread` frame
+ * that carries a `sourceVersion` announces the index, and the same request then succeeds.
+ */
+export type FindIndexing = { indexing: true };
+export type FindReply = SearchResult | FindIndexing;
 export type PromptList = { prompts: { name: string; description: string; body: string }[]; skills: { name: string; description: string; path: string }[] };
 
 /** Ops a Pi Host serves itself (src/pi/host.ts). */
 export type HostOps = {
-	"thread.submit": OpSpec<{ threadId: string; content: string; whenBusy?: "steer" | "followUp"; requestId?: string; images?: { data: string; mimeType: string }[] }, ActionAck>;
+	/**
+	 * `asText: true` marks plain text that starts with `/` as the owner's choice to send it as a message (the composer's
+	 * `//` escape or "Send as text"). The Host refuses an unmarked one with "This page is older than the hub. Reload it."
+	 */
+	"thread.submit": OpSpec<{ threadId: string; content: string; whenBusy?: "steer" | "followUp"; requestId?: string; images?: { data: string; mimeType: string }[]; asText?: true }, ActionAck>;
 	"thread.abort": OpSpec<{ threadId: string }, ActionAck>;
 	"thread.withdraw": OpSpec<{ threadId: string; submissionId: string }, { withdrawn: boolean }>;
 	"thread.commands": OpSpec<{ threadId: string }, SlashCommands>;
@@ -282,7 +314,12 @@ export type HostOps = {
 	"thread.close": OpSpec<{ threadId: string; lastPane?: boolean }, ActionAck>;
 	"sessions.search": OpSpec<{ query: string }, FleetSearchResult>;
 	"thread.outline": OpSpec<{ threadId: string }, ThreadOutline>;
-	"thread.find": OpSpec<{ threadId: string; query: string }, SearchResult>;
+	/**
+	 * `from` (an entry ID, the reader's place) centers the result's windows and the result echoes `anchored`; `tail`
+	 * puts them at the branch's end. Without either they hold the first matches. A Session the Host has not indexed
+	 * yet answers `FindIndexing`; a copy outside the retained scope refuses with `not_found`.
+	 */
+	"thread.find": OpSpec<{ threadId: string; query: string; from?: string; tail?: boolean }, FindReply>;
 	"thread.history": OpSpec<{ threadId: string; limit?: number; before?: string; around?: string; version?: string }, HistoryPage>;
 	"thread.entry": OpSpec<{ threadId: string; entry: string; offset?: number; version?: string }, EntryPage>;
 	"prompts.list": OpSpec<{ cwd?: string }, PromptList>;
@@ -301,7 +338,8 @@ export type ArcMissing = { missing: true; notice: string };
  */
 export type ViewTopics = {
 	rarebit: {
-		params: { threadId: string; before?: string };
+		/** `around` names a linked entry: the page holds its Rarebit item, and `before` in the value is the page's cursor. */
+		params: { threadId: string; before?: string; around?: string };
 		value: RarebitValue;
 		ops: {
 			ask: OpSpec<RarebitAskArgs, RarebitAskResult>;
@@ -385,9 +423,26 @@ export type TopicValue<T extends Topic> = T extends { kind: "view"; view: infer 
 
 /** Ops the hub serves itself (src/hub/hub.ts), on its own `hub` channel. */
 export type HubOps = {
-	"hosts.add": OpSpec<{ target: string; label?: string }, { id: string }>;
 	"hosts.remove": OpSpec<{ id: string }, Done>;
 	"hosts.reconnect": OpSpec<{ id: string }, Done>;
+	/**
+	 * The owner's intent for one Session by threadId: pinned or not. The hub applies it idempotently: a repeated
+	 * intent keeps membership, the place and the host. `host`, the pin's first host hint, goes in only when the pin is
+	 * created, and a new pin needs one; `pins.hint` moves it later. `title` is saved so the pin still reads when the
+	 * Session is gone; a repeated pin with a new title renames in place. `intent: "owner"` marks an owner click; the hub
+	 * creates a pin only with it, and refuses an unmarked create with "This page is older than the hub. Reload it."
+	 */
+	"pins.set": OpSpec<{ threadId: string; pinned: boolean; intent?: "owner"; host?: string; title?: string }, Done>;
+	/**
+	 * Moves an existing pin's host hint to the Host that now lists the Session. It never creates or removes a pin: only
+	 * `pins.set`, an owner action, changes which Sessions are pinned. A hint for an unpinned Session does nothing.
+	 */
+	"pins.hint": OpSpec<{ host: string; threadId: string }, Done>;
 };
 /** The hub's broadcast of every host link's state, after any change. */
-export type HostsFrame = { t: "hosts"; hosts: HostState[] };
+/** `config`: the hub.json this hub read at start, for the Host setup prompt. */
+export type HostsFrame = { t: "hosts"; hosts: HostState[]; config?: string };
+/** One pinned Session (src/hub/pins.ts): threadId is the key, `host` the Host that last listed it. */
+export type Pin = { host: string; threadId: string; title: string };
+/** The hub's pin list, sent on connect and to every browser after a change. */
+export type PinsFrame = { t: "pins"; pins: Pin[] };

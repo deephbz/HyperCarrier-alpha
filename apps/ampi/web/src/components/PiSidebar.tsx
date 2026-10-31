@@ -4,9 +4,9 @@
 
 import { useEffect, useState } from "react";
 import type { ThreadSummary } from "../../../src/shared/protocol.ts";
-import { ago } from "../util.ts";
-import { type HostThreads, ThreadRow } from "./Sidebar.tsx";
-import { hostMeta, readHostFold, saveHostFold } from "./host-fold.ts";
+import { useNow } from "../client.ts";
+import { type HostThreads, LinkNotes, ThreadRow } from "./Sidebar.tsx";
+import { hostMeta, linkView, readHostFold, saveHostFold } from "./host-fold.ts";
 import { projectTeamRows } from "./team-nesting.ts";
 
 type Group = { key: string; label: string; rows: ThreadSummary[] };
@@ -73,7 +73,7 @@ function SessionRows({ list, host, active, expandedLeaders, toggleLeader, parent
 	</>;
 }
 
-export function PiHostSection({ data, route, filter }: { data: HostThreads; route: { host?: string; thread?: string }; filter: string }) {
+export function PiHostSection({ data, route }: { data: HostThreads; route: { host?: string; thread?: string } }) {
 	const { host } = data;
 	const [collapsed, setCollapsed] = useState<Record<string, boolean>>({ unplaced: true });
 	// The Host fold persists, so a Host that is away on purpose stays folded with its error across reloads.
@@ -91,14 +91,13 @@ export function PiHostSection({ data, route, filter }: { data: HostThreads; rout
 		try { localStorage.setItem(leadersKey, JSON.stringify([...next])); } catch { /* The Teams stay expanded for this page only. */ }
 		return next;
 	};
-	const q = filter.toLowerCase();
-	const match = (t: ThreadSummary) => !q || t.title.toLowerCase().includes(q) || t.cwd.toLowerCase().includes(q) || (t.preview ?? "").toLowerCase().includes(q);
-	const { groups, unplaced } = arrangeByLayout({ threads: data.threads.filter(match), layout: data.layout });
+	const { groups, unplaced } = arrangeByLayout({ threads: data.threads, layout: data.layout });
 	// No agents list since the Host connected: saved rows stay listed, unplaced and not live, under this note.
 	const looking = data.listing && host.status !== "disconnected";
 	// After a failed working-set init no copy is readable; host.error says why.
-	const status =
-		host.status === "connected" ? "live" : host.status === "connecting" ? "connecting…" : host.cacheFailed ? "unavailable" : `away${host.lastSeen ? ` · seen ${ago(host.lastSeen)} ago` : ""} · copies readable`;
+	const now = useNow(host.status !== "connected");
+	const view = linkView(host, now);
+	const status = host.cacheFailed ? "unavailable" : `${view.state} · copies readable`;
 	const toggle = (key: string) => setCollapsed((c) => ({ ...c, [key]: !c[key] }));
 	const toggleLeader = (id: string) => setExpandedLeaders((previous) => {
 		const next = new Set(previous);
@@ -114,14 +113,16 @@ export function PiHostSection({ data, route, filter }: { data: HostThreads; rout
 				<button className="host-collapse" onClick={() => setFold(saveHostFold(host, !fold.collapsed))} aria-expanded={!fold.collapsed} title={host.label}>
 					<span className={`dot ${host.status}`} />
 					<span className="grow">{host.label}</span>
-					<span className="meta">{hostMeta(host)}</span>
+					{host.status === "connected" ? <span className="visually-hidden">connected</span> : <span className="meta">{hostMeta(host, now)}</span>}
 					{/* A folded Host keeps its error for screen readers only; unfolding shows it. */}
-					{fold.collapsed && host.status === "disconnected" && host.error && <span className="visually-hidden">: {host.error}</span>}
+					{fold.collapsed && view.error && <span className="visually-hidden">: {view.error}</span>}
 				</button>
 				{teamIds.length > 0 && <button className="host-collapse-all" data-host-collapse-all={host.id} onClick={collapseAll} aria-label={`${allCollapsed ? "Expand" : "Collapse"} all Teams for ${host.label}`} title={`${allCollapsed ? "Expand" : "Collapse"} all Teams`}>{allCollapsed ? "Expand all" : "Collapse all"}</button>}
 			</div>
 			{!fold.collapsed && host.status === "disconnected" && <div className="host-note">{status}</div>}
-			{!fold.collapsed && host.status === "disconnected" && host.error && <div className="host-note err">{host.error}</div>}
+			{!fold.collapsed && <LinkNotes view={view} />}
+			{/* Cache health, apart from the link: a connected Host keeps its green dot. */}
+			{!fold.collapsed && host.indexError && <div className="host-note warn" data-index-error={host.id}>Index not saved: {host.indexError}</div>}
 			{!fold.collapsed && looking && <div className="host-note" role="status" data-listing>Looking for live Sessions…</div>}
 			{!fold.collapsed &&
 				groups.map((g) => (
@@ -130,7 +131,7 @@ export function PiHostSection({ data, route, filter }: { data: HostThreads; rout
 							<span className="twisty">{collapsed[g.key] ? "▸" : "▾"}</span>
 							<span className="title group-label">{g.label}</span>
 						</button>
-						{!collapsed[g.key] && <SessionRows list={g.rows} host={host.id} active={route.host === host.id ? route.thread : undefined} expandedLeaders={expandedLeaders} toggleLeader={toggleLeader} parentNavId={g.key} />}
+						{!collapsed[g.key] && <SessionRows list={g.rows} host={host.link} active={route.host === host.link ? route.thread : undefined} expandedLeaders={expandedLeaders} toggleLeader={toggleLeader} parentNavId={g.key} />}
 					</div>
 				))}
 			{!fold.collapsed && unplaced.length > 0 && (
@@ -139,11 +140,11 @@ export function PiHostSection({ data, route, filter }: { data: HostThreads; rout
 						<span className="twisty">{collapsed.unplaced ? "▸" : "▾"}</span>
 						<span className="title group-label">{data.listing ? "Not placed yet" : "Not in a pane"} ({unplaced.length.toLocaleString()})</span>
 					</button>
-					{!collapsed.unplaced && <SessionRows list={unplaced} host={host.id} active={route.host === host.id ? route.thread : undefined} expandedLeaders={expandedLeaders} toggleLeader={toggleLeader} parentNavId="unplaced" />}
+					{!collapsed.unplaced && <SessionRows list={unplaced} host={host.link} active={route.host === host.link ? route.thread : undefined} expandedLeaders={expandedLeaders} toggleLeader={toggleLeader} parentNavId="unplaced" />}
 				</div>
 			)}
 			{!fold.collapsed && groups.length === 0 && unplaced.length === 0 && host.status === "connected" && (
-				<div className="host-note">{data.stale || data.indexing ? "Reading Pi Sessions…" : q ? "No Sessions match. Try a title or directory." : "No Pi Sessions found. Start an agent to begin."}</div>
+				<div className="host-note">{data.stale || data.indexing ? "Reading Pi Sessions…" : "No Pi Sessions found. Start an agent to begin."}</div>
 			)}
 		</div>
 	);

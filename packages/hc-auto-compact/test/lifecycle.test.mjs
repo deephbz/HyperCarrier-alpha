@@ -1295,6 +1295,28 @@ test("budget slot separates effective budget from capacity and replays without d
   assert.equal(harness.hudSlots.at(-1).value.capacity, 100_000);
 });
 
+test("budget slot follows a settings reload and each assistant usage without waiting for turn_end", async () => {
+  const harness = makeHarness({ budget_tokens: 200_000 });
+  harness.ctx.model.contextWindow = 1_000_000;
+  await harness.handlers.get("session_start")({}, harness.ctx);
+  assert.equal(harness.hudSlots.at(-1).value.limit, 200_000);
+  // A settings edit reaches the slot when the next prompt reloads settings, before any turn ends.
+  harness.setConfiguredSettings({ budget_tokens: 300_000, threshold: 80 });
+  await harness.handlers.get("before_agent_start")({}, harness.ctx);
+  assert.equal(harness.hudSlots.at(-1).value.limit, 300_000);
+  assert.equal(harness.hudSlots.at(-1).value.threshold, 80);
+  assert.equal(harness.hudSlots.at(-1).value.used, 90_000);
+  // An assistant response carries its usage; Pi persists it only after extensions see message_end.
+  const usage = { input: 1_000, output: 2_000, cacheRead: 117_000, cacheWrite: 0, totalTokens: 120_000 };
+  harness.handlers.get("message_end")({ message: { role: "assistant", stopReason: "toolUse", usage } }, harness.ctx);
+  assert.equal(harness.hudSlots.at(-1).value.used, 120_000);
+  assert.equal(harness.hudSlots.at(-1).value.limit, 300_000);
+  const count = harness.hudSlots.length;
+  harness.handlers.get("message_end")({ message: { role: "assistant", stopReason: "error", usage: { ...usage, totalTokens: 1 } } }, harness.ctx);
+  harness.handlers.get("message_end")({ message: { role: "user", content: "hi" } }, harness.ctx);
+  assert.equal(harness.hudSlots.length, count, "errors and other roles carry no context usage");
+});
+
 test("budget slots publish without a TUI and retract unknown usage and shutdown", async () => {
   const harness = makeHarness({ enabled: false });
   harness.ctx.mode = "rpc";

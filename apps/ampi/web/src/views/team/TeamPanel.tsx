@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import type { PiTeamTask, TeamValue } from "../../../../src/pi/views/team.ts";
-import { useHosts, useTopic } from "../../client.ts";
+import { findHost, useHosts, useTopic } from "../../client.ts";
 import { href } from "../../util.ts";
 import "./team.css";
 
@@ -120,7 +120,7 @@ function Tasks({ team, host }: { team: Team; host: string }) {
 export function TeamPanel({ host, threadId }: { host: string; threadId: string }) {
 	const { value, stale, error } = useTopic(host, { kind: "view", view: "team", threadId });
 	const { hosts } = useHosts();
-	const away = hosts.find(h => h.id === host)?.status !== "connected";
+	const away = findHost(hosts, host)?.status !== "connected";
 	const failed = value && "error" in value;
 	const team = value && !("error" in value) ? value : undefined;
 	const availability = team?.availability;

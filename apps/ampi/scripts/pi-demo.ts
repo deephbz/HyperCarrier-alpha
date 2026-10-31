@@ -108,7 +108,7 @@ const observationFile = join(dir, "observation.json");
 writeFileSync(observationFile, JSON.stringify(observation));
 writeFileSync(
 	ptb,
-	`import { readFileSync as readDemoObservation } from "node:fs";\nexport async function readObservationSnapshot() { return JSON.parse(readDemoObservation(${JSON.stringify(observationFile)}, "utf8")); }\n` + DEMO_EXTENSIONS.map((extend) => extend({ dir, agentDir, sessions })).join("\n"),
+	`import { readFileSync as readDemoObservation } from "node:fs";\nexport async function readObservationSnapshot() { return JSON.parse(readDemoObservation(${JSON.stringify(observationFile)}, "utf8")); }\n` + DEMO_EXTENSIONS.map((extend) => extend({ dir, agentDir, now, sessions })).join("\n"),
 );
 
 // DEMO_HUB_TOKEN lets a test restart the demo hub with another key (a stale login cookie).
@@ -127,7 +127,6 @@ const hub = new Hub(
 				env: { HOME: dir, HERDR_BIN: herdr, FAKE_HERDR_STATE: join(dir, "state.json"), FAKE_HERDR_LOG: join(dir, "calls.jsonl") },
 			},
 		],
-		backend: "pi",
 		// Helper models have no built-in default; the offline stand-in answers whatever they name.
 		models: { arcLabels: "anthropic/claude-haiku-5-5", arcSynthesis: "anthropic/claude-sonnet-5-5", rarebitAsk: "anthropic/claude-sonnet-5-5" },
 	},

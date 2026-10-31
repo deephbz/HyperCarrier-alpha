@@ -4,6 +4,7 @@ import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFi
 import { createServer, type Server } from "node:net";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { agentModules } from "../src/pi/agent-modules.ts";
 import { tempHome } from "./helpers.ts";
 
 export const AGENT = fileURLToPath(new URL("../src/pi/remote-agent.cjs", import.meta.url));
@@ -54,7 +55,10 @@ else if (a === "agent" && b === "get") {
     p.agent_session = { kind: "path", agent: "pi", value: file };
     save();
   }
-  reply({ text: "" });
+  // \`screen\`: what a pane shows; the agent reads it before it types. A pane with none set shows Pi's empty editor.
+  // Herdr 0.9.5 prints \`agent read\` as plain text, one line per row.
+  if (b === "read") process.stdout.write(paneOf(c)?.screen ?? ["─".repeat(40), "", "─".repeat(40), "~/work", ""].join("\\n"));
+  else reply({ text: "" });
 } else if (a === "pane" && b === "send-text") {
   log();
   if (!paneOf(c)) refuse("pane_not_found", "no pane " + c);
@@ -192,7 +196,7 @@ export class Agent {
 		});
 	}
 	static start(f: Fixture, extra: Record<string, unknown> = {}): Agent {
-		const cfg = { agentDir: f.agentDir, pollMs: 30, discoverMs: 150, teams: false, controlStatusMs: 300, ...extra };
+		const cfg = { ...agentModules(), agentDir: f.agentDir, pollMs: 30, discoverMs: 150, teams: false, controlStatusMs: 300, ...extra };
 		const child = spawn(process.execPath, [AGENT], {
 			stdio: ["pipe", "pipe", "inherit"],
 			env: {
@@ -229,7 +233,7 @@ export class Agent {
 
 // A tiny hc-control server (contract section 1) plus its descriptor.
 // With `queue`, it tracks submissions as pi-hc-control does: submit queues one, abort returns all to the editor.
-export async function control(f: Fixture, session: string, opts: { nonce?: string; descriptorNonce?: string; idle?: boolean; queue?: boolean; commands?: boolean; trackPending?: boolean; settleOnAbort?: boolean } = {}) {
+export async function control(f: Fixture, session: string, opts: { nonce?: string; descriptorNonce?: string; idle?: boolean; queue?: boolean; commands?: boolean; images?: boolean; trackPending?: boolean; settleOnAbort?: boolean } = {}) {
 	const dir = join(f.agentDir, "hc-control");
 	mkdirSync(dir, { recursive: true, mode: 0o700 });
 	const nonce = opts.nonce ?? "n-live";
@@ -259,8 +263,8 @@ export async function control(f: Fixture, session: string, opts: { nonce?: strin
 				buf = buf.slice(i + 1);
 				requests.push(req);
 				const reply =
-					req.op === "status" ? { id: req.id, ok: true, value: { sessionId, sessionFile: session, nonce, idle, compacting: false, pending: opts.trackPending ? { steer: submissions.filter(s => s.state === "queued" && s.deliverAs === "steer").length, followUp: submissions.filter(s => s.state === "queued" && s.deliverAs === "followUp").length } : { steer: 0, followUp: 1 }, ...(opts.queue ? { submissions } : {}), ...(opts.commands ? { commands: 1 } : {}) } }
-					: req.op === "commands" && opts.commands ? { id: req.id, ok: true, value: { commands: [{ name: "model", source: "builtin", supported: true }, { name: "reload", source: "builtin", supported: false }], models: [{ ref: "p/m2" }], model: "p/m1", thinkingLevels: ["off"], thinking: "off" } }
+					req.op === "status" ? { id: req.id, ok: true, value: { sessionId, sessionFile: session, nonce, idle, compacting: false, pending: opts.trackPending ? { steer: submissions.filter(s => s.state === "queued" && s.deliverAs === "steer").length, followUp: submissions.filter(s => s.state === "queued" && s.deliverAs === "followUp").length } : { steer: 0, followUp: 1 }, ...(opts.queue ? { submissions } : {}), ...(opts.commands ? { commands: 1 } : {}), ...(opts.images ? { images: 1 } : {}) } }
+					: req.op === "commands" && opts.commands ? { id: req.id, ok: true, value: { commands: [{ name: "model", source: "builtin", supported: true }, { name: "reload", source: "builtin", supported: false }, { name: "review", source: "extension", supported: true }], models: [{ ref: "p/m2" }], model: "p/m1", thinkingLevels: ["off"], thinking: "off" } }
 					: req.op === "command" && opts.commands && req.name === "model" && req.args === "m2" ? { id: req.id, ok: true, disposition: "handled", notice: "Model: p/m2", effect: { model: "p/m2" } }
 					: req.op === "command" && opts.commands && req.name === "model" ? { id: req.id, ok: false, error: { code: "bad_args", message: "ambiguous", matches: ["p/x", "q/x"] } }
 					: req.op === "submit" && opts.queue ? (() => {

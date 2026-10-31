@@ -1,6 +1,6 @@
 // Hub working set: compact materializations plus bounded live/LRU windows. Worker
 // ingestion owns full scans; navigation reads local indexed pages, never full files.
-import { fleetSearch, type SearchResult } from "./search.ts";
+import { fleetSearch, type FindAsk, type SearchResult } from "./search.ts";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -13,7 +13,7 @@ import { readWorkingSet } from "./working-set-db.ts";
 import { counter, tracing } from "../trace.ts";
 import { trackDerive } from "./derive-queue.ts";
 import { derivedVersion, WINDOW_BYTES, WINDOW_ENTRIES, ENTRY_PAGE_BYTES, type Source, type Derived, type WorkerJob } from "./working-set-types.ts";
-import type { PiEntry, ThreadOutline } from "../shared/protocol.ts";
+import { NOT_FOUND, STALE_VERSION, type PiEntry, type ThreadOutline } from "../shared/protocol.ts";
 import { projectEntry, wireEntry } from "./projection.ts";
 import type { RarebitItem, RarebitValue } from "./views/rarebit.ts";
 
@@ -21,6 +21,8 @@ let worker: Worker | undefined, owners = 0, serial = 0, ingestions = 0;
 const pending = new Map<number, { job: WorkerJob | { op: "close"; cacheDir: string }; started?: boolean; resolve: (value: any) => void; reject: (error: Error) => void; onStart?: () => void }>();
 // Open stores per cache directory. The last one to close tells the Worker to stop writing there.
 const opened = new Map<string, number>();
+/** A versioned read's typed refusal; the wire carries `code` to the client (protocol.ts STALE_VERSION). */
+const refusal = (code: string, message: string) => Object.assign(new Error(message), { code });
 const jobDir = (job: WorkerJob | { op: "close"; cacheDir: string }) => "cacheDir" in job ? job.cacheDir : job.source.cacheDir;
 function ensureWorker() {
  if (worker) return;
@@ -66,6 +68,8 @@ async function release() {
 type Window = { value: { entries: PiEntry[]; more: boolean; version: string }; bytes: number; live: boolean };
 const windows = new Map<string, Window>();
 const LIVE_BYTES = 64 * 1024 * 1024, LRU_BYTES = 64 * 1024 * 1024, LRU_SLOTS = 20;
+/** UTF-16 units of one Rarebit text in a page; a fullText read keeps it whole. */
+const RAREBIT_PAGE_CHARS = 8192;
 const cacheKey = (s: Source) => `${s.host}\0${s.path}`;
 function trim() {
  let live = 0, lru = 0, slots = 0;
@@ -132,10 +136,10 @@ export class WorkingSet {
  /** Moves a queued derivation of this Session ahead of the cold backlog. */
  urgent(source: Source): void { worker?.postMessage({ op: "urgent", cacheDir: source.cacheDir, path: source.path }); }
  search(query: string) { return fleetSearch(this.db, query); }
- async find(source: Source, query: string, version: string): Promise<SearchResult> {
+ async find(source: Source, query: string, version: string, ask: FindAsk = {}): Promise<SearchResult> {
   await this.ready;
   if (this.#closed) throw new Error("Working set stopped");
-  return request<SearchResult>({ op: "find", source, query, version });
+  return request<SearchResult>({ op: "find", source, query, version, ask });
  }
  invalidate(source: Source) { windows.delete(cacheKey(source)); }
  live(source: Source, live: boolean) { const w = windows.get(cacheKey(source)); if (w) { w.live = live; trim(); } }
@@ -150,22 +154,32 @@ export class WorkingSet {
  #page(path: string, { before, around, limit = WINDOW_ENTRIES, version }: { before?: string; around?: string; limit?: number; version?: string } = {}) {
   const data = this.load(path);
   if (!data) throw new Error("This Session is not indexed yet");
-  if (version && version !== data.version) throw new Error("History changed; refresh this Session");
-  let end = Number.MAX_SAFE_INTEGER;
+  if (version && version !== data.version) throw refusal(STALE_VERSION, "History changed; refresh this Session");
+  let end = Number.MAX_SAFE_INTEGER, target: number | undefined;
   if (before || around) {
    const row = this.db.prepare('SELECT position FROM entries WHERE path=? AND id=?').get(path, (before ?? around)!);
-   if (!row) throw new Error("Entry is not on the current branch");
-   end = Number(row.position) + (around ? 21 : 0);
+   if (!row) throw refusal(NOT_FOUND, "Entry is not on the current branch");
+   if (around) target = Number(row.position); else end = Number(row.position);
   }
   limit = Math.max(1, Math.min(WINDOW_ENTRIES, limit));
-  const rows = this.db.prepare("SELECT ui FROM entries WHERE path=? AND position < ? AND ui <> 'null' ORDER BY position DESC LIMIT ?").all(path, end, limit + 1);
-  const entries: PiEntry[] = []; let size = 0;
-  for (const row of rows.slice(0, limit)) {
+  const budget = WINDOW_BYTES - 1024;
+  // An `around` page always holds its target: the target and earlier rows take up to 3/4 of the budget first, then up
+  // to 20 later rows (at most half the page) fill what fits. Large later rows can never push the target out of the page.
+  const later = target === undefined ? [] : this.db.prepare("SELECT ui FROM entries WHERE path=? AND position > ? AND ui <> 'null' ORDER BY position LIMIT ?").all(path, target, Math.min(20, Math.floor((limit - 1) / 2)));
+  const rows = this.db.prepare("SELECT ui FROM entries WHERE path=? AND position < ? AND ui <> 'null' ORDER BY position DESC LIMIT ?").all(path, target === undefined ? end : target + 1, limit + 1);
+  const entries: PiEntry[] = []; let size = 0, kept = 0;
+  for (const row of rows.slice(0, Math.max(1, limit - later.length))) {
    const text = String(row.ui), bytes = Buffer.byteLength(text);
-   if (size + bytes > WINDOW_BYTES - 1024) break;
+   if (kept && size + bytes > (target === undefined ? budget : budget * 0.75)) break;
+   entries.push(JSON.parse(text)); size += bytes; kept++;
+  }
+  entries.reverse();
+  for (const row of later) {
+   const text = String(row.ui), bytes = Buffer.byteLength(text);
+   if (size + bytes > budget) break;
    entries.push(JSON.parse(text)); size += bytes;
   }
-  return { entries: entries.reverse(), more: rows.length > entries.length, version: data.version };
+  return { entries, more: rows.length > kept, version: data.version };
  }
  #outlines = new Map<string, ThreadOutline>();
  /** Navigation reads compact indexed rows once per version, never transcript bodies or paint windows. */
@@ -191,22 +205,39 @@ export class WorkingSet {
   const row = this.db.prepare("SELECT id FROM entries WHERE path=? AND t IS NOT NULL AND ui <> 'null' ORDER BY abs(t - ?) LIMIT 1").get(path, at);
   return row ? String(row.id) : undefined;
  }
- rarebits(path: string, revision: number, before?: string, fullText = false): RarebitValue { return this.snapshot(() => this.#rarebits(path, revision, before, fullText)); }
- #rarebits(path: string, revision: number, before?: string, fullText = false): RarebitValue {
+ rarebits(path: string, revision: number, before?: string, fullText = false, around?: string): RarebitValue { return this.snapshot(() => this.#rarebits(path, revision, before, fullText, around)); }
+ #rarebits(path: string, revision: number, before?: string, fullText = false, around?: string): RarebitValue {
   const data = this.load(path); if (!data) throw new Error("This Session is not indexed yet");
   if (data.invalidLines) throw new Error("The local Session copy could not be read. Reconnect the Host to receive new Session bytes.");
+  let found: "item" | "entry" | "missing" | undefined;
+  if (around) {
+   // A linked entry selects the page that holds it: the cursor is a newer Rarebit item up to 200 items or half the page's
+   // characters away, so the target stays inside the page; the newest page holds a target with fewer newer items.
+   const row = this.db.prepare('SELECT position, rarebit IS NOT NULL AS item FROM entries WHERE path=? AND id=?').get(path, around);
+   found = !row ? "missing" : row.item ? "item" : "entry";
+   before = undefined;
+   if (row) {
+    let n = 0, chars = 0;
+    for (const next of this.db.prepare(`SELECT id, min(coalesce(length(json_extract(rarebit,'$.text')),0), ${RAREBIT_PAGE_CHARS}) AS n FROM entries WHERE path=? AND rarebit IS NOT NULL AND position > ? ORDER BY position LIMIT 201`).iterate(path, row.position)) {
+     if (++n > 200 || (chars += Number(next.n)) > 100_000) { before = String(next.id); break; }
+    }
+   }
+  }
   const position = before ? this.db.prepare('SELECT position FROM entries WHERE path=? AND id=?').get(path, before)?.position : undefined;
   const items: RarebitItem[] = []; let chars = 0;
-  for (const row of this.db.prepare('SELECT rarebit FROM entries WHERE path=? AND position < ? AND rarebit IS NOT NULL ORDER BY position DESC LIMIT 401').iterate(path, position ?? Number.MAX_SAFE_INTEGER)) {
+  // SQLite cuts a long text to RAREBIT_PAGE_CHARS code points before JS sees the row, so a large body is never parsed whole;
+  // the JS cut below then applies the UTF-16 bound exactly as before.
+  const cut = fullText ? "rarebit" : `CASE WHEN coalesce(length(json_extract(rarebit,'$.text')),0) <= ${RAREBIT_PAGE_CHARS} THEN rarebit ELSE json_set(rarebit,'$.text',substr(json_extract(rarebit,'$.text'),1,${RAREBIT_PAGE_CHARS}),'$.truncated',json('true')) END`;
+  for (const row of this.db.prepare(`SELECT ${cut} AS rarebit FROM entries WHERE path=? AND position < ? AND rarebit IS NOT NULL ORDER BY position DESC LIMIT 401`).iterate(path, position ?? Number.MAX_SAFE_INTEGER)) {
    if (items.length >= 400 || chars >= 200_000) break;
    const item = JSON.parse(String(row.rarebit)) as RarebitItem;
-   if (!fullText && item.text.length > 8192) { item.text = item.text.slice(0, 8192); item.truncated = true; }
+   if (!fullText && item.text.length > RAREBIT_PAGE_CHARS) { item.text = item.text.slice(0, RAREBIT_PAGE_CHARS); item.truncated = true; }
    items.push(item); chars += item.text.length;
   }
   items.reverse();
   const first = items[0]?.id;
   const more = Boolean(first && this.db.prepare('SELECT 1 FROM entries WHERE path=? AND rarebit IS NOT NULL AND position < (SELECT position FROM entries WHERE path=? AND id=?) LIMIT 1').get(path, path, first));
-  return { ...data.rarebit, items, revision, more, sourceVersion: data.version };
+  return { ...data.rarebit, items, revision, more, sourceVersion: data.version, ...(around ? { around: { id: around, found: found! }, ...(before ? { before } : {}) } : {}) };
  }
  rarebitSnapshot(path: string, maxChars: number) { return this.snapshot(() => this.#rarebitSnapshot(path, maxChars)); }
  #rarebitSnapshot(path: string, maxChars: number) {
@@ -244,12 +275,12 @@ export class WorkingSet {
   // The reader below writes the copy's index file in this cache, so a closed store must not reach it.
   if (this.#closed) throw new Error("Working set stopped");
   const data = this.load(source.path); if (!data) throw new Error("Session unavailable");
-  if (version && version !== data.version) throw new Error("Entry changed; refresh this Session");
+  if (version && version !== data.version) throw refusal(STALE_VERSION, "Entry changed; refresh this Session");
   const row = this.db.prepare('SELECT id FROM entries WHERE path=? AND id=?').get(source.path, id);
-  if (!row) throw new Error("Entry is not on the current branch");
+  if (!row) throw refusal(NOT_FOUND, "Entry is not on the current branch");
   const reader = openPiSessionRange(source.file, { host: source.host, indexPath: `${source.file}.index.sqlite` });
   try {
-   if (derivedVersion(reader.info().version) !== data.version) throw new Error("Source changed; retry after indexing completes");
+   if (derivedVersion(reader.info().version) !== data.version) throw refusal(STALE_VERSION, "Source changed; retry after indexing completes");
    const projected = projectEntry(reader.entry(id, { full: true }));
    if (!projected) throw new Error("Entry has no transcript view");
    const bytes = Buffer.from(JSON.stringify(wireEntry(projected)));

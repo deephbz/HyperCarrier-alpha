@@ -1,12 +1,13 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync } from "node:fs";
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { PI_VIEWS } from "../src/pi/views/index.ts";
 import { PiHost, modelLimits } from "../src/pi/host.ts";
-import { user, setup, testView } from "./pi-host-fixtures.ts";
+import { overrideTokens } from "../src/pi/derive-worker.ts";
+import { iso, line, user, setup, testView } from "./pi-host-fixtures.ts";
 // pi-host-f.test.ts holds the per-input row updates and the threads audit.
 
 test("pi host: create beside a Session binds the new Session id before Herdr runs, sends the prompt with the spawn, and never splits twice", async (t) => {
@@ -84,6 +85,57 @@ test("pi host: model limits resolve the working budget as hc-auto-compact does",
 	assert.deepEqual(modelLimits("magpie/claude/opus", { windows, budget: null }), { contextWindow: 1_000_000 }, "no Auto Compact settings: no working budget");
 	assert.deepEqual(modelLimits("prov/unknown", { windows, budget: { tokens: 200_000 } }), {}, "an unknown model claims nothing");
 	assert.deepEqual(modelLimits(undefined, undefined), {});
+	assert.deepEqual(modelLimits("magpie/claude/opus", { windows, budget: { tokens: 200_000 } }, 300_000).workingBudget, 300_000, "a Session override wins");
+	assert.deepEqual(modelLimits("prov/small", { windows, budget: { tokens: 200_000 } }, 300_000).workingBudget, 128_000, "an override is clamped to the window");
+	assert.deepEqual(modelLimits("magpie/claude/opus", { windows, budget: null }, 300_000), { contextWindow: 1_000_000, workingBudget: 300_000 }, "an override proves Auto Compact runs");
+});
+
+test("pi host: a failed read of the budget override gives the default budget and does not fail the derive", () => {
+	const reader = (read: () => unknown) => ({ entryBytes: read });
+	const native = (data: unknown) => () => ({ text: JSON.stringify({ type: "custom", customType: "auto-compact.budget", data }), more: false });
+	assert.equal(overrideTokens(reader(native({ tokens: 300_000 })), "b1"), 300_000);
+	assert.equal(overrideTokens(reader(native({ tokens: null })), "b1"), undefined, "null restores the default");
+	assert.equal(overrideTokens(reader(native({ tokens: -5 })), "b1"), undefined, "not a positive integer");
+	assert.equal(overrideTokens(reader(() => ({ text: "{\"data\":", more: true })), "b1"), undefined, "a truncated entry");
+	assert.equal(overrideTokens(reader(() => { throw new Error("Source version changed; refresh before reading"); }), "b1"), undefined, "a read error");
+});
+
+test("pi host: a Session's /auto-compact budget override reaches its working budget, per active branch", async (t) => {
+	const { f, browser } = await setup(t);
+	writeFileSync(join(f.agentDir, "models-store.json"), JSON.stringify({ prov: { models: [{ id: "model-x", contextWindow: 1_000_000 }] } }));
+	writeFileSync(join(f.agentDir, "settings.json"), JSON.stringify({ auto_compact: { budget_tokens: 200_000 } }));
+	const threads = browser.sub("devbox", { kind: "threads" });
+	const budget = (n: number) => browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.workingBudget === n);
+	await budget(200_000);
+	// hc-auto-compact's `/auto-compact budget 300k`, then `/auto-compact budget default`.
+	const override = (id: string, parent: string, n: number, tokens: number | null) =>
+		line({ type: "custom", id, parentId: parent, timestamp: iso(n), customType: "auto-compact.budget", data: { tokens } });
+	appendFileSync(f.sessionA, override("b1", "r1", 4, 300_000));
+	await budget(300_000);
+	appendFileSync(f.sessionA, override("b2", "b1", 5, null));
+	await budget(200_000);
+	appendFileSync(f.sessionA, override("b3", "b2", 6, 320_000));
+	await budget(320_000);
+	// A branch from b1 leaves b2 and b3 behind: b1's override applies again.
+	appendFileSync(f.sessionA, user("u9", "b1", 7, "try again"));
+	await budget(300_000);
+});
+
+test("pi host: context usage is unknown after a compaction until a valid response, as Pi counts it", async (t) => {
+	const { f, browser } = await setup(t);
+	const threads = browser.sub("devbox", { kind: "threads" });
+	const count = browser.sub("devbox", { kind: "thread", threadId: "pi:sess-a" });
+	await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.contextTokens === 170);
+	const reply = (id: string, parent: string, n: number, stopReason: string, usage: object) =>
+		line({ type: "message", id, parentId: parent, timestamp: iso(n), message: { role: "assistant", content: [{ type: "text", text: id }], model: "model-x", provider: "prov", stopReason, usage, timestamp: Date.parse(iso(n)) } });
+	appendFileSync(f.sessionA, line({ type: "compaction", id: "c1", parentId: "r1", timestamp: iso(4), summary: "Earlier work", firstKeptEntryId: "r1", tokensBefore: 170 }));
+	await browser.until<any>(count, (v) => v.entries.some((e: any) => e.id === "c1"));
+	assert.equal((await browser.until<any>(threads, (v) => v.threads["pi:sess-a"])).threads["pi:sess-a"].contextTokens, undefined, "the compaction replaced the measured context");
+	appendFileSync(f.sessionA, reply("a2", "c1", 5, "stop", { input: 40, output: 2, cacheRead: 0, cacheWrite: 0 }));
+	await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.contextTokens === 42);
+	appendFileSync(f.sessionA, reply("e1", "a2", 6, "error", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }));
+	await browser.until<any>(count, (v) => v.entries.some((e: any) => e.id === "e1"));
+	assert.equal((await browser.until<any>(threads, (v) => v.threads["pi:sess-a"])).threads["pi:sess-a"].contextTokens, 42, "an error response measures nothing");
 });
 
 test("pi host: identical Herdr frames recompute nothing; a changed agent marks only its Session", async (t) => {

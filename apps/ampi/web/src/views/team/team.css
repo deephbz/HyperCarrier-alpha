@@ -17,7 +17,6 @@
 .ptb-dot.state-goal_failed { background: var(--err); }
 .ptb-task-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .ptb button { background: none; border: 0; border-radius: 4px; padding: 4px 8px; font-size: 12px; }
-.ptb button:active { transform: scale(0.97); }
 .ptb button:disabled { color: var(--text-2); cursor: default; }
 .ptb-toggle { display: flex; gap: 4px; }
 .ptb-toggle button { color: var(--text-2); }
@@ -58,4 +57,3 @@
 .ptb-diagnostics { font-size: 12px; color: var(--text-2); margin-top: 16px; }
 .ptb-diagnostics summary { cursor: pointer; }
 .ptb-diagnostics ul { padding-left: 16px; overflow-wrap: anywhere; }
-@media (prefers-reduced-motion: reduce) { .ptb button:active { transform: none; } }

@@ -31,7 +31,7 @@ for (const engine of Object.keys(ENGINES) as Engine[]) {
 			const grown = await assertInside(page, `${card} after its content grows`);
 			assert.ok(grown.scrolls, `${card}: the grown card scrolls inside`);
 			await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-			await page.locator("section.session-metadata").waitFor({ state: "detached" });
+			await page.locator(".session-metadata").waitFor({ state: "detached" });
 			await page.hover(trigger(card));
 			await frames(page);
 			await assertInside(page, `${card} on reopen`);
@@ -49,7 +49,7 @@ for (const engine of Object.keys(ENGINES) as Engine[]) {
 			await assertInside(page, `${corner}: focus opens the card`);
 			assert.equal(await page.evaluate(() => document.activeElement?.className), "model-hud-trigger hint", `${corner}: focus stays on the trigger`);
 			await page.keyboard.press("Escape");
-			await page.locator("section.session-metadata").waitFor({ state: "detached" });
+			await page.locator(".session-metadata").waitFor({ state: "detached" });
 			await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 			await page.hover(".model-hud-trigger");
 			const m = await assertInside(page, `${corner}: hover opens the card`);

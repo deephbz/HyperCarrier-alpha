@@ -9,7 +9,8 @@ import { native } from "./native.ts";
 import { parseRoute } from "./util.ts";
 
 /** `nav`: depth from the first AmPi entry; null when unknown (an entry written before this code). */
-export type EntryState = { id?: string; nav?: number | null; focus?: Target; place?: unknown };
+/** `revealed`: the entry's linked entry (`?e=`) was revealed; a return to the entry keeps its place instead. */
+export type EntryState = { id?: string; nav?: number | null; focus?: Target; place?: unknown; revealed?: boolean };
 
 /** Fired after `navigate` changes the route; pushState and replaceState fire no hashchange. */
 export const ROUTE_EVENT = "ampi:route";
@@ -103,8 +104,32 @@ export function noteFocus(target: Target) {
 	if (entryState().focus !== target) noteEntry({ focus: target }, state().id);
 }
 
-/** The only route writer. Returns false when `to` is already the route. */
-export function navigate(to: string, hint?: "replace"): boolean {
+/**
+ * A request to reveal the route's linked entry (`?e=`). A followed link is an event and the route is a place: a link to
+ * the route already shown still asks again, so `seq` counts requests. Every surface of the Session that shows the entry
+ * (the transcript, the Rarebit panel) reveals each request once.
+ */
+export type RevealRequest = { entry: string; thread?: string; seq: number };
+let reveal: RevealRequest | undefined;
+let revealSeq = 0;
+const revealListeners = new Set<() => void>();
+/** Sets the request from a route: an entry route asks to reveal it, any other route ends the request. */
+function requestReveal(to: string) {
+	const r = parseRoute(to);
+	reveal = r.entry ? { entry: r.entry, thread: r.thread, seq: ++revealSeq } : undefined;
+	for (const listener of revealListeners) listener();
+}
+export const revealStore = {
+	subscribe(listener: () => void) { revealListeners.add(listener); return () => { revealListeners.delete(listener); }; },
+	get: () => reveal,
+};
+
+/**
+ * The only route writer. Returns false when `to` is already the route. A route with `?e=` requests a reveal, also when
+ * it is already the route; `reveal: false` keeps the current request (a panel change that keeps the linked entry).
+ */
+export function navigate(to: string, hint?: "replace", { reveal: ask = true }: { reveal?: boolean } = {}): boolean {
+	if (ask) requestReveal(to);
 	if (to === location.hash) return false;
 	flushEntry();
 	const was = entryState();
@@ -135,12 +160,16 @@ export function arriveEntry(): Arrival {
 	if (s.id !== undefined) {
 		current = { id: s.id, nav: s.nav ?? null };
 		if (unwritten.has(s.id)) timer ??= setTimeout(flushEntry, FLUSH_MS);
+		// Back, Forward and a reload return to the place the entry held (D20); only an entry never revealed reveals its link.
+		requestReveal(entryState().place || entryState().revealed ? "" : location.hash);
 		return { kind: "traverse", focus: entryState().focus };
 	}
 	const boot = current.id === undefined;
 	const nav = boot ? (history.state === null ? 0 : null) : current.nav === null ? null : current.nav + 1;
 	current = { id: newId(), nav };
 	history.replaceState({ ...s, id: current.id, nav }, "");
+	// A boot or an external hash edit arrives without navigate: its linked entry is a request too.
+	requestReveal(location.hash);
 	return { kind: "new" };
 }
 

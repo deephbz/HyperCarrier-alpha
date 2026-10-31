@@ -30,8 +30,9 @@ after(async () => { await vite?.close(); });
 const ERROR = "agent exited 255: connection to devbox timed out";
 const KEY = "ampi.sidebar.hostCollapsed.devbox";
 const NOW = Date.now(), WENT_AWAY = NOW - 3_600_000;
-type Host = { id: string; label: string; kind: string; status: string; error?: string; lastSeen?: number; attempts: number };
-const away = (over: Partial<Host> = {}): Host => ({ id: "devbox", label: "devbox", kind: "ssh", status: "disconnected", error: ERROR, lastSeen: WENT_AWAY, attempts: 3, ...over });
+const HINT = "Check that `ssh devbox` works; the hub retries.";
+type Host = { id: string; label: string; kind: string; status: string; phase?: string; since?: number; hint?: string; error?: string; retryAt?: number; lastSeen?: number; attempts: number };
+const away = (over: Partial<Host> = {}): Host => ({ id: "devbox", label: "devbox", kind: "ssh", status: "disconnected", since: WENT_AWAY, error: ERROR, hint: HINT, lastSeen: WENT_AWAY, attempts: 3, ...over });
 const render = (host: Host) => renderToStaticMarkup(createElement(section as never, { data: { host, threads: [], stale: false }, route: {}, filter: "" } as never));
 const head = (html: string) => /<div class="side-head">[\s\S]*?<\/button>/.exec(html)?.[0] ?? "";
 /** What a sighted reader sees: the markup without visually hidden text. */
@@ -57,7 +58,7 @@ test("away Host folded: the dot stays red and Overview keeps the error; folding 
 		assert.ok(!visible(html).includes(ERROR) && !html.includes("copies readable"), "a folded Host shows no error or status detail");
 		assert.match(head(html), /<span class="visually-hidden">: agent exited 255/, "a screen reader still hears the error");
 	}
-	assert.ok(fold.awayLine(away() as never).includes(ERROR), "Overview shows a folded away Host in full");
+	assert.ok(fold.linkLine(fold.linkView(away() as never)).includes(ERROR), "Overview shows a folded away Host in full");
 });
 
 test("a fold saved by an older build, with its away record, reads as a plain fold", () => {
@@ -72,11 +73,11 @@ test("a fold saved by an older build, with its away record, reads as a plain fol
 test("away Host folded, live again, then away again: the dot is green while live and red again when away", () => {
 	store.clear();
 	fold.saveHostFold(away() as never, true);
-	assert.match(head(render(away({ status: "connected", error: undefined, lastSeen: NOW + 1_000 }))), /class="dot connected"/);
+	assert.match(head(render(away({ status: "connected", since: undefined, hint: undefined, error: undefined, lastSeen: NOW + 1_000 }))), /class="dot connected"/);
 	const again = away({ lastSeen: NOW + 2_000 });
 	assert.match(head(render(again)), /class="dot disconnected"/);
 	assert.match(head(render(again)), /aria-expanded="false"/, "the fold holds across the reconnect");
-	assert.ok(fold.awayLine(again as never).includes(ERROR));
+	assert.ok(fold.linkLine(fold.linkView(again as never)).includes(ERROR));
 });
 
 test("away Host folded, then a different error: the dot stays red and the new error is still folded", () => {
@@ -93,5 +94,30 @@ test("unavailable Host (no readable copy) folded: the dot stays red", () => {
 	const failed = { ...away(), cacheFailed: true };
 	fold.saveHostFold(failed as never, true);
 	assert.match(head(render(failed)), /class="dot disconnected"/);
-	assert.ok(fold.awayLine(failed as never).includes(ERROR));
+	assert.ok(fold.linkLine(fold.linkView(failed as never)).includes(ERROR));
+});
+
+test("retrying Host: the header names the phase and elapsed time, and the last failure and next step stay visible", () => {
+	store.clear();
+	const html = render(away({ status: "connecting", phase: "hello", since: Date.now() - 12_000, hint: "Waiting for the agent's hello." }));
+	assert.match(head(html), /class="dot connecting"/);
+	assert.match(head(html), /<span class="meta">connecting · awaiting hello · 1[23] s<\/span>/);
+	assert.ok(visible(html).includes(ERROR), "a retry keeps the last failure until a hello arrives");
+	assert.ok(visible(html).includes("Waiting for the agent&#x27;s hello."), "the hint says what the link does");
+});
+
+test("linkView: each status that is not connected projects its state, failure, and next step", () => {
+	const now = 1_000_000;
+	assert.deepEqual(fold.linkView({ status: "connected", connectedAt: now } as never, now), { state: "connected" });
+	assert.deepEqual(fold.linkView({ status: "connecting", phase: "transport", since: now - 5_000, hint: "Opening ssh." } as never, now), { state: "connecting · opening link · 5 s", hint: "Opening ssh." });
+	const down = fold.linkView({ status: "disconnected", since: now, error: "silent", hint: "Restart it.", retryAt: now + 180_000, lastSeen: now - 60_000 } as never, now);
+	assert.deepEqual(down, { state: "away · seen 1m ago · retry in 3 min", error: "silent", hint: "Restart it." });
+	assert.equal(fold.linkLine(down), "away · seen 1m ago · retry in 3 min — silent — Restart it.");
+});
+
+test("connected Host with a failed index write: the dot stays green and a secondary warning names the reason", () => {
+	store.clear();
+	const html = render({ ...away({ status: "connected", since: undefined, hint: undefined, error: undefined }), indexError: "ENOSPC: no space left on device" } as never);
+	assert.match(head(html), /class="dot connected"/);
+	assert.match(html, /class="host-note warn" data-index-error="devbox">Index not saved: ENOSPC: no space left on device</);
 });

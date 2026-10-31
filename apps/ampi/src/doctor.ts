@@ -2,12 +2,12 @@
 // problem. It never changes anything. Exit code 1 when something blocks use.
 
 import { execFile } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { hubConfigPath, hubProof, hubToken, loadHubConfig } from "./hub/hub.ts";
+import { hubConfigPath, hubProof, loadHubConfig } from "./hub/hub.ts";
+import { ampiHome, hubOwner, readHubToken } from "./hub/home.ts";
 import type { HostConfig } from "./hub/hosts.ts";
 import { connectSocket, socketPath } from "./node/daemon.ts";
 import { buildId } from "./shared/build.ts";
@@ -23,10 +23,6 @@ function report(level: Level, what: string, fix?: string): void {
 	if (level === "fail") failures++;
 	console.log(`${MARK[level]} ${what}`);
 	if (fix && level !== "ok") console.log(`    → ${fix}`);
-}
-
-export function ampiHome(): string {
-	return process.env.AMPI_HOME ?? join(homedir(), ".ampi");
 }
 
 /** The running node's hello, or undefined when none answers. Never starts a node. */
@@ -66,6 +62,26 @@ export function versionLine(): string {
 	return `ampi ${pkg.version} build ${buildId()} node ${process.versions.node}`;
 }
 
+/**
+ * What the hub does with leftovers of the retired backend choice. They change nothing at runtime, so only doctor says it:
+ * a `"backend"` field or AMPI_BACKEND, and durable threads under AMPI_HOME that no listed durable Host serves.
+ */
+export function configNotes(raw: { backend?: unknown }, env: NodeJS.ProcessEnv, home: string, hosts: readonly { kind: string }[], self: string): { what: string; fix: string }[] {
+	const notes: { what: string; fix: string }[] = [];
+	if (raw.backend !== undefined) notes.push({ what: 'hub.json sets "backend"; the hub ignores it', fix: 'This machine\'s Pi Sessions always show. Remove the "backend" line from hub.json.' });
+	if (env.AMPI_BACKEND !== undefined) notes.push({ what: "AMPI_BACKEND is set; the hub ignores it", fix: "This machine's Pi Sessions always show. Unset AMPI_BACKEND." });
+	let threads = 0;
+	try {
+		threads = readdirSync(join(home, "threads")).length;
+	} catch {}
+	if (threads > 0 && !hosts.some((host) => host.kind === "local"))
+		notes.push({
+			what: `${threads} durable thread${threads === 1 ? "" : "s"} in ${join(home, "threads")}, and no durable Host is listed, so the hub does not show them`,
+			fix: `The durable line (release/durable) runs them. On this line, list this machine's node in hub.json: { "id": "${self}", "label": "${self}", "kind": "local" }, then restart the hub.`,
+		});
+	return notes;
+}
+
 export async function doctor(): Promise<number> {
 	const { listModels, openModels } = await import("./node/models.ts");
 	console.log(`${versionLine()}\n`);
@@ -84,11 +100,13 @@ export async function doctor(): Promise<number> {
 		report("warn", "Terminals unavailable: node-pty did not load", "Install build tools (python3, make, a C++ compiler), then npm install again. Everything else works without it.");
 	}
 
-	const node = await nodeHello();
-	if (!node) report("ok", "No node running yet; the hub or the first SSH connection starts it");
-	else if (node.build && node.build !== buildId())
+	// The durable node runs only for a listed `local` Host; a Pi-only hub has none to check.
+	const config = loadHubConfig(hubConfigPath());
+	const node = config.hosts.some((host) => host.kind === "local") ? await nodeHello() : null;
+	if (node === undefined) report("ok", "No node running yet; the hub or the first SSH connection starts it");
+	else if (node?.build && node.build !== buildId())
 		report("warn", `The running node (pid ${node.pid}) is an older build (${node.build})`, "ampi stop; it restarts on the next connection, and running work resumes.");
-	else report("ok", `Node running (pid ${node.pid})`);
+	else if (node) report("ok", `Node running (pid ${node.pid})`);
 
 	const models = (await listModels(openModels())).filter((m) => m.provider !== "ampi-sim");
 	if (models.length) report("ok", `Models signed in: ${[...new Set(models.map((m) => m.provider))].join(", ")} (${models.length} models)`);
@@ -115,16 +133,24 @@ export async function doctor(): Promise<number> {
 
 	console.log("\nHub");
 	const port = hubPort();
-	const token = existsSync(join(ampiHome(), "hub.token")) ? hubToken() : undefined;
+	const token = readHubToken();
+	// One hub owns this home; a second `ampi hub` on it refuses to start and names this owner.
+	const owner = hubOwner();
+	if (owner) report("ok", `Hub pid ${owner.pid} owns ${ampiHome()}${owner.port ? ` (port ${owner.port})` : ""}`);
 	try {
 		const health = (await (await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(2000) })).json()) as { proof?: string };
 		if (token && health.proof === hubProof(token)) report("ok", `Hub running: http://127.0.0.1:${port}/?k=… (ampi open prints the full link)`);
 		else report("fail", `Something else answers on port ${port}`, "Stop it, or start AmPi on another port: ampi hub --port 7879 (open and doctor then find it there).");
 	} catch {
-		report("ok", `Hub not running; start it with: ampi hub`);
+		if (owner) report("fail", `Hub pid ${owner.pid} does not answer on port ${port}`, `It may still be starting. If it stays silent, stop it (kill ${owner.pid}) and start again: ampi hub`);
+		else report("ok", `Hub not running; start it with: ampi hub`);
 	}
 
-	const config = loadHubConfig(hubConfigPath());
+	let raw: { backend?: unknown } = {};
+	try {
+		raw = JSON.parse(readFileSync(hubConfigPath(), "utf8")) as { backend?: unknown };
+	} catch {}
+	for (const note of configNotes(raw, process.env, ampiHome(), config.hosts, config.self)) report("warn", note.what, note.fix);
 	const remotes = config.hosts.filter((h): h is HostConfig => h.kind === "ssh");
 	if (remotes.length) console.log("\nRemote hosts");
 	await Promise.all(

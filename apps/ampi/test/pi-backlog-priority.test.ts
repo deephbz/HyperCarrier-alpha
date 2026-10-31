@@ -37,7 +37,7 @@ test("pi working set: new, appended and live Sessions get rows before a warm cac
  for (const name of ["new-a", "new-b", "new-c"]) writeFileSync(file(name), session(`sess-${name}`, Date.now(), 3));
  const pane = (name: string, id: string) => ({ pane_id: id, workspace_id: "w1", tab_id: "w1:tA", name, terminal_title_stripped: `pi ${name}`, cwd: "/work", agent_status: "idle", focused: false, agent: "pi", agent_session: { kind: "path", agent: "pi", value: file(name) } });
  f.setState({ sessionsDir: dir, workspaces: [{ workspace_id: "w1", label: "HC" }], tabs: [{ tab_id: "w1:tA", workspace_id: "w1", label: "Work" }], agents: [pane("new-a", "w1:p1"), pane("new-b", "w1:p2"), pane("old7", "w1:p3")] });
- const hub = new Hub({ backend: "pi", hosts: [{ id: "devbox", label: "devbox", kind: "pi-local", cacheDir,
+ const hub = new Hub({ hosts: [{ id: "devbox", label: "devbox", kind: "pi-local", cacheDir,
   agentConfig: { agentDir: f.agentDir, pollMs: 30, discoverMs: 300, teamsMs: 0 },
   env: { HOME: f.dir, HERDR_BIN: join(f.dir, "herdr"), FAKE_HERDR_STATE: join(f.dir, "state.json"), FAKE_HERDR_LOG: join(f.dir, "calls.jsonl") } }] }, { token: TOKEN });
  const port = await hub.listen(0);

@@ -17,6 +17,12 @@ export type RarebitValue = {
 	revision: number;
 	more: boolean;
 	sourceVersion: string;
+	/**
+	 * For an `around` read: the cursor that selects this page (none: newest page), and what the linked entry is. A Host
+	 * that still indexes says `indexing` for an entry it has not found yet; only an idle index says `missing`.
+	 */
+	before?: string;
+	around?: { id: string; found: "item" | "entry" | "missing" | "indexing" };
 	source?: SourceStatus;
 	/** Automatic Arc Builds (D16), newest last; each follows the agent stop `afterEntryId` names. */
 	arcBuilds?: ArcBuildRun[];
@@ -26,9 +32,9 @@ export type SideTurn = { question: string; answer?: string; error?: string };
 export type RarebitSide = { id: string; at: string; count: number; included: number; omittedChars: number; revision: number; turns: SideTurn[]; model: string };
 const sides = new WeakMap<PiViewContext, Map<string, { threadId: string; file: string; side: RarebitSide; busy: boolean; override?: string }>>();
 
-function value(ctx: PiViewContext, threadId: string, before?: string): RarebitValue | undefined {
+function value(ctx: PiViewContext, threadId: string, before?: string, around?: string): RarebitValue | undefined {
  const session = ctx.session(threadId);
- return session ? { ...session.rarebits(before), source: sourceStatus(session), arcBuilds: buildLog(ctx, threadId).filter((b) => b.trigger === "auto").slice(-20) } : undefined;
+ return session ? { ...session.rarebits(before, false, around), source: sourceStatus(session), arcBuilds: buildLog(ctx, threadId).filter((b) => b.trigger === "auto").slice(-20) } : undefined;
 }
 function snapshot(ctx: PiViewContext, threadId: string, maxChars: number) {
  const session = ctx.session(threadId);
@@ -47,7 +53,7 @@ function failure(e: unknown): string {
 
 export const rarebitView: PiView<"rarebit"> = {
 	name: "rarebit",
-	value: (ctx, topic) => value(ctx, String(topic.threadId ?? ""), typeof topic.before === "string" ? topic.before : undefined),
+	value: (ctx, topic) => value(ctx, String(topic.threadId ?? ""), typeof topic.before === "string" ? topic.before : undefined, typeof topic.around === "string" ? topic.around : undefined),
 	evict(ctx, threadId) { const map = sides.get(ctx); for (const [id, item] of map ?? []) if (item.threadId === threadId && !item.busy) { rmSync(item.file, { force: true }); map!.delete(id); } },
 	ops: {
 		ask: async (ctx, args): Promise<RarebitAskResult> => {

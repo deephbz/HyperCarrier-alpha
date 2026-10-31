@@ -87,28 +87,44 @@ function preview(e: PiReaderEntry) {
  return out;
 }
 
+/**
+ * The positive token budget of one native `auto-compact.budget` entry, else undefined. The override is optional, so a
+ * failed read (no offset, a changed source) gives the default budget and does not fail the derive.
+ */
+export function overrideTokens(reader: any, id: string): number | undefined {
+ try {
+  const chunk = reader.entryBytes(id) as { text: string; more: boolean };
+  if (chunk.more) return undefined;
+  const tokens = JSON.parse(chunk.text)?.data?.tokens;
+  return Number.isSafeInteger(tokens) && tokens > 0 ? tokens : undefined;
+ } catch { return undefined; }
+}
+
 function derive(source: Source, reader: any, db: ReturnType<typeof openWorkingSet>, version: string, started: number): Derived {
  const session = reader.session();
  const records: PiReaderEntry[] = [], nativeMeta: any[] = [], occurrences: any[] = [], rarebitChars = new Map<string, number>();
  const buckets = new Map<number, [number, number, number]>(), hints: [number, string][] = [], marks: [number, string, "stop" | "error"][] = [];
  let whole = kinds(), live = kinds(), totalChars = 0, rareChars = 0, count = 0, cost = 0, staleItems = 0, priced = false;
  const rarebitHash = createHash("sha256");
- let model: string | undefined, contextTokens: number | undefined, cacheHit: number | undefined, lastPreview: string | undefined;
+ let model: string | undefined, budgetEntry: string | undefined, contextTokens: number | undefined, cacheHit: number | undefined, lastPreview: string | undefined;
  let lastUser = -1, lastStop = -1, selector = "", title = session.title;
  const open = new OpenCalls();
  const counts = { user: 0, continuation: 0, stop: 0, compactions: 0 };
  for (const row of db.prepare('SELECT * FROM entries WHERE path=? ORDER BY position').iterate(source.path)) {
   const e = parse<PiReaderEntry>(row.feature), occurrence = row.occurrence ? parse<any>(row.occurrence) : null;
-  const meta = parse<{ type?: string; model?: string }>(row.native_meta);
+  const meta = parse<{ type?: string; model?: string; customType?: string }>(row.native_meta);
   records.push(e); nativeMeta.push(meta); count++;
   // Pi's setModel (`/model`) writes model_change before any turn uses it; the latest of either names the model.
   if (meta.type === "model_change" && meta.model) model = meta.model;
+  // hc-auto-compact reads the latest `auto-compact.budget` entry on the branch; its value is read once after the loop.
+  if (meta.customType === "auto-compact.budget") budgetEntry = e.id;
   if (occurrence) {
    occurrences.push(occurrence);
    if (occurrence.outcome === "user") lastUser = count;
    if (occurrence.outcome === "stop") lastStop = count;
   }
-  if (e.kind === "compaction") { counts.compactions++; live = kinds(); }
+  // Pi's getContextUsage: a compaction makes the context size unknown until a later response measures it.
+  if (e.kind === "compaction") { counts.compactions++; live = kinds(); contextTokens = undefined; }
   const chars = parse<Kinds>(row.kinds);
   for (const key of Object.keys(whole) as (keyof Kinds)[]) { whole[key] += chars[key]; live[key] += chars[key]; }
   totalChars += Number(row.totalchars); rareChars += Number(row.rarechars);
@@ -127,10 +143,13 @@ function derive(source: Source, reader: any, db: ReturnType<typeof openWorkingSe
   if (e.kind === "assistant") {
    // Provider-qualified, as the pi-durable projection and hc-hud's alias keys name a model.
    if (e.model) model = e.provider ? `${e.provider}/${e.model}` : e.model;
-   if (e.usage) {
-    contextTokens = positive(e.usage.input) + positive(e.usage.output) + positive(e.usage.cacheRead) + positive(e.usage.cacheWrite);
-    const prompt = positive(e.usage.input) + positive(e.usage.cacheRead) + positive(e.usage.cacheWrite);
-    cacheHit = prompt > 0 ? 100 * positive(e.usage.cacheRead) / prompt : undefined;
+   // Aborted, failed and all-zero responses measure nothing, as Pi skips them.
+   const usage = e.stop === "aborted" || e.stop === "error" ? undefined : e.usage;
+   const measured = usage ? positive(usage.input) + positive(usage.output) + positive(usage.cacheRead) + positive(usage.cacheWrite) : 0;
+   if (usage && measured > 0) {
+    contextTokens = measured;
+    const prompt = positive(usage.input) + positive(usage.cacheRead) + positive(usage.cacheWrite);
+    cacheHit = prompt > 0 ? 100 * positive(usage.cacheRead) / prompt : undefined;
    }
   }
   if (e.kind === "human" || e.kind === "assistant") { const text = body(e); if (text) lastPreview = text.slice(0, 160); }
@@ -144,6 +163,8 @@ function derive(source: Source, reader: any, db: ReturnType<typeof openWorkingSe
    if (e.role === "assistant" && e.stop === "error") marks.push([t, e.id, "error"]);
   }
  }
+ // The index keeps no custom data, so read the one override entry; `tokens: null` restores the default.
+ const budgetOverride = budgetEntry ? overrideTokens(reader, budgetEntry) : undefined;
  // The published selector decides occurrence semantics; this probe supplies its version.
  selector = String(selectRarebits([]).manifest.selectorVersion);
  const imported = getImportedRarebitEntryIds(nativeMeta);
@@ -159,7 +180,7 @@ function derive(source: Source, reader: any, db: ReturnType<typeof openWorkingSe
  return {
   version, summaryVersion: SUMMARY_VERSION, bytes: reader.info().bytes, asOf: Date.now(), invalidLines: reader.info().invalidLines, count, tip: session.tip,
   session: { id: session.id, session: session.id.slice(3), ref: session.ref, cwd: session.cwd, started: session.started, updated: session.updated, title },
-  cost, priced, ...(model ? { model } : {}), ...(contextTokens ? { contextTokens } : {}), ...(cacheHit !== undefined ? { cacheHit } : {}), ...(lastPreview ? { preview: lastPreview } : {}),
+  cost, priced, ...(model ? { model } : {}), ...(budgetOverride ? { budgetOverride } : {}), ...(contextTokens ? { contextTokens } : {}), ...(cacheHit !== undefined ? { cacheHit } : {}), ...(lastPreview ? { preview: lastPreview } : {}),
   ...(open.ids.size ? { openCalls: open.ids.size } : {}),
   timeline: { start: hints[0]?.[0] ?? 0, end: hints.at(-1)?.[0] ?? 0, entries: sampled, entryCount: count,
    omittedHints: hints.length - sampled.length, marks: marks.slice(-256), omittedMarks: Math.max(0, marks.length - 256),
@@ -295,7 +316,7 @@ if (parentPort) {
    switch (message.op) {
     case "init": openWorkingSet(message.cacheDir).close(); break;
     case "derive": data = await materialize(message.source); break;
-    case "find": data = findInSession(message.source, message.query, message.version); break;
+    case "find": data = findInSession(message.source, message.query, message.version, message.ask); break;
     case "forget": data = await forget(message.source, message.version, message.watermark); break;
    }
    parentPort!.postMessage({ id: message.id, data });

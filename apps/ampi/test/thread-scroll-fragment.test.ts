@@ -23,8 +23,8 @@ for (const [backend, lens] of [["pi", false], ["pi", true]] as const) {
 			await page.locator("[data-region=transcript] .md", { hasText: `After tool e${CAP - 1}.` }).waitFor({ state: "attached" });
 			await frames(page);
 			if (lens) {
-				await page.getByRole("button", { name: "Transcript lens: full transcript" }).click();
-				await page.locator('[aria-label="Transcript lens: conversation only"]').waitFor({ state: "attached" });
+				await page.getByRole("button", { name: "Chat", exact: true }).click();
+				await page.locator('[aria-label="Transcript mode"] > [aria-pressed="true"]', { hasText: "Chat" }).first().waitFor({ state: "attached" });
 				await frames(page);
 			}
 			await page.evaluate(() => { document.querySelector<HTMLElement>("[data-region=transcript]")!.scrollTop = 300; });
@@ -66,8 +66,8 @@ for (const [backend, lens] of [["pi", false], ["pi", true]] as const) {
 		await page.locator("[data-region=transcript] .md", { hasText: `After tool e${CAP - 1}.` }).waitFor({ state: "attached" });
 		await frames(page);
 		if (lens) {
-			await page.getByRole("button", { name: "Transcript lens: full transcript" }).click();
-			await page.locator('[aria-label="Transcript lens: conversation only"]').waitFor({ state: "attached" });
+			await page.getByRole("button", { name: "Chat", exact: true }).click();
+			await page.locator('[aria-label="Transcript mode"] > [aria-pressed="true"]', { hasText: "Chat" }).first().waitFor({ state: "attached" });
 			await frames(page);
 		}
 		await page.evaluate(() => { document.querySelector<HTMLElement>("[data-region=transcript]")!.scrollTop = 300; });

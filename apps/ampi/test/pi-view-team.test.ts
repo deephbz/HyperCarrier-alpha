@@ -28,7 +28,7 @@ export let readTaskSnapshot = ({teamName}) => read().tasks[teamName];
 export async function readObservationSnapshot() { const data = read(); readTaskSnapshot = data.missingReader ? undefined : ({teamName}) => read().tasks[teamName]; return data; }`);
 	const header = (id: string) => `${JSON.stringify({ type: "session", version: 3, id, cwd: "/work", timestamp: new Date().toISOString() })}\n`;
 	writeFileSync(f.sessionA, header("sess-a")); writeFileSync(f.sessionB, header("sess-b"));
-	const hub = new Hub({ backend: "pi", hosts: [{ id: "devbox", label: "devbox", kind: "pi-local", cacheDir: join(f.dir, "cache"),
+	const hub = new Hub({ hosts: [{ id: "devbox", label: "devbox", kind: "pi-local", cacheDir: join(f.dir, "cache"),
 		agentConfig: { agentDir: f.agentDir, pollMs: 30, discoverMs: 180, teamsMs: 150, ptbObservation: moduleFile },
 		env: { HOME: f.dir, HERDR_BIN: join(f.dir, "herdr"), FAKE_HERDR_STATE: join(f.dir, "state.json"), FAKE_HERDR_LOG: join(f.dir, "calls.jsonl") } }] }, { token });
 	const port = await hub.listen(0);

@@ -5,6 +5,16 @@
 
 export const HOLD_CHANNEL = "hc.delivery-hold";
 export const MAX_TEXT_BYTES = 1024 * 1024;
+// Images ride in one frame (endpoint MAX_FRAME_BYTES 8 MiB), so their base64 total stays below it.
+export const MAX_IMAGES = 8;
+export const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
+/**
+ * What submit takes as images in one message, in the units it counts (base64 characters). Status `images: 1`
+ * names exactly these limits; a change to them is a new `images` version, so a client never guesses.
+ */
+export const IMAGE_LIMITS = Object.freeze({ count: MAX_IMAGES, totalBase64: MAX_IMAGE_BYTES, types: Object.freeze(["image/png", "image/jpeg", "image/gif", "image/webp"]) });
+const IMAGE_TYPES = new Set(IMAGE_LIMITS.types);
+const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
 export const DEFAULTS = Object.freeze({
   holdWaitMs: 120_000,
   admitTimeoutMs: 30_000,
@@ -37,6 +47,23 @@ const textOf = (content) =>
     : Array.isArray(content)
       ? content.filter((b) => b?.type === "text").map((b) => b.text).join("\n")
       : "";
+
+// Returns Pi ImageContent blocks, or a string that names the defect.
+const imagesOf = (images) => {
+  if (images === undefined) return [];
+  if (!Array.isArray(images) || images.length > MAX_IMAGES) return `images must be an array of at most ${MAX_IMAGES}.`;
+  let total = 0;
+  const blocks = [];
+  for (const image of images) {
+    const { data, mimeType } = image ?? {};
+    if (!IMAGE_TYPES.has(mimeType)) return `image mimeType must be one of ${[...IMAGE_TYPES].join(", ")}.`;
+    if (typeof data !== "string" || !data || data.length % 4 !== 0 || !BASE64.test(data))
+      return "image data must be nonempty base64.";
+    total += data.length;
+    blocks.push({ type: "image", data, mimeType });
+  }
+  return total > MAX_IMAGE_BYTES ? { tooLarge: true } : blocks;
+};
 
 const fail = (id, code, message, extra) => ({ id, ok: false, error: { code, message, ...extra } });
 const refOf = (model) => (model ? `${model.provider}/${model.id}` : null);
@@ -117,7 +144,8 @@ export function createControl(pi, options = {}) {
       if (record.state !== "queued") continue;
       editor ??= String(ctx.ui?.getEditorText?.() ?? "");
       // A queued skill or template reaches Pi as different text, so delivery is not observable.
-      record.state = editor.includes(record.text) ? "returned" : record.expanded ? "unknown" : "dropped";
+      // An empty text proves nothing about the editor; Pi returns text only, never images.
+      record.state = record.text && editor.includes(record.text) ? "returned" : record.expanded ? "unknown" : "dropped";
       record.at = Date.now();
       settled.push(record);
     }
@@ -129,12 +157,13 @@ export function createControl(pi, options = {}) {
       } else i++;
     return settled;
   };
-  const view = ({ submission, deliverAs, text, state, at, entryId, expanded }) => ({
+  const view = ({ submission, deliverAs, text, state, at, entryId, expanded, images }) => ({
     submission,
     deliverAs,
     state,
     at,
     ...(expanded ? { expanded } : {}),
+    ...(images ? { images } : {}),
     ...(entryId ? { entryId } : {}),
     ...clipped(text),
   });
@@ -188,7 +217,7 @@ export function createControl(pi, options = {}) {
     if (inflight && !inflight.inputSeen && event.source === "extension" && event.text === inflight.text) {
       inflight.inputSeen = event.streamingBehavior ?? "start";
       if (inflight.inputSeen !== "start") {
-        inflight.record = { submission: globalThis.crypto.randomUUID(), deliverAs: inflight.inputSeen, text: event.text, state: "queued", at: Date.now(), ...(inflight.expand ? { expanded: true } : {}) };
+        inflight.record = { submission: globalThis.crypto.randomUUID(), deliverAs: inflight.inputSeen, text: event.text, state: "queued", at: Date.now(), ...(inflight.expand ? { expanded: true } : {}), ...(inflight.images ? { images: inflight.images } : {}) };
         submissions.push(inflight.record);
         inflight.checkQueued();
       }
@@ -254,7 +283,7 @@ export function createControl(pi, options = {}) {
     return closed ? "closed" : "open";
   };
 
-  const deliver = (text, deliverAs, expand) =>
+  const deliver = (text, deliverAs, expand, images = []) =>
     new Promise((resolve) => {
       let done = false;
       let timer;
@@ -262,6 +291,7 @@ export function createControl(pi, options = {}) {
       const attempt = {
         text,
         expand,
+        images: images.length,
         inputSeen: undefined,
         userMessage: undefined,
         settle(value) {
@@ -302,18 +332,20 @@ export function createControl(pi, options = {}) {
       attempt.closeOut = () => attempt.settle({ error: "closed", message: "Session control closed." });
       arm();
       try {
-        pi.sendUserMessage(text, { deliverAs, ...(expand ? { expandPromptTemplates: true } : {}) });
+        // Pi joins the text blocks of a content array, so the input event text still equals `text`.
+        const content = images.length ? [...(text ? [{ type: "text", text }] : []), ...images] : text;
+        pi.sendUserMessage(content, { deliverAs, ...(expand ? { expandPromptTemplates: true } : {}) });
       } catch (error) {
         attempt.settle({ error: "not_admitted", message: String(error?.message ?? error) });
       }
     });
 
-  const submit = async (id, text, deliverAs, arrived, expand = false) => {
+  const submit = async (id, text, deliverAs, arrived, expand = false, images = []) => {
     const gate = await waitOpen(arrived + cfg.holdWaitMs);
     if (gate === "closed") return fail(id, "closed", "Session control closed.");
     if (gate === "timeout")
       return fail(id, "busy_compacting", `Compaction or a delivery hold did not clear within ${cfg.holdWaitMs} ms.`);
-    const result = await deliver(text, deliverAs, expand);
+    const result = await deliver(text, deliverAs, expand, images);
     if (result.error) return fail(id, result.error, result.message);
     return { id, ok: true, ...result };
   };
@@ -453,8 +485,9 @@ export function createControl(pi, options = {}) {
       held: holds.size > 0,
       pending: { steer: queue.steer.length, followUp: queue.followUp.length },
       submissions: submissions.map(view),
-      // Capability: this control serves the commands and command ops.
+      // Capabilities: this control serves the commands and command ops, and submit takes images.
       commands: 1,
+      images: 1,
     };
   };
 
@@ -475,14 +508,17 @@ export function createControl(pi, options = {}) {
           return await abort(id);
         case "submit": {
           const { text, deliverAs } = frame;
-          if (typeof text !== "string" || !text.trim())
-            return fail(id, "bad_request", "text must be a nonempty string.");
+          const images = imagesOf(frame.images);
+          if (typeof images === "string") return fail(id, "bad_request", images);
+          if (images.tooLarge) return fail(id, "too_large", `images exceed ${MAX_IMAGE_BYTES} base64 bytes.`);
+          if (typeof text !== "string" || (!text.trim() && !images.length))
+            return fail(id, "bad_request", "text must be a string, nonempty unless images are attached.");
           if (Buffer.byteLength(text, "utf8") > MAX_TEXT_BYTES)
             return fail(id, "too_large", `text exceeds ${MAX_TEXT_BYTES} bytes.`);
           if (!DELIVER_AS.has(deliverAs))
             return fail(id, "bad_request", 'deliverAs must be "steer" or "followUp".');
           // One submission at a time keeps queue order equal to arrival order.
-          const run = chain.then(() => submit(id, text, deliverAs, arrived));
+          const run = chain.then(() => submit(id, text, deliverAs, arrived, false, images));
           chain = run.catch(() => {});
           return await run;
         }

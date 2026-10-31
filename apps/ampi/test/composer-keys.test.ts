@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import ts from "typescript";
-import { COMPOSER_BUSY_HINT, COMPOSER_SHORTCUTS, composerSubmission } from "../web/src/composer-keys.ts";
+import { COMPOSER_BUSY_HINT, COMPOSER_SHORTCUTS, composerSubmission, freshPress } from "../web/src/composer-keys.ts";
 
-function source(name: string) {
-	return ts.createSourceFile(name, readFileSync(new URL(`../web/src/components/${name}.tsx`, import.meta.url), "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+function source(name: string, dir = "components") {
+	return ts.createSourceFile(name, readFileSync(new URL(`../web/src/${dir}/${name}.tsx`, import.meta.url), "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 }
 function find(node: ts.Node, predicate: (node: ts.Node) => boolean): ts.Node | undefined {
 	if (predicate(node)) return node;
@@ -44,5 +44,30 @@ test("composer help and busy hint match submission keys; newline and IME input n
 		handler({ key: "Enter", altKey: false, shiftKey: false, ...modifiers, nativeEvent: { isComposing: "isComposing" in modifiers }, preventDefault: () => { prevented = true; } });
 		assert.deepEqual(sent, expected ? [expected] : [], JSON.stringify(modifiers));
 		assert.equal(prevented, expected !== null, JSON.stringify(modifiers));
+	}
+});
+
+// A held key auto-repeats into whichever field focus reaches: Restore, a quote, or a palette command moves focus on
+// keydown and hands the rest of its press to that field (adversarial-restore holds Enter on Restore). Every field
+// that sends on a key sends on the fresh press and never on a repeat.
+test("every field that sends on a key sends only on a fresh press", () => {
+	const keyDown = (file: ts.SourceFile, label?: string) => {
+		const field = find(file, (n) => ts.isJsxSelfClosingElement(n) && n.tagName.getText() === "textarea" && (!label || n.attributes.getText().includes(`aria-label="${label}"`))) as ts.JsxSelfClosingElement;
+		assert.ok(field, `${file.fileName} has the field`);
+		const attr = field.attributes.properties.find((n) => ts.isJsxAttribute(n) && n.name.getText() === "onKeyDown") as ts.JsxAttribute;
+		return (attr.initializer as ts.JsxExpression).expression!;
+	};
+	const fields = [
+		{ name: "Composer", handler: keyDown(source("Composer")), call: "send", chord: {} },
+		{ name: "new Session (Dialogs)", handler: keyDown(source("Dialogs"), "First message"), call: "create", chord: { metaKey: true } },
+		{ name: "new Pi agent (PiDialogs)", handler: keyDown(source("PiDialogs"), "First message"), call: "create", chord: { ctrlKey: true } },
+		{ name: "Rarebit ask", handler: keyDown(source("View", "views/rarebit")), call: "ask", chord: {} },
+	];
+	for (const { name, handler, call, chord } of fields) for (const repeat of [false, true]) {
+		const calls: unknown[] = []; let prevented = false;
+		const run = evaluate(handler, { composerSubmission, freshPress, matches: [], [call]: (...args: unknown[]) => calls.push(args) });
+		run({ key: "Enter", altKey: false, shiftKey: false, metaKey: false, ctrlKey: false, ...chord, repeat, nativeEvent: { repeat, isComposing: false }, preventDefault: () => { prevented = true; } });
+		assert.equal(calls.length, repeat ? 0 : 1, `${name}: ${repeat ? "a repeat sends" : "a fresh press does not send"}`);
+		if (name === "Composer" || name === "Rarebit ask") assert.equal(prevented, true, `${name}: a held Enter adds a new line`);
 	}
 });

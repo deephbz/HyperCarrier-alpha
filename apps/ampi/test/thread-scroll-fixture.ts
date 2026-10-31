@@ -25,13 +25,17 @@ export async function componentScript(): Promise<string> {
 				import React from 'react';
 				import { createRoot } from 'react-dom/client';
 				import { ThreadView } from ${JSON.stringify(join(web, "src/components/ThreadView.tsx"))};
-				import { arriveEntry } from ${JSON.stringify(join(web, "src/nav.ts"))};
-				arriveEntry(); window.addEventListener('hashchange', arriveEntry);
+				import { arriveEntry, installNavLinks, navigate } from ${JSON.stringify(join(web, "src/nav.ts"))};
+				import { installKeymapDispatcher } from ${JSON.stringify(join(web, "src/keymap.ts"))};
+				installKeymapDispatcher();
+				installNavLinks(); arriveEntry(); window.addEventListener('hashchange', arriveEntry);
 				const threadId = window.THREAD;
 				const summary = { id: threadId, title: 'Scroll hold', createdAt: 0, updatedAt: 0, kind: 'thread', activity: 'idle', queued: 0, costUsd: 0 };
 				const root = createRoot(document.getElementById('root'));
-				const render = () => root.render(React.createElement('div', { className: 'main-slot', style: { height: '600px' } },
-					React.createElement(ThreadView, { host: 'devbox', threadId, summary, models: [], panel: undefined, setPanel() {} })));
+				// Like App: a linked entry arrives as a route, which requests its reveal (nav.ts).
+				let routed;
+				const render = () => (window.ENTRY !== routed && (routed = window.ENTRY) && navigate('#/h/devbox/t/' + encodeURIComponent(threadId) + '?e=' + encodeURIComponent(routed)), root.render(React.createElement('div', { className: 'main-slot', style: { height: (window.SLOT || 600) + 'px' } },
+					React.createElement(ThreadView, { host: 'devbox', threadId, summary, models: [], panel: undefined, setPanel() {}, entry: window.ENTRY }))));
 				render();
 				setInterval(() => { if (window.parentTicks) render(); }, 250);
 			` : undefined,
@@ -71,12 +75,15 @@ export const HOSTS = { pi: { id: "devbox", link: "devbox#pi", label: "devbox", k
 export const THREADS = { pi: THREAD, durable: "tree-a.8" };
 /**
  * `zoom`: the overall display size, html `zoom` as App.tsx sets it; the viewport scales with it, so the layout keeps its
- * CSS px. `region`: the transcript's own display size, on every load.
+ * CSS px. `region`: the transcript's own display size, on every load. `size`: the viewport in CSS px; the thread view
+ * takes its height less 100 px.
  */
-export async function open(t: TestContext, count: number, backend: keyof typeof HOSTS = "pi", engine: Engine = "chromium", zoom = 1, region = 1): Promise<{ page: Page; publish: Publish; send: (value: unknown) => void }> {
+/** Answers one request frame with `reply` and returns true, or returns false to refuse it as unsupported. */
+export type Answer = (frame: { op: string; args: Record<string, unknown> }, reply: (result: { ok: true; value: unknown } | { ok: false; error: { code: string; message: string } }) => void) => boolean;
+export async function open(t: TestContext, count: number, backend: keyof typeof HOSTS = "pi", engine: Engine = "chromium", zoom = 1, region = 1, size = { width: 1000, height: 700 }): Promise<{ page: Page; publish: Publish; send: (value: unknown) => void; answer: (handler: Answer) => void; hold: (value: unknown) => void; subs: () => number }> {
 	const script = await (bundle ??= componentScript());
 	const browser = await (engine === "webkit" ? (safari ??= webkit.launch({ headless: true })) : (chrome ??= chromium.launch({ headless: true, executablePath: findChrome() })));
-	const page = await browser.newPage({ viewport: { width: Math.round(1000 * zoom), height: Math.round(700 * zoom) } });
+	const page = await browser.newPage({ viewport: { width: Math.round(size.width * zoom), height: Math.round(size.height * zoom) } });
 	t.after(() => page.context().close());
 	page.setDefaultTimeout(3000);
 	const css = readFileSync(join(web, "src/styles.css"), "utf8");
@@ -84,19 +91,22 @@ export async function open(t: TestContext, count: number, backend: keyof typeof 
 		const url = new URL(route.request().url());
 		if (url.origin !== ORIGIN) return route.abort();
 		if (url.pathname === "/component.js") return route.fulfill({ contentType: "text/javascript; charset=utf-8", body: script });
-		if (url.pathname === "/") return route.fulfill({ contentType: "text/html; charset=utf-8", body: `<meta charset="utf-8"><style>${css}${region === 1 ? "" : `[data-region=transcript]{zoom:${region}}`}</style><div id="root"></div><script>document.documentElement.style.zoom = ${JSON.stringify(String(zoom))}; window.THREAD = ${JSON.stringify(THREADS[backend])}</script><script src="/component.js"></script>` });
+		if (url.pathname === "/") return route.fulfill({ contentType: "text/html; charset=utf-8", body: `<meta charset="utf-8"><style>${css}${region === 1 ? "" : `[data-region=transcript]{zoom:${region}}`}</style><div id="root"></div><script>document.documentElement.style.zoom = ${JSON.stringify(String(zoom))}; window.THREAD = ${JSON.stringify(THREADS[backend])}; window.SLOT = ${size.height - 100}</script><script src="/component.js"></script>` });
 		return route.abort();
 	});
 	let send: ((frame: unknown) => void) | undefined;
 	let sid: number | undefined;
+	let answer: Answer | undefined;
+	// The thread view the page holds; a new subscription (a reconnect, a refresh) gets its snapshot.
+	let current: unknown = view(count), subs = 0;
 	await page.routeWebSocket("**/ws", (client) => {
 		send = (frame) => client.send(JSON.stringify(frame));
 		send({ t: "hosts", hosts: [HOSTS[backend]] });
 		client.onMessage((message) => {
 			const frame = JSON.parse(String(message));
-			if (frame.t === "sub" && frame.topic?.kind === "thread") { sid = frame.sid; send!({ t: "snap", sid, value: view(count) }); }
+			if (frame.t === "sub" && frame.topic?.kind === "thread") { sid = frame.sid; subs++; send!({ t: "snap", sid, value: current }); }
 			else if (frame.t === "sub") send!({ t: "snap", sid: frame.sid, value: frame.topic?.kind === "threads" ? { threads: {} } : {} });
-			else if (frame.t === "req" || frame.t === "hub") send!({ t: "res", id: frame.id, ok: false, error: { code: "unsupported", message: "not in this test" } });
+			else if ((frame.t === "req" || frame.t === "hub") && !answer?.(frame, (result) => send!({ t: "res", id: frame.id, ...result }))) send!({ t: "res", id: frame.id, ok: false, error: { code: "unsupported", message: "not in this test" } });
 		});
 	});
 	await page.goto(`${ORIGIN}/`);
@@ -106,12 +116,17 @@ export async function open(t: TestContext, count: number, backend: keyof typeof 
 		page,
 		// A reader at the end paints the newest entry; a frozen window away from the end shows the count instead.
 		publish: async (n, tail = "", from = 0) => {
-			send!({ t: "snap", sid, value: view(n, tail, from) });
+			current = view(n, tail, from);
+			send!({ t: "snap", sid, value: current });
 			await page.locator(`[data-entry="e${n - 1}"], [data-region=transcript] [role=status] button`).first().waitFor({ state: "attached" });
 			await page.waitForTimeout(30);
 			await frames(page);
 		},
-		send: (value) => send!({ t: "snap", sid, value }),
+		send: (value) => { current = value; send!({ t: "snap", sid, value }); },
+		answer: (handler) => { answer = handler; },
+		// The node moves on without a live update; only a new subscription sees it.
+		hold: (value) => { current = value; },
+		subs: () => subs,
 	};
 }
 

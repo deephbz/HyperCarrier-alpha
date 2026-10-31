@@ -14,6 +14,16 @@ test("global bindings have unique physical keys per modifier set and scope", () 
 	}
 });
 
+test("Cmd+T and browser Ctrl+T share the transcript mode action and command surfaces", () => {
+	const binding = KEYMAP.find((entry) => entry.id === "transcript.mode")!;
+	assert.equal(binding.code, "KeyT");
+	assert.equal(binding.meta, true);
+	assert.equal(binding.browserOwned, undefined, "Ctrl+T can reach the app when Chrome reserves Cmd+T");
+	assert.match(binding.note ?? "", /Ctrl\+T in a browser/);
+	assert.equal(binding.palette, true);
+	assert.match(binding.appNote ?? "", /AmPi\.app/);
+});
+
 test("focus toggle distinguishes hidden, visible-unfocused, and focused regions", () => {
 	assert.equal(regionToggle(true, false), "show-and-focus");
 	assert.equal(regionToggle(false, false), "focus");

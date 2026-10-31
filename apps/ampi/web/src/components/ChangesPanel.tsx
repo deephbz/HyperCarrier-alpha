@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { PiEntry } from "../../../src/shared/protocol.ts";
 import { hub, useTopic } from "../client.ts";
-import { clock } from "../util.ts";
+import { clock, href } from "../util.ts";
 import { Diff, editPatch } from "./ToolCall.tsx";
 
 type Change = { entryId: string; ts?: number; tool: "edit" | "write"; patch: string; failed: boolean };
@@ -226,15 +226,7 @@ export function ChangesPanel({ host, threadId }: { host: string; threadId: strin
 									<div className="hint">
 										{c.tool} · {clock(c.ts)}
 										{c.failed ? " · failed, not applied" : ""} ·{" "}
-										<a
-											href="#"
-											onClick={(e) => {
-												e.preventDefault();
-												const el = document.querySelector(`[data-entry="${c.entryId}"]`);
-												if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
-												else alert("Load earlier messages in the transcript to see this step.");
-											}}
-										>
+										<a href={href.thread(host, threadId, { entry: c.entryId, panel: "changes" })}>
 											show in transcript
 										</a>
 									</div>

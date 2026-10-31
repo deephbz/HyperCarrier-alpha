@@ -32,7 +32,7 @@ test("keep-place follows the bottom and tolerates no surviving anchor", () => {
 	const { el } = fixture();
 	restorePlace(el, "[data-id]", "data-id", { bottom: true, anchors: [] });
 	assert.equal(el.scrollTop, 1000);
-	restorePlace(el, "[data-id]", "data-id", { bottom: false, anchors: [{ id: "gone", top: 0, offset: 0 }] });
+	restorePlace(el, "[data-id]", "data-id", { bottom: false, anchors: [{ id: "gone", offset: 0 }] });
 	assert.equal(el.scrollTop, 1000);
 });
 

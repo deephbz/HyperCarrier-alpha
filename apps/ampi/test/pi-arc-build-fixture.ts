@@ -2,7 +2,6 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cosDemo } from "../scripts/demo/cos.ts";
-import type { DemoContext } from "../scripts/demo/index.ts";
 import { useHubConfig, type ModelPurpose, resolveHelperModel } from "../src/hub/helper-models.ts";
 import { ask } from "../src/pi/ask.ts";
 import type { Chunk } from "../src/pi/views/cos-arc-chunks.ts";
@@ -18,7 +17,7 @@ export const MODELS = { arcLabels: "anthropic/claude-haiku-5-5", arcSynthesis: "
 export const HUB = join(root, "models-hub.json");
 writeFileSync(HUB, JSON.stringify({ hosts: [], models: MODELS }));
 useHubConfig(HUB);
-cosDemo({ dir: root, agentDir: join(root, "agent") } as DemoContext);
+cosDemo({ dir: root, agentDir: join(root, "agent"), now: Date.now(), sessions: {} });
 export const model = [process.execPath, join(root, "cos-model.cjs")];
 export const T = Date.parse("2026-10-19T00:00:00.000Z");
 // 20 chunks: four label batches of six, then one step-2 call.

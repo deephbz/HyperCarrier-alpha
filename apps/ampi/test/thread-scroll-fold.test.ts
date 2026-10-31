@@ -8,9 +8,9 @@ import { anchor, entries, frames, gap, offsetOf, open, scrollAway, scrollTop, sp
 
 test("scroll hold: conversation-only folds arriving tool calls and Team messages without moving a reader one or two screens up", async (t) => {
 	const { page, send } = await open(t, 200);
-	await page.getByRole("button", { name: "Transcript lens: full transcript" }).click();
+	await page.getByRole("button", { name: "Chat", exact: true }).click();
 	await frames(page);
-	await page.locator('[aria-label="Transcript lens: conversation only"]').waitFor({state:"attached"});
+	await page.locator('[aria-label="Transcript mode"] > [aria-pressed="true"]', { hasText: "Chat" }).first().waitFor({state:"attached"});
 	await page.locator("[data-region=transcript]").hover();
 	await page.mouse.wheel(0, -1000);
 	await frames(page);
@@ -36,7 +36,7 @@ for (const operation of ["open fold growth", "lens round trip"] as const) test(`
 	if (operation === "open fold growth") for (let i=192;i<240;i++) mixed[i]={id:`e${i}`,kind:'compaction',summary:'Context kept'};
 	const publish = () => send({...view(200),entries:mixed,live:{run:{startedAt:1}}});
 	publish(); await frames(page);
-	await page.getByRole("button", {name:"Transcript lens: full transcript"}).click(); await frames(page);
+	await page.getByRole("button", { name: "Chat", exact: true }).click(); await frames(page);
 	if (operation === "open fold growth") { await page.locator('.rb-tools').last().locator(':scope > summary').click(); await frames(page); }
 	const fragment = page.locator('.md').filter({hasText:operation === "open fold growth" ? "Answer 191." : "After tool 191."});
 	const position = () => fragment.evaluate(node=>node.getBoundingClientRect().top-document.querySelector('[data-region=transcript]')!.getBoundingClientRect().top);
@@ -55,8 +55,8 @@ for (const operation of ["open fold growth", "lens round trip"] as const) test(`
 		assert.ok(Math.abs(await position()-before)<=2,`growth between the fragment and next unique entry moved the fragment ${before} -> ${await position()}`);
 	} else {
 		const before=await position();
-		await page.getByRole('button',{name:'Transcript lens: conversation only'}).click(); await frames(page);
-		await page.getByRole('button',{name:'Transcript lens: full transcript'}).click(); await frames(page);
+		await page.getByRole('button', { name: 'Full', exact: true }).click(); await frames(page);
+		await page.getByRole('button', { name: 'Chat', exact: true }).click(); await frames(page);
 		assert.ok(Math.abs(await position()-before)<=2,`lens round trip moved split prose from ${before} to ${await position()}`);
 	}
 });
@@ -81,7 +81,7 @@ test("scroll hold: Back restores the saved entry place without persisting DOM re
 test("scroll hold: Back to a split entry restores the after-tool fragment", async (t) => {
 	const {page, send} = await open(t, 200);
 	send({...view(200),entries:splitEntries()}); await frames(page);
-	await page.getByRole('button',{name:'Transcript lens: full transcript'}).click(); await frames(page);
+	await page.getByRole('button', { name: 'Chat', exact: true }).click(); await frames(page);
 	const fragment=page.locator('.msg.assistant[data-entry=e191]').last();
 	assert.ok((await fragment.textContent())?.includes('After tool 191.'));
 	await fragment.evaluate(node=>{const el=document.querySelector<HTMLElement>('[data-region=transcript]')!;el.scrollTop+=node.getBoundingClientRect().top-el.getBoundingClientRect().top+10;});
@@ -96,4 +96,30 @@ test("scroll hold: Back to a split entry restores the after-tool fragment", asyn
 	assert.ok(Math.abs(await scrollTop(page)-before)>200);
 	await page.goBack(); await frames(page);
 	assert.ok(Math.abs(await position()-offset)<=2,`Back moved after-tool fragment from ${offset} to ${await position()}`);
+});
+
+test("reveal: a newer reveal leaves the earlier tool body open; the Transcript-mode toggle closes every body and fold a reveal opened", async (t) => {
+	const {page, send} = await open(t, 200);
+	// Each assistant entry's bash call has its result right after it.
+	const mixed: any[] = splitEntries().flatMap((entry: any, i) => entry.kind === "assistant" ? [entry, {id:`r${i}`,kind:"tool-result",callId:`mixed${i}`,name:"bash",isError:false,text:`output ${i}`,truncated:false}] : [entry]);
+	send({...view(200),entries:mixed}); await frames(page);
+	const body = (i: number) => page.locator(`[data-entry=e${i}] .tool-head`);
+	const reveal = async (entry: string) => { await page.evaluate((e) => { (window as any).ENTRY = e; (window as any).parentTicks = true; }, entry); };
+	await reveal("r185");
+	await page.waitForFunction(() => document.querySelector("[data-entry=e185] .tool-head")?.getAttribute("aria-expanded") === "true");
+	await reveal("r191");
+	await page.waitForFunction(() => document.querySelector("[data-entry=e191] .tool-head")?.getAttribute("aria-expanded") === "true");
+	assert.equal(await body(185).getAttribute("aria-expanded"), "true", "a newer reveal leaves the earlier body open");
+	await page.getByRole("button", { name: "Chat", exact: true }).click(); await frames(page);
+	await page.locator('[aria-label="Transcript mode"] > [aria-pressed="true"]', { hasText: "Chat" }).first().waitFor({state:"attached"});
+	assert.equal(await page.locator(".rb-tools[open]").count(), 0, "conversation only: no fold opens for the earlier reveals");
+	await page.getByRole("button", { name: "Full", exact: true }).click(); await frames(page);
+	assert.deepEqual([await body(185).getAttribute("aria-expanded"), await body(191).getAttribute("aria-expanded")], ["false", "false"], "full transcript again: the revealed bodies are closed");
+	// In conversation only, a reveal opens the fold; the toggle round trip closes it.
+	await page.getByRole("button", { name: "Chat", exact: true }).click(); await frames(page);
+	await reveal("r181");
+	await page.locator(".rb-tools[open]").first().waitFor({state:"attached"});
+	await page.getByRole("button", { name: "Full", exact: true }).click(); await frames(page);
+	await page.getByRole("button", { name: "Chat", exact: true }).click(); await frames(page);
+	assert.equal(await page.locator(".rb-tools[open]").count(), 0, "the round trip closes the revealed fold");
 });

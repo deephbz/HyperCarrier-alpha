@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test, type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
-import { chromium, webkit, type Browser, type BrowserType, type Page } from "playwright";
+import { chromium, webkit, type Browser, type BrowserContextOptions, type BrowserType, type Page } from "playwright";
 import { build } from "vite";
 // @ts-ignore: shared browser discovery is plain ESM.
 import { findChrome } from "../scripts/perf/browser.mjs";
@@ -15,7 +15,7 @@ import { engineSkip } from "./engines.ts";
 // synthetic demo hub (scripts/pi-demo.ts). Real mouse down/move/up drive both edges in Chromium and in WebKit, the
 // macOS shell's engine. One gesture rule: the grabbed point stays under the cursor within 1 px at every move, at any
 // display size, and release commits exactly the drawn width. resize-edges.test.ts and resize-edges-limits.test.ts
-// register the cases.
+// register the cases. prompt-rail-overlay.test.ts opens another Session on the same App through `route`.
 
 const web = fileURLToPath(new URL("../web", import.meta.url));
 const app = fileURLToPath(new URL("..", import.meta.url));
@@ -86,12 +86,12 @@ export const ENGINES: [string, BrowserType, () => string | undefined][] = [
 	["webkit", webkit, () => webkit.executablePath()],
 ];
 
-export async function open(t: TestContext, engine: string, type: BrowserType, path: string | undefined, { display }: { display?: Record<string, number> } = {}): Promise<Page> {
+export async function open(t: TestContext, engine: string, type: BrowserType, path: string | undefined, { display, route = LEAD, context: options }: { display?: Record<string, number>; route?: string; context?: BrowserContextOptions } = {}): Promise<Page> {
 	// A fulfilled document loses its loopback address space; Chromium's Local Network Access check then blocks the hub socket.
 	const args = engine === "chromium" ? ["--disable-features=LocalNetworkAccessChecks"] : [];
 	if (!browsers.has(engine)) browsers.set(engine, type.launch({ headless: true, args, ...(path ? { executablePath: path } : {}) }));
 	const browser = await browsers.get(engine)!;
-	const context = await browser.newContext({ viewport: { width: 1600, height: 800 } });
+	const context = await browser.newContext({ viewport: { width: 1600, height: 800 }, ...options });
 	t.after(() => context.close());
 	const page = await context.newPage();
 	page.setDefaultTimeout(20_000);
@@ -112,8 +112,8 @@ export async function open(t: TestContext, engine: string, type: BrowserType, pa
 		localStorage.setItem("ampi.panel", "arc");
 		if (display) localStorage.setItem("ampi.display", JSON.stringify(display));
 	}, display);
-	await page.goto(`${hub!.origin}/?k=${hub!.key}${LEAD}`);
-	await page.locator(".panel-edge").waitFor();
+	await page.goto(`${hub!.origin}/?k=${hub!.key}${route}`);
+	if (route.includes("?p=")) await page.locator(".panel-edge").waitFor();
 	await page.locator(".transcript [data-entry]").first().waitFor({ state: "attached" });
 	return page;
 }

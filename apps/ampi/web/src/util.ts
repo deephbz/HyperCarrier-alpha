@@ -155,3 +155,14 @@ export function go(host?: string, thread?: string, opts: { entry?: string; panel
 	if (thread) perfMark("switch-start");
 	navigate(host ? (thread ? href.thread(host, thread, opts) : `#/h/${encodeURIComponent(host)}`) : "#/");
 }
+
+/**
+ * Centers `item` in the scrolling `list` and scrolls nothing else. `scrollIntoView` also scrolls each ancestor, and a
+ * clipped app shell then shifts the whole page with no way back.
+ */
+export function centerInList(list: HTMLElement, item: HTMLElement): void {
+	let top = 0, node: Element | null = item;
+	while (node instanceof HTMLElement && node !== list && node !== list.offsetParent) { top += node.offsetTop; node = node.offsetParent; }
+	if (node !== list) top -= list.offsetTop + list.clientTop;
+	list.scrollTop = top - (list.clientHeight - item.offsetHeight) / 2;
+}

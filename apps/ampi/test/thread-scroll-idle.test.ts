@@ -27,9 +27,9 @@ test("scroll hold: conversation-only stays still for ten seconds with a running 
 	await page.locator("[data-region=transcript]").hover();
 	await page.mouse.wheel(0, -1000);
 	await frames(page);
-	await page.getByRole("button", { name: "Transcript lens: full transcript" }).click();
+	await page.getByRole("button", { name: "Chat", exact: true }).click();
 	await frames(page);
-	await page.locator('[aria-label="Transcript lens: conversation only"]').waitFor({state:"attached"});
+	await page.locator('[aria-label="Transcript mode"] > [aria-pressed="true"]', { hasText: "Chat" }).first().waitFor({state:"attached"});
 	// A mode toggle may change geometry. Once it settles, no new source data or reader action occurs.
 	const read = () => page.evaluate(() => { const el = document.querySelector<HTMLElement>("[data-region=transcript]")!; return {top:el.scrollTop,height:el.scrollHeight,rows:el.querySelectorAll("[data-entry]").length}; });
 	const before = await read();

@@ -29,7 +29,7 @@ test("a link whose agent sends no frame and never exits is killed, and the Host 
 	const { hub, browser } = await setup(t);
 	const threads = browser.sub("devbox", { kind: "threads" });
 	await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.live);
-	const link = hub.links.get("devbox") as PiHost;
+	const link = hub.link("devbox") as PiHost;
 	const [stuck] = agents();
 	assert.ok(stuck, "the Host runs one agent");
 	process.kill(stuck, "SIGSTOP");
@@ -54,6 +54,6 @@ test("a link whose agent sends no frame and never exits is killed, and the Host 
 		await new Promise((resolve) => setTimeout(resolve, 10));
 	assert.equal(link.state.status, "connected", "the Host reconnected with a new agent");
 	assert.ok(!agents().includes(stuck), "the silent agent was killed");
-	assert.match(reason, /no frame for \d+ s, killed/, "the disconnect names the silence");
+	assert.match(reason, /No frame from the Pi agent for \d+ s; the hub stopped it/, "the disconnect names the silence");
 	await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.live);
 });

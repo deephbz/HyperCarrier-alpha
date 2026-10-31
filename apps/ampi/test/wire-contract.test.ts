@@ -86,7 +86,7 @@ test("wire contract: an unknown or unsupported request completes with its error 
 	assert.deepEqual(await refused("thread.slashCommands", { threadId: "pi:sess-a" }), { code: "unsupported", message: "thread.slashCommands is not available for Pi Sessions yet" });
 	assert.deepEqual(await refused("view.nope.build", {}), { code: "unsupported", message: "view.nope.build is not available" });
 	assert.deepEqual(await refused("thread.compact", { threadId: "pi:sess-a" }), { code: "unsupported", message: "thread.compact is not available for Pi Sessions yet" }, "a node-backend op");
-	assert.deepEqual(await refused("thread.submit", { threadId: "pi:sess-a", content: "x", images: [{ data: "", mimeType: "image/png" }] }), { code: "unsupported", message: "Images cannot be sent to a Pi Session from here yet" });
+	assert.deepEqual(await refused("thread.submit", { threadId: "pi:sess-nope", content: "x", images: [{ data: "", mimeType: "image/png" }] }), { code: "not_found", message: "Unknown Session on this Host" }, "a handler's own refusal");
 });
 
 test("wire contract: the cast lint finds each banned escape and ignores comments and strings", () => {

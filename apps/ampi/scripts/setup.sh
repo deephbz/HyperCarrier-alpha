@@ -75,6 +75,6 @@ cat <<NEXT
 Next:
   • Start AmPi:      ampi hub --open        (prints and opens the window's link)
   • On a Mac app:    apps/ampi/macos/scripts/build-app.sh, then open apps/ampi/macos/build/AmPi.app
-  • Remote Linux:    run this script there with --bin-dir /usr/local/bin, then use + Add host in the window
+  • Remote Linux:    run this script there with --bin-dir /usr/local/bin, then use Remote host (?) in the window
   • Anytime:         ampi doctor
 NEXT

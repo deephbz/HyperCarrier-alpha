@@ -24,12 +24,36 @@ export function saveHostFold(host: Pick<HostState, "id">, collapsed: boolean): H
 	return fold;
 }
 
-/** Overview's line for a disconnected Host, with its error. */
-export function awayLine(host: HostState): string {
-	return `disconnected${host.lastSeen ? `, last seen ${ago(host.lastSeen)} ago` : ""}${host.error ? ` — ${host.error}` : ""}`;
+/**
+ * The projection every view renders for a Host's link: what the link does and for how long, its last failure, and the
+ * next step. Views show all three for a Host that is not connected, so a retry never hides why it is not connected.
+ */
+export type LinkView = { state: string; error?: string; hint?: string };
+
+export function linkView(host: HostState, now = Date.now()): LinkView {
+	if (host.status === "connected") return { state: "connected" };
+	const notes = { ...(host.error ? { error: host.error } : {}), ...(host.hint ? { hint: host.hint } : {}) };
+	if (host.status === "connecting") {
+		const elapsed = duration(now - host.since);
+		return { state: `connecting · ${host.phase === "hello" ? "awaiting hello" : "opening link"}${elapsed ? ` · ${elapsed}` : ""}`, ...notes };
+	}
+	const retry = host.retryAt ? duration(host.retryAt - now) : "";
+	return { state: `away${host.lastSeen ? ` · seen ${ago(host.lastSeen, now)} ago` : ""}${retry ? ` · retry in ${retry}` : ""}`, ...notes };
 }
 
-/** The sidebar header's quiet status word. */
-export function hostMeta(host: HostState): string {
-	return host.status === "connected" ? "live" : host.status === "connecting" ? "connecting…" : "away";
+/** Seconds below two minutes, then minutes. */
+function duration(ms: number): string {
+	if (!Number.isFinite(ms)) return "";
+	const s = Math.max(0, Math.round(ms / 1000));
+	return s < 120 ? `${s} s` : `${Math.round(s / 60)} min`;
+}
+
+/** Overview's line for a Host that is not connected: its link state, last failure, and next step. */
+export function linkLine(view: LinkView): string {
+	return [view.state, view.error, view.hint].filter(Boolean).join(" — ");
+}
+
+/** The sidebar header's quiet status. A connected Host shows only its green dot; screen readers still hear "connected". */
+export function hostMeta(host: HostState, now = Date.now()): string {
+	return host.status === "connected" ? "" : host.status === "connecting" ? linkView(host, now).state : "away";
 }

@@ -3,7 +3,9 @@ import { scaleOf, toCss } from "./display.ts";
 
 // DOM references belong only to the mounted reader; history stores entry IDs and offsets separately.
 // `fragment` names one rendered part of an entry (FRAGMENT), so a remounted fragment is found again.
-type Anchor = { id: string; top: number; offset: number; node?: HTMLElement; unique?: boolean; fragment?: string };
+// `offset`: the anchor's top below the scroller's top, in the scroller's CSS px. The scroller can move on screen and its
+// display size can change (a zoom step) between capture and restore; the CSS offset from its own top still holds.
+type Anchor = { id: string; offset: number; node?: HTMLElement; unique?: boolean; fragment?: string };
 export type ReadingPlace = { bottom: boolean; anchors: Anchor[] };
 type Options = { anchor?: HTMLElement | null; accept?: (node: HTMLElement) => boolean };
 
@@ -13,6 +15,7 @@ export const FRAGMENT = "data-fragment";
 /** Keep surviving content at its screen height; a bottom-pinned reader follows the bottom. Never moves focus. */
 export function capturePlace(el: HTMLElement, selector: string, attribute: string, bottom: boolean, options: Options = {}): ReadingPlace {
 	const bounds = el.getBoundingClientRect();
+	const scale = scaleOf(el);
 	const visible = [...el.querySelectorAll<HTMLElement>(selector)].filter((node) => node.getBoundingClientRect().height > 0);
 	const counts = new Map<string | null, number>();
 	for (const node of visible) { const id = node.getAttribute(attribute); counts.set(id, (counts.get(id) ?? 0) + 1); }
@@ -22,14 +25,13 @@ export function capturePlace(el: HTMLElement, selector: string, attribute: strin
 	if (options.anchor) ordered.unshift(options.anchor);
 	return { bottom, anchors: ordered.flatMap((node) => {
 		const id = node.getAttribute(attribute);
-		const top = node.getBoundingClientRect().top;
-		return id ? [{ id, top, offset: top - bounds.top, node, unique: counts.get(id) === 1, fragment: node.getAttribute(FRAGMENT) ?? undefined }] : [];
+		return id ? [{ id, offset: (node.getBoundingClientRect().top - bounds.top) / scale, node, unique: counts.get(id) === 1, fragment: node.getAttribute(FRAGMENT) ?? undefined }] : [];
 	}) };
 }
 
 /**
  * `shift`: how far the reader scrolled down since the capture, in scrollTop's CSS px; the anchor lands that much higher,
- * so the scroll stays. Anchor tops are screen px; the correction converts them at `el` (display zoom).
+ * so the scroll stays. Rects are screen px; the anchor's CSS offset converts at `el`'s display size now.
  */
 export function restorePlace(el: HTMLElement, selector: string, attribute: string, place: ReadingPlace, shift = 0) {
 	if (place.bottom) { el.scrollTop = el.scrollHeight; return; }
@@ -44,18 +46,25 @@ export function restorePlace(el: HTMLElement, selector: string, attribute: strin
 			: named.length === 1 ? named[0]
 			: anchor.unique !== false && matches.length === 1 ? matches[0] : undefined;
 		if (!node) continue;
-		const target = anchor.top - shift * scaleOf(el);
+		const target = el.getBoundingClientRect().top + (anchor.offset - shift) * scaleOf(el);
 		const off = () => node.getBoundingClientRect().top - target;
 		const delta = toCss(off(), el);
 		// Ignore subpixel rounding within half a CSS pixel.
 		if (Math.abs(delta) > 0.5) el.scrollTop += delta;
-		// WebKit keeps scrollTop in whole screen px and rounds a write down, which leaves up to two CSS px at display zoom;
-		// one more write, rounded away from zero, keeps the closer place.
+		// WebKit keeps scrollTop in whole screen px and rounds a write down, which leaves up to two CSS px at display zoom.
+		// Try the whole-px steps on both sides of the rest and keep the closest place: a step rounded up alone can overshoot
+		// by a pixel.
 		const rest = off();
 		if (Math.abs(rest) > 0.5) {
-			const kept = el.scrollTop;
-			el.scrollTop = kept + Math.sign(rest) * Math.ceil(Math.abs(toCss(rest, el)));
-			if (Math.abs(off()) >= Math.abs(rest)) el.scrollTop = kept;
+			// Each try writes a value, never one read back: WebKit rounds a written value again.
+			const kept = el.scrollTop, need = Math.abs(toCss(rest, el));
+			let best: number | undefined, least = Math.abs(rest), last: number | undefined;
+			for (const step of new Set([Math.max(1, Math.floor(need)), Math.ceil(need)])) {
+				el.scrollTop = last = kept + Math.sign(rest) * step;
+				if (Math.abs(off()) < least) { best = last; least = Math.abs(off()); }
+			}
+			if (best === undefined) el.scrollTop = kept;
+			else if (best !== last) el.scrollTop = best;
 		}
 		return;
 	}
@@ -178,6 +187,10 @@ export function useKeepPlace(
 		el.scrollTop = el.scrollHeight;
 		remember();
 	}, [scroller, remember]);
+	// The one record of a place the view wrote itself (Back's restore, a reveal): it is the reader's place at once. Until
+	// that write's scroll event arrives, a resize (the prompt rail mounts) or a render restores the record, and the place
+	// from before the write would undo it.
+	const record = remember;
 	// The reader's wheel up leaves the end at its input, before its scroll lands. WebKit on macOS applies a wheel's scroll
 	// asynchronously: a render between the wheel and its scroll still sees scrollTop at the end and would follow. A wheel
 	// that a nested scroller takes, a pinch zoom, or a scroller already at its top moves nothing here.
@@ -203,9 +216,12 @@ export function useKeepPlace(
 		const el = scroller.current;
 		if (!el || (el.clientWidth === size.current.width && el.clientHeight === size.current.height)) return false;
 		if (saved.current) restorePlace(el, selector, attribute, saved.current);
-		remember();
+		// One render can resize the scroller and shrink its content (a run ends: the Composer shrinks while the live reply
+		// gives way to its entry). The restore then cannot reach the place, and a clamped reader keeps the record.
+		if (clamp()) size.current = { width: el.clientWidth, height: el.clientHeight };
+		else remember();
 		return true;
-	}, [scroller, selector, attribute, remember]);
+	}, [scroller, selector, attribute, remember, clamp]);
 	const onScroll = useCallback(() => {
 		const el = scroller.current;
 		if (!el) return;
@@ -280,5 +296,5 @@ export function useKeepPlace(
 			mutations.current = undefined;
 		};
 	}, [scroller, selector, attribute, resized, following, tail, remember, clamp]);
-	return { capture, onScroll, onWheel, following, follow };
+	return { capture, onScroll, onWheel, following, follow, record };
 }

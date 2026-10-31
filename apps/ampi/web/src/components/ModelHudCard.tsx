@@ -5,7 +5,7 @@ import { useHoverCard } from "./hover-card.tsx";
 /** The composer's model label; hover or focus shows the Session as the hc-hud footer draws it. */
 export function ModelHudCard({ summary }: { summary: ThreadSummary }) {
 	// The composer sits at the bottom of the window, so the card opens upward.
-	const { id, open, anchorProps, render } = useHoverCard<HTMLSpanElement>({ prefer: "above", deps: [summary] });
+	const { id, open, anchorProps, render } = useHoverCard<HTMLSpanElement>({ prefer: "above" });
 	const view = open ? hudView(summary) : undefined;
 	return <span className="model-hud-card" {...anchorProps}>
 		<span className="model-hud-trigger hint" tabIndex={0} aria-describedby={open ? id : undefined}>{summary.model}</span>

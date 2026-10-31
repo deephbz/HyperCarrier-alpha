@@ -154,9 +154,9 @@ function TimelineView({ route, selected }: { route: Route; selected?: PanelSelec
 	const merged = queryParams.get("teams") !== "separate";
 	const sessions = useMemo(() => feeds.flatMap((f) => (f.value?.sessions ?? []).filter((s) => {
 		// The panel keeps only its Session and Team; open Sessions are always in scope.
-		if (selected) return s.entries.length > 0 && inPanel({ ...s, host: f.host.id }, selected);
+		if (selected) return s.entries.length > 0 && inPanel({ ...s, host: f.host.link }, selected);
 		return s.entries.length > 0 && isSessionInScope({ activityAt: s.end, live: s.live, open: false });
-	} ).map((s) => ({ ...s, host: f.host.id, live: connected && !f.stale && f.host.status === "connected" && s.live }))), [feeds, connected, selected]);
+	} ).map((s) => ({ ...s, host: f.host.link, live: connected && !f.stale && f.host.status === "connected" && s.live }))), [feeds, connected, selected]);
 	const focus = queryParams.get("focus");
 	const focused = sessions.find((s) => s.ref === focus);
 	const min = Math.min(...sessions.map((s) => s.start)), max = Math.max(...sessions.map((s) => s.end));
@@ -183,7 +183,7 @@ function TimelineView({ route, selected }: { route: Route; selected?: PanelSelec
 		node.scrollTop = top;
 		setScroll(node.scrollTop);
 	}, [bands]);
-	const unreadable = feeds.flatMap((f) => (f.value?.unreadable ?? []).filter((u) => !selected || (f.host.id === selected.host && u.threadId === selected.threadId)));
+	const unreadable = feeds.flatMap((f) => (f.value?.unreadable ?? []).filter((u) => !selected || (f.host.link === selected.host && u.threadId === selected.threadId)));
 	const waitingOutside = sessions.filter((s) => attention(s, seen) && (s.end < from || s.start > to)).length;
 	const bucketMs = feeds.find((f) => f.value)?.value?.bucketMs ?? 900_000;
 	const overview = useMemo(() => {

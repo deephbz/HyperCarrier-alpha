@@ -34,7 +34,7 @@ test("host lists render: a failed init says unavailable and the full reason, nev
 	assert.match(side, /unavailable/);
 	assert.doesNotMatch(side, /copies readable/);
 	assert.ok(side.includes(REASON), side);
-	const page = text(renderToStaticMarkup(createElement(overview as never, { data: [failed], onNew() {}, onAddHost() {}, onHelp() {} })));
+	const page = text(renderToStaticMarkup(createElement(overview as never, { data: [failed], onNew() {}, onHostSetup() {}, onHelp() {} })));
 	assert.ok(page.includes(`devbox: ${REASON}`), page);
 	assert.doesNotMatch(page, /No Sessions yet|Reading Sessions/);
 });

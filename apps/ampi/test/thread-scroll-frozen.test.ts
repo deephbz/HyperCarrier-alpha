@@ -11,7 +11,7 @@ test("scroll hold: scrolling to the bottom of a frozen window extends it downwar
 	const { page, send } = await open(t, 200);
 	await scrollAway(page);
 	send({ ...view(320) });
-	await newButton(page).getByText("↓ 120 new", { exact: true }).waitFor();
+	await newButton(page).getByText("↓ 120 new messages", { exact: true }).waitFor();
 	await frames(page);
 	assert.equal(await page.locator("[data-entry=e200]").count(), 0, "arrivals past the frozen window do not paint");
 	// The reader scrolls to near the bottom of the frozen window; the anchor is measured before the scroll event.
@@ -37,7 +37,7 @@ for (const engine of ENGINES) test(`scroll hold (${engine}): wheeling down a fro
 	const { page, send } = await open(t, 200, "pi", engine);
 	await scrollAway(page);
 	send({ ...view(320) });
-	await newButton(page).getByText("↓ 120 new", { exact: true }).waitFor();
+	await newButton(page).getByText("↓ 120 new messages", { exact: true }).waitFor();
 	await frames(page);
 	const top = () => page.evaluate(() => document.querySelector<HTMLElement>("[data-region=transcript]")!.scrollTop);
 	await page.evaluate(() => { const el = document.querySelector<HTMLElement>("[data-region=transcript]")!; el.scrollTop = el.scrollHeight - el.clientHeight - 1200; });
@@ -64,7 +64,7 @@ for (const engine of ENGINES) test(`scroll hold (${engine}): a scroll after the 
 	const { page, send } = await open(t, 200, "pi", engine);
 	await scrollAway(page);
 	send({ ...view(320) });
-	await newButton(page).getByText("↓ 120 new", { exact: true }).waitFor();
+	await newButton(page).getByText("↓ 120 new messages", { exact: true }).waitFor();
 	await frames(page);
 	const moved = await page.evaluate(() => new Promise<{ from: number; to: number }>((done) => {
 		const el = document.querySelector<HTMLElement>("[data-region=transcript]")!;
@@ -99,7 +99,7 @@ test("scroll hold: a busy thread shows \"working…\" to a reader away from the 
 	await status.getByText("working…", { exact: true }).waitFor();
 	assert.equal(await status.getByRole("button").count(), 0, "no control before an entry arrives");
 	send({ ...view(201), live: live("Streaming more") });
-	await status.getByRole("button", { name: "↓ 1 new · working…" }).waitFor();
+	await status.getByRole("button", { name: "↓ 1 new message · working…" }).waitFor();
 	await page.locator("[data-region=transcript]").focus();
 	await page.keyboard.press("Shift+G");
 	await frames(page);

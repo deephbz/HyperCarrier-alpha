@@ -20,7 +20,7 @@ test("input: images reach the model and come back on demand; a retried submit is
 		const threads = client.sub({ kind: "threads" });
 		const { threadId } = await client.req("thread.create", { cwd: home, model: SIM, prompt: "hello" });
 		await client.until<any>(threads, (v) => v.threads[threadId]?.activity === "idle" && v.threads[threadId]?.preview);
-		await assert.rejects(client.req("thread.submit", { threadId, content: "x", images: [{ data: PNG, mimeType: "image/svg+xml" }] }), /png, jpeg, gif, or webp/);
+		await assert.rejects(client.req("thread.submit", { threadId, content: "x", images: [{ data: PNG, mimeType: "image/svg+xml" }] }), /not PNG, JPEG, GIF, WebP/);
 		await assert.rejects(client.req("thread.submit", { threadId, content: "x", images: [{ data: PNG, mimeType: "image/jpeg" }] }), /not a valid jpeg/, "the label must match the bytes");
 		await assert.rejects(client.req("thread.submit", { threadId, content: "x", images: [{ data: "not base64!", mimeType: "image/png" }] }), /not a valid png/);
 		// The same intent sent twice (a lost response, then a retry) is one message.

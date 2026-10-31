@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { WorkingSet } from "../src/pi/working-set.ts";
+import type { FindAsk } from "../src/pi/search.ts";
 import { openWorkingSet, readWorkingSet } from "../src/pi/working-set-db.ts";
 import { type Source, TOOL_ARGS_CHARS } from "../src/pi/working-set-types.ts";
 import { selectRarebits, measureRarebits } from "@hypercarrier/rarebit/core";
@@ -44,6 +45,23 @@ test("working set: tail limits cannot truncate full-branch statistics, Rarebit s
  const snapshot = store.rarebitSnapshot(source.path, 100_000);
  assert.equal(snapshot.count, 650); assert.ok(snapshot.omittedChars > 0); assert.equal(snapshot.context.length, 100_000);
  assert.ok(data.arc.chunks.some((c) => c.firstEntryId === "e0"));
+});
+
+test("working set: an around page always holds its target, and the Rarebit page of a linked entry holds its item", async (t) => {
+ const records = Array.from({ length: 650 }, (_, i) => msg(`e${i}`, i ? `e${i - 1}` : null, `prose ${i} ` + "x".repeat(1500), i % 2 ? "assistant" : "user"));
+ const { source, store } = setup(t, records);
+ const data = (await store.refresh(source))!;
+ // Later rows used to fill a small page from above and push the target out (nav-anchors, systems observer).
+ const small = store.page(source.path, { around: "e50", limit: 10, version: data.version });
+ assert.ok(small.entries.some((e) => e.id === "e50"), "the target is in the page");
+ assert.equal(small.entries.length, 10); assert.ok(small.more);
+ for (let i = 1; i < small.entries.length; i++) assert.ok(Number(small.entries[i]!.id.slice(1)) === Number(small.entries[i - 1]!.id.slice(1)) + 1, "contiguous rows");
+ // The newest Rarebit page (400 items) does not hold e50; an around read serves the page that does, and its cursor.
+ assert.ok(!store.rarebits(source.path, 1).items.some((i) => i.id === "e50"));
+ const page = store.rarebits(source.path, 1, undefined, false, "e50");
+ assert.ok(page.items.some((i) => i.id === "e50")); assert.deepEqual(page.around, { id: "e50", found: "item" }); assert.ok(page.before);
+ assert.deepEqual(store.rarebits(source.path, 1, undefined, false, "e640").before, undefined, "a recent target is on the newest page");
+ assert.deepEqual(store.rarebits(source.path, 1, undefined, false, "nope").around, { id: "nope", found: "missing" });
 });
 
 test("working set: the hub's reader waits out a briefly held write lock instead of failing (\"database is locked\" at load 211)", async (t) => {
@@ -91,9 +109,11 @@ test("working set: fork/reset invalidates old pages, prose hits and body referen
  appendFileSync(source.file, line(msg("e2", "e0", "newneedle")));
  const fork = (await store.refresh(source))!;
  assert.equal(fork.count, 2); assert.equal(store.search("discardedneedle").hits.length, 0);
- assert.throws(() => store.page(source.path, { version: original.version }), /changed/);
- assert.throws(() => store.entry(source, "e1"), /current branch/);
- assert.throws(() => store.entry(source, "e2", 0, original.version), /changed/);
+ // A moved version is retryable and an entry off the branch is final; the wire carries the code (protocol.ts).
+ assert.throws(() => store.page(source.path, { version: original.version }), { code: "stale_version", message: /changed/ });
+ assert.throws(() => store.page(source.path, { around: "e1", version: fork.version }), { code: "not_found", message: /current branch/ });
+ assert.throws(() => store.entry(source, "e1"), { code: "not_found", message: /current branch/ });
+ assert.throws(() => store.entry(source, "e2", 0, original.version), { code: "stale_version", message: /changed/ });
  const page = store.entry(source, "e2", 0, fork.version);
  assert.equal(page.more, false); assert.equal(JSON.parse(page.text).text, "newneedle");
  writeFileSync(source.file, line({ type: "session", id: "fixture-session" }) + line(msg("e3", null, "samelengthA")));
@@ -126,6 +146,46 @@ test("search: fleet CJK bigrams find two characters and exclude thinking/tools; 
   assert.ok(found.hits[0]?.ref.startsWith("fixture/pi:fixture-session#"));
  }
  await store.forget(source); assert.equal(store.search("alpha").hits.length, 0); assert.equal(store.load(source.path), undefined);
+});
+
+test("search: Session find keeps one window of at most 200 matches per scope near `from` or the tail, echoes `anchored`, and old clients keep the first 200", async (t) => {
+ // e0–e599 match in prose, e600 does not, t601–t650 match only in tool results.
+ const records: any[] = Array.from({ length: 600 }, (_, i) => msg(`e${i}`, i ? `e${i - 1}` : null, `needle ${i}`, i % 2 ? "assistant" : "user"));
+ records.push(msg("e600", "e599", "plain"));
+ for (let i = 601; i <= 650; i++) records.push(msg(`t${i}`, i === 601 ? "e600" : `t${i - 1}`, `needle ${i}`, "toolResult"));
+ const { source, store } = setup(t, records);
+ const data = (await store.refresh(source))!;
+ const find = async (ask: FindAsk = {}) => {
+  const found = await store.find(source, "needle", data.version, ask);
+  assert.equal(found.total, 650); assert.equal(found.proseTotal, 600); assert.ok(found.more);
+  const ids = (scope: "all" | "prose") => { const w = found.windows![scope]; return found.hits.filter((h) => (scope === "all" || h.prose) && h.at! >= w.first && h.at! <= w.last).map((h) => h.entry); };
+  return { found, all: ids("all"), prose: ids("prose"), w: found.windows! };
+ };
+ const span = (from: number, to: number, p = "e") => Array.from({ length: to - from + 1 }, (_, i) => `${p}${from + i}`);
+ // No `from` gives the first window and no `anchored`; a `from` the copy lacks gives it with `anchored: false`.
+ for (const [ask, anchored] of [[{}, undefined], [{ from: "missing" }, false]] as const) {
+  const { found, all, w } = await find(ask);
+  assert.deepEqual(all, span(0, 199)); assert.deepEqual(w.all, { first: found.hits[0]!.at, last: found.hits[199]!.at, skipped: 0, start: 0, size: 200 });
+  assert.equal(found.hits.length, 200); assert.equal(found.anchored, anchored);
+ }
+ // In the middle, 100 matches lie behind `from`; the window's start is `from` itself.
+ let r = await find({ from: "e500" });
+ assert.equal(r.found.anchored, true);
+ assert.deepEqual(r.prose, span(400, 599)); assert.deepEqual({ skipped: r.w.prose.skipped, start: r.w.prose.start, size: r.w.prose.size }, { skipped: 400, start: 100, size: 200 });
+ assert.deepEqual(r.all, [...span(400, 599)]); assert.equal(r.w.all.skipped, 400);
+ // Near the start, the window cannot hold 100 behind.
+ r = await find({ from: "e30" });
+ assert.deepEqual(r.prose, span(0, 199)); assert.equal(r.w.prose.start, 30); assert.equal(r.w.prose.skipped, 0);
+ // Near the end, the window holds more behind; with no prose match after `from`, prose starts past its window.
+ r = await find({ from: "e600" });
+ assert.deepEqual(r.all, [...span(450, 599), ...span(601, 650, "t")]); assert.deepEqual({ skipped: r.w.all.skipped, start: r.w.all.start }, { skipped: 450, start: 150 });
+ assert.deepEqual(r.prose, span(400, 599)); assert.deepEqual({ skipped: r.w.prose.skipped, start: r.w.prose.start, size: r.w.prose.size }, { skipped: 400, start: 200, size: 200 });
+ assert.equal(r.found.hits.length, 250);
+ // The tail holds each scope's last 200 matches; no match lies after the reader, so `start` is the window's size.
+ r = await find({ tail: true });
+ assert.equal(r.found.anchored, true);
+ assert.deepEqual(r.all, [...span(450, 599), ...span(601, 650, "t")]); assert.deepEqual({ skipped: r.w.all.skipped, start: r.w.all.start, size: r.w.all.size }, { skipped: 450, start: 200, size: 200 });
+ assert.deepEqual(r.prose, span(400, 599)); assert.deepEqual({ skipped: r.w.prose.skipped, start: r.w.prose.start }, { skipped: 400, start: 200 });
 });
 
 test("working set: repeated 32-Session churn plateaus heap/external bytes and releases every LRU reference on close", () => {
@@ -222,6 +282,22 @@ test("working set: user and assistant prose up to 16 KiB stay whole in the previ
  assert.equal(user.text.length, 13_616); assert.ok(!user.bodyAvailable, "a 13,616-char user message is whole");
  assert.equal(assistant.blocks[0].text.length, 13_616); assert.ok(!assistant.bodyAvailable, "a 13,616-char reply is whole");
  assert.equal(long.blocks[0].text.length, 16 * 1024); assert.equal(long.bodyAvailable, true);
+});
+
+test("working set: a Rarebit page cuts long texts in SQLite and equals the whole-row parse; fullText keeps them whole", async (t) => {
+ // Astral characters make the SQLite cut (code points) and the page cut (UTF-16 units) differ.
+ const astral = "é🙂".repeat(6000) + "z".repeat(100), plain = "p".repeat(9000), short = "short";
+ const records = [msg("e0", null, astral), msg("e1", "e0", plain, "assistant"), msg("e2", "e1", short)];
+ const { source, store } = setup(t, records);
+ await store.refresh(source);
+ const db = new DatabaseSync(join(source.cacheDir, "working-set.sqlite"), { readOnly: true });
+ t.after(() => db.close());
+ const whole = db.prepare("SELECT rarebit FROM entries WHERE path=? AND rarebit IS NOT NULL ORDER BY position").all(source.path).map((row: any) => JSON.parse(String(row.rarebit)));
+ const expected = whole.map((item: any) => item.text.length > 8192 ? { ...item, text: item.text.slice(0, 8192), truncated: true } : item);
+ const page = store.rarebits(source.path, 1);
+ assert.deepEqual(page.items.map((i) => i.text.length), [8192, 8192, short.length]);
+ assert.deepEqual(page.items, expected, "the page equals the old JS cut of each whole row");
+ assert.deepEqual(store.rarebits(source.path, 1, undefined, true).items, whole, "fullText keeps every text whole");
 });
 
 test("working set: saved heads are readable before the derive Worker initializes, so a restart lists Sessions sooner", async (t) => {

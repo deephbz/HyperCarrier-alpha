@@ -1,14 +1,23 @@
+import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { createConnection, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyImmutable } from "@earendil-works/chord/delta";
 import WebSocket from "ws";
+import { HubHome } from "../src/hub/home.ts";
 import { encodeFrame, lineReader } from "../src/shared/framing.ts";
 import type { NodeFrame, Topic } from "../src/shared/protocol.ts";
 
 export function tempHome(): string {
 	return mkdtempSync(join(tmpdir(), "ampi-test-"));
+}
+
+/** The home lock for one test hub, as `ampi hub` takes it; release it when the hub stops. */
+export function ownHome(dir = tempHome()): HubHome {
+	const home = HubHome.acquire(dir);
+	assert.ok(home instanceof HubHome, `the home is free: ${JSON.stringify(home)}`);
+	return home;
 }
 
 /** A minimal ampi/1 client over the unix socket, for tests. */
@@ -105,6 +114,8 @@ export class Browser {
 	gaps: string[] = [];
 	snaps = new Map<number, number>();
 	hosts: any[] = [];
+	/** The hosts frame's `config`: the hub.json the hub read at start. */
+	config: string | undefined;
 	stale = new Set<number>();
 	/** The last `end` or `pending` frame of each subscription. */
 	closing = new Map<number, { t: "end" | "pending"; reason: string }>();
@@ -117,7 +128,7 @@ export class Browser {
 		ws.on("message", (data) => {
 			const frame = JSON.parse(String(data));
 			if (frame.t === "res") this.#waiters.get(frame.id)?.(frame);
-			else if (frame.t === "hosts") this.hosts = frame.hosts;
+			else if (frame.t === "hosts") (this.hosts = frame.hosts), (this.config = frame.config);
 			else if (frame.t === "stale") this.stale.add(frame.sid);
 			else if (frame.t === "end" || frame.t === "pending") this.closing.set(frame.sid, { t: frame.t, reason: frame.reason });
 			else if (frame.t === "snap") {

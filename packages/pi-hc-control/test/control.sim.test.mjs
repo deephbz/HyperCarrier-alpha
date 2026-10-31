@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { SimWorld } from "@hypercarrier/pi-sim";
 import { socketPathFor } from "../src/endpoint.mjs";
-import { createHcControlExtension } from "../src/extension.mjs";
+import { VERSION, createHcControlExtension } from "../src/extension.mjs";
 
 const tick = (ms = 1) => new Promise((resolve) => setTimeout(resolve, ms));
 async function until(predicate, label, limit = 2000) {
@@ -225,6 +225,85 @@ test("input Pi never admits is reported as not_admitted, idle or streaming", asy
   );
 });
 
+// A synthetic 1x1 PNG; Pi stores image blocks as they arrive.
+const PNG = { mimeType: "image/png", data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAwS2OUAAAAABJRU5ErkJggg==" };
+const imagesOfEntry = (world, entryId) =>
+  world.sessionManager.getEntry(entryId).message.content.filter((b) => b.type === "image").map(({ data, mimeType }) => ({ data, mimeType }));
+
+test("submit with images starts or queues one user entry that holds text and images", async () => {
+  await scenario(
+    {
+      // Pi's resize is real image work outside the simulated clock; without it Pi keeps each image as sent.
+      settings: { compaction: { enabled: false, keepRecentTokens: 1, reserveTokens: 1024 }, images: { autoResize: false } },
+      replies: [{ text: "first", delayMs: 300 }, { text: "after images" }, { text: "after image only" }],
+    },
+    async ({ world, ctl }) => {
+      await world.run(async () => {
+        const status = await ctl({ id: "q", op: "status" });
+        assert.equal(status.value.images, 1);
+        const started = await ctl({ id: "i", op: "submit", text: "SYN with image", images: [PNG], deliverAs: "followUp" });
+        assert.equal(started.evidence, "started", JSON.stringify(started));
+        assert.equal(world.sessionManager.getEntry(started.entryId).message.content[0].text, "SYN with image");
+        assert.deepEqual(imagesOfEntry(world, started.entryId), [PNG]);
+        await until(() => world.session.isStreaming, "streaming");
+        const queued = await ctl({ id: "f", op: "submit", text: "SYN two images", images: [PNG, PNG], deliverAs: "followUp" });
+        const bare = await ctl({ id: "b", op: "submit", text: "", images: [PNG], deliverAs: "followUp" });
+        assert.deepEqual([queued.evidence, bare.evidence], ["admitted", "admitted"], JSON.stringify([queued, bare]));
+        await world.session.waitForIdle();
+        const after = Object.fromEntries((await ctl({ id: "q2", op: "status" })).value.submissions.map((r) => [r.submission, r]));
+        const two = after[queued.submission], one = after[bare.submission];
+        assert.deepEqual([two?.state, one?.state], ["delivered", "delivered"], JSON.stringify(after));
+        assert.deepEqual(imagesOfEntry(world, two.entryId), [PNG, PNG]);
+        assert.deepEqual(imagesOfEntry(world, one.entryId), [PNG]);
+      });
+      assert.deepEqual(userTexts(world), ["SYN with image", "SYN two images", ""]);
+    },
+  );
+});
+
+test("abort: a queued submission names its images; one with no text is never returned", async () => {
+  let draft = "";
+  const uiContext = { getEditorText: () => draft, setEditorText: (text) => void (draft = text) };
+  await scenario({ replies: [{ text: "never finishes", delayMs: 60_000 }], uiContext }, async ({ world, ctl }) => {
+    await world.run(async () => {
+      const run = world.session.prompt("SYN long task");
+      await until(() => world.session.isStreaming, "streaming");
+      const both = await ctl({ id: "t", op: "submit", text: "SYN with image", images: [PNG], deliverAs: "followUp" });
+      const bare = await ctl({ id: "b", op: "submit", text: "", images: [PNG, PNG], deliverAs: "followUp" });
+      // Pi's interactive abort moves the queued text, never the images, into the editor draft.
+      const { steering, followUp } = world.session.clearQueue();
+      draft = [...steering, ...followUp].join("\n\n");
+      const reply = await ctl({ id: "a", op: "abort" });
+      assert.deepEqual(reply.submissions.map((r) => [r.submission, r.state, r.images]), [
+        [both.submission, "returned", 1],
+        [bare.submission, "dropped", 2],
+      ]);
+      await run.catch(() => {});
+    });
+  });
+});
+
+test("bad or oversized images are refused before Pi sees them", async () => {
+  await scenario({ replies: [] }, async ({ world, ctl }) => {
+    const big = { mimeType: "image/png", data: "A".repeat(6 * 1024 * 1024 + 4) };
+    const replies = await world.run(() =>
+      Promise.all([
+        ctl({ id: 1, op: "submit", text: "SYN", images: PNG, deliverAs: "steer" }),
+        ctl({ id: 2, op: "submit", text: "SYN", images: [{ ...PNG, mimeType: "image/svg+xml" }], deliverAs: "steer" }),
+        ctl({ id: 3, op: "submit", text: "SYN", images: [{ ...PNG, data: "not base64!" }], deliverAs: "steer" }),
+        ctl({ id: 4, op: "submit", text: "SYN", images: Array(9).fill(PNG), deliverAs: "steer" }),
+        ctl({ id: 5, op: "submit", text: "SYN", images: [big], deliverAs: "steer" }),
+        ctl({ id: 6, op: "submit", text: " ", images: [], deliverAs: "steer" }),
+      ]),
+    );
+    assert.deepEqual(
+      replies.map((r) => r.error?.code),
+      ["bad_request", "bad_request", "bad_request", "bad_request", "too_large", "bad_request"],
+    );
+    assert.deepEqual(userTexts(world), []);
+  });
+});
+
 test("invalid frames are rejected without touching the Session", async () => {
   await scenario({ replies: [] }, async ({ world, ctl }) => {
     const replies = await world.run(() =>
@@ -255,7 +334,7 @@ test("descriptor names the live Session; shutdown removes it and closes the sock
     assert.equal(descriptor.sessionId, sessionId);
     assert.equal(descriptor.pid, process.pid);
     assert.match(descriptor.nonce, /^[0-9a-f]{32}$/);
-    assert.equal(descriptor.version, "0.1.0");
+    assert.equal(descriptor.version, VERSION);
     assert.equal(descriptor.socket, transport.listens[0].path);
     // The path rule itself, preferred or fallback, is endpoint.test.mjs's subject.
     assert.equal(transport.listens[0].path, socketPathFor(join(world.agentDir, "hc-control"), sessionId).path);

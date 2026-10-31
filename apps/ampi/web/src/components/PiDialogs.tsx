@@ -3,10 +3,14 @@
 
 import { useState } from "react";
 import type { ThreadSummary } from "../../../src/shared/protocol.ts";
-import { hub, type HostState } from "../client.ts";
+import { findHost, hub, type HostState } from "../client.ts";
+import { hostLabelFor } from "./host-label.ts";
 import { useFeeds } from "../context.ts";
 import { MOD, go } from "../util.ts";
+import { freshPress } from "../composer-keys.ts";
 import { Modal } from "./Dialogs.tsx";
+import { Segmented } from "./Segmented.tsx";
+import { newId } from "../ids.ts";
 
 type Place = "right" | "down" | "workspace";
 const LAST_KEY = "ampi.newAgent";
@@ -15,8 +19,9 @@ const LAST_KEY = "ampi.newAgent";
 export function NewAgentDialog({ hosts, defaultHost, beside, onClose }: { hosts: HostState[]; defaultHost?: string; beside?: ThreadSummary; onClose: () => void }) {
 	const last = JSON.parse(localStorage.getItem(LAST_KEY) ?? "{}") as { host?: string; place?: Place; cwd?: Record<string, string> };
 	const connected = hosts.filter((h) => h.status === "connected");
-	const [host, setHost] = useState(defaultHost && hosts.some((h) => h.id === defaultHost) ? defaultHost : (last.host ?? connected[0]?.id ?? ""));
-	const besidePane = beside?.location?.pane && host === defaultHost ? beside : undefined;
+	const routed = findHost(hosts, defaultHost);
+	const [host, setHost] = useState(routed?.link ?? findHost(hosts, last.host)?.link ?? connected[0]?.link ?? "");
+	const besidePane = beside?.location?.pane && host === routed?.link ? beside : undefined;
 	const [chosen, setPlace] = useState<Place>(besidePane ? (last.place === "workspace" ? "right" : (last.place ?? "right")) : "workspace");
 	// Without a Session in a pane on this Host there is nothing to sit beside.
 	const place: Place = besidePane ? chosen : "workspace";
@@ -29,7 +34,7 @@ export function NewAgentDialog({ hosts, defaultHost, beside, onClose }: { hosts:
 	const [note, setNote] = useState<string>();
 	const [started, setStarted] = useState<string>();
 	// One ID per dialog: a double submit or a retry after a lost response must not start a second agent.
-	const [requestId] = useState(() => crypto.randomUUID());
+	const [requestId] = useState(() => newId());
 	const where = place === "workspace" ? "a new Herdr workspace" : `a pane ${place === "right" ? "to the right of" : "below"} ${besidePane?.title ?? "this Session"}`;
 	const create = async () => {
 		if (!cwd.trim()) return setError("Give the agent a working directory on the Host.");
@@ -69,7 +74,7 @@ export function NewAgentDialog({ hosts, defaultHost, beside, onClose }: { hosts:
 				Host
 				<select value={host} onChange={(e) => setHost(e.target.value)} aria-label="Host">
 					{hosts.map((h) => (
-						<option key={h.id} value={h.id} disabled={h.status !== "connected"}>
+						<option key={h.link} value={h.link} disabled={h.status !== "connected"}>
 							{h.label} {h.status === "connected" ? "" : `— ${h.status}`}
 						</option>
 					))}
@@ -77,21 +82,7 @@ export function NewAgentDialog({ hosts, defaultHost, beside, onClose }: { hosts:
 			</div>
 			<div className="field">
 				Where
-				<div className="seg" role="group" aria-label="Where">
-					{besidePane && (
-						<>
-							<button className={place === "right" ? "on" : ""} aria-pressed={place === "right"} onClick={() => setPlace("right")}>
-								Beside, right
-							</button>
-							<button className={place === "down" ? "on" : ""} aria-pressed={place === "down"} onClick={() => setPlace("down")}>
-								Beside, below
-							</button>
-						</>
-					)}
-					<button className={place === "workspace" ? "on" : ""} aria-pressed={place === "workspace"} onClick={() => setPlace("workspace")}>
-						New workspace
-					</button>
-				</div>
+				<Segmented label="Where" value={place} onChange={setPlace} options={[...(besidePane ? [["right", "Beside, right"], ["down", "Beside, below"]] as const : []), ["workspace", "New workspace"]]} />
 			</div>
 			<div className="field">
 				Working directory
@@ -116,7 +107,7 @@ export function NewAgentDialog({ hosts, defaultHost, beside, onClose }: { hosts:
 					onChange={(e) => setPrompt(e.target.value)}
 					aria-label="First message"
 					onKeyDown={(e) => {
-						if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void create();
+						if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && freshPress(e.nativeEvent)) void create();
 					}}
 				/>
 			</div>
@@ -124,7 +115,7 @@ export function NewAgentDialog({ hosts, defaultHost, beside, onClose }: { hosts:
 			{note && <div className="attn-box" role="status">{note} Open the agent to check its state.</div>}
 			<div className="actions">
 				<span className="hint" style={{ marginRight: "auto" }}>
-					Herdr starts Pi in {where} on {hosts.find((h) => h.id === host)?.label ?? host}.
+					Herdr starts Pi in {where} on {hostLabelFor(host, hosts)}.
 				</span>
 				<button className="btn" onClick={onClose}>
 					{started ? "Close" : "Cancel"}
@@ -220,7 +211,7 @@ export function ResumeAgentDialog({ host, summary, onClose }: { host: string; su
 	const [direction, setDirection] = useState<"right" | "down">("right");
 	const [error, setError] = useState<string>();
 	const [busy, setBusy] = useState(false);
-	const [requestId] = useState(() => crypto.randomUUID());
+	const [requestId] = useState(() => newId());
 	const resume = async () => {
 		setBusy(true);
 		setError(undefined);
@@ -252,14 +243,7 @@ export function ResumeAgentDialog({ host, summary, onClose }: { host: string; su
 				</select>
 			</div>
 			{beside && (
-				<div className="seg" role="group" aria-label="Split">
-					<button className={direction === "right" ? "on" : ""} aria-pressed={direction === "right"} onClick={() => setDirection("right")}>
-						Right
-					</button>
-					<button className={direction === "down" ? "on" : ""} aria-pressed={direction === "down"} onClick={() => setDirection("down")}>
-						Below
-					</button>
-				</div>
+				<Segmented label="Split" value={direction} onChange={setDirection} options={[["right", "Right"], ["down", "Below"]]} />
 			)}
 			{error && <div className="err-box" role="alert">{error} Check the Host connection and try again.</div>}
 			<div className="actions">

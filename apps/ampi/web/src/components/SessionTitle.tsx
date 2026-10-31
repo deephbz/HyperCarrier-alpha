@@ -4,7 +4,7 @@ import { money } from "../util.ts";
 import { useHoverCard } from "./hover-card.tsx";
 
 export function SessionTitle({ children, title, summary, host, parent }: { children: ReactNode; title: string; summary?: ThreadSummary; host: string; parent?: ReactNode }) {
-	const { id, open, setOpen, anchorProps, render } = useHoverCard<HTMLDivElement>({ deps: [title, summary] });
+	const { id, open, setOpen, anchorProps, render } = useHoverCard<HTMLDivElement>();
 	const [copied, setCopied] = useState<"ok" | "error">();
 	useEffect(() => { setCopied(undefined); setOpen(false); }, [summary?.id, host]);
 	const date = (value?: number) => value === undefined ? "Unknown" : new Date(value).toLocaleString(undefined, { hour12: false });

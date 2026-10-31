@@ -86,7 +86,7 @@ export async function open(t: TestContext, engine: Engine): Promise<Page> {
 		const w = window as unknown as { frames: number[][] };
 		w.frames = [];
 		const tick = () => {
-			const card = document.querySelector<HTMLElement>("section.session-metadata");
+			const card = document.querySelector<HTMLElement>(".session-metadata");
 			if (card && getComputedStyle(card).visibility !== "hidden") { const r = card.getBoundingClientRect(); w.frames.push([r.left, r.top, r.right, r.bottom]); }
 			requestAnimationFrame(tick);
 		};
@@ -117,7 +117,7 @@ export const zoom = (page: Page, overall: number, composer: number) => page.eval
 export const trigger = (card: Setup["card"]) => card === "hud" ? ".model-hud-trigger" : ".session-title-text";
 /** The card's border box, the viewport, and whether the card scrolls. */
 export const measure = (page: Page) => page.evaluate(() => {
-	const card = document.querySelector<HTMLElement>("section.session-metadata");
+	const card = document.querySelector<HTMLElement>(".session-metadata");
 	if (!card) return undefined;
 	const r = card.getBoundingClientRect();
 	return { box: [r.left, r.top, r.right, r.bottom], width: innerWidth, height: innerHeight, scrolls: card.scrollHeight > card.clientHeight + 1 };
@@ -136,7 +136,7 @@ export async function hoverOpen(page: Page, value: Setup, label: string) {
 	await setup(page, value);
 	await page.evaluate(() => { (window as unknown as { frames: number[][] }).frames = []; });
 	await page.hover(trigger(value.card));
-	await page.locator("section.session-metadata").waitFor({ state: "attached" });
+	await page.locator(".session-metadata").waitFor({ state: "attached" });
 	await frames(page);
 	const m = await assertInside(page, label);
 	const painted = await page.evaluate(() => (window as unknown as { frames: number[][] }).frames);

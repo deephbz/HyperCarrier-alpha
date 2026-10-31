@@ -38,6 +38,7 @@ import { defaultModel, listModels, openModels } from "./models.ts";
 import { contentText } from "./projection.ts";
 import { Terminals } from "./terminals.ts";
 import { Accounts } from "./accounts.ts";
+import { NODE_IMAGE_LIMITS } from "./images.ts";
 import { buildId } from "../shared/build.ts";
 
 export const VERSION = "0.1.0";
@@ -382,6 +383,7 @@ export class NodeRuntime {
 			activity: activityOf(live),
 			queued: inbox?.items.length ?? 0,
 			costUsd: 0,
+			images: NODE_IMAGE_LIMITS,
 		};
 		if (convMeta.archived) summary.archived = true;
 		if (record?.owner) summary.parentId = store.threadKey(record.owner.conversationId);

@@ -4,7 +4,14 @@ export const thread = (name = 'lead', panel = '') => `#/h/devbox/t/pi%3Asess-${n
 export const timeline = '#/v/timeline';
 export const arc = '#/v/arcs/devbox/pi%3Asess-big';
 const recipes = [];
-const add = (id, title, family, route, options = {}) => recipes.push({ id, title, family, route, ...options });
+// `read`: the entry ID the reader reads. The scene opens the Session at it through AmPi's own link (`?e=`), so the place
+// is a message, never a pixel offset: it holds however much of the transcript has painted, and through live arrivals.
+const linked = (route, read) => read ? `${route}${route.includes('?') ? '&' : '?'}e=${encodeURIComponent(read)}` : route;
+const add = (id, title, family, route, options = {}) => recipes.push({ id, title, family, ...options, route: linked(route, options.read) });
+// Preview fields (scripts/ux/preview.mjs): `target` locates the element the gallery rings and crops around; `serves`
+// quotes the owner request a scene proves ({ date, words }), and a scene without it reads AGENT-ORIGINATED; `live`
+// lets hub deltas through the fixture socket, for states that need entries arriving after load; `scrollbar` names a
+// scroller whose native scrollbar the shot shows (macOS draws an overlay bar only while it scrolls).
 add('S01.a', 'Timeline · tokens, merged Teams', 'Timeline', timeline);
 add('S01.b', 'Timeline · dollars, split Sessions', 'Timeline', timeline + '?unit=dollars&teams=separate');
 add('S01.c', 'Timeline · empty', 'Timeline', timeline, { variant: 'empty' });
@@ -44,7 +51,6 @@ add('S04.g', 'Rarebit · malformed input error', 'Rarebit', thread('rarebit-erro
 add('S04.h', 'Rarebit · side ask pending', 'Rarebit', thread('worker-gui', 'rarebit'), { setup: 'ask', pending: true });
 add('S04.i', 'Rarebit · side ask answer', 'Rarebit', thread('worker-gui', 'rarebit'), { setup: 'ask' });
 add('S04.j', 'Rarebit · ask failure', 'Rarebit', thread('worker-gui', 'rarebit'), { setup: 'ask', reject: true });
-add('S04.k', 'Rarebit · recap band', 'Rarebit', thread('worker-gui', 'rarebit'), { setup: 'recap' });
 add('S04.l', 'Rarebit · transcript lens', 'Rarebit', thread('worker-gui', 'rarebit'), { setup: 'lens' });
 add('S04.m', 'Rarebit · long conversation', 'Rarebit', thread('big', 'rarebit'));
 add('S04.n', 'Rarebit · compact overlay layout', 'Rarebit', thread('worker-gui', 'rarebit'), { width: 760 });
@@ -80,8 +86,7 @@ add('S07.d', 'Close agent · confirmation', 'Agent dialogs', thread('solo'), { s
 add('S07.e', 'Close agent · failure', 'Agent dialogs', thread('solo'), { setup: 'close-error', reject: true });
 add('S07.f', 'Resume agent · outside pane', 'Agent dialogs', thread('loose'), { setup: 'resume' });
 add('S07.g', 'Resume agent · failure', 'Agent dialogs', thread('loose'), { setup: 'resume-error', reject: true });
-add('S08.a', 'Add Host · form', 'Global dialogs', timeline, { setup: 'add-host' });
-add('S08.b', 'Add Host · rejected safely', 'Global dialogs', timeline, { setup: 'host-error', reject: true });
+add('S08.a', 'Remote host · setup prompt', 'Global dialogs', timeline, { setup: 'host-setup' });
 add('S08.c', 'Jump palette · results', 'Global dialogs', timeline, { setup: 'palette' });
 add('S08.d', 'Jump palette · no match', 'Global dialogs', timeline, { setup: 'palette-empty' });
 add('S08.e', 'Keyboard help', 'Global dialogs', timeline, { setup: 'help' });
@@ -103,18 +108,32 @@ add('S10.j', 'Node UI · full terminal', 'Frozen node UI', '#/h/devbox/x/ux-term
 add('S11.a', 'Unknown page · recovery', 'Recovery', '#/v/unknown-synthetic-page');
 add('S01.h', 'Timeline · zoomed range', 'Timeline', timeline, { setup: 'zoom' });
 add('S01.i', 'Timeline · stream inspector', 'Timeline', timeline, { setup: 'hover-stream' });
-add('S03.s', 'Sidebar · matching filter', 'Session', thread(), { setup: 'filter' });
-add('S03.t', 'Sidebar · no matching Sessions', 'Session', thread(), { setup: 'filter-empty' });
 add('S03.u', 'Sidebar · archived visible', 'Session', thread(), { setup: 'archive' });
 add('S03.v', 'Sidebar · group collapsed', 'Session', thread(), { setup: 'collapse-group' });
-add('S03.w', 'Session · earlier transcript', 'Session', thread('big'), { setup: 'transcript-top' });
+add('S03.w', 'Session · earlier transcript', 'Session', thread('big'), { read: 'u2749' });
 add('S04.p', 'Rarebit · earlier conversation window', 'Rarebit', thread('big', 'rarebit'), { setup: 'rb-top' });
 add('S05.n', 'Team · next Task page', 'Team', thread('lead', 'team'), { variant: 'large-team', setup: 'task-next' });
 add('S05.o', 'Team · read diagnostics', 'Team', thread('lead', 'team'), { variant: 'reader-missing', setup: 'team-diagnostics' });
 add('S10.k', 'Node UI · collapsed Host', 'Frozen node UI', thread('worker-gui'), { node: true, setup: 'host-collapse' });
 add('S04.q', 'Rarebit · previous user message', 'Rarebit', thread('worker-gui', 'rarebit'), { setup: 'rb-prev' });
 add('S04.r', 'Rarebit · next user message', 'Rarebit', thread('worker-gui', 'rarebit'), { setup: 'rb-next' });
-add('S04.s', 'Recap · hidden by toggle', 'Rarebit', thread('worker-gui', 'rarebit'), { setup: 'recap-hide' });
-add('S04.t', 'Recap · shown again', 'Rarebit', thread('worker-gui', 'rarebit'), { setup: 'recap-reshow' });
 add('S04.u', 'Conversation lens · expanded tool run', 'Rarebit', thread('worker-gui', 'rarebit'), { setup: 'lens-tools' });
+add('S03.x', 'Session · new-below chip', 'Session', thread('big'), { read: 'u2869', setup: 'new-below', live: true, target: '.new-below button',
+  serves: { date: '2026-10-30', words: '"Main transcript: when focus is not at tail and there\'re new messages: it show “X new”: should differentiate proses and tools, to show “X new messages, Y tool use” Y could contain any non-prose messages including compaction, intercom or whatever"' } });
+add('S03.y', 'Session · compact header, long name', 'Session', thread('long-title'), { target: '.thread-bar',
+  serves: { date: '2026-10-30', words: '"The \'running tools\' and spinning icon at main transcript session name header bar is not necessary and only takes space that could be used to show long session name. Remove it and let long session name comfortably displayed. Shorten the long button \'full transcript / conversation only\'. Also make the buttons at header bar a bit more compact (reduce margins/padding between buttons)."' } });
+add('S12.a', 'Sidebar · Team expanded', 'Session', thread('lead'), { setup: 'expand-team', target: '.side-scroll',
+  serves: { date: '2026-10-30', words: '"left sidebar UI: the “live” after hostID is not useful because we already have the green dot at left. The right-triangle before workspace / tab name has too large indent and padding / margin around, besides the session name have even larger indent."' } });
+const railAsk = { date: '2026-10-30', words: '"The prompt rail is wrong. It reused the old scroll bar with gray dashes/blocks. In the preview it was the proper ChatGPT black dashes clean shape."' };
+add('S13.a', 'Session · prompt rail, mid-transcript', 'Session', thread('big'), { read: 'u2921', target: '.prompt-rail', serves: railAsk });
+add('S13.b', 'Session · prompt rail, dark theme', 'Session', thread('big'), { read: 'u2921', theme: 'dark', target: '.prompt-rail', serves: railAsk });
+add('S13.c', 'Session · prompt rail hover, prompt outline', 'Session', thread('big'), { read: 'u2921', setup: 'rail-hover', target: '.prompt-rail', serves: railAsk });
+// The Session header's composition rule (header-fold.ts): the name keeps its slot at every width; secondary actions fold
+// into More. S03.r shows a busy spinner under the captures' reduced motion.
+add('S14.a', 'Session header · phone, long name', 'Session', thread('long-title'), { width: 390, setup: 'phone', target: '.thread-bar' });
+add('S14.b', 'Session header · phone, folded actions in More', 'Session', thread('long-title'), { width: 390, setup: 'phone-more', target: '.t-more-menu' });
+add('S14.c', 'Session header · narrow, long name', 'Session', thread('long-title'), { width: 760, target: '.thread-bar' });
+add('S14.d', 'Session header · desktop, transcript mode', 'Session', thread('long-title'), { target: '.thread-bar' });
+// The solo Session's first tool call is a2986; long-turn copies it as a2986-0 … a2986-299, so copy 150 is the middle.
+add('S13.d', 'Session · 1 prompt, 300 tool calls, scrolled to middle (no rail, native scrollbar)', 'Session', thread('solo'), { variant: 'long-turn', read: 'a2986-150', scrollbar: '.transcript-frame .scroll', target: '.transcript-frame' });
 export { recipes };

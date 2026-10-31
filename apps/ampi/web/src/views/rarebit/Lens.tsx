@@ -5,7 +5,9 @@ import { href } from "../../util.ts";
 import { tokens } from "../../util.ts";
 import { Diagnosis } from "./Diagnosis.tsx";
 import { useRarebitState } from "./state.ts";
+import { useRevealOpen } from "../../components/reveal-open.ts";
 import { toggleArcPanel } from "../cos/ArcPanel.tsx";
+import { Segmented, type Segment } from "../../components/Segmented.tsx";
 import "./rarebit.css";
 
 export function useRarebitLens(host: string, threadId: string, pi: boolean, beforeChange: () => void) {
@@ -22,25 +24,37 @@ export function useRarebitLens(host: string, threadId: string, pi: boolean, befo
 	return pi && state.lens;
 }
 
-export function RarebitControls({ host, threadId, panel, setPanel, beforeLensChange }: { host: string; threadId: string; panel?: string; setPanel: (panel?: string) => void; beforeLensChange: () => void }) {
+const MODES: readonly Segment<"full" | "chat">[] = [
+	["full", "Full", "Full transcript (L, ⌘T in AmPi.app, Ctrl+T in a browser)"],
+	["chat", "Chat", "Conversation only (L, ⌘T in AmPi.app, Ctrl+T in a browser)"],
+];
+
+/** The Session header's Rarebit actions, inline in the bar or as items of its More menu (ThreadView's header fold). */
+export function RarebitControls({ host, threadId, panel, setPanel, beforeLensChange, place }: { host: string; threadId: string; panel?: string; setPanel: (panel?: string) => void; beforeLensChange: () => void; place: "bar" | "menu" }) {
 	const [state, set] = useRarebitState(host, threadId);
 	const togglePanel = (name: string) => setPanel(panel === name ? undefined : name);
-	return <span className="rb-controls">
-		<button className={`btn small rb-lens ${state.lens ? "rb-lens-on" : "rb-lens-off"}`} aria-pressed={state.lens} aria-label={`Transcript lens: ${state.lens ? "conversation only" : "full transcript"}`} title={state.lens ? "Show full transcript (L)" : "Show conversation only (L)"} onClick={() => { beforeLensChange(); set({ lens: !state.lens }); }}>{state.lens ? "Conversation only" : "Full transcript"}</button>
-		<button className="btn ghost small" aria-pressed={panel === "timeline"} onClick={() => togglePanel("timeline")}>Timeline</button>
-		<button className="btn ghost small" aria-pressed={panel === "arc"} onClick={() => toggleArcPanel(panel, setPanel)}>Arc</button>
-		{!panel && <a className="btn ghost small" href={href.thread(host, threadId, { panel: "rarebit" })}>Rarebit</a>}
-	</span>;
+	const btn = place === "bar" ? "btn ghost small" : undefined;
+	const mode = <Segmented label="Transcript mode" value={state.lens ? "chat" : "full"} options={MODES} onChange={(next) => { beforeLensChange(); set({ lens: next === "chat" }); }} />;
+	const items = <>
+		<button className={btn} aria-pressed={panel === "timeline"} onClick={() => togglePanel("timeline")}>Timeline</button>
+		<button className={btn} aria-pressed={panel === "arc"} onClick={() => toggleArcPanel(panel, setPanel)}>Arc</button>
+		{!panel && <a className={btn} href={href.thread(host, threadId, { panel: "rarebit" })}>Rarebit</a>}
+	</>;
+	return place === "bar" ? <span className="rb-controls">{mode}{items}</span> : <><div className="t-more-row"><span>Transcript</span>{mode}</div>{items}</>;
 }
 
 export function RarebitJump({ host, threadId, entry }: { host: string; threadId: string; entry: string }) {
-	return <a className="rb-jump" tabIndex={-1} href={href.thread(host, threadId, { entry, panel: "rarebit" })} title="Show this message in the Rarebit panel">Rarebit ↗</a>;
+	return <a className="rb-jump" tabIndex={-1} href={href.thread(host, threadId, { entry, panel: "rarebit" })} title="Show this message in the Rarebit panel" aria-label="Rarebit"><span className="rb-jump-label">Rarebit </span>↗</a>;
 }
 
-export function RarebitTools({ run, children }: { run: ToolRun; children: ReactNode }) {
-	const [open, setOpen] = useState(false);
-	return <details className="rb-tools" onToggle={(e) => setOpen(e.currentTarget.open)}>
-		<summary className="quiet-scroll">{run.entries.map((entry, i) => run.entries.findIndex((e) => e.id === entry.id) === i && <span key={entry.id} data-entry={entry.id} data-fragment={`${run.keys[i]}/fold`} />)}{run.label} · {runDuration(run.start, run.end)} · {runClock(run.start)}–{runClock(run.end)}{run.errors > 0 && <span className="rb-run-errors"> · {run.errors} {run.errors === 1 ? "error" : "errors"}</span>}{run.running && " · running"}</summary>
+/** `reveal`: a reveal request for an entry in this run (ThreadView); each new request opens the fold. */
+export function RarebitTools({ run, children, reveal }: { run: ToolRun; children: ReactNode; reveal?: number }) {
+	const [held, setOpen] = useRevealOpen(reveal);
+	const open = held ?? false;
+	const last = run.entries.at(-1);
+	const latest = last?.kind === "assistant" ? last.blocks.findLast((block) => block.type === "tool")?.name ?? "thinking" : last?.kind === "tool-result" ? last.name : last?.kind === "custom" ? last.entryKind : last?.kind;
+	return <details className="rb-tools" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
+		<summary className="quiet-scroll">{run.entries.map((entry, i) => run.entries.findIndex((e) => e.id === entry.id) === i && <span key={entry.id} data-entry={entry.id} data-fragment={`${run.keys[i]}/fold`} />)}{run.label} · {runDuration(run.start, run.end)} · {runClock(run.start)}–{runClock(run.end)}{run.errors > 0 && <span className="rb-run-errors"> · {run.errors} {run.errors === 1 ? "error" : "errors"}</span>}{run.running && ` · running · ${latest}`}</summary>
 		{open && <div>{children}</div>}
 	</details>;
 }

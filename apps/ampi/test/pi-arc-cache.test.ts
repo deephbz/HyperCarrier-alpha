@@ -5,7 +5,6 @@ import { homedir, tmpdir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { cosDemo } from "../scripts/demo/cos.ts";
-import type { DemoContext } from "../scripts/demo/index.ts";
 import { resolveHelperModel, useHubConfig, type ModelPurpose } from "../src/hub/helper-models.ts";
 import { ask, askCwd, sweepAskScratch } from "../src/pi/ask.ts";
 import type { Chunk } from "../src/pi/views/cos-arc-chunks.ts";
@@ -28,7 +27,7 @@ const MODELS = { arcLabels: "anthropic/claude-haiku-5-5", arcSynthesis: "anthrop
 const HUB = join(root, "hub.json");
 writeFileSync(HUB, JSON.stringify({ hosts: [], models: MODELS }));
 useHubConfig(HUB);
-cosDemo({ dir: root, agentDir: join(root, "agent") } as DemoContext);
+cosDemo({ dir: root, agentDir: join(root, "agent"), now: Date.now(), sessions: {} });
 const LOG = join(root, "pi-calls.jsonl"), FLAGS = join(root, "flags");
 mkdirSync(FLAGS);
 const flag = (name: string, on = true) => (on ? writeFileSync(join(FLAGS, name), "") : rmSync(join(FLAGS, name), { force: true }));

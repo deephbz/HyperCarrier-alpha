@@ -149,7 +149,10 @@ planning shows the model output ceiling. Session request settings can lower it.
 - [`./extension`](src/extension.mjs) registers the Pi extension.
 - [`./controller`](src/controller.mjs) owns lifecycle state and Pi effects.
 - [`./command`](src/command.mjs) owns command parsing and completion.
-- [`./settings`](src/settings.mjs) owns settings resolution and persistence.
+- [`./settings`](src/settings.mjs) owns settings files: reading and persistence.
+- [`./resolve`](src/resolve.mjs) owns settings resolution: defaults, merge
+  and validation, with no file access. Other hosts, such as the AmPi durable
+  node, call it so one file means the same in both.
 
 [`src/presentation.mjs`](src/presentation.mjs) renders human projections, and
 [`src/threshold.mjs`](src/threshold.mjs) owns threshold validity. They are

@@ -4,12 +4,12 @@ import { CLOSED_CHUNKS_HEADER } from "../../src/pi/views/cos-arc-prompts.ts";
 import type { DemoContext } from "./index.ts";
 
 /** DEMO_STRESS=200 adds real synthetic Session files, through the real reader and hub. */
-export function cosDemo({ dir, agentDir, sessions }: DemoContext) {
+export function cosDemo({ dir, agentDir, now, sessions }: DemoContext) {
 	const count = Math.max(0, Math.min(1000, Number(process.env.DEMO_STRESS) || 0));
 	const root = join(agentDir, "sessions", "--work-stress--");
 	mkdirSync(root, { recursive: true });
 	for (let n = 0; n < count; n++) {
-		const start = Date.now() - (68 - n % 64) * 3600_000;
+		const start = now - (68 - n % 64) * 3600_000;
 		const id = `stress-${n}`;
 		const lines: unknown[] = [{ type: "session", version: 3, id, timestamp: new Date(start).toISOString(), cwd: "/work/synthetic" }];
 		let parent: string | null = null;
@@ -35,7 +35,7 @@ export function cosDemo({ dir, agentDir, sessions }: DemoContext) {
 		80: "The CI runner is out of disk. To unblock it, approve a larger runner.",
 		100: "Still pending from earlier.\n\nShould I cap it at 64 MB or keep LRU only?",
 	};
-	const asksStart = Date.now() - 30 * 3600_000;
+	const asksStart = now - 30 * 3600_000;
 	const asksLines: unknown[] = [{ type: "session", version: 3, id: "sess-asks", timestamp: new Date(asksStart).toISOString(), cwd: "/work/demo" }];
 	for (let i = 0, parent: string | null = null; i < 110; i++) {
 		const t = asksStart + i * 15 * 60_000, u = `asks-u${i}`, a = `asks-a${i}`;
@@ -60,8 +60,8 @@ export function cosDemo({ dir, agentDir, sessions }: DemoContext) {
 		tail.forEach((text, i) => {
 			const u = `big-ask-u${i}`, a = `big-ask-a${i}`;
 			// One owner turn opens the tail; a later owner turn would overtake the asks before it.
-			if (i === 0) out += JSON.stringify({ type: "message", id: u, parentId: parent, timestamp: new Date(Math.min(t += 60_000, Date.now())).toISOString(), message: { role: "user", content: [{ type: "text", text: "Continue with the selector work." }] } }) + "\n";
-			out += JSON.stringify({ type: "message", id: a, parentId: i === 0 ? u : parent, timestamp: new Date(Math.min(t += 30_000, Date.now())).toISOString(), message: { role: "assistant", model: "claude-opus-5-5", provider: "anthropic", stopReason: "stop", content: [{ type: "text", text }], usage: { input: 120, output: 40, cacheRead: 0, cacheWrite: 0, cost: { total: 0.001 } } } }) + "\n";
+			if (i === 0) out += JSON.stringify({ type: "message", id: u, parentId: parent, timestamp: new Date(Math.min(t += 60_000, now)).toISOString(), message: { role: "user", content: [{ type: "text", text: "Continue with the selector work." }] } }) + "\n";
+			out += JSON.stringify({ type: "message", id: a, parentId: i === 0 ? u : parent, timestamp: new Date(Math.min(t += 30_000, now)).toISOString(), message: { role: "assistant", model: "claude-opus-5-5", provider: "anthropic", stopReason: "stop", content: [{ type: "text", text }], usage: { input: 120, output: 40, cacheRead: 0, cacheWrite: 0, cost: { total: 0.001 } } } }) + "\n";
 			parent = a;
 		});
 		appendFileSync(big, out);

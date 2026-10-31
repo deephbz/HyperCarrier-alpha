@@ -5,15 +5,16 @@ import { readFile, access } from 'node:fs/promises';
 import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
+import { launchOptions } from './browser.mjs';
 import { recipes } from './recipes.mjs';
-import { fixtureSocket } from './fixtures.mjs';
+import { routeFixture } from './fixtures.mjs';
 // Exercise the safety adapter without a network connection.
 const forwarded = [], replies = [];
 let receive;
-fixtureSocket({
+await routeFixture({ routeWebSocket: (_, handler) => handler({
   connectToServer: () => ({ send: f => forwarded.push(JSON.parse(f)), onMessage: () => {} }),
   onMessage: fn => { receive = fn; }, send: f => replies.push(JSON.parse(f)),
-}, {}, { requests: [] });
+}) }, {}, { requests: [] });
 receive(JSON.stringify({ t: 'sub', sid: 'test', topic: { kind: 'threads' } }));
 receive(JSON.stringify({ t: 'unsub', sid: 'test' }));
 for (const t of ['req', 'hub']) for (const op of ['thread.submit', 'thread.create', 'thread.resume', 'thread.close', 'host.add', 'term.input', 'accounts.login', 'unexpected.operation']) {
@@ -69,15 +70,13 @@ const has = (id, name) => map.nodes.find(n => n.id === id).elements.some(e => e.
 assert(has('S04.a', 'Previous user message'));
 assert(has('S04.a', 'Next user message'));
 assert(!has('S04.a', 'Refresh'));
-assert(has('S04.a', 'Transcript lens: full transcript'));
-assert(has('S04.l', 'Transcript lens: conversation only'));
-assert(!has('S04.s', 'Dismiss recap'));
-assert(has('S04.t', 'Dismiss recap'));
+assert(has('S04.a', 'Chat'));
+assert(has('S04.l', 'Full'));
 assert(map.nodes.find(n => n.id === 'S04.l').elements.some(e => e.selector.includes('details') && e.tag === 'summary' && /tool call/.test(e.name)));
 const checked = map.edges.filter(e => e.evidence.startsWith('browser-checked'));
 assert(checked.length >= 9);
 // Actual browser assertions against the file:// review surface.
-const browser = await chromium.launch({ headless: true, ...(process.env.UX_CHROME_CHANNEL ? { channel: process.env.UX_CHROME_CHANNEL } : {}) });
+const browser = await chromium.launch(launchOptions());
 try {
   const p = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
   const errors = []; p.on('pageerror', error => errors.push(error.message));

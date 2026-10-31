@@ -49,7 +49,7 @@ test("scroll hold: a stationary reader near the window top paints no arrived row
 	// Arrivals below a frozen window only feed the count.
 	for (let n = 412; n <= 760; n += 12) {
 		send({ ...view(n) });
-		await newButton(page).getByText(`↓ ${n - 400} new`, { exact: true }).waitFor();
+		await newButton(page).getByText(`↓ ${n - 400} new messages`, { exact: true }).waitFor();
 		await frames(page);
 		assert.equal(await painted(), first, `after ${n} entries the window painted rows past its frozen end`);
 		const offset = await offsetOf(page, before.id);
@@ -77,9 +77,9 @@ test("scroll hold: arrivals below a reader away from the end show \"↓ N new\";
 	await frames(page);
 	assert.equal(await status.getByRole("button").count(), 0, "no button before anything arrives");
 	await publish(203);
-	await status.getByRole("button", { name: "↓ 3 new" }).waitFor();
+	await status.getByRole("button", { name: "↓ 3 new messages" }).waitFor();
 	await publish(204);
-	await status.getByRole("button", { name: "↓ 4 new" }).click();
+	await status.getByRole("button", { name: "↓ 4 new messages" }).click();
 	await frames(page);
 	assert.ok(await gap(page) <= 2, "the click returns to the newest end");
 	assert.equal(await status.getByRole("button").count(), 0, "the count clears at the end");
@@ -166,16 +166,16 @@ test("scroll hold: a capped Pi tail counts arrivals by entry, though its length 
 	await scrollAway(page);
 	// The Pi Host serves the newest 200 entries: each arrival drops one entry at the window's start.
 	await publish(203, "", 3);
-	await newButton(page).getByText("↓ 3 new", { exact: true }).waitFor();
+	await newButton(page).getByText("↓ 3 new messages", { exact: true }).waitFor();
 	await publish(205, "", 5);
-	await newButton(page).getByText("↓ 5 new", { exact: true }).waitFor();
+	await newButton(page).getByText("↓ 5 new messages", { exact: true }).waitFor();
 });
 
 test("scroll hold: a last-seen entry that left the capped tail shows \"↓ new\"", async (t) => {
 	const { page, publish } = await open(t, 200);
 	await scrollAway(page);
 	await publish(300, "", 100);
-	await newButton(page).getByText("↓ 100 new", { exact: true }).waitFor();
+	await newButton(page).getByText("↓ 100 new messages", { exact: true }).waitFor();
 	// e199, the newest entry when the reader left the end, slides out of the window: the count is unknown.
 	await publish(400, "", 200);
 	await newButton(page).getByText("↓ new", { exact: true }).waitFor();
@@ -205,19 +205,19 @@ test("scroll hold: a branch summary that replaces the newest entry starts the co
 	assert.ok(await gap(page) > 60, "the reader is still away from the end");
 	assert.equal(await newButton(page).count(), 0, "a branch change clears the count");
 	send(branch(11));
-	await newButton(page).getByText("↓ 1 new", { exact: true }).waitFor();
+	await newButton(page).getByText("↓ 1 new message", { exact: true }).waitFor();
 });
 
 test("scroll hold: G returns to the end and clears \"↓ N new\"; Escape leaves it", async (t) => {
 	const { page, publish } = await open(t, 200);
 	await scrollAway(page);
 	for (const n of [201, 202, 203]) await publish(n);
-	await newButton(page).getByText("↓ 3 new", { exact: true }).waitFor();
+	await newButton(page).getByText("↓ 3 new messages", { exact: true }).waitFor();
 	await page.locator("[data-region=transcript]").focus();
 	const away = await gap(page);
 	await page.keyboard.press("Escape");
 	await frames(page);
-	assert.equal(await newButton(page).textContent(), "↓ 3 new", "Escape keeps the count");
+	assert.equal(await newButton(page).textContent(), "↓ 3 new messages", "Escape keeps the count");
 	assert.ok(Math.abs(await gap(page) - away) <= 2, "Escape does not scroll");
 	await page.keyboard.press("Shift+G");
 	await frames(page);

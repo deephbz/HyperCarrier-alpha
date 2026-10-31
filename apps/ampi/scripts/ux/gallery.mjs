@@ -1,0 +1,56 @@
+// The preview gallery: one HTML file generated from a preview run (preview.mjs). It is output only; nobody edits it.
+// Per shot: before | after | diff, cropped around the union of the measured target boxes, each side's ring drawn from
+// its own box. The change percentage orders the cards and carries no verdict.
+const esc = text => String(text).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
+const count = n => n.toLocaleString('en-US');
+
+/** A window onto the full screenshot at `crop`, with an optional ring at `box` (viewport pixels). */
+function pane(label, image, crop, box, absent) {
+  const { x, y, width, height } = crop;
+  const ring = box ? `<rect class="ring" x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}"/>` : '';
+  return `<figure><figcaption>${esc(label)}${absent ? ` <span class="absent">${esc(absent)}</span>` : ''}</figcaption>`
+    + `<a class="frame" href="${esc(image)}" style="aspect-ratio:${width}/${height}">`
+    + `<img src="${esc(image)}" alt="${esc(label)}" style="width:var(--vw);left:${-x / width * 100}%;top:${-y / height * 100}%">`
+    + `<svg viewBox="${x} ${y} ${width} ${height}" preserveAspectRatio="none">${ring}</svg></a></figure>`;
+}
+
+function card(shot, labels) {
+  const { scene, crop, viewport, sides, diff } = shot;
+  const serves = scene.serves
+    ? `<p class="serves owner">Owner ${esc(scene.serves.date)}: ${esc(scene.serves.words)}</p>`
+    : '<p class="serves agent">AGENT-ORIGINATED: no owner request recorded for this scene</p>';
+  const pct = diff.changed ? `${(diff.changed / diff.total * 100).toFixed(2)}% changed (${count(diff.changed)} px)` : 'no change';
+  const outside = diff.outside ? ` · <b>${count(diff.outside)} px changed outside target</b>` : '';
+  const before = sides.before, after = sides.after;
+  const missing = (side, other, name) => side.error ? `${name} step stopped: ${side.error}` : !side.box && other.box ? `target not present in ${name}` : '';
+  const vw = `${viewport.width / crop.width * 100}%`;
+  return `<article class="shot" data-scene="${esc(scene.id)}" data-key="${esc(shot.key)}" style="--vw:${vw}">`
+    + `<h2><b>${esc(scene.id)}</b> ${esc(scene.title)} <small>${esc(shot.theme)}${shot.variant ? ` · variant ${esc(shot.variant)}` : ''} · ${esc(scene.family)}</small></h2>`
+    + serves
+    + `<p class="meta">${pct}${outside}${scene.target ? ` · target <code>${esc(scene.target)}</code>` : ' · whole viewport'} · route <code>${esc(scene.route ?? '')}</code></p>`
+    + `<div class="panes">${pane(labels.before, before.image, crop, before.box, missing(before, after, labels.beforeName))}${pane(labels.after, after.image, crop, after.box, missing(after, before, labels.afterName))}${pane('diff (changes in red)', diff.image, crop)}</div>`
+    + `</article>`;
+}
+
+/** run: { base, head, coverage: { ran, notRun }, verdict?, warnings, shots, createdAt? } → HTML */
+export function renderGallery(run) {
+  const shots = [...run.shots].sort((a, b) => b.diff.changed - a.diff.changed || a.key.localeCompare(b.key));
+  const labels = { before: `before · base ${run.base.sha.slice(0, 12)}`, after: `after · head ${run.head.sha.slice(0, 12)}`, beforeName: 'base', afterName: 'head' };
+  const { ran, notRun } = run.coverage;
+  const v = run.verdict;
+  const failure = v && !v.ok ? `<p class="absent">FAIL${v.failed.length ? ` · scene setups failed: ${esc(v.failed.join(', '))}` : ''}${v.drift.length ? ` · A/A run changed: ${esc(v.drift.join(', '))}` : ''}</p>` : '';
+  const warnings = run.warnings?.length ? `<ul class="warnings">${run.warnings.map(w => `<li>${esc(w)}</li>`).join('')}</ul>` : '';
+  return `<!doctype html><html lang="en"><meta charset="utf-8"><title>AmPi preview · ${esc(run.base.sha.slice(0, 8))} → ${esc(run.head.sha.slice(0, 8))}</title><style>
+*{box-sizing:border-box}body{margin:0;font:14px system-ui;background:#eef0f3;color:#17212b}header{background:#fff;border-bottom:1px solid #aab4bf;padding:12px 18px}header p{margin:4px 0}
+.warnings{margin:8px 0;padding:8px 8px 8px 28px;background:#fff4d6;border:1px solid #c9a227}.shot{background:#fff;margin:14px 18px;padding:10px 14px;border:1px solid #aab4bf}
+.shot h2{font-size:15px;margin:0 0 4px}.shot h2 small{font-weight:400;color:#56616d}.serves{margin:2px 0;font-size:13px}.serves.agent{color:#a3123a;font-weight:700}.meta{margin:2px 0 8px;color:#56616d;font-size:12px}
+.panes{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;align-items:start}figure{margin:0}figcaption{font-size:12px;margin-bottom:3px}.absent{color:#a3123a;font-weight:700}
+.frame{display:block;position:relative;overflow:hidden;border:1px solid #c5ccd4;background:#fafafa}.frame img{position:absolute;max-width:none}.frame svg{position:absolute;inset:0;width:100%;height:100%}
+.ring{fill:none;stroke:#ff6a00;stroke-width:3;vector-effect:non-scaling-stroke}code{font:12px ui-monospace,monospace}details{font-size:12px}
+</style><header><p><b>AmPi preview</b> · generated by <code>npm run preview</code> from the real code on the synthetic demo hub; do not edit this file.${run.createdAt ? ` · ${esc(run.createdAt)}` : ''}</p>
+<p>base: <code>${esc(run.base.note ?? run.base.sha)}</code></p><p>head: <code>${esc(run.head.note ?? run.head.sha)}</code></p>
+<p>ran ${ran.length} of ${ran.length + notRun.length} scenes${notRun.length ? `; not run: <span class="not-run">${esc(notRun.join(', '))}</span>` : ''}</p>${failure}${warnings}
+<p>Cards are ordered by total changed pixels. Orange rings: each side's measured target box. Click an image for the full viewport.</p></header>
+${shots.map(s => card(s, labels)).join('\n')}
+</html>`;
+}
