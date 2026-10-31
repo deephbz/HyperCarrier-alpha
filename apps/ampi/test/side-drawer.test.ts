@@ -84,9 +84,9 @@ for (const [engine, type, path] of ENGINES) {
 		// A rotation to a wide layout and back starts the drawer closed.
 		await show.click();
 		await page.setViewportSize({ width: 900, height: 390 });
-		await page.waitForFunction(() => getComputedStyle(document.documentElement).getPropertyValue("--side-overlay").trim() === "" && document.querySelector(".app")!.classList.contains("sidebar-hidden"));
+		await page.waitForFunction(() => !document.querySelector(".app")!.classList.contains("side-overlay") && document.querySelector(".app")!.classList.contains("sidebar-hidden"));
 		await page.setViewportSize({ width: 390, height: 844 });
-		await page.waitForFunction(() => getComputedStyle(document.documentElement).getPropertyValue("--side-overlay").trim() === "1");
+		await page.waitForFunction(() => document.querySelector(".app")!.classList.contains("side-overlay"));
 		assert.equal((await sides(page)).sidebar, false, "a rotation round trip leaves the drawer closed");
 		// A panel link while the drawer is open: the panel shows, the drawer closes.
 		await page.getByRole("button", { name: "Show sidebar" }).click();
@@ -95,7 +95,7 @@ for (const [engine, type, path] of ENGINES) {
 		assert.deepEqual(await sides(page), { sidebar: false, panel: true, saved: "1" }, "a panel link closes the drawer");
 		// Across the narrow rule nothing is written; desktop shows its saved choice again.
 		await page.setViewportSize({ width: 1280, height: 844 });
-		await page.waitForFunction(() => document.querySelector(".app")!.classList.contains("sidebar-hidden"));
+		await page.waitForFunction(() => !document.querySelector(".app")!.classList.contains("side-overlay") && document.querySelector(".app")!.classList.contains("sidebar-hidden"));
 		assert.deepEqual(await sides(page), { sidebar: false, panel: true, saved: "1" });
 		await page.getByRole("button", { name: "Show sidebar" }).click();
 		await page.setViewportSize({ width: 390, height: 844 });

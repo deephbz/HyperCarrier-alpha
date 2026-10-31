@@ -34,7 +34,11 @@ function savedWidth(key: string, fallback: number, min: number, max: number) {
 const MAIN_MIN = 480;
 /** The layout viewport in CSS px: the unit of the grid widths. `innerWidth` is in viewport px, which display zoom scales. */
 const viewWidth = () => document.documentElement.clientWidth;
-/** The side panels overlay the main (a phone). styles.css owns the width: its narrow rule sets --side-overlay. */
+/**
+ * The side panels overlay the main (a phone). styles.css owns the width: its narrow rule sets --side-overlay. App reads
+ * it at first render and on resize, and marks `.app` with `side-overlay` once it draws that layout.
+ * The mark is an observation for tests: nothing styles or branches on it.
+ */
 const sideOverlay = () => getComputedStyle(document.documentElement).getPropertyValue("--side-overlay").trim() === "1";
 
 type Drag = { app: HTMLElement; pointer: number; x: number; scale: number; start: number; width: number };
@@ -482,7 +486,7 @@ export function App() {
 	return (
 		<FeedsContext.Provider value={feeds}>
 		<FocusIntentContext.Provider value={focusIntent}>
-		<div ref={appRef} className={`app ${sideHidden ? "sidebar-hidden" : ""} ${showPanel ? "has-panel" : ""} ${overlayPanel ? "panel-overlay" : ""}`} style={{ "--side-w": `${sidebarWidth}px`, "--side-visible": sideHidden ? "0px" : "var(--side-w)", "--panel-w": `${panelWidth}px` } as CSSProperties}>
+		<div ref={appRef} className={`app ${sideHidden ? "sidebar-hidden" : ""} ${showPanel ? "has-panel" : ""} ${overlayPanel ? "panel-overlay" : ""} ${oneSide ? "side-overlay" : ""}`} style={{ "--side-w": `${sidebarWidth}px`, "--side-visible": sideHidden ? "0px" : "var(--side-w)", "--panel-w": `${panelWidth}px` } as CSSProperties}>
 			{zoomToast && <div className="toast" role="status" aria-live="polite">{zoomToast}</div>}
 			<SettingsNotices feeds={feeds} />
 			{hosts.map((host) => (
