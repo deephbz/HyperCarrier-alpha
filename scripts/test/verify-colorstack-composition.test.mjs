@@ -1,7 +1,8 @@
 import "./home.mjs";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -10,8 +11,10 @@ import { verifyComposition } from "../verify-colorstack-composition.mjs";
 const run = (cwd, ...args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 const source = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../config/colorstack");
 const outputs = ["ghostty-theme", "tmux-include", "bat-theme", "shell-env", "starship-select", "starship-palette", "herdr", "pi-theme", "jupyter-css", "jupyter-cfg", "jupyter-theme"];
-function fixture() {
-  const root = mkdtempSync(path.join(process.cwd(), ".colorstack-composition-test-")), child = path.join(root, "config/colorstack");
+// The fixture repository lives in the OS temp directory, and its removal is registered before any step can fail.
+function fixture(t) {
+  const root = mkdtempSync(path.join(realpathSync(os.tmpdir()), "colorstack-composition-test-")), child = path.join(root, "config/colorstack");
+  t.after(() => rmSync(root, { recursive: true, force: true }));
   mkdirSync(path.dirname(child), { recursive: true }); cpSync(source, child, { recursive: true, filter: (entry) => path.basename(entry) !== ".git" });
   for (const repo of [root, child]) { run(repo, "init", "-q"); run(repo, "config", "user.email", "privacy-fixture@example.invalid"); run(repo, "config", "user.name", "Test"); }
   run(child, "remote", "add", "origin", "https://github.com/deephbz/colorstack.git"); run(child, "add", "."); run(child, "commit", "-qm", "child");
@@ -21,10 +24,10 @@ function fixture() {
   const selection = { schemaVersion: 1, scheme: "modus", inkContrast: 10, outputs };
   writeFileSync(path.join(root, "config/colorstack-compatibility.json"), JSON.stringify(record)); writeFileSync(path.join(root, "config/colorstack-selection.json"), JSON.stringify(selection));
   for (const name of ["colorstack-compatibility.schema.json", "colorstack-selection.schema.json"]) writeFileSync(path.join(root, "config/schemas", name), JSON.stringify({ $schema: "http://json-schema.org/draft-07/schema#", type: "object" }));
-  return { root, child, record, selection, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+  return { root, child, record, selection };
 }
-async function state(name, mutate, code) { await test(name, () => { const f = fixture(); try { mutate(f); assert.throws(() => verifyComposition({ root: f.root }), (error) => error.code === code); } finally { f.cleanup(); } }); }
-test("verifies a clean Colorstack source and exact selection through a removed OS temp bundle", () => { const f = fixture(); try { const result = verifyComposition({ root: f.root, debug: true }); assert.equal(result.record.component, "colorstack"); assert.ok(!result.trace.outputRoot.startsWith(f.root)); assert.equal(existsSync(result.trace.outputRoot), false); } finally { f.cleanup(); } });
+async function state(name, mutate, code) { await test(name, (t) => { const f = fixture(t); mutate(f); assert.throws(() => verifyComposition({ root: f.root }), (error) => error.code === code); }); }
+test("verifies a clean Colorstack source and exact selection through a removed OS temp bundle", (t) => { const f = fixture(t); const result = verifyComposition({ root: f.root, debug: true }); assert.equal(result.record.component, "colorstack"); assert.ok(!result.trace.outputRoot.startsWith(f.root)); assert.equal(existsSync(result.trace.outputRoot), false); });
 test("CLI default is compact verified JSON while debug carries record, selection, and trace", () => { const script = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../verify-colorstack-composition.mjs"); const plain = execFileSync(process.execPath, [script], { encoding: "utf8" }); const debug = execFileSync(process.execPath, [script, "--debug"], { encoding: "utf8" }); assert.deepEqual(JSON.parse(plain), { component: "colorstack", revision: "a4b18392b975979505f5d54ab96d6f1194d6c026", status: "verified" }); assert.doesNotMatch(plain, /\n  /); const traced = JSON.parse(debug); assert.ok(traced.record && traced.selection && traced.trace); });
 await state("distinguishes missing and uninitialized source", ({ root }) => rmSync(path.join(root, "config/colorstack"), { recursive: true }), "missing-submodule");
 await state("distinguishes uninitialized source", ({ child }) => rmSync(path.join(child, ".git"), { recursive: true }), "uninitialized-submodule");

@@ -6,6 +6,33 @@
  * and body portals give elements different scales, so never use one global zoom.
  */
 
+/** The stored display sizes: the page (`overall`) and each region's own. */
+export type DisplaySettings = { overall?: number; sidebar?: number; transcript?: number; composer?: number; panel?: number };
+const REGIONS = ["sidebar", "transcript", "composer", "panel"] as const;
+
+/**
+ * The one writer of the display zoom. Each zoom root also gets `--display-scale`, its effective zoom: the page's on
+ * `html`, the page's times the region's on a region root. A rule that must hold a rendered size reads it (the editable
+ * field floor in styles.css). Apply before `ampi:display` is dispatched: its listeners measure the new zoom.
+ */
+export function applyDisplay(settings: DisplaySettings = JSON.parse(localStorage.getItem("ampi.display") ?? "{}") as DisplaySettings) {
+	const html = document.documentElement;
+	const overall = settings.overall ?? 1;
+	html.style.zoom = String(overall);
+	html.style.setProperty("--display-scale", String(overall));
+	// WebKit misplaces container-unit geometry under any zoom; zoom-sensitive layout keys off this flag.
+	html.toggleAttribute("data-zoomed", overall !== 1 || (settings.transcript ?? 1) !== 1);
+	for (const region of REGIONS) {
+		const root = document.querySelector<HTMLElement>(`[data-region="${region}"]`);
+		if (!root) continue;
+		root.style.zoom = String(settings[region] ?? 1);
+		root.style.setProperty("--display-scale", String(overall * (settings[region] ?? 1)));
+	}
+}
+
+/** The touch field rule applies: styles.css sets --touch-fields with the 16 px field floor. */
+export const touchFields = () => getComputedStyle(document.documentElement).getPropertyValue("--touch-fields").trim() === "1";
+
 /**
  * The border-box width of `el` in its own CSS px, unrounded. `offsetWidth` rounds to a whole px; at a region zoom the
  * width is fractional, and a long scroll multiplies the scale's error (0.04 % moved a 4,700 px restore by 3 px).

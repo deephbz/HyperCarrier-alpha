@@ -13,6 +13,8 @@ export type Target = Region | "page";
 
 export type KeyIntent =
 	| "sidebar.toggle" // ⌘B
+	| "sidebar.hide" // the sidebar's hide button
+	| "navigate" // a sidebar row or a route arrival: on a phone the drawer closes, also on the open Session's row
 	| "panel.toggle" // ⌘L, ⌘\
 	| "composer.toggle" // ⌘I
 	| "insert" // plain i in the transcript
@@ -23,7 +25,8 @@ export type KeyIntent =
 	| "overview" // ⌘0
 	| "history.move" // Back or Forward arrived on an entry: return to the target it held
 	// View changes without a focus key. They move focus only when it would drop to body (R11, I20 no focus steal).
-	| "panel.set" // panel ✕ or tab, ⌘J shell, hash panel, Arc toggle
+	| "sidebar.show" // ☰: it removes itself, so on a desktop focus returns as from a layout change
+	| "panel.set" // panel ✕ or tab, ⌘J shell, hash panel, Arc toggle; the View already holds the new panel state
 	| "layout.change"; // resize, squeeze, auto-collapse, any other removal of the focused element
 
 export type View = {
@@ -35,6 +38,8 @@ export type View = {
 	panelShown: boolean;
 	/** A Modal owns focus. */
 	modal: boolean;
+	/** The side panels overlay the main (a phone): one side shows at a time, so opening one closes the other. */
+	oneSide: boolean;
 };
 
 export type Focus = {
@@ -77,15 +82,30 @@ function chainFor(view: View, target: Target, recent: readonly SessionRegion[]):
 	return steps.filter((step, i) => steps.indexOf(step) === i && step !== "page" && (step !== "panel" || view.panelShown) && (view.session || step === "sidebar")).concat("page");
 }
 
-function move(view: View, focus: Focus, target: Target, change: ViewChange = {}): Extract<Next, { kind: "move" }> {
+/**
+ * On a phone (View.oneSide) one side shows at a time. The sidebar stays when the move opens or targets it; otherwise the
+ * panel, which the move opened or a writer set, stays and the sidebar hides.
+ */
+function oneSide(view: View, change: ViewChange, target: Target): ViewChange {
+	if (!view.oneSide) return change;
+	const next = after(view, change);
+	if (!next.panelShown || next.sidebarHidden) return change;
+	return change.sidebar === "show" || target === "sidebar" ? { ...change, panel: "close" } : { ...change, sidebar: "hide" };
+}
+
+function move(view: View, focus: Focus, target: Target, request: ViewChange = {}): Extract<Next, { kind: "move" }> {
+	const change = oneSide(view, request, target);
 	const next = after(view, change);
 	const recent = target === "sidebar" || target === "page" ? [...focus.recent] : remember(focus.recent, target);
 	return { kind: "move", change, chain: chainFor(next, target, recent), recent };
 }
 
-/** `last`: the most recent shown Session region other than the one closing, else the transcript. */
+/**
+ * `last`: the most recent shown Session region other than the one closing, else the transcript. On a phone a return
+ * skips the composer: focus there raises the keyboard over the transcript the owner came back to read.
+ */
 function returnTarget(view: View, focus: Focus, closing?: "panel"): SessionRegion {
-	return focus.recent.find((r) => r !== closing && (r !== "panel" || view.panelShown)) ?? "transcript";
+	return focus.recent.find((r) => r !== closing && (r !== "panel" || view.panelShown) && !(view.oneSide && r === "composer")) ?? "transcript";
 }
 
 export function transition(view: View, focus: Focus, intent: KeyIntent): Next {
@@ -109,6 +129,10 @@ export function transition(view: View, focus: Focus, intent: KeyIntent): Next {
 				default:
 					return absurd(from);
 			}
+		case "sidebar.hide":
+			if (view.sidebarHidden) return unavailable;
+			// As ⌘B from the sidebar: focus there returns to `last`; focus elsewhere stays.
+			return move(view, focus, from === "sidebar" || from === "none" ? (view.session ? returnTarget(view, focus) : "page") : from, { sidebar: "hide" });
 		case "panel.toggle":
 			if (!view.session) return unavailable;
 			if (!view.panelShown) return move(view, focus, "panel", { panel: "open" });
@@ -146,8 +170,9 @@ export function transition(view: View, focus: Focus, intent: KeyIntent): Next {
 					return absurd(from);
 			}
 		case "session.switch":
-			// A Session opens in its composer. Back, Forward and a reload arrive by history.move instead.
-			return move(view, focus, "composer");
+			// A Session opens in its composer. Back, Forward and a reload arrive by history.move instead. A phone opens it in
+			// its transcript: the composer would raise the keyboard over it. The new-agent dialog takes the first prompt.
+			return move(view, focus, view.oneSide ? "transcript" : "composer");
 		case "overview":
 			// ⌘0 opens the Overview and focuses its content, so Space and ↓ scroll it (D20, owner ruling 2026-10-20).
 			return move({ ...view, session: false }, focus, "page");
@@ -163,6 +188,12 @@ export function transition(view: View, focus: Focus, intent: KeyIntent): Next {
 			return view.session ? move(view, focus, returnTarget(view, focus)) : unavailable;
 		case "find.go":
 			return view.session ? move(view, focus, "transcript") : unavailable;
+		case "navigate":
+			return view.oneSide && !view.sidebarHidden ? transition(view, focus, "sidebar.hide") : unavailable;
+		case "sidebar.show":
+			// A phone's drawer covers the main, so focus goes into it, as from a swipe.
+			if (view.oneSide) return move(view, focus, "sidebar", view.sidebarHidden ? { sidebar: "show" } : {});
+			return { ...move(view, focus, view.session ? returnTarget(view, focus) : "sidebar", view.sidebarHidden ? { sidebar: "show" } : {}), ifLost: true };
 		case "panel.set":
 		case "layout.change":
 			return { ...move(view, focus, view.session ? returnTarget(view, focus) : view.sidebarHidden ? "page" : "sidebar"), ifLost: true };

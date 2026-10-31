@@ -13,7 +13,7 @@ export const FLEET_SCOPE = "Indexed active branches retained by this hub (96 h b
 export const FIND_SCOPE = "This Session’s copied active branch. Case-insensitive substring search covers user text, replies, thinking, tool calls/results, bash command/output, custom messages and summaries. Excludes images, non-text metadata, inactive branches and uncopied bytes.";
 /** Session Find adds `prose` (the match is in user or agent text), `at` (scan position) and `prompt` (the user entry it answers). */
 export type SearchHit = { entry: string; ref: string; threadId: string; snippet: string; kind?: string; title?: string; version: string; prose?: boolean; at?: number; prompt?: string };
-export type SearchResult = { hits: SearchHit[]; more: boolean; scope: string; asOf: number | null; total?: number; proseTotal?: number; windows?: { all: FindWindow; prose: FindWindow }; anchored?: boolean; scanned?: number; invalidLines?: number; coverage?: { indexed: number; notIndexed: number; stale: number; invalidLines: number } };
+export type SearchResult = { hits: SearchHit[]; more: boolean; scope: string; asOf: number | null; total?: number; proseTotal?: number; windows?: { all: FindWindow; prose: FindWindow }; anchored?: boolean; scanned?: number; invalidLines?: number; coverage?: { indexed: number; notIndexed: number; stale: number; invalidLines: number; updating?: number } };
 const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+/gu;
 const encoded = (a: string, b: string) => `u${a.codePointAt(0)!.toString(16)}u${b.codePointAt(0)!.toString(16)}`;
 function grams(run: string) { const c = Array.from(run); return c.slice(1).map((b, i) => encoded(c[i]!, b)); }
@@ -116,8 +116,8 @@ export function fleetSearch(db: DatabaseSync, query: string): SearchResult {
   json_extract(s.data,'$.session.id') AS thread, json_extract(s.data,'$.session.ref') AS ref,
   json_extract(s.data,'$.session.title') AS title, json_extract(s.data,'$.version') AS version,
   json_extract(s.data,'$.asOf') AS asof
-  FROM prose JOIN sessions s ON s.path=prose.path WHERE prose MATCH ? ORDER BY rank LIMIT 101`).all(cjk, cjk, match);
- const coverage = db.prepare("SELECT count(*) AS indexed, min(json_extract(data,'$.asOf')) AS asof, coalesce(sum(json_extract(data,'$.invalidLines')),0) AS invalid FROM sessions").get()!;
+  FROM prose JOIN sessions s ON s.path=prose.path WHERE prose MATCH ? AND same_index(json_extract(s.data,'$.version')) ORDER BY rank LIMIT 101`).all(cjk, cjk, match);
+ const coverage = db.prepare("SELECT count(*) AS indexed, min(json_extract(data,'$.asOf')) AS asof, coalesce(sum(json_extract(data,'$.invalidLines')),0) AS invalid FROM sessions WHERE same_index(json_extract(data,'$.version'))").get()!;
  const asOf = coverage.asof == null ? null : Number(coverage.asof);
  const hits = rows.slice(0, 100).map((row) => {
   return { entry: String(row.id), threadId: String(row.thread), ref: `${row.ref}#${row.id}`, snippet: String(row.excerpt), title: String(row.title ?? row.thread), version: String(row.version) };

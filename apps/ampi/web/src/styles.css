@@ -153,7 +153,9 @@ html[data-input="pointer"] .modal { animation: overlay-enter 160ms cubic-bezier(
 	*, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 	:is(button, .btn):active:not(:disabled) { transform: none; }
 }
-::placeholder { color: var(--text-3); opacity: 1; }
+/* A hint reads quieter than the text typed over it, on every device. iOS WebKit zooms on the field's font size, not
+   the placeholder's, so the touch field floor still holds (docs/ux/field-size.md). */
+::placeholder { color: var(--text-3); opacity: 1; font-size: 0.85em; }
 /* Quiet scrollbars: one style for every scroll region except the transcript, which owns its strip. A .quiet-scroll
    region shows a thin, low-contrast thumb only while the pointer or focus is inside it, or about 1 s after it scrolls
    (quiet-scroll.ts sets data-scrolled). Content that fits shows no bar; only the sidebar list keeps a transparent track, so its rows do not move when it
@@ -179,6 +181,20 @@ textarea,
 select {
 	font: inherit;
 	color: inherit;
+}
+/* The editable field floor (docs/ux/field-size.md). iOS WebKit zooms the whole page when a field it focuses renders
+   under 16 px: computed size times the effective CSS zoom. On a touch device every field renders at 16 px or more,
+   at any display size: --display-scale is the zoom applyDisplay() wrote (display.ts). It is the one size rule for a
+   field on touch, and it replaces the field's own size: !important keeps every component's field rule (.composer,
+   .rb-ask, .find-bar) from going under it. The touch body size is larger than every desktop field size, so a large
+   display size keeps fields at least as large as on desktop. The left-out input types take no text and open no keyboard.
+   The Composer reads --touch-fields: a field at 16 px gets the short hints. Touch text is larger too: the body
+   matches the 16 px field, and code keeps the desktop ratio, 13:12 to 16:14. */
+@media (pointer: coarse) {
+	:root { --touch-fields: 1; --font-body: 16px; --line-body: 24px; --font-code: 14px; --line-code: 21px; }
+	:is(textarea, select, [contenteditable]:not([contenteditable="false"]), input:not([type="checkbox"], [type="radio"], [type="range"], [type="button"], [type="submit"], [type="reset"], [type="color"], [type="file"], [type="image"], [type="hidden"])) {
+		font-size: max(var(--font-body), 16px / var(--display-scale, 1)) !important;
+	}
 }
 code,
 pre,
@@ -240,7 +256,13 @@ kbd {
 	top: 8px;
 	z-index: 2;
 }
-.sidebar-hidden .main > .topbar { padding-left: 48px; }
+/* On touch ☰ takes a full target. At the topbar's 8 px padding its centre is the header actions' centre. */
+@media (pointer: coarse) { .sidebar-reveal { min-width: var(--hit); min-height: var(--hit); justify-content: center; } }
+/* The main column's first row keeps clear of the reveal button: a page's header, or the note a page shows without one
+   (a loading or missing page). No text or control sits under ☰. A side panel has its own. The reserve follows where ☰
+   can show: a hidden sidebar, or a phone's drawers at every drawer state (below). */
+:root { --reveal-reserve: max(48px, calc(var(--hit) + 16px)); }
+.sidebar-hidden .main-slot > .main > :first-child { padding-left: var(--reveal-reserve); }
 .resize-edge {
 	position: absolute;
 	top: 0;
@@ -261,15 +283,54 @@ kbd {
 	left: 3px;
 	width: 2px;
 }
-.resize-edge:hover::after,
-.resize-edge:focus-visible::after { background: var(--accent); }
-.resize-edge:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* The centre line is the edge's one indicator. The 8 px hit box never paints, so no focus ring outlines it. A pointer
+   press focuses the edge for Escape and looks like hover; pointer capture keeps the hover for the whole drag.
+   Keyboard focus (App's data-input) widens the line. */
+.resize-edge:focus-visible { outline: none; }
+.resize-edge:hover::after { background: var(--accent); }
+html[data-input="keyboard"] .resize-edge:focus::after { left: 2px; width: 4px; background: var(--accent); }
 @media (max-width: 600px) {
 	/* Below the desktop acceptance sizes the sidebar itself becomes an overlay. */
+	/* App reads --side-overlay: the side panels are drawers, one side shows at a time, and the drawer state is not saved. */
+	:root { --side-overlay: 1; }
+	/* A drawer opens over the page and changes nothing under it: the header keeps ☰'s reserve while a drawer is open. */
+	.main-slot > .main > :first-child { padding-left: var(--reveal-reserve); }
 	.app { grid-template-columns: 0px minmax(0, 1fr) 0px; }
+	/* One drawer layer for both sides and the drag sheet: each covers the full height, above the main pane. The main pane
+	   is its own stacking context, so no z-index inside it (the Session header, the sticky prompt header) rises above a
+	   drawer. The selectors outrank the narrow-window rules below, which keep a desktop's overlay panel over the
+	   transcript only. */
+	.main-slot { isolation: isolate; }
 	.sidebar-slot { position: absolute; inset: 0 auto 0 0; width: min(var(--side-w), 100%); z-index: 5; }
+	.app.panel-overlay .panel-slot, .app .drawer-sheet { inset: 0 0 0 auto; z-index: 5; }
 	.panel-overlay .panel-slot { width: min(var(--panel-w), 100%); }
+	/* A sideways finger drag is the drawers' (drawer-swipe.ts); the page pans only vertically and zooms. A nested
+	   scroller, such as a code block, still pans sideways: panning restarts at each scroller. */
+	.app { touch-action: pan-y pinch-zoom; }
+	/* The drag's look: --drawer-p is the open fraction. The committed state stays .sidebar-hidden and .has-panel. */
+	.app.drawer-drag { user-select: none; -webkit-user-select: none; }
+	.app.drawer-drag[data-drawer="sidebar"] .sidebar-slot { visibility: visible; transform: translateX(calc((var(--drawer-p) - 1) * 100%)); }
+	.app.drawer-drag[data-drawer="panel"] .panel-slot,
+	.app.drawer-drag[data-drawer="panel"][data-drawer-opening="true"] .drawer-sheet { display: flex; transform: translateX(calc((1 - var(--drawer-p)) * 100%)); }
+	.app.drawer-settle .sidebar-slot,
+	.app.drawer-settle .panel-slot,
+	.app.drawer-settle .drawer-sheet { transition: transform var(--drawer-ms) ease-out; }
+	.app.drawer-arrived .panel-slot > .panel > :not(.panel-tabs) { animation: drawer-fade 120ms ease-out; }
 }
+/* The empty sheet a panel-opening swipe pulls in: the panel's place and title, no content. */
+.drawer-sheet {
+	display: none;
+	flex-direction: column;
+	position: absolute;
+	inset: var(--transcript-top, 0px) 0 var(--transcript-bottom, 0px) auto;
+	width: min(var(--panel-w), 100%);
+	z-index: 3;
+	background: var(--bg-side);
+	border-left: 1px solid var(--border);
+	box-shadow: var(--shadow);
+}
+.drawer-sheet-title { padding: 0 8px; font-weight: 500; }
+@keyframes drawer-fade { from { opacity: 0; } }
 /* Sidebar */
 .side {
 	background: var(--bg-side);
@@ -717,7 +778,11 @@ kbd {
 	color: var(--text);
 	font-weight: 500;
 }
+/* The transcript scroller is vertical only: wide content (code, tables) scrolls inside its own block. A scroller that
+   could scroll sideways lets iOS drag the whole transcript off the screen edge and spring it back. --rail-w is the
+   prompt rail's width; transcript content that sizes against the pane (100cqw) subtracts it. */
 .transcript-frame {
+ --rail-w: 0px;
  display: flex;
  flex: 1;
  min-height: 0;
@@ -738,7 +803,8 @@ kbd {
 .prompt-head .tb[aria-disabled] { color: var(--border-strong); pointer-events: none; }
 @media (pointer: coarse) { .prompt-head .in { height: auto; min-height: var(--hit); } .prompt-head .tb { width: var(--hit); line-height: var(--hit); } }
 /* The prompt rail: the strip plus the outline it opens on hover or focus. */
-.prompt-rail { position: relative; display: flex; flex: 0 0 28px; }
+.transcript-frame.strip { --rail-w: 28px; }
+.prompt-rail { position: relative; display: flex; flex: 0 0 var(--rail-w); }
 .prompt-outline { width: 360px; max-height: 70vh; overflow-y: auto; padding: 4px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); font-size: var(--font-ui); }
 .prompt-outline .hint { padding: 4px 8px; color: var(--text-3); }
 .prompt-outline a { display: flex; gap: 8px; padding: 3px 8px; border-radius: 4px; color: var(--text-2); text-decoration: none; }
@@ -755,7 +821,7 @@ kbd {
 .companion-scrollbar {
  margin-block: 8px;
  position: relative;
- flex: 0 0 28px;
+ flex: 0 0 var(--rail-w);
  display: flex;
  flex-direction: column;
  justify-content: center;
@@ -789,6 +855,7 @@ kbd {
 .companion-scrollbar a:hover span, .companion-scrollbar a:focus-visible span { width: 18px; background: var(--accent); }
 .scroll {
 	flex: 1;
+	overflow-x: hidden;
 	overflow-y: auto;
 	min-height: 0;
 	overscroll-behavior: contain;
@@ -940,13 +1007,13 @@ kbd {
 }
 /* An assistant message's table may grow past the 76ch prose column, centred, up to the pane less its gutters.
    A table that fits the column stays on the text's left edge. Clipped previews and indented bodies keep the column.
-   100cqw is the pane: .main is the size container. The scroller cannot be one: its layout containment would
+   100cqw is the pane: .main is the size container; the scroller is the pane less the rail. The scroller cannot be one: its layout containment would
    capture fixed-position descendants such as the Quote button. Under a display zoom WebKit resolves 100cqw and the
    translate in different scales and the table overflows the pane, so a zoomed display keeps tables in the column. */
 html:not([data-zoomed]) .transcript .msg.assistant > .md table {
 	width: max-content;
-	max-width: calc(100cqw - 48px);
-	translate: min(0px, calc((min(76ch, 100cqw - 48px) - 100%) / 2));
+	max-width: calc(100cqw - var(--rail-w) - 48px);
+	translate: min(0px, calc((min(76ch, 100cqw - var(--rail-w) - 48px) - 100%) / 2));
 }
 .md a {
 	color: var(--accent);
@@ -1027,13 +1094,13 @@ details[open] > .disclosure::before,
 .tool-head .name {
 	font-weight: 500;
 	font-family: var(--mono); font-feature-settings: normal;
-	font-size: 12px;
+	font-size: var(--font-code);
 	flex: none;
 }
 .tool-head .arg {
 	color: var(--text-2);
 	font-family: var(--mono); font-feature-settings: normal;
-	font-size: 12px;
+	font-size: var(--font-code);
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -1308,6 +1375,9 @@ details[open] > .disclosure::before,
 .panel-tabs > .seg { overflow-x: auto; }
 .panel-tabs .seg button { flex: none; }
 .panel-tabs > .btn { flex: none; }
+/* On touch the panel's ✕ takes a full target: on a phone the open panel covers ☰, and ✕ is its visible way out. The
+   target reaches into the header's padding, so the header keeps its height. */
+@media (pointer: coarse) { .panel-close { min-width: var(--hit); min-height: var(--hit); margin-block: -6px; justify-content: center; } }
 .panel-body {
 	flex: 1;
 	overflow-y: auto;
@@ -2046,10 +2116,9 @@ details[open] > .disclosure::before,
 .composer-bar .model-hud-card { display: inline-flex; min-width: 0; }
 .composer-bar .model-hud-trigger { cursor: help; text-decoration: underline dotted; text-decoration-thickness: 1px; text-underline-offset: 2px; }
 .composer-bar .model-hud-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-/* hc-hud's footer roles: the Session name bold, path and accounting dim, model neutral. */
+/* hc-hud's footer roles: path and accounting dim. */
 .hud-footer { font-family: var(--mono); font-size: 12px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .hud-footer .hud-dim { color: var(--text-3); }
-.hud-footer .hud-bold { font-weight: 600; }
 .hud-note { margin: 8px 0 0; color: var(--text-3); font-size: 12px; }
 .session-metadata dl { margin: 0; }
 .session-metadata dl > div { display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: 8px; padding: 3px 0; }
@@ -2062,6 +2131,9 @@ details[open] > .disclosure::before,
 .topbar a.btn { text-decoration: none; }
 /* The Session bar's actions sit tight but keep 24 px hit targets. */
 .thread-bar.form-row { position: relative; gap: 2px 8px; }
+/* On touch the name reserves 8 em: on a 375 px phone the name, ☆, 🔍 and ⋯ at 40 px targets then share one row, and
+   the name still shows about 15 characters. The name is read there more than typed; the Find bar keeps 12 em. */
+@media (pointer: coarse) { .thread-bar.form-row { --field-min: 8em; } }
 .thread-bar > .form-actions { gap: 2px; }
 .thread-bar .btn.small:not(.session-copy), .thread-bar .seg button { padding: 3px 6px; min-height: var(--hit); min-width: var(--hit); justify-content: center; }
 /* The secondary actions (header-fold.ts). Folded, the group stays drawn for its width but is invisible, inert and out
@@ -2091,10 +2163,10 @@ details[open] > .disclosure::before,
 .attn-note strong { color: var(--attn); font-weight: 500; }
 /* Overlay panel (narrow windows): only over the transcript, so the topbar and composer stay usable. */
 .panel-overlay .panel-slot { top: var(--transcript-top, 0px); bottom: var(--transcript-bottom, 0px); border-left: 1px solid var(--border); }
-html[data-input="keyboard"] [data-region]:focus { outline: 2px solid color-mix(in srgb, var(--accent) 50%, transparent); outline-offset: -2px; }
-html[data-input="pointer"] [data-region]:focus { outline: none; }
-html[data-input="keyboard"] :is([data-page-root], [data-page-focus]):focus { outline: 2px solid color-mix(in srgb, var(--accent) 50%, transparent); outline-offset: -2px; }
-html[data-input="pointer"] :is([data-page-root], [data-page-focus]):focus { outline: none; }
+/* A focused region or page root draws its ring only after keyboard input (App's data-input). A pointer, a touch, or a
+   script's move before any input draws none: :focus-visible matches a script's focus on a fresh page. */
+:is([data-region], [data-page-root], [data-page-focus]):focus { outline: none; }
+html[data-input="keyboard"] :is([data-region], [data-page-root], [data-page-focus]):focus { outline: 2px solid color-mix(in srgb, var(--accent) 50%, transparent); outline-offset: -2px; }
 .panel-tab-choice { display: inline-flex; align-items: center; gap: 2px; }
 
 /* Long prose shows its preview with a fade, then opens inline in its message (A24). */

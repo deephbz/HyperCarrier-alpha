@@ -1,8 +1,9 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import type { Page } from "playwright";
-import { anchor, entries, frames, gap, newButton, offsetOf, open, scrollAway, scrollTop, streaming, view } from "./thread-scroll-fixture.ts";
+import { engineSkip } from "./engines.ts";
+import { anchor, ENGINES, type Engine, entries, frames, gap, newButton, offsetOf, open, scrollAway, scrollTop, streaming, view } from "./thread-scroll-fixture.ts";
 
 // The real ThreadView with the real stylesheet in Chromium; only the hub is a script on the page's WebSocket. A reader
 // away from the newest end keeps the entry they read at its screen height while entries arrive; a reader at the end
@@ -123,6 +124,90 @@ test("scroll hold: k and u from the end leave the end band, so arrivals do not p
 		assert.ok(await gap(page) > 60, `the reader stays away from the end after ${key}; gap ${await gap(page)}`);
 		await newButton(page).waitFor();
 	}
+});
+
+/**
+ * A page whose `replay()` delivers the last Session snapshot again from its hub socket. Called in the task of a reader's
+ * scroll, it renders the Session view before that scroll's event, as any hub frame can.
+ */
+async function replayable(t: TestContext, engine: Engine = "chromium") {
+	const opened = await open(t, 200, "pi", engine);
+	await opened.page.addInitScript(() => {
+		const Socket = window.WebSocket;
+		let last: unknown;
+		(window as any).WebSocket = class extends Socket {
+			constructor(url: string | URL, protocols?: string | string[]) {
+				super(url, protocols);
+				this.addEventListener("message", (event) => { if (JSON.parse(String(event.data)).value?.entries) last = event.data; });
+				(window as any).replay = () => this.dispatchEvent(new MessageEvent("message", { data: last }));
+			}
+		};
+	});
+	await opened.page.reload();
+	await opened.page.locator("[data-entry=e199]").waitFor({ state: "attached" });
+	return opened;
+}
+
+// An up scroll key leaves the end at its input, like a wheel up (thread-scroll-wheel.test.ts). Its smooth step moves no
+// pixel before the next frame, so a hub frame that renders between the key and that frame still sees a reader at the end;
+// following would write scrollTop and cancel the step (failure: K1 journey on a busy hub, k did not scroll up).
+test("scroll hold: an up scroll key leaves the end before a render in the same task", async (t) => {
+	const { page } = await replayable(t);
+	for (const key of ["k", "u"]) {
+		await page.locator("[data-region=transcript]").focus();
+		await page.keyboard.press("Shift+G");
+		await frames(page);
+		assert.ok(await gap(page) <= 2, "G starts the reader at the newest end");
+		await page.evaluate((key) => {
+			const el = document.querySelector<HTMLElement>("[data-region=transcript]")!;
+			el.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+			(window as any).replay();
+		}, key);
+		for (let i = 0; i < 20; i++) await frames(page);
+		assert.ok(await gap(page) > 60, `${key} leaves the end band despite the render; gap ${await gap(page)}`);
+	}
+});
+
+// Only a deliberate scroll up leaves the end at its input. The keymap's rules decide a key (isScrollKey: an editable
+// target or a Ctrl or Alt chord scrolls nothing), and a pinch zoom (ctrl+wheel) or a horizontal wheel is no scroll. A
+// dispatched event scrolls nothing itself, so a reader who left the end here would not follow the next arrival.
+test("scroll hold: an input that scrolls nothing up keeps a reader at the end following", async (t) => {
+	const { page, send } = await open(t, 200);
+	await page.locator("[data-entry=e199]").waitFor({ state: "attached" });
+	let n = 200;
+	const kept: Record<string, boolean> = {};
+	const cases = {
+		"k in a text field": { key: "k", field: true },
+		"Ctrl+ArrowUp": { key: "ArrowUp", ctrlKey: true },
+		"Alt+ArrowUp": { key: "ArrowUp", altKey: true },
+		"Ctrl+u": { key: "u", ctrlKey: true },
+		"Shift+G": { key: "G", shiftKey: true },
+		"ctrl+wheel up": { deltaY: -100, ctrlKey: true },
+		"horizontal wheel": { deltaX: -100, deltaY: 0 },
+		// Controls: a wheel up, and Cmd+↑, which scrolls a focused scroller to its top on macOS.
+		"wheel up": { deltaY: -100 },
+		"Cmd+ArrowUp": { key: "ArrowUp", metaKey: true },
+	};
+	for (const [name, input] of Object.entries(cases)) {
+		await page.locator("[data-region=transcript]").focus();
+		await page.keyboard.press("Shift+G");
+		await frames(page);
+		assert.ok(await gap(page) <= 2, `${name}: the reader starts at the newest end`);
+		await page.evaluate((input) => {
+			const el = document.querySelector<HTMLElement>("[data-region=transcript]")!;
+			let target: HTMLElement = el;
+			if ("field" in input) { target = document.createElement("input"); el.querySelector("[data-entry]")!.parentElement!.append(target); }
+			target.dispatchEvent("deltaY" in input ? new WheelEvent("wheel", { ...input, bubbles: true }) : new KeyboardEvent("keydown", { ...input, bubbles: true, cancelable: true }));
+			if ("field" in input) target.remove();
+		}, input);
+		// A following reader paints the newest entry at the end; a reader who left the end keeps a frozen window.
+		n += 2;
+		send(view(n));
+		const painted = await page.locator(`[data-entry="e${n - 1}"]`).waitFor({ state: "attached", timeout: 1000 }).then(() => true, () => false);
+		await frames(page);
+		kept[name] = painted && await gap(page) <= 2;
+	}
+	assert.deepEqual(kept, { ...Object.fromEntries(Object.keys(cases).map((name) => [name, true])), "wheel up": false, "Cmd+ArrowUp": false });
 });
 
 /** How far the last streamed line's bottom is below the transcript's visible bottom (positive: hidden). */
@@ -248,4 +333,45 @@ test("scroll hold: a source window that drops the held first entry keeps a mid-t
 		const offset = await offsetOf(page, before.id);
 		assert.ok(offset !== null && Math.abs(offset - before.offset) <= 2, `after ${n} entries from e${from}, ${before.id} moved from ${before.offset.toFixed(1)} to ${offset?.toFixed(1)}`);
 	}
+});
+
+// Only the reader moves scrollTop (scroll anchoring is off), and their scroll event comes a frame later. A render or a
+// resize before that event sees the moved scrollTop first; it must treat the move as the reader's scroll, as the event
+// would. A move down into the end band follows again; any move keeps its place.
+for (const engine of ENGINES) test(`scroll hold (${engine}): a reader back at the end follows the next arrival after a render before the scroll event`, { skip: engineSkip(engine) }, async (t) => {
+	const { page, publish } = await replayable(t, engine);
+	await scrollAway(page);
+	assert.ok(await gap(page) > 1000, "the reader is away from the newest end");
+	await page.evaluate(() => {
+		const el = document.querySelector<HTMLElement>("[data-region=transcript]")!;
+		el.scrollTop = el.scrollHeight;
+		(window as any).replay();
+	});
+	for (let i = 0; i < 5; i++) await frames(page);
+	await publish(201);
+	assert.equal(await newButton(page).count(), 0, "the reader at the end sees \"↓ N new\" instead of the arrival");
+	assert.ok(await gap(page) <= 2, `the reader at the end did not follow the arrival; gap ${await gap(page)}`);
+});
+
+for (const engine of ENGINES) test(`scroll hold (${engine}): a resize before the scroll event keeps the reader's scroll up`, { skip: engineSkip(engine) }, async (t) => {
+	const moved: Record<string, number> = {};
+	for (const resize of ["Find bar", "style"]) for (const start of ["away", "end"]) {
+		const { page } = await open(t, 200, "pi", engine);
+		await page.locator("[data-entry=e199]").waitFor({ state: "attached" });
+		if (start === "away") {
+			await scrollAway(page);
+			assert.ok(await gap(page) > 1000, "the reader is away from the newest end");
+		} else assert.ok(await gap(page) <= 2, "the reader starts at the newest end");
+		moved[`${start}, ${resize}`] = await page.evaluate(async (resize) => {
+			const el = document.querySelector<HTMLElement>("[data-region=transcript]")!;
+			const from = el.scrollTop;
+			el.scrollTop = from - 300;
+			// The Find bar renders the Session view and shrinks the transcript in one commit; a style resize renders nothing.
+			if (resize === "style") el.style.maxHeight = `${el.clientHeight - 40}px`;
+			else document.querySelector<HTMLButtonElement>('button[aria-label="Find in this Session"]')!.click();
+			for (let i = 0; i < 5; i++) await new Promise((done) => requestAnimationFrame(done));
+			return Math.round(from - el.scrollTop);
+		}, resize);
+	}
+	assert.deepEqual(moved, { "away, Find bar": 300, "end, Find bar": 300, "away, style": 300, "end, style": 300 });
 });

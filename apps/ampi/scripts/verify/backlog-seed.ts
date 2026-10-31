@@ -3,6 +3,7 @@
 // Seed from mem-builder's apps/ampi/test/pi-backlog-priority.test.ts (ampi-memory-startup); incident 2026-10-19:
 // only 14 of 33 live agents had a row because every cached copy queued a derive (FIFO) before them.
 // Starts its own disposable hub on an OS port. Prints one JSON line; exit 0 on pass, 1 on fail.
+import "../stdio-sync.cjs";
 import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";

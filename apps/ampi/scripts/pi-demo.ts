@@ -9,6 +9,7 @@
 //
 // Views extend the data through scripts/demo/index.ts (one function per view), not by editing the base Sessions.
 
+import "./stdio-sync.cjs";
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

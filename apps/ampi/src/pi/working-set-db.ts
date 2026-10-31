@@ -4,14 +4,22 @@ import { chmodSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { searchSchema } from "./search.ts";
 import { span, traceDb } from "../trace.ts";
+import { sameIndex } from "./working-set-types.ts";
 
 // The Worker's last close checkpoints the WAL under an exclusive lock. Every open
 // waits out such locks from its first statement instead of failing with SQLITE_BUSY.
 const BUSY_MS = 5000;
 
+/** Gives SQL reads of saved heads, such as fleet search, the predicate of WorkingSet.load: `same_index(version)`. */
+export function sameIndexFunction(db: DatabaseSync): DatabaseSync {
+ db.function("same_index", { deterministic: true }, (version) => (sameIndex(String(version)) ? 1 : 0));
+ return db;
+}
+
 /** Hub connections cannot mutate working-set state, including schema. */
 export function readWorkingSet(cacheDir: string): DatabaseSync {
- const db = traceDb(span("sqlite-open", "sqlite", () => new DatabaseSync(join(cacheDir, "working-set.sqlite"), { readOnly: true, timeout: BUSY_MS }), { db: "read" }), "read");
+ const raw = span("sqlite-open", "sqlite", () => new DatabaseSync(join(cacheDir, "working-set.sqlite"), { readOnly: true, timeout: BUSY_MS }), { db: "read" });
+ const db = traceDb(sameIndexFunction(raw), "read");
  db.exec("PRAGMA cache_size=-2048; PRAGMA mmap_size=0; PRAGMA query_only=ON;");
  return db;
 }

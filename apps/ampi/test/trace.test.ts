@@ -66,6 +66,48 @@ await new Promise((r) => setTimeout(r, 300));
 	}
 });
 
+test("trace: a traced cursor that ends early reads what a raw cursor reads: break and throw release the snapshot", () => {
+	const dir = mkdtempSync(join(tmpdir(), "ampi-trace-cursor-"));
+	try {
+		const out = child(join(dir, "trace"), `
+const file = ${JSON.stringify(join(dir, "db.sqlite"))};
+const write = new DatabaseSync(file);
+write.exec("PRAGMA journal_mode=WAL; CREATE TABLE k (v INTEGER); INSERT INTO k VALUES (0); CREATE TABLE x (a INTEGER)");
+for (let a = 1; a <= 50; a++) write.prepare("INSERT INTO x VALUES (?)").run(a);
+const readers = { raw: new DatabaseSync(file), traced: t.traceDb(new DatabaseSync(file), "read") };
+const head = (read) => { read.exec("BEGIN"); try { return read.prepare("SELECT v FROM k").get().v; } finally { read.exec("ROLLBACK"); } };
+const seen = [], held = [];
+// The ways a consumer leaves a cursor: break, a throw from the loop body, and abandon after one row (no return()).
+const exits = {
+	break: (read) => { for (const row of read.prepare("SELECT a FROM x").iterate()) if (row.a >= 3) break; },
+	throw: (read) => { try { for (const row of read.prepare("SELECT a FROM x").iterate()) if (row.a >= 3) throw new Error("stop"); } catch {} },
+	abandon: (read) => { const rows = read.prepare("SELECT a FROM x").iterate(); rows.next(); held.push(rows); },
+};
+for (const [exit, leave] of Object.entries(exits)) for (const [reader, read] of Object.entries(readers)) {
+	read.exec("BEGIN"); leave(read); read.exec("ROLLBACK");
+	write.prepare("UPDATE k SET v = v + 1").run();
+	seen.push({ exit, reader, fresh: head(read) === write.prepare("SELECT v FROM k").get().v });
+}
+for (const rows of held) rows.return();
+const rows = readers.traced.prepare("SELECT a FROM x").iterate();
+console.log(JSON.stringify({ seen, helpers: typeof rows.toArray, all: rows.toArray().length }));
+t.flushTrace();
+`);
+		const { seen, helpers, all } = JSON.parse(out);
+		const fresh = (exit: string, reader: string) => seen.find((s: { exit: string; reader: string }) => s.exit === exit && s.reader === reader).fresh;
+		for (const exit of ["break", "throw", "abandon"]) assert.equal(fresh(exit, "traced"), fresh(exit, "raw"), `after ${exit}, tracing does not change what the next snapshot reads`);
+		assert.ok(fresh("break", "traced") && fresh("throw", "traced"), "after break or throw, the next snapshot reads the committed head");
+		assert.equal(fresh("abandon", "raw"), false, "an abandoned cursor pins its snapshot until GC, raw or traced: the working set repairs that class");
+		assert.equal(helpers, "function", "a traced cursor keeps the native Iterator helpers");
+		assert.equal(all, 50);
+		const [file] = readdirSync(join(dir, "trace"));
+		const iterated = parseTrace(readFileSync(join(dir, "trace", file), "utf8")).filter((e: { name: string }) => e.name === "SELECT a FROM x");
+		assert.deepEqual(iterated.map((e: { args: { rows: number } }) => e.args.rows), [3, 3, 1, 50], "each cursor records one span with the rows it read, when it ends");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("trace: without AMPI_TRACE nothing is written and the API is a no-op", () => {
 	const dir = mkdtempSync(join(tmpdir(), "ampi-trace-off-"));
 	try {

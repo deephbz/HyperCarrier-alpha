@@ -7,6 +7,7 @@
 //
 // A run directory holds the disposable HOME, AMPI_HOME, demo data, and hub log. Proof lives elsewhere
 // (proofDir) and survives stop. The access key stays in <run>/hub.key (mode 600); logs carry no key.
+import '../stdio-sync.cjs';
 import { spawn, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';

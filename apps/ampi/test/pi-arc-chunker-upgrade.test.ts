@@ -105,7 +105,7 @@ test("arc chunker upgrade: a row derived under older chunk and excerpt rules re-
 	// The older rules: one chunk over the whole Session, under the index-only version key.
 	const merged = { ...fresh.arc.chunks[0]!, hash: "old-h0", lastEntryId: "a4", ownerTurns: 4 };
 	ageRow(source.cacheDir, source.path, { version: `5:${sourceVersion}`, chunks: [merged] });
-	assert.equal(store.load(source.path)!.arc.chunks.length, 1);
+	assert.equal(store.load(source.path), undefined, "the hub does not serve a head of the older index rules");
 	writeFileSync(join(state, `${createHash("sha256").update("fixture-session").digest("hex")}.json`), JSON.stringify(oldReceipt(`5:${sourceVersion}`, 3)));
 
 	const again = (await store.refresh(source))!;

@@ -43,6 +43,7 @@
 .cos-axis > div { display: flex; justify-content: space-between; gap: 8px; }
 .cos-axis time { white-space: nowrap; }
 .cos-axis time:nth-child(3) { text-align: center; }
+.cos-tick-short { display: none; }
 .cos-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .cos-stream-row { display: grid; grid-template-columns: 220px minmax(0, 1fr); padding: 0 20px; align-items: center; }
 .cos-stream-row:nth-child(even) { background: var(--bg-side); }
@@ -166,6 +167,24 @@
 	.cos-list-row .cos-links { gap: 4px; }
 	.cos-arc-list-head, .cos-arc-list-row { grid-template-columns: minmax(0, 1fr) minmax(96px, 160px) 48px 54px 64px; }
 	.cos-transition { grid-template-columns: 124px minmax(0, 1fr); gap: 12px; }
+}
+/* A phone (styles.css's 600 px drawer rule). The axis shows three short labels, so it fits the screen and the page never
+   scrolls sideways (docs/ux/swipe-drawers.md). The Timeline lanes and the Arcs lists take their full height and the
+   page is the one vertical scroller, so a tall header or a large display size cannot squeeze them to nothing. The
+   axis sticks to the top; nothing else in the page may stick above it. Timeline.tsx reads the lanes' offset from
+   either scroller (rows.ts laneOffset). A page's name keeps its whole word; its count line wraps below. An Arc's
+   title is long and keeps its ellipsis. */
+@media (max-width: 600px) {
+	.cos-header { flex-wrap: wrap; row-gap: 4px; }
+	.cos-header:not(.cos-arc-header) h1 { flex: none; }
+	.cos-scroll { flex: none; overflow: visible; }
+	.cos-axis { position: sticky; top: 0; z-index: 1; }
+	.cos-axis, .cos-stream-row { grid-template-columns: 132px minmax(0, 1fr); padding-left: 10px; padding-right: 10px; }
+	/* The stuck axis reaches the screen top, where ☰ shows: its label keeps the ☰ reserve, and its first column gives up
+	   the same width, so the ticks stay over the lanes' time column. */
+	.cos-axis { padding-left: var(--reveal-reserve); grid-template-columns: calc(142px - var(--reveal-reserve)) minmax(0, 1fr); }
+	.cos-tick-full { display: none; }
+	.cos-tick-short { display: inline; }
 }
 /* A narrow Arcs list stacks each row, so the title keeps a full line: title, then context, then span, entries and links. */
 @container (max-width: 560px) {

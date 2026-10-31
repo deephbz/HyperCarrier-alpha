@@ -33,6 +33,9 @@ function Copy({ text, label = "Copy", icon = false }: { text: string; label?: st
 	return <button className={icon ? "btn ghost small rb-icon" : "btn ghost small"} aria-label={feedback} onClick={() => { void navigator.clipboard.writeText(text).then(() => { setCopied(true); setError(false); }, () => setError(true)); }} title={feedback}>{icon ? error ? "!" : copied ? "✓" : <Icon name="copy" /> : feedback}</button>;
 }
 
+/** The reading line: a stepped-to message lands this many CSS px below the scroller's top. */
+const READING_LINE = 12;
+
 export function RarebitView({ host, threadId, entry }: { host: string; threadId: string; entry?: string }) {
 	const [before, setBefore] = useState<string>();
 	// A linked entry outside the loaded page: the hub serves the page that holds it until the reader pages away.
@@ -60,12 +63,22 @@ export function RarebitView({ host, threadId, entry }: { host: string; threadId:
 	const start = Math.max(0, filtered.length - state.window);
 	const visible = filtered.slice(start, start + 60);
 	const [steps, setSteps] = useState<{ prev?: number; next?: number }>({});
-	const [jump, setJump] = useState<string>();
+	/**
+	 * A message to place `offset` CSS px below the scroller's top: a step lands on the reading line, a toggle keeps the
+	 * read place. `hand` is the hook's hand-off; the reader's own scroll input before the write takes the place back.
+	 * `space` is the tail space before the jump: a dropped jump leaves none of its own.
+	 */
+	const [jump, setJump] = useState<{ id: string; offset: number; hand: number; space: number }>();
 	const [tailSpace, setTailSpace] = useState(0);
+	/** Blank tail space shows only below the newest message; a window with newer messages behind it shows none. */
+	const newest = start + 60 >= filtered.length;
+	const tail = newest ? tailSpace : 0;
+	// Tail space belongs to the jump that set it: a window or Hide change that places no message leaves none.
+	useLayoutEffect(() => { if (!jump) setTailSpace(0); }, [state.window, state.hide]);
 	const updateSteps = () => {
 		const el = scroller.current;
 		if (!el) return;
-		const top = el.getBoundingClientRect().top + toScreen(12, el);
+		const top = el.getBoundingClientRect().top + toScreen(READING_LINE, el);
 		const users = Array.from(el.querySelectorAll<HTMLElement>(".rb-message[data-kind='user']")).map((node) => ({ index: filtered.findIndex((item) => item.id === node.dataset.rarebit), top: node.getBoundingClientRect().top }));
 		const prev = users.filter((user) => user.top < top - 2).at(-1)?.index ?? filtered.findLastIndex((item, index) => index < start && item.kind === "user");
 		const next = users.find((user) => user.top > top + 2)?.index ?? filtered.findIndex((item, index) => index >= start + visible.length && item.kind === "user");
@@ -74,33 +87,50 @@ export function RarebitView({ host, threadId, entry }: { host: string; threadId:
 	useLayoutEffect(updateSteps, [value, state.window, state.hide, state.side, state.pending, tailSpace]);
 	useLayoutEffect(() => {
 		const el = scroller.current;
-		const target = jump && el?.querySelector<HTMLElement>(`[data-rarebit="${CSS.escape(jump)}"]`);
-		if (!el || !target) return;
-		// Rects are screen px; scrollTop and the 12 px reading line are the scroller's CSS px.
-		const top = toCss(target.getBoundingClientRect().top - el.getBoundingClientRect().top, el) + el.scrollTop - 12;
-		const needed = Math.max(0, Math.ceil(el.clientHeight - (el.scrollHeight - tailSpace - top)));
+		if (!el || !jump) return;
+		if (!keepPlace.holds(jump.hand)) { setJump(undefined); setTailSpace(jump.space); return; }
+		const target = el.querySelector<HTMLElement>(`[data-rarebit="${CSS.escape(jump.id)}"]`);
+		// The hook restores nothing while a jump waits; a target this window does not render leaves the place as it is.
+		if (!target) { keepPlace.record(); return; }
+		// Rects are screen px; scrollTop and the offset are the scroller's CSS px. The tail space below the window lets the
+		// target reach its offset when too little content follows it.
+		const top = toCss(target.getBoundingClientRect().top - el.getBoundingClientRect().top, el) + el.scrollTop - jump.offset;
+		const short = Math.ceil(el.clientHeight - (el.scrollHeight - tail - top));
+		// Newer messages fill the space instead. The window starts at the row the screen top will show, so the content above
+		// the target still covers its offset; for a step, the target itself.
+		const line = target.getBoundingClientRect().top - toScreen(jump.offset, el);
+		const first = newest || short <= 0 ? undefined : [...el.querySelectorAll<HTMLElement>("[data-rarebit]")].findLast((row) => row.getBoundingClientRect().top <= line + 0.5);
+		const index = first ? filtered.findIndex((item) => item.id === first.dataset.rarebit) : -1;
+		if (index > start) { set({ window: Math.max(60, filtered.length - index) }); return; }
+		const needed = newest ? Math.max(0, short) : 0;
 		if (needed !== tailSpace) { setTailSpace(needed); return; }
 		el.scrollTop = top;
+		// The placed message is the reader's place at once: a resize before this write's scroll event restores it.
+		keepPlace.record();
 		setJump(undefined);
 		updateSteps();
 	}, [jump, state.window, tailSpace]);
+	/** The one writer of a placed message: the hook hands the place to the jump effect. */
+	const place = (id: string, offset: number) => setJump({ id, offset, hand: keepPlace.handOff(), space: tailSpace });
 	const step = (index: number | undefined) => {
 		if (index === undefined || index < 0) return;
 		pinned.current = false;
 		set({ window: Math.max(60, filtered.length - index) });
-		setJump(filtered[index]!.id);
+		place(filtered[index]!.id, READING_LINE);
 	};
-	// Preserve the shared reading-place rule while remapping the bounded message window.
+	// Preserve the shared reading-place rule while remapping the bounded message window. The remapped window can end a few
+	// messages below the anchor, so the anchor is placed like a step, with newer messages or tail space under it.
 	const toggleHide = () => {
 		const hide = !state.hide;
 		const el = scroller.current;
 		if (el && value && !keepPlace.following()) {
-			const anchor = keepPlace.capture({ accept: (node) => !hide || node.dataset.kind !== "continuation" });
+			const anchor = keepPlace.measure({ accept: (node) => !hide || node.dataset.kind !== "continuation" });
 			const next = value.items.filter((i) => !hide || i.kind !== "continuation");
 			const index = anchor ? next.findIndex((i) => i.id === anchor.id) : -1;
 			if (anchor && index >= 0) {
 				const above = visible.findIndex((i) => i.id === anchor.id);
 				set({ hide, window: Math.max(60, next.length - Math.max(0, index - Math.max(0, above))) });
+				place(anchor.id, anchor.offset);
 				return;
 			}
 		}
@@ -125,7 +155,7 @@ export function RarebitView({ host, threadId, entry }: { host: string; threadId:
 		pinned.current = false;
 		revealed.current = want.seq;
 		set({ window: Math.max(60, filtered.length - index) });
-		setJump(entry);
+		place(entry, READING_LINE);
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [want?.seq, value, state.hide]);
 	const ask = async () => {
@@ -160,7 +190,7 @@ export function RarebitView({ host, threadId, entry }: { host: string; threadId:
 			{stale && value && <div className="rb-error" role="status">Last local copy · Host may be away. Reconnect the Host to see new messages.</div>}
 			{failure && <div className="rb-error" role="alert">Rarebit: {failure} The panel retries when the Session changes.</div>}
 		</header>
-		<div className="rb-scroll quiet-scroll" ref={scroller} onWheel={keepPlace.onWheel} onScroll={() => { keepPlace.onScroll(); if (tailSpace) pinned.current = false; updateSteps(); }}>
+		<div className="rb-scroll quiet-scroll" ref={scroller} onScroll={() => { keepPlace.onScroll(); if (tail) pinned.current = false; updateSteps(); }}>
 			{!value && !failure ? <p className="rb-state" role="status">Reading the Session…</p> : !count && !failure ? <p className="rb-state">No Rarebits yet. Human messages and agent prose appear here; tool traffic stays in the transcript.</p> : null}
 			{entry && value && !value.items.some((i) => i.id === entry) && <p className="rb-state" data-why={value.around?.id === entry ? value.around.found : "page"}>{
 				around === entry && value.around?.id !== entry ? "Loading the linked message's page…"
@@ -180,9 +210,9 @@ export function RarebitView({ host, threadId, entry }: { host: string; threadId:
 					<Markdown text={item.text} />{item.truncated && <p className="rb-meta">Preview shortened · open Transcript to read the source entry.</p>}
 					{builds.get(item.id)?.map((b) => <p key={b.startedAt} className="cos-arc-build-row" data-state={b.state} title={buildDetail(b)}><span>{buildText(b)}</span><a href={href.page("arcs", [host, threadId])}>Arc ↗</a></p>)}
 				</article>)}
-				{start + 60 < filtered.length && <button className="btn ghost small rb-earlier" onClick={() => { pinned.current = false; set({ window: Math.max(60, state.window - 60) }); scroller.current?.scrollTo({ top: 0 }); }}>Show 60 newer</button>}
+				{!newest && <button className="btn ghost small rb-earlier" onClick={() => { pinned.current = false; set({ window: Math.max(60, state.window - 60) }); scroller.current?.scrollTo({ top: 0 }); }}>Show 60 newer</button>}
 			</>}
-			{!hasSide && tailSpace > 0 && <div aria-hidden="true" style={{ height: tailSpace, flex: "none" }} />}
+			{!hasSide && tail > 0 && <div aria-hidden="true" style={{ height: tail, flex: "none" }} />}
 			{hasSide && <section className="rb-side" aria-label="Side ask">
 				<div className="rb-side-heading"><strong>Side ask</strong><button className="btn ghost small" disabled={Boolean(state.pending)} onClick={() => void end()}>End</button></div>
 				<p className="rb-meta">{state.side ? `Snapshot of ${state.side.count.toLocaleString()} Rarebits at ${time(state.side.at)}` : "Freezing a snapshot of Rarebits…"} · nothing here enters the main Session.</p>

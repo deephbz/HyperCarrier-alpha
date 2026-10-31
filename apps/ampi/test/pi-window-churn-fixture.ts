@@ -4,11 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WorkingSet, workingSetUsage } from "../src/pi/working-set.ts";
 import { openWorkingSet } from "../src/pi/working-set-db.ts";
+import { derivedVersion } from "../src/pi/working-set-types.ts";
 const dir = mkdtempSync(join(tmpdir(), "ampi-churn-"));
 const seed = openWorkingSet(dir);
 let store: WorkingSet | undefined;
 try {
- const data: any = { version: "fixture", count: 400 };
+ const data: any = { version: derivedVersion("fixture"), count: 400 };
  const insert = seed.prepare("INSERT INTO entries VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
  seed.exec("BEGIN");
  for (let session = 0; session < 32; session++) {

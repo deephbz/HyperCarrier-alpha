@@ -13,7 +13,10 @@ export function sidebarKeyAction(key: string, expanded: boolean, expandable: boo
 	return undefined;
 }
 
-/** Handles the sidebar's roving rows. Global and editable-target keys remain owned by their existing handlers. */
+/**
+ * Handles the sidebar's roving rows. Global and editable-target keys remain owned by their existing handlers.
+ * A [data-nav-row] that is no button navigates: a click on it closes a phone's drawer (App.tsx, focus.ts navigate).
+ */
 export function handleSidebarKeyDown(event: KeyboardEvent, root: HTMLElement): void {
 	const allowShiftG = event.key.toLowerCase() === "g" && event.shiftKey;
 	if (event.metaKey || event.ctrlKey || event.altKey || (event.shiftKey && !allowShiftG) || isEditableTarget(event.target)) return;

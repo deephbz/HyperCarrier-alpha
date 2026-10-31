@@ -3,9 +3,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { overlayChord, transition, type Focus, type KeyIntent, type Region, type SessionRegion, type View } from "../web/src/focus.ts";
 
-const session: View = { session: true, sidebarHidden: false, panelShown: false, modal: false };
+const session: View = { session: true, sidebarHidden: false, panelShown: false, modal: false, oneSide: false };
 const page: View = { ...session, session: false };
 const withPanel: View = { ...session, panelShown: true };
+const phone: View = { ...session, sidebarHidden: true, oneSide: true };
 const at = (region: Region | null, ...recent: SessionRegion[]): Focus => ({ region, recent: recent.length ? recent : ["transcript"] });
 
 // One row per cell of TABLE.md §3 and RULINGS.md: [name, view, focus, intent, first target or "unavailable", view change, ifLost].
@@ -57,6 +58,25 @@ const rows: [string, View, Focus, KeyIntent, string, object?, boolean?][] = [
 	["layout change on a page, sidebar hidden → page root if lost", { ...page, sidebarHidden: true }, at(null), "layout.change", "page", {}, true],
 	["Modal open: ⌘B → unavailable", { ...session, modal: true }, at(null), "sidebar.toggle", "unavailable"],
 	["Modal open: ⌘I → unavailable", { ...session, modal: true }, at(null), "composer.toggle", "unavailable"],
+	["☰ hidden → show, last if lost", { ...session, sidebarHidden: true }, at(null, "composer"), "sidebar.show", "composer", { sidebar: "show" }, true],
+	["☰ on a page → show, sidebar if lost", { ...page, sidebarHidden: true }, at(null), "sidebar.show", "sidebar", { sidebar: "show" }, true],
+	["sidebar hide button → hide, last composer", session, at("sidebar", "composer"), "sidebar.hide", "composer", { sidebar: "hide" }],
+	["sidebar hide on a page → page root", page, at("sidebar"), "sidebar.hide", "page", { sidebar: "hide" }],
+	["sidebar hide with focus in the composer → focus stays", session, at("composer", "composer"), "sidebar.hide", "composer", { sidebar: "hide" }],
+	["sidebar hide when hidden → unavailable", { ...session, sidebarHidden: true }, at(null), "sidebar.hide", "unavailable"],
+	["desktop: ⌘L with the sidebar shown keeps it", session, at("transcript"), "panel.toggle", "panel", { panel: "open" }],
+	["desktop: ☰ with the panel shown keeps it", { ...withPanel, sidebarHidden: true }, at(null, "panel"), "sidebar.show", "panel", { sidebar: "show" }, true],
+	["phone: ☰ with the panel shown → show, panel closes, sidebar", { ...phone, panelShown: true }, at(null, "panel"), "sidebar.show", "sidebar", { sidebar: "show", panel: "close" }],
+	["phone: ☰ → show, sidebar", phone, at("composer", "composer"), "sidebar.show", "sidebar", { sidebar: "show" }],
+	["phone: navigate with the drawer open → hide, last but never the composer", { ...phone, sidebarHidden: false }, at("sidebar", "composer"), "navigate", "transcript", { sidebar: "hide" }],
+	["phone: the drawer closes from the sidebar → hide, last but never the composer", { ...phone, sidebarHidden: false }, at("sidebar", "composer", "transcript"), "sidebar.hide", "transcript", { sidebar: "hide" }],
+	["phone: the panel closes from the panel → close, last but never the composer", { ...phone, panelShown: true }, at("panel", "panel", "composer"), "panel.close", "transcript", { panel: "close" }],
+	["phone: a Session opens → its transcript, so no keyboard rises", { ...phone, sidebarHidden: false }, at("sidebar", "composer"), "session.switch", "transcript"],
+	["phone: navigate with the drawer closed → unavailable", phone, at("transcript"), "navigate", "unavailable"],
+	["desktop: navigate → unavailable", session, at("sidebar"), "navigate", "unavailable"],
+	["phone: ⌘B with the panel shown → show, panel closes", { ...phone, panelShown: true }, at(null), "sidebar.toggle", "sidebar", { sidebar: "show", panel: "close" }],
+	["phone: ⌘L with the sidebar shown → sidebar hides", { ...phone, sidebarHidden: false }, at("sidebar"), "panel.toggle", "panel", { panel: "open", sidebar: "hide" }],
+	["phone: a writer set the panel with the sidebar shown → sidebar hides", { ...phone, sidebarHidden: false, panelShown: true }, at("sidebar", "composer"), "panel.set", "transcript", { sidebar: "hide" }, true],
 ];
 
 for (const [name, view, focus, intent, expected, change, ifLost] of rows) {
@@ -71,11 +91,11 @@ for (const [name, view, focus, intent, expected, change, ifLost] of rows) {
 	});
 }
 
-const intents: KeyIntent[] = ["sidebar.toggle", "panel.toggle", "composer.toggle", "insert", "panel.close", "find.close", "find.go", "session.switch", "overview", "history.move", "panel.set", "layout.change"];
+const intents: KeyIntent[] = ["sidebar.toggle", "sidebar.show", "sidebar.hide", "navigate", "panel.toggle", "composer.toggle", "insert", "panel.close", "find.close", "find.go", "session.switch", "overview", "history.move", "panel.set", "layout.change"];
 const regions: (Region | null)[] = ["sidebar", "transcript", "composer", "panel", null];
 const lasts: SessionRegion[] = ["transcript", "composer", "panel"];
 const views: View[] = [];
-for (const s of [true, false]) for (const sidebarHidden of [true, false]) for (const panelShown of [true, false]) for (const modal of [true, false]) views.push({ session: s, sidebarHidden, panelShown: s && panelShown, modal });
+for (const s of [true, false]) for (const sidebarHidden of [true, false]) for (const panelShown of [true, false]) for (const modal of [true, false]) for (const oneSide of [true, false]) views.push({ session: s, sidebarHidden, panelShown: s && panelShown, modal, oneSide });
 
 test("cell matrix: every move has a chain that ends at the page root and names only shown targets", () => {
 	let cells = 0;
@@ -86,6 +106,8 @@ test("cell matrix: every move has a chain that ends at the page root and names o
 		const label = `${intent} from ${region} (last ${last}) in ${JSON.stringify(view)}`;
 		assert.equal(next.chain.at(-1), "page", label);
 		const shown = { ...view, sidebarHidden: next.change.sidebar ? next.change.sidebar === "hide" : view.sidebarHidden, panelShown: next.change.panel ? next.change.panel === "open" : view.panelShown };
+		// A phone shows one side at a time after every move, whatever the view before it.
+		if (view.oneSide) assert(shown.sidebarHidden || !shown.panelShown, `both sides shown on a phone: ${label}`);
 		if (intent === "overview") continue;
 		for (const target of next.chain) {
 			if (target === "sidebar") assert(!shown.sidebarHidden, `hidden sidebar in chain: ${label}`);

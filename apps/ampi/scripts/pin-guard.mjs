@@ -14,6 +14,7 @@
 // miss (in parallel, AMPI_PIN_FETCH_TIMEOUT_MS, default 4000). A failed fetch prints a WARNING and refuses the pin.
 // Every git call is asynchronous, and independent calls run together: the guard sits on the deploy return path.
 // Exit 0: deployable. Exit 1: refused; each line names the check, path and hashes. Exit 2: usage.
+import './stdio-sync.cjs';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';

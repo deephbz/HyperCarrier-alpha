@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -8,6 +8,7 @@ import { Worker } from "node:worker_threads";
 import "./bound.ts";
 
 const runner = join(import.meta.dirname, "..", "scripts", "run-tests.cjs");
+const scripts = join(import.meta.dirname, "..", "scripts");
 
 // At load 232 Node startup plus the 2.5 s slow test passed a 4 s file bound; 10 s leaves the margin.
 // A ci-builder probe run hung for 3 h: `--test-timeout` fails the test body, but an open handle keeps the file alive.
@@ -65,6 +66,32 @@ test("test isolation: a process whose os.homedir() does not follow the fresh HOM
 	assert.match(String(error), /HOME isolation failed: os\.homedir\(\) is .* No test code ran\./);
 });
 
+// A caller's provider key signed a test in (2026-10-31: ANTHROPIC_API_KEY on an Amp orb failed accounts.test).
+test("test isolation: a test process and its children see no provider credential that the caller set", () => {
+	const caller = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_OAUTH_TOKEN", "OPENAI_API_KEY", "FUTURECO_API_KEY", "AWS_SECRET_ACCESS_KEY", "AWS_PROFILE", "AZURE_OPENAI_BASE_URL", "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT", "HF_TOKEN", "COPILOT_GITHUB_TOKEN"];
+	const { NODE_TEST_CONTEXT: _, ...env } = process.env;
+	const run = spawnSync(process.execPath, ["--import", join(import.meta.dirname, "isolate.ts"), "-e", "console.log(JSON.stringify(Object.keys(process.env)))"], {
+		encoding: "utf8", timeout: 30_000, env: { ...env, ...Object.fromEntries(caller.map((name) => [name, "fake"])), AMPI_TEST_UNRELATED: "kept" },
+	});
+	assert.equal(run.status, 0, run.stderr);
+	const seen: string[] = JSON.parse(run.stdout);
+	assert.deepEqual(caller.filter((name) => seen.includes(name)), []);
+	assert.ok(seen.includes("AMPI_TEST_UNRELATED"), "an unrelated variable stays");
+});
+
+// A detached maintenance run changes .git/objects after a commit returns; a test that then copies the repository fails.
+test("test isolation: a writing Git command in a test process starts no background maintenance", (t) => {
+	const repo = mkdtempSync(join(tmpdir(), "ampi-quiet-git-"));
+	t.after(() => rmSync(repo, { recursive: true, force: true }));
+	const trace = join(repo, "trace.log");
+	const git = (...args: string[]) => execFileSync("git", ["-C", join(repo, "r"), "-c", "user.name=t", "-c", "user.email=t@example.invalid", ...args], { env: { ...process.env, GIT_TRACE: trace } });
+	execFileSync("git", ["init", "-q", join(repo, "r")]);
+	writeFileSync(join(repo, "r", "a"), "a\n");
+	git("add", "a");
+	git("commit", "-qm", "a");
+	assert.doesNotMatch(readFileSync(trace, "utf8"), /run_command: .*\b(maintenance run|gc --auto)/);
+});
+
 // Hosted CI runs one shard per job; a file missing from every shard would never run there.
 test("test runner: the shards of a lane are disjoint and together list every file of the lane once", () => {
 	const list = (...args: string[]) => {
@@ -89,4 +116,24 @@ test("test runner: the shards of a lane are disjoint and together list every fil
 	assert.deepEqual(withCases.filter((file) => !engine.includes(file)), []);
 	const bad = spawnSync(process.execPath, [runner, "--list", "--shard=3/2"], { encoding: "utf8", timeout: 30_000 });
 	assert.equal(bad.status, 2, bad.stdout + bad.stderr);
+});
+
+// 2026-10-31, gate at load 16: `--list` exited before a 4 KiB pipe drained, and the shard check saw a short list.
+test("script output: a script that writes more than its pipe holds and calls process.exit loses no byte to a slow reader", () => {
+	const child = `require(${JSON.stringify(join(scripts, "stdio-sync.cjs"))}); process.stdout.write("x".repeat(1 << 20)); process.exit(0);`;
+	const run = spawnSync("sh", ["-c", 'node -e "$0" | { sleep 1; wc -c; }', child], { encoding: "utf8", timeout: 30_000 });
+	assert.equal(run.status, 0, run.stderr);
+	assert.equal(Number(run.stdout.trim()), 1 << 20, run.stderr);
+});
+
+test("script output: every script that calls process.exit loads stdio-sync.cjs before its first import", () => {
+	const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(join(dir, e.name)) : /\.(c|m)?[jt]s$/.test(e.name) ? [join(dir, e.name)] : []);
+	// demo/cos.ts calls process.exit only inside the source of the stub scripts it writes.
+	const bad = walk(scripts).filter((file) => !file.endsWith(join("demo", "cos.ts"))).filter((file) => {
+		const text = readFileSync(file, "utf8");
+		if (!/process\.exit\(/.test(text)) return false;
+		const first = text.split("\n").find((line) => /^(import |const .*require\(|require\()/.test(line)) ?? "";
+		return !/^(import |require\()["'](\.\.?\/)+stdio-sync\.cjs["']\)?;$/.test(first);
+	}).map((file) => file.slice(scripts.length + 1));
+	assert.deepEqual(bad, []);
 });

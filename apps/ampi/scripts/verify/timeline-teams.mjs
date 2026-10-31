@@ -82,6 +82,27 @@ async function topLane(p) {
 const groupOf = (table, thread) => table.get(thread)?.team ?? thread;
 const dedupe = list => list.filter((g, i) => list.indexOf(g) === i);
 
+/**
+ * Other journeys add Sessions and change attention meanwhile, and a new lane above the viewport moves every lane below
+ * it. A reading counts only when the separate lane order before and after it agrees, so a fleet change is retried and
+ * never read as a toggle failure. `attempt` starts and ends with Team members separated.
+ */
+async function steady(p, attempt) {
+  const tries = [];
+  for (let i = 0; i < 5; i++) {
+    const before = await lanes(p);
+    let result, error;
+    try { result = await attempt(before); } catch (e) { error = e; }
+    const after = await lanes(p);
+    if (JSON.stringify(before) === JSON.stringify(after)) {
+      if (error) throw error;
+      return { ...result, tries: i + 1 };
+    }
+    tries.push({ before, after, error: error?.message });
+  }
+  assert.fail(`the fleet changed during each of ${tries.length} readings: ${JSON.stringify(tries.at(-1))}`);
+}
+
 /** `addFixture` is journeys.mjs addFixture: it opens the side-effect gate after the hub lists and derives the Sessions. */
 export async function timelineTeams(j, addFixture) {
   const p = j.page;
@@ -96,7 +117,6 @@ export async function timelineTeams(j, addFixture) {
     assert(seeded.ids.every(id => seen.includes(id)), `lanes ${seen.join(', ')} lack ${seeded.ids.join(', ')}`);
     return { lanes: seen.length };
   });
-  let separateGroups;
   await j.step('members-in-place', 'Read the separate lanes: each Team is contiguous, lead first, closed Workers included', async () => {
     const table = teamTable(j.state), order = await lanes(p), groups = order.map(t => groupOf(table, t));
     for (const team of new Set(groups.filter(g => order.some(t => table.get(t)?.team === g)))) {
@@ -107,8 +127,7 @@ export async function timelineTeams(j, addFixture) {
     }
     const atlas = order.filter(t => table.get(t)?.team === 'atlas');
     assert.deepEqual(atlas, [seeded.lead, 'pi:sess-atlas-worker-1', 'pi:sess-atlas-worker-2'], 'atlas members: lead, then start order');
-    separateGroups = dedupe(groups);
-    return { order, groups: separateGroups };
+    return { order, groups: dedupe(groups) };
   });
   await j.step('toggle-label', 'Read the toggle: its label names the current mode', async () => {
     assert.equal((await toggle.textContent())?.trim(), 'Team members separated');
@@ -117,41 +136,34 @@ export async function timelineTeams(j, addFixture) {
     await toggle.click(); await p.waitForURL(/teams=separate/);
   });
   await j.step('toggle-keeps-groups', 'Merge Team members; the group order is the separate order with each Team folded to one lane', async () => {
-    // Other journeys add Sessions and change attention meanwhile. A reading counts only when the separate order before
-    // and after it agrees, so a fleet change is retried and never read as a toggle reorder.
-    const table = teamTable(j.state), read = async () => dedupe((await lanes(p)).map(t => groupOf(table, t)));
-    let before = separateGroups, tries = [];
-    for (let i = 0; i < 5; i++) {
+    const table = teamTable(j.state);
+    return steady(p, async separate => {
       await toggle.click(); await p.waitForURL(/teams=merged/);
       const order = await lanes(p), merged = order.map(t => groupOf(table, t));
-      assert.equal(new Set(merged).size, merged.length, `a Team has more than one merged lane: ${order.join(', ')}`);
       await toggle.click(); await p.waitForURL(/teams=separate/);
-      const after = await read();
-      tries.push({ before, merged, after });
-      if (JSON.stringify(before) === JSON.stringify(after)) {
-        assert.deepEqual(merged, before, 'the toggle reordered groups');
-        return { merged: order, tries: tries.length };
-      }
-      before = after;
-    }
-    assert.fail(`the fleet changed during each of ${tries.length} readings: ${JSON.stringify(tries.at(-1))}`);
+      assert.equal(new Set(merged).size, merged.length, `a Team has more than one merged lane: ${order.join(', ')}`);
+      assert.deepEqual(merged, dedupe(separate.map(t => groupOf(table, t))), 'the toggle reordered groups');
+      return { merged: order };
+    });
   });
   await j.step('place-kept', 'Scroll Team atlas to the top, 10 px into its second lane; toggle twice; atlas stays at the top', async () => {
-    const table = teamTable(j.state), order = await lanes(p);
-    const index = order.indexOf('pi:sess-atlas-worker-1');
-    await p.evaluate(top => { const box = document.querySelector('.cos-scroll'); box.scrollTop = top; box.dispatchEvent(new Event('scroll')); }, index * ROW + 10);
-    await j.settle();
-    const before = await topLane(p);
-    assert.deepEqual([groupOf(table, before.thread), before.px], ['atlas', 10], `scroll setup: ${JSON.stringify(before)}`);
-    const max = await p.evaluate(() => { const b = document.querySelector('.cos-scroll'); return b.scrollHeight - b.clientHeight; });
-    await toggle.click(); await p.waitForURL(/teams=merged/); await j.settle();
-    const merged = await topLane(p);
-    await toggle.click(); await p.waitForURL(/teams=separate/); await j.settle();
-    const back = await topLane(p);
-    // Merged, atlas has one lane: the place clamps to it at the same pixel offset, unless the list cannot scroll that far.
-    assert.equal(groupOf(table, merged.thread), 'atlas', `merged top lane ${JSON.stringify(merged)}`);
-    assert.equal(groupOf(table, back.thread), 'atlas', `separate top lane ${JSON.stringify(back)}`);
-    assert(Math.abs(merged.px - 10) <= 1 && Math.abs(back.px - 10) <= 1, `offsets ${merged.px}, ${back.px}`);
-    return { before, merged, back, max };
+    const table = teamTable(j.state);
+    return steady(p, async order => {
+      const index = order.indexOf('pi:sess-atlas-worker-1');
+      await p.evaluate(top => { const box = document.querySelector('.cos-scroll'); box.scrollTop = top; box.dispatchEvent(new Event('scroll')); }, index * ROW + 10);
+      await j.settle();
+      const before = await topLane(p);
+      assert.deepEqual([groupOf(table, before.thread), before.px], ['atlas', 10], `scroll setup: ${JSON.stringify(before)}`);
+      const max = await p.evaluate(() => { const b = document.querySelector('.cos-scroll'); return b.scrollHeight - b.clientHeight; });
+      await toggle.click(); await p.waitForURL(/teams=merged/); await j.settle();
+      const merged = await topLane(p);
+      await toggle.click(); await p.waitForURL(/teams=separate/); await j.settle();
+      const back = await topLane(p);
+      // Merged, atlas has one lane: the place clamps to it at the same pixel offset, unless the list cannot scroll that far.
+      assert.equal(groupOf(table, merged.thread), 'atlas', `merged top lane ${JSON.stringify(merged)}`);
+      assert.equal(groupOf(table, back.thread), 'atlas', `separate top lane ${JSON.stringify(back)}`);
+      assert(Math.abs(merged.px - 10) <= 1 && Math.abs(back.px - 10) <= 1, `offsets ${merged.px}, ${back.px}`);
+      return { before, merged, back, max };
+    });
   });
 }

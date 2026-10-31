@@ -9,7 +9,7 @@ import { Hub } from "../src/hub/hub.ts";
 import { WorkingSet } from "../src/pi/working-set.ts";
 import type { Source } from "../src/pi/working-set-types.ts";
 import { Browser } from "./helpers.ts";
-import { fixture } from "./pi-fixtures.ts";
+import { fixture, replaceFile } from "./pi-fixtures.ts";
 const pause = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 const line = (o: unknown) => JSON.stringify(o) + "\n";
 function gate() { let resolve!: () => void; const promise = new Promise<void>(r => { resolve = r; }); return { promise, resolve }; }
@@ -85,7 +85,8 @@ test("retention A: unknown liveness, unknown freshness, live and recent Sessions
  const script = join(dir, "source"), state = join(dir, "state.json"), log = join(dir, "commands.jsonl");
  const old = "2026-01-01T00:00:00Z", now = new Date().toISOString();
  const frames = [ { t: "hello", host: "fixture" }, ...[["old", old], ["unknown", undefined], ["recent", now]].map(([id, at]) => ({ t: "chunk", path: `/synthetic/${id}`, offset: 0, data: header(id!, at) + message("e0", null, "policy", at) })) ];
- writeFileSync(state, JSON.stringify({ t: "agents", agents: [] }));
+ // The source polls this file every 10 ms; replaceFile keeps each read whole.
+ replaceFile(state, JSON.stringify({ t: "agents", agents: [] }));
  writeFileSync(script, `#!${process.execPath}\nconst fs=require('fs');const out=x=>console.log(JSON.stringify(x));for(const f of ${JSON.stringify(frames)})out(f);let last='';setInterval(()=>{const s=fs.readFileSync(${JSON.stringify(state)},'utf8');if(s!==last){last=s;const f=JSON.parse(s);if(f.exit)process.exit(0);out(f)}},10);let b='';process.stdin.on('data',d=>{b+=d;let i;while((i=b.indexOf('\\n'))>=0){const f=JSON.parse(b.slice(0,i));b=b.slice(i+1);if(f.t==='forget'){fs.appendFileSync(${JSON.stringify(log)},JSON.stringify(f)+'\\n');out({t:'ack',id:f.id,ok:false,error:{code:'source_unknown',message:'fixture refused'}})}}});\n`);
  chmodSync(script, 0o755);
  const hub = new Hub({ hosts: [{ id: "fixture", label: "fixture", kind: "pi-local", cacheDir: join(dir, "cache"), remoteNode: script }] }, { token: "c".repeat(64) });
@@ -95,10 +96,10 @@ test("retention A: unknown liveness, unknown freshness, live and recent Sessions
  await browser.until<any>(sid, v => Object.keys(v.threads).length === 3);
  browser.ws.send(JSON.stringify({ t: "unsub", sid: 999 })); await pause(50);
  assert.equal(existsSync(log), false, "unknown liveness cannot authorize forget");
- writeFileSync(state, JSON.stringify({ t: "agents", panes: [{ pane: "p1" }], agents: [{ session: "/synthetic/old", pane: "p1" }] }));
+ replaceFile(state, JSON.stringify({ t: "agents", panes: [{ pane: "p1" }], agents: [{ session: "/synthetic/old", pane: "p1" }] }));
  await browser.until<any>(sid, v => v.threads["pi:old"]?.live); await pause(50);
  assert.equal(existsSync(log), false, "live, recent and unknown-age copies remain");
- writeFileSync(state, JSON.stringify({ exit: true }));
+ replaceFile(state, JSON.stringify({ exit: true }));
  await browser.when(() => browser.hosts[0]?.status === "disconnected");
  browser.ws.send(JSON.stringify({ t: "unsub", sid: 998 })); await pause(50);
  assert.equal(existsSync(log), false, "disconnected last-known-live copy remains");

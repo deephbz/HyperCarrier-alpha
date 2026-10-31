@@ -15,11 +15,11 @@ import { fileURLToPath } from "node:url";
 import { diffRevisions } from "@earendil-works/chord/delta";
 import { type HostBase, type HostState, type LinkStatus, negotiating, withStatus } from "../hub/hosts.ts";
 import type { ActionAck, ClientFrame, CommandAck, SlashCommands, ControlSubmission, Every, HostOps, PiQueuedItem, OpHandlers, OpName, OpRequest, OpResult, Ops, Placement, PiHostFrame, PiThreadView, PiTopicValue, SubmittedPrompt, ThreadCreated, ThreadResumed, ThreadsState, ThreadSummary, Topic } from "../shared/protocol.ts";
-import { INDEXING, NOT_FOUND, type ImageLimits } from "../shared/protocol.ts";
+import { INDEXING, NOT_FOUND, STALE_VERSION, type ImageLimits } from "../shared/protocol.ts";
 import { admitImages, rejectionLine } from "../shared/image-admission.ts";
 // @ts-ignore: pi-hc-control is plain ESM.
 import { IMAGE_LIMITS as CONTROL_IMAGE_LIMITS } from "@hypercarrier/pi-hc-control/control";
-import { historySpend, spendLabel } from "../shared/spend.ts";
+import { historySpend, spendLabel, unreadSpend } from "../shared/spend.ts";
 import { SESSION_SCOPE_MS } from "../shared/session-scope.ts";
 import { agentModules } from "./agent-modules.ts";
 import { ask } from "./ask.ts";
@@ -30,7 +30,8 @@ import { watched } from "../loop-watch.ts";
 import { PI_VIEWS, viewOps } from "./views/index.ts";
 import type { HostedView, PiTeamMember, PiTeamsFrame, PiViewContext, PiViewSession } from "./views/types.ts";
 import type { WorkingSet } from "./working-set.ts";
-import type { Derived, Source as CopySource } from "./working-set-types.ts";
+import type { Derived, SessionIdentity, Source as CopySource } from "./working-set-types.ts";
+import { identityOf } from "./session-identity.ts";
 
 export type PiHostConfig = {
 	/** The owner's SSH config alias for this Host, or the hub machine's own alias. It is the Host's identity. */
@@ -59,7 +60,6 @@ export type PiHostConfig = {
 };
 
 export { projectEntry } from "./projection.ts";
-type ReaderSession = { id: string; session: string; ref: string; cwd?: string | null; started?: number | null; updated?: number | null; title?: string | null };
 type RemoteAgent = {
 	session: string;
 	sessionId?: string;
@@ -117,7 +117,7 @@ const LEGACY_OPS: Partial<Record<string, OpName>> = { "view.cos-arc.build": "vie
 
 /** Copy metadata and compact derived values. Transcript bodies never stay here. */
 type Copy = {
- path: string; file: string; offset: number; session?: ReaderSession; closedAt?: number;
+ path: string; file: string; offset: number; session?: SessionIdentity; closedAt?: number;
 	/** Whole-line length of the Session file at the agent's last read; absent from an agent that does not report it. */ sourceBytes?: number;
  revision: number; data?: Derived; updatedAt: number; cost: number; priced?: boolean; model?: string;
 	contextTokens?: number; budgetOverride?: number;
@@ -125,7 +125,11 @@ type Copy = {
 	cacheHit?: number; preview?: string; lastKnownLive?: boolean; generation: number;
 	/** When its last open thread or view closed. Memory only: after a hub restart the browser's resubscribe marks the row. */ lastOpenAt?: number;
 	refreshing?: Promise<void>; deriving?: boolean; refreshAgain?: boolean; urgent?: boolean; leases: number;
-	/** Copy file mtime at load; orders the cold backlog newest first. */ copiedAt?: number; eviction?: Promise<void>; evictionCancelled?: boolean; readError?: string; sourceMissing?: boolean;
+	/** Copy file mtime at load; orders the cold backlog newest first. */ copiedAt?: number;
+	/** Loaded without a head of this build's derivation, and its first derive has not settled: the row lists by identity only. */ updating?: boolean;
+	eviction?: Promise<void>; evictionCancelled?: boolean; readError?: string; sourceMissing?: boolean;
+	/** Reads stay behind the derive Worker after a reopen (a cache fault); `staleRetry` and `staleDelay` back off refused publish reads. */
+	cacheFault?: boolean; staleRetry?: ReturnType<typeof setTimeout>; staleDelay?: number;
 	/** The copy's host inputs (#hostInputs) at its last publish; a frame that leaves them equal marks nothing. */ hostKey?: string;
 	/** Liveness last given to the working set's transcript window. */ windowLive?: boolean;
 };
@@ -225,6 +229,9 @@ export function modelLimits(model: string | undefined, limits: ModelLimits | und
 	const configured = override ?? limits?.budget?.models?.[model!] ?? limits?.budget?.tokens ?? window;
 	return { contextWindow: window, workingBudget: Math.min(configured, window) };
 }
+/** Copy file reads in flight at once while the index loads (#loadIndex): the reads are I/O-bound and small. */
+const LOAD_READS = 8;
+
 function piSpendFields(copy: { cost: number; priced?: boolean }): Pick<ThreadSummary, "spend" | "spendLabel"> {
  const spend = historySpend(copy.priced === false ? null : copy.cost);
  return { spend, spendLabel: spendLabel(spend) };
@@ -245,6 +252,8 @@ export class PiHost extends EventEmitter {
 	#listable = false;
 	/** The startup refresh of every saved copy has not settled, and UPDATING_MAX_MS has not passed. */
 	#refreshing = true;
+	/** Copies loaded without a current head (Copy.updating), and how many of them have settled; HostBase.upgrade. */
+	#upgrade = { updated: 0, total: 0 };
 	/** Set when working-set init failed: the end reason for every list, served or later. */
 	#failure?: string;
 	#stopping?: Promise<void>;
@@ -282,6 +291,11 @@ export class PiHost extends EventEmitter {
 	static UPDATING_MAX_MS = 60_000;
 	#anyTimer?: ReturnType<typeof setTimeout>;
 	#anyDeferred = new Set<string>();
+	/** A publish read refused by its version check retries after this delay, doubling up to the maximum until the copy's next commit. */
+	static STALE_RETRY_MS = 250;
+	static STALE_RETRY_MAX_MS = 30_000;
+	/** The hub log gets the first stale read of each kind and every Nth after it; /api/health keeps the counts. */
+	static STALE_LOG_EVERY = 100;
 	#saveTimer?: ReturnType<typeof setTimeout>;
 	#publishScheduled = false;
 	#dirty = new Set<string>();
@@ -396,7 +410,8 @@ export class PiHost extends EventEmitter {
 			const started = Date.now();
 			span("refresh-all", "startup", () => {
 				const backlog = [...this.#copies.values()].sort((a, b) => (b.copiedAt ?? 0) - (a.copiedAt ?? 0));
-				void Promise.allSettled(backlog.map((copy) => this.#refresh(copy, this.#isLive(copy)))).then(() => this.#updated("refresh", started));
+				// A Session open in a browser before this pass re-derives with the live ones, ahead of the cold backlog.
+				void Promise.allSettled(backlog.map((copy) => this.#refresh(copy, this.#isLive(copy) || this.#held(copy)))).then(() => this.#updated("refresh", started));
 			}, { copies: this.#copies.size });
 			// Node's timer clock counts whole ms, so a timer can fire 1 ms before the bound by Date.now(); re-arm for the rest.
 			const bound = () => {
@@ -416,7 +431,7 @@ export class PiHost extends EventEmitter {
 				this.#subs.clear();
 				this.#preparing.clear();
 			}
-			this.#set(this.#failure ? { cacheFailed: true } : {}, { status: "disconnected", since: Date.now(), error: `Host cache unavailable: ${(error as Error).message}.`, hint: this.#cacheHint() });
+			this.#set(this.#failure ? { cacheFailed: true } : {}, { status: "disconnected", since: Date.now(), error: `Host cache unavailable: ${(error as Error).message}.`, errorClass: "reachability", hint: this.#cacheHint() });
 		});
 	}
 
@@ -444,6 +459,7 @@ export class PiHost extends EventEmitter {
 		clearInterval(this.#sweep);
 		clearInterval(this.#audit);
 		clearTimeout(this.#anyTimer);
+		for (const copy of this.#copies.values()) clearTimeout(copy.staleRetry);
 		clearTimeout(this.#saveTimer);
 		clearTimeout(this.#timer);
 		this.#preparing.clear();
@@ -467,7 +483,7 @@ export class PiHost extends EventEmitter {
 		clearTimeout(this.#timer);
 		this.#attempts = 0;
 		this.#child?.kill();
-		if (this.state.status !== "connected") void this.#loaded?.then(() => this.#connect()).catch((error) => { if (!this.#stopped) this.#set({}, { status: "disconnected", since: Date.now(), error: `Host cache unavailable: ${(error as Error).message}.`, hint: this.#cacheHint() }); });
+		if (this.state.status !== "connected") void this.#loaded?.then(() => this.#connect()).catch((error) => { if (!this.#stopped) this.#set({}, { status: "disconnected", since: Date.now(), error: `Host cache unavailable: ${(error as Error).message}.`, errorClass: "reachability", hint: this.#cacheHint() }); });
 	}
 
 	/** Frames from the hub, as a node would receive them. Answers are emitted as `frame` events. */
@@ -512,18 +528,38 @@ export class PiHost extends EventEmitter {
 	async #loadIndex(): Promise<void> {
   let index: Record<string, { file: string; offset: number; closedAt?: number; lastKnownLive?: boolean }> = {};
   try { index = JSON.parse(await readFile(this.#indexFile(), "utf8")); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-  for (const [path, meta] of Object.entries(index)) {
-   const file = join(this.cacheDir, basename(meta.file));
-   let end: number;
-   let copiedAt: number;
+  // Each copy's file reads overlap with others (LOAD_READS at a time); the copies register in index order.
+  const readCopy = async (path: string, file: string) => {
+   let end: number, copiedAt: number;
    try { end = await repairReplicaTail(file); copiedAt = (await stat(file)).mtimeMs; }
-   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
-   const copy = this.#newCopy(path, file, end);
-   copy.copiedAt = copiedAt;
+   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
+   // A head of another derivation reads as missing (WorkingSet.load). The header still lists the Session.
+   const saved = this.#store.load(path);
+   const identity = saved ? undefined : await identityOf(this.config.id, file, copiedAt).catch(() => undefined);
+   return { end, copiedAt, saved, identity };
+  };
+  const entries = Object.entries(index), loaded: Promise<void>[] = [];
+  const reads = new Array<Awaited<ReturnType<typeof readCopy>>>(entries.length);
+  let next = 0;
+  for (let n = 0; n < Math.min(LOAD_READS, entries.length); n++) loaded.push((async () => {
+   for (let i = next++; i < entries.length; i = next++) reads[i] = await readCopy(entries[i]![0], join(this.cacheDir, basename(entries[i]![1].file)));
+  })());
+  await Promise.all(loaded);
+  for (const [i, [path, meta]] of entries.entries()) {
+   const read = reads[i];
+   if (!read) continue;
+   const copy = this.#newCopy(path, join(this.cacheDir, basename(meta.file)), read.end);
+   copy.copiedAt = read.copiedAt;
    copy.closedAt = meta.closedAt; copy.lastKnownLive = meta.lastKnownLive;
-   const saved = this.#store.load(path); if (saved) this.#applyDerived(copy, saved);
-   await yieldLoop();
+   if (read.saved) { this.#applyDerived(copy, read.saved); continue; }
+   // A copy without a Pi header does not list, but it counts in the progress until its derive settles.
+   copy.updating = true; this.#upgrade.total++;
+   if (read.identity) {
+    copy.session = read.identity; copy.updatedAt = read.identity.updated ?? read.copiedAt;
+    this.#byThread.set(read.identity.id, copy);
+   }
   }
+  this.#publishUpgrade();
   try { for (const s of JSON.parse(await readFile(this.#startingFile(), "utf8")) as Starting[]) if (s?.threadId && s.pane) this.#starting.set(s.threadId, s); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
  }
 
@@ -582,16 +618,55 @@ export class PiHost extends EventEmitter {
 
  #applyDerived(copy: Copy, data: Derived): void {
   if (copy.session && copy.session.id !== data.session.id) this.#byThread.delete(copy.session.id);
-  copy.data = data; copy.session = data.session; copy.updatedAt = data.session.updated ?? 0;
+  const { title: _title, ...identity } = data.session;
+  copy.data = data; copy.session = identity; copy.updatedAt = data.session.updated ?? 0;
+  this.#settleUpgrade(copy);
   copy.cost = data.cost; copy.priced = data.priced; copy.model = data.model; copy.budgetOverride = data.budgetOverride; copy.contextTokens = data.contextTokens; copy.cacheHit = data.cacheHit; copy.preview = data.preview;
   this.#byThread.set(data.session.id, copy);
  }
 
+ /** Ends a copy's identity-only listing: its first derive committed a head, or settled without one. */
+ #settleUpgrade(copy: Copy): void {
+  if (!copy.updating) return;
+  copy.updating = undefined; this.#upgrade.updated++;
+ }
+
+ // `committed` is the result of this copy's derive job (derive-worker.ts
+ // materialize): the head it committed, or the saved head it kept. Only that job
+ // writes this head, and a forget deletes it only at the version the hub read, so
+ // a different read means a stale read connection. The check runs before the
+ // snapshot reads anything (WorkingSet.reopen). The hub reopens once; the read after
+ // that only checks the repair. Still behind: a cache fault until the next commit.
+ // A head of another derivation reads as none (WorkingSet.load), so only a commit of this build's head can match.
+ #checkRead(copy: Copy, committed: Derived): boolean {
+  const read = this.#store.load(copy.path)?.version;
+  let behind = false;
+  if (read !== committed.version) {
+   this.#store.reopen();
+   this.#staleRead("reopened", `${copy.path} read ${read ?? "none"}, the worker committed ${committed.version}; reopened the read connection`);
+   const again = this.#store.load(copy.path)?.version;
+   behind = again !== committed.version;
+   if (behind) this.#staleRead("behind", `${copy.path} still read ${again ?? "none"} after the reopen; adopted the worker's head`);
+  }
+  if (behind) copy.readError = "Cache read behind the derive Worker after a reopen; the next change checks again. Restart the hub if this lasts";
+  this.#cacheFault(copy, behind);
+  return behind;
+ }
+
+ // The Host warning counts the faulted copies that #copies still holds.
+ #cacheFault(copy: Copy, fault: boolean): void {
+  if (fault === Boolean(copy.cacheFault)) return;
+  copy.cacheFault = fault || undefined;
+  const n = [...this.#copies.values()].filter((c) => c.cacheFault).length;
+  this.#set({ cacheFault: n ? `${n} Session ${n === 1 ? "copy reads" : "copies read"} behind the derive Worker after a reopen` : undefined });
+ }
+
  // SQLite commit is the publication authority. The worker message can arrive
  // after a subscriber reads that commit; never roll a published copy backwards.
- #adoptHead(copy: Copy): void {
+ // `committed`: the job's result, when #checkRead found the read connection behind it.
+ #adoptHead(copy: Copy, committed?: Derived): void {
   if (!copy.refreshing || !copy.deriving) return;
-  const data = this.#store.load(copy.path);
+  const data = committed ?? this.#store.load(copy.path);
   if (data && data.version !== copy.data?.version) {
    this.#applyDerived(copy, data); copy.revision++; this.#store.invalidate(this.#source(copy));
    // Adoption can happen inside any computation, an audit included, before the worker message arrives: mark it here.
@@ -615,9 +690,13 @@ export class PiHost extends EventEmitter {
     const data = await this.#store.refresh(this.#source(copy), () => { copy.deriving = true; }, urgent);
     if (!data || copy.generation !== generation || this.#copies.get(copy.path) !== copy || this.#stopped) return;
     copy.readError = undefined;
+    // A commit restarts the refused-read backoff: the copy publishes now.
+    clearTimeout(copy.staleRetry); copy.staleRetry = copy.staleDelay = undefined;
+    const behind = this.#checkRead(copy, data);
     this.#store.snapshot(() => {
-     this.#adoptHead(copy);
-     if (this.#isLive(copy) && copy.data) this.#store.tail(this.#source(copy), copy.data, true);
+     this.#adoptHead(copy, behind ? data : undefined);
+     try { if (this.#isLive(copy) && copy.data) this.#store.tail(this.#source(copy), copy.data, true); }
+     catch (error) { if (!this.#refused(copy, error, `warm-up of ${copy.path}`)) throw error; }
     });
     if (copy.session && this.#starting.has(copy.session.id)) this.#reconcileStarting();
     this.#dirty.add(copy.path); this.#schedulePublish();
@@ -626,6 +705,8 @@ export class PiHost extends EventEmitter {
     if (!this.#stopped) { this.#dirty.add(copy.path); this.#schedulePublish(); }
    }
    finally {
+    // A failed or empty derive also ends the updating mark: the row keeps its identity and shows the error.
+    if (!copy.refreshAgain) this.#settleUpgrade(copy);
     const again = copy.refreshAgain, urgent = copy.urgent;
     copy.refreshing = undefined; copy.deriving = false; copy.refreshAgain = false; copy.urgent = false;
     if (again && !this.#stopped) void this.#refresh(copy, urgent);
@@ -654,6 +735,8 @@ export class PiHost extends EventEmitter {
   const id = this.#openThread(sub.topic), copy = id ? this.#byThread.get(id) : undefined, held = copy && this.#held(copy);
   this.#subs.set(sid, sub);
   if (id) this.#openCount.set(id, (this.#openCount.get(id) ?? 0) + 1);
+  // Opening an updating Session moves its re-derive ahead of the cold backlog.
+  if (copy?.updating) this.#promote(copy);
   if (copy && this.#held(copy) !== held) { this.#dirty.add(copy.path); this.#schedulePublish(); }
  }
 
@@ -711,6 +794,7 @@ export class PiHost extends EventEmitter {
    if (this.#stopped) return;
    if (changed()) { await this.#refresh(copy); return; }
    this.#copies.delete(copy.path);
+   clearTimeout(copy.staleRetry); this.#cacheFault(copy, false);
    if (copy.session) {
     this.#byThread.delete(copy.session.id);
     for (const view of this.#views.values()) view.evict?.(this.#viewContext, copy.session.id);
@@ -835,7 +919,7 @@ export class PiHost extends EventEmitter {
 		this.#child = undefined;
 		const delay = Math.min(30_000, 500 * 2 ** Math.min(this.#attempts, 6));
 		const now = Date.now();
-		this.#set({}, { status: "disconnected", since: now, error: reason, hint, ...(this.#stopped ? {} : { retryAt: now + delay }) });
+		this.#set({}, { status: "disconnected", since: now, error: reason, errorClass: "reachability", hint, ...(this.#stopped ? {} : { retryAt: now + delay }) });
 		for (const pending of this.#pending.values()) {
 			clearTimeout(pending.timer);
 			pending.reject(Object.assign(new Error("Host disconnected; the outcome of this action is unknown"), { code: "host_disconnected" }));
@@ -1135,7 +1219,16 @@ export class PiHost extends EventEmitter {
 		const blocked = agent?.status === "blocked";
 		// An open tool call at the tail while the Session runs means it is running tools, whatever the pane shows.
 		const activity: ThreadSummary["activity"] = control?.compacting ? "compacting" : blocked ? "idle" : busy ? (copy.data?.openCalls ? "tools" : "streaming") : "idle";
-		const title = session.title || agent?.title || agent?.name || basename(session.cwd ?? "") || session.session.slice(0, 8);
+		// The row of a copy without a current head (Copy.updating) has identity and host inputs only. The derived fields
+		// (title, cost and spend, model and limits, context, cache hit, preview) stay absent: they would be the previous build's.
+		// A live or open Session also hides its model, context, and limits (they come from the head, not the pane or the
+		// control socket). That window is short: live and open Sessions re-derive first (refresh-all urgent).
+		// The spend counts no class (unreadSpend), so a sum over the row reads as partial.
+		const updating = copy.updating;
+		// Pi ids are UUIDv7: the head encodes the start time, so the random tail tells apart Sessions started together.
+		const title = updating ? [basename(session.cwd ?? ""), agent?.name, session.session.slice(-8)].filter(Boolean).join(" · ")
+			: copy.data?.session.title || agent?.title || agent?.name || basename(session.cwd ?? "") || session.session.slice(0, 8);
+		const derived = !updating;
 		return {
 			id: session.id,
 			title,
@@ -1144,17 +1237,18 @@ export class PiHost extends EventEmitter {
 			updatedAt: copy.updatedAt,
 			kind: team && team.role !== "lead" ? "worker" : "thread",
 			...(team ? { team: { teamId: team.team, role: team.role === "lead" || team.role === "leader" ? "lead" : "worker", worker: team.member } } : {}),
-			...(copy.model ? { model: copy.model } : {}),
+			...(derived && copy.model ? { model: copy.model } : {}),
 			activity,
 			queued: (control?.steer ?? 0) + (control?.followUp ?? 0),
 			...(blocked ? { attention: [{ source: "Herdr", reason: "needs input" }] } : {}),
-			costUsd: copy.cost,
-			...piSpendFields(copy),
+			costUsd: derived ? copy.cost : 0,
+			...(derived ? piSpendFields(copy) : { spend: unreadSpend() }),
 			...(copy.readError ? { lastError: copy.readError } : {}),
-			...(copy.contextTokens ? { contextTokens: copy.contextTokens } : {}),
-			...limits,
-			...(copy.cacheHit !== undefined ? { cacheHit: copy.cacheHit } : {}),
-			...(copy.preview ? { preview: copy.preview } : {}),
+			...(derived && copy.contextTokens ? { contextTokens: copy.contextTokens } : {}),
+			...(derived ? limits : {}),
+			...(derived && copy.cacheHit !== undefined ? { cacheHit: copy.cacheHit } : {}),
+			...(derived && copy.preview ? { preview: copy.preview } : {}),
+			...(updating ? { updating: true } : {}),
 			ref: session.ref,
 			...(agent?.pane ? { location: defined({ workspace: agent.workspace, workspaceLabel: agent.workspaceLabel, tab: agent.tab, tabLabel: agent.tabLabel, pane: agent.pane }) } : {}),
 			// Live means a pane or a control socket runs it; a recent file alone is not.
@@ -1228,6 +1322,33 @@ export class PiHost extends EventEmitter {
 		return this.#agents.find((a) => a.control?.live && a.sessionId && `pi:${a.sessionId}` === threadId);
 	}
 
+	/** Counts a stale read in host state (/api/health, the Host's cache-health note) and logs the first and every Nth. */
+	#staleRead(kind: keyof NonNullable<HostState["staleReads"]>, detail: string): void {
+		const reads = { reopened: 0, behind: 0, refused: 0, ...this.state.staleReads };
+		reads[kind]++;
+		this.#set({ staleReads: reads });
+		if (kind === "behind" || reads[kind] % PiHost.STALE_LOG_EVERY === 1) console.error(`pi host ${this.config.id}: stale read (${kind} ${reads[kind]}): ${detail}`);
+	}
+
+	/**
+	 * A publish read refused by its version check: count it, keep the subscriber's last value, and publish the copy
+	 * again later. Each retry of the copy doubles its delay, up to STALE_RETRY_MAX_MS; its next commit resets it.
+	 */
+	#refused(copy: Copy | undefined, error: unknown, what: string): boolean {
+		if ((error as { code?: string }).code !== STALE_VERSION) return false;
+		this.#staleRead("refused", `${what}: ${(error as Error).message}`);
+		if (copy && !copy.staleRetry) {
+			copy.staleDelay = copy.staleDelay ? Math.min(PiHost.STALE_RETRY_MAX_MS, copy.staleDelay * 2) : PiHost.STALE_RETRY_MS;
+			copy.staleRetry = setTimeout(() => {
+				copy.staleRetry = undefined;
+				this.#dirty.add(copy.path);
+				this.#schedulePublish();
+			}, copy.staleDelay);
+			copy.staleRetry.unref?.();
+		}
+		return true;
+	}
+
 	#threadValue(threadId: string): PiThreadView | undefined {
 		const copy = this.#copyByThread(threadId);
 		if (!copy) {
@@ -1242,7 +1363,9 @@ export class PiHost extends EventEmitter {
 		}
 		const summary = this.#summary(copy);
 		const busy = summary ? summary.activity !== "idle" : false;
-		const page = copy.data ? this.#store.tail(this.#source(copy), copy.data, this.#isLive(copy)) : { entries: [], more: false };
+		let page: { entries: PiThreadView["entries"]; more: boolean };
+		try { page = copy.data ? this.#store.tail(this.#source(copy), copy.data, this.#isLive(copy)) : { entries: [], more: false }; }
+		catch (error) { if (this.#refused(copy, error, `thread ${threadId}`)) return undefined; throw error; }
 		return {
 			conversationId: threadId,
 			sourceVersion: copy.data?.version,
@@ -1251,7 +1374,8 @@ export class PiHost extends EventEmitter {
 			live: busy ? { run: summary ? { activity: summary.activity } : {} } : {},
 			inbox: { items: this.#queuedItems(threadId) },
 			agent: { cwd: summary?.cwd ?? "", asOf: copy.data?.asOf ?? null, readError: copy.readError ?? null, ...(copy.model ? { model: copy.model } : {}) },
-			usage: { costUsd: copy.cost },
+			usage: copy.updating ? {} : { costUsd: copy.cost },
+			...(copy.updating ? { updating: true } : {}),
 		};
 	}
 
@@ -1278,6 +1402,7 @@ export class PiHost extends EventEmitter {
 			try {
 				return view.value(this.#viewContext, topic);
 			} catch (error) {
+				if (topic.threadId && this.#refused(this.#copyByThread(topic.threadId), error, `view ${view.name} of ${topic.threadId}`)) return undefined;
 				console.error(`pi host ${this.config.id}: view ${view.name} failed:`, error);
 				return { error: { code: "view_failed", message: `The ${view.name} view failed: ${(error as Error).message}` } };
 			}
@@ -1348,6 +1473,14 @@ export class PiHost extends EventEmitter {
 		for (const view of views) try { view.changed!(this.#viewContext, sessions); } catch (error) { console.error(`pi host ${this.config.id}: view ${view.name} change hook failed:`, error); }
 	}
 
+	/** One Host state event per publish at most, however many copies settled since the last one. */
+	#publishUpgrade(): void {
+		const { updated, total } = this.#upgrade;
+		const upgrade = updated < total ? { updated, total } : undefined;
+		if (upgrade?.updated === this.state.upgrade?.updated && upgrade?.total === this.state.upgrade?.total) return;
+		this.#set({ upgrade });
+	}
+
 	#schedulePublish(): void {
 		if (this.#publishScheduled) return;
 		this.#publishScheduled = true;
@@ -1357,6 +1490,7 @@ export class PiHost extends EventEmitter {
 			const start = tracing ? nowUs() : 0;
 			const dirty = this.#dirty;
 			this.#dirty = new Set();
+			this.#publishUpgrade();
 			const changed = dirty.size > 0 || this.#hostChanged, audit = this.#auditDue && !changed;
 			this.#hostChanged = false;
 			// An audit due during a change waits for the next quiet publish.
@@ -1599,10 +1733,13 @@ export class PiHost extends EventEmitter {
 			},
 			"sessions.search": async (args) => {
     return this.#store.snapshot(() => {
-     let notIndexed = 0, stale = 0;
-     for (const copy of this.#copies.values()) { this.#adoptHead(copy); if (!copy.data) notIndexed++; else if (copy.readError || copy.offset !== copy.data.bytes) stale++; }
+     let notIndexed = 0, stale = 0, updating = 0;
+     for (const copy of this.#copies.values()) {
+      this.#adoptHead(copy);
+      if (copy.updating) updating++; else if (!copy.data) notIndexed++; else if (copy.readError || copy.offset !== copy.data.bytes) stale++;
+     }
      const value = this.#store.search(String(args.query ?? ""));
-     return { ...value, coverage: { ...value.coverage!, notIndexed, stale }, hostStatus: this.state.status };
+     return { ...value, coverage: { ...value.coverage!, notIndexed, stale, ...(updating ? { updating } : {}) }, hostStatus: this.state.status };
     });
    },
 			"thread.outline": async (args) => {

@@ -6,13 +6,13 @@ import type { ThreadSummary } from "../../src/shared/protocol.ts";
 import type { HostThreads } from "./components/Sidebar.tsx";
 import { native } from "./native.ts";
 import { navigate } from "./nav.ts";
-import { attentionOf, go, isAttentionEligible, isBusy, needsYou, openAsks } from "./util.ts";
+import { attentionOf, go, href, isAttentionEligible, isBusy, needsYou, openAsks } from "./util.ts";
 
 
 export function notify(title: string, body: string, host: string, threadId: string): void {
 	const shell = native();
 	if (shell) {
-		shell.postMessage({ type: "notify", title, body, tag: `${host}|${threadId}`, route: `#/h/${encodeURIComponent(host)}/t/${encodeURIComponent(threadId)}` });
+		shell.postMessage({ type: "notify", title, body, tag: `${host}|${threadId}`, route: href.thread(host, threadId) });
 		return;
 	}
 	if (typeof Notification === "undefined" || Notification.permission !== "granted") return;

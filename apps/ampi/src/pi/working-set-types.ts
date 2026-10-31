@@ -36,9 +36,11 @@ export type Series = {
  entries: [number, string][]; marks: [number, string, "stop" | "error"][];
  stopped: boolean; priced: boolean; entryCount: number; omittedHints: number; omittedMarks: number;
 };
+/** What lists a Session without its derived head: the Pi header and the last activity (session-identity.ts). */
+export type SessionIdentity = { id: string; session: string; ref: string; cwd?: string | null; started?: number | null; updated?: number | null };
 export type Derived = {
  version: string; bytes: number; asOf: number; invalidLines: number; count: number; tip: string | null;
- session: { id: string; session: string; ref: string; cwd?: string | null; started?: number | null; updated?: number | null; title?: string | null };
+ session: SessionIdentity & { title?: string | null };
  summaryVersion?: number;
  /** `cost` sums the entries' prices; `priced` says whether any entry reported one (else the figure is no price). */
  cost: number; priced: boolean; model?: string; contextTokens?: number; cacheHit?: number; preview?: string;

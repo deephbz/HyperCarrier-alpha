@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { Hub } from "../src/hub/hub.ts";
 import { Browser } from "./helpers.ts";
-import { control, fixture } from "./pi-fixtures.ts";
+import { control, fixture, replaceFile } from "./pi-fixtures.ts";
 import { PI_VIEWS } from "../src/pi/views/index.ts";
 import { BOOTSTRAP, PiHost, agentLaunch, modelLimits } from "../src/pi/host.ts";
 import { TOKEN, iso, line, user, assistant, toolResult, setup } from "./pi-host-fixtures.ts";
@@ -116,7 +116,7 @@ async function bareControl(f: { agentDir: string }, sessionId: string, sessionFi
 		});
 	});
 	await new Promise<void>((resolve) => server.listen(join(dir, `${sessionId}.sock`), resolve));
-	writeFileSync(join(dir, `${sessionId}.json`), JSON.stringify({ schema: "hc-control/1", sessionId, sessionFile, pid, nonce: `n-${sessionId}`, startedAt: iso(9), version: "test" }));
+	replaceFile(join(dir, `${sessionId}.json`), JSON.stringify({ schema: "hc-control/1", sessionId, sessionFile, pid, nonce: `n-${sessionId}`, startedAt: iso(9), version: "test" }));
 	return { requests, close: () => server.close() };
 }
 

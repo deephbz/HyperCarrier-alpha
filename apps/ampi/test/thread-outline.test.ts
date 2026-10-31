@@ -6,11 +6,12 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { openWorkingSet } from "../src/pi/working-set-db.ts";
 import { WorkingSet } from "../src/pi/working-set.ts";
+import { derivedVersion } from "../src/pi/working-set-types.ts";
 
 test("outline: whole-branch ordinals, bounded newest users, version replacement and cache", async t => {
  const dir=mkdtempSync(join(tmpdir(),'ampi-outline-'));
  const db=openWorkingSet(dir);
- db.prepare('INSERT INTO sessions VALUES (?,?)').run('thread',JSON.stringify({version:'v1'}));
+ db.prepare('INSERT INTO sessions VALUES (?,?)').run('thread',JSON.stringify({version:derivedVersion('v1')}));
  const put=db.prepare('INSERT INTO entries(path,id,position,ui,feature,native_meta,totalchars,rarechars,kinds) VALUES (?,?,?,?,?,?,?,?,?)');
  db.exec('BEGIN');
  for(let i=0;i<4202;i++) put.run('thread',`e${i}`,i,JSON.stringify({kind:i%2?'assistant':'user',text:i===4200?'x'.repeat(140)+'\nignored':`Message ${i}\nsecond line`}), '{}','{}',0,0,'{}');
@@ -24,9 +25,9 @@ test("outline: whole-branch ordinals, bounded newest users, version replacement 
  assert.equal(outline.users.at(-1)!.firstLine.length,120);
  assert.equal(store.outline('thread'),outline,'same version reuses compact outline');
  db.exec("DELETE FROM entries WHERE path='thread' AND (position>2 OR position<0)");
- db.prepare('UPDATE sessions SET data=? WHERE path=?').run(JSON.stringify({version:'v2'}),'thread');
+ db.prepare('UPDATE sessions SET data=? WHERE path=?').run(JSON.stringify({version:derivedVersion('v2')}),'thread');
  const replaced=store.outline('thread');
- assert.equal(replaced.version,'v2');assert.equal(replaced.totalEntries,3);assert.equal(replaced.truncated,false);
+ assert.equal(replaced.version,derivedVersion('v2'));assert.equal(replaced.totalEntries,3);assert.equal(replaced.truncated,false);
  assert.deepEqual(replaced.users.map(x=>x.id),['e0','e2']);
 });
 

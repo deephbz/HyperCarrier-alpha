@@ -10,6 +10,7 @@
 //
 // Exit 0 only when every journey passes, every known gap still reproduces, the proof survives cleanup, and the
 // whole run (launch to cleanup) took at most 60 s.
+import '../stdio-sync.cjs';
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { cpus, loadavg } from 'node:os';
@@ -24,6 +25,8 @@ import { commitRecord } from './receipt.mjs';
 
 // Above this 1-minute load average, an over-budget run is reported as "over budget under load". It still fails.
 const LOAD_LIMIT = 20;
+// One page boot under host load; an action after the boot keeps the page's 8 s budget.
+const BOOT_MS = 30_000;
 let started = Date.now();
 const args = process.argv.slice(2);
 if (args.includes('--checkout')) {
@@ -149,13 +152,22 @@ try {
     };
     const j = {
       page, state,
-      async goto(route) {
+      // A boot (the first entry or a reload) loads the bundle, opens the hub link and reads the first snapshots. Under
+      // host load a boot takes longer than one action's budget, so a boot gets BOOT_MS and ends when `ready` shows.
+      // `.app` shows before the data does; a step whose next action needs data passes the element that action needs.
+      async goto(route, ready = page.locator('.app')) {
         // The key only enters the browser once; the hub swaps it for a cookie and redirects to a key-free URL.
-        // The first entry is a cold bundle load; under host load it gets its own budget, and `.app` proves readiness.
         const cold = !entered;
-        if (cold) { await page.goto(`${state.origin}/?k=${keyOf(state)}`, { waitUntil: 'commit', timeout: 30_000 }); entered = true; }
+        if (cold) { await page.goto(`${state.origin}/?k=${keyOf(state)}`, { waitUntil: 'commit', timeout: BOOT_MS }); entered = true; }
         await page.evaluate(r => { location.hash = r; }, route);
-        await page.locator('.app').waitFor({ timeout: cold ? 30_000 : undefined });
+        await ready.waitFor({ timeout: cold ? BOOT_MS : undefined });
+      },
+      /** Reloads the page, a boot. `early` reads the page once the document has parsed, before the app renders. */
+      async reload(ready = page.locator('.app'), early) {
+        await page.reload({ waitUntil: early ? 'domcontentloaded' : 'commit', timeout: BOOT_MS });
+        const seen = await early?.();
+        await ready.waitFor({ timeout: BOOT_MS });
+        return seen;
       },
       settle: () => page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)))),
       /**

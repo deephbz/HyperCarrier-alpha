@@ -2,10 +2,10 @@ import { type ReactNode, type Ref, type SetStateAction, useEffect, useImperative
 import type { ImageLimits, PiThreadView, SlashCommands, ThreadSummary } from "../../../src/shared/protocol.ts";
 import { admitImages, base64Length, rejectionLine } from "../../../src/shared/image-admission.ts";
 import { hub, useHosts } from "../client.ts";
-import { COMPOSER_BUSY_HINT, composerSubmission } from "../composer-keys.ts";
+import { composerHint, composerSubmission } from "../composer-keys.ts";
 import { type Custody, type Draft, type Outcome, appendDraftQuote, editDraft, giveBack, isEmpty, outcomeText, restoreReturned, takeDraft } from "../composer-drafts.ts";
 import { hostErrorMessage, refusalText, sendOutcome } from "../composer-outcomes.ts";
-import { toCss } from "../display.ts";
+import { toCss, touchFields } from "../display.ts";
 import { openAccounts } from "./Accounts.tsx";
 import { ModelHudCard } from "./ModelHudCard.tsx";
 import { Popover, hoverIntent } from "./Popover.tsx";
@@ -21,7 +21,8 @@ export const THINKING = ["off", "minimal", "low", "medium", "high", "xhigh"];
 
 type Image = { data: string; mimeType: string; name: string };
 
-export type ComposerActions = { openPanel: (name: string) => void };
+/** `follow`: the owner's own send goes to the newest end of the transcript and ends a pending reveal. */
+export type ComposerActions = { openPanel: (name: string) => void; follow: () => void };
 
 /** `disabled`: listed but not runnable from here. A Pi command has no `run`: the composer sends it as a typed op. */
 type Command = { name: string; args?: string; help: string; disabled?: boolean; run?: (arg: string) => Promise<void> | void };
@@ -323,8 +324,10 @@ export function Composer({
 			live = false;
 		};
 	}, [host, cwd]);
-	const submitText = (content: string) =>
-		hub.request(host, "thread.submit", { threadId, content, whenBusy: "followUp", requestId: newId() }).then(() => {});
+	const submitText = (content: string) => {
+		actions.follow();
+		return hub.request(host, "thread.submit", { threadId, content, whenBusy: "followUp", requestId: newId() }).then(() => {});
+	};
 	const extraCommands = (loaded: Extras): Command[] => [
 		...loaded.prompts.map((p) => ({ name: p.name, args: "[args]", help: `${p.description} (template)`, run: (arg: string) => submitText(expandTemplate(p.body, arg)) })),
 		...loaded.skills.map((k) => ({
@@ -414,6 +417,15 @@ export function Composer({
 			: summary?.control ? "this Pi Session cannot take images from AmPi yet: update pi-hc-control and /reload in the Pi pane"
 			: "this Session has no live control socket, so AmPi cannot send images; paste them in the Pi pane");
 	const takesImages = typeof capability !== "string";
+	// --touch-fields is the one definition; read it again after mount and when the pointer media changes.
+	const [touch, setTouch] = useState(touchFields);
+	useLayoutEffect(() => {
+		const read = () => setTouch(touchFields());
+		read();
+		const coarse = matchMedia("(pointer: coarse)");
+		coarse.addEventListener("change", read);
+		return () => coarse.removeEventListener("change", read);
+	}, []);
 	// Attached images plus files still being read, so two quick drops cannot both pass the same limit.
 	const reading = useRef<{ base64: number }[]>([]);
 	const attach = async (files: Iterable<File>) => {
@@ -549,6 +561,7 @@ export function Composer({
 	 */
 	const deliver = async (submission: Draft<Image>, content: string, whenBusy: "followUp" | "steer", asText = false) => {
 		setError(undefined);
+		actions.follow();
 		const sent = submission.images;
 		try {
 			const ack = await hub.request(host, "thread.submit", {
@@ -722,15 +735,7 @@ export function Composer({
 					value={text}
 					rows={1}
 					aria-label="Message the agent"
-					placeholder={
-						busy
-							? COMPOSER_BUSY_HINT
-							: pi
-								? summary?.control
-									? `Message the agent… (Enter starts a turn, Shift+Enter adds a line, / for commands${takesImages ? ", paste or drop images" : ""})`
-									: "Message the agent… (Enter types it into the Herdr pane, Shift+Enter adds a line)"
-								: "Message the agent… (Enter sends, Shift+Enter adds a line, / for commands, paste or drop images)"
-					}
+					placeholder={composerHint({ busy, pi, control: Boolean(summary?.control), images: takesImages, touch })}
 					onChange={(e) => {
 						setText(e.target.value);
 						setChoice(undefined);

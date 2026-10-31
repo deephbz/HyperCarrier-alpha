@@ -5,6 +5,7 @@ import { Popover, hoverIntent } from "./Popover.tsx";
  * A card that hover intent (Popover.tsx) or keyboard focus opens beside its anchor: a Popover below it, or above it with `prefer`. It
  * stays open while the pointer or focus is inside the anchor or the card. The Popover's close policy also holds:
  * Escape while focus is in the anchor, a press elsewhere. React events from the card bubble to the anchor.
+ * Known limit: a diagonal move from a short trigger can leave through its side and close the card.
  */
 export function useHoverCard<T extends HTMLElement>({ prefer = "below" }: { prefer?: "below" | "above" } = {}) {
 	const id = useId();

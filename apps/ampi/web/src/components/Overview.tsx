@@ -1,6 +1,5 @@
 import type { ThreadSummary } from "../../../src/shared/protocol.ts";
 import { ACTIVITY_LABEL, MOD, ago, attentionOf, go, href, isBusy, needsYou } from "../util.ts";
-import { spendLabel, sumSpend, summarySpend } from "../../../src/shared/spend.ts";
 import { useEffect, useRef, useState } from "react";
 import { useKeepPlace } from "../keep-place.ts";
 import { hasRealModel, useModels } from "../models.ts";
@@ -11,6 +10,7 @@ import { linkLine, linkView } from "./host-fold.ts";
 import { ActivityIcon, type HostThreads, ThreadBadges, isPiHost } from "./Sidebar.tsx";
 import { emptyNote, reading, unavailable } from "../host-lists.ts";
 import { KIND_LABEL, arcCoverage, arcFinished, asksByKind, coverageNote } from "../views/cos/needs.ts";
+import { activeSpend } from "../views/cos/totals.ts";
 
 function Step({ done, title, children, action }: { done: boolean | undefined; title: string; children?: React.ReactNode; action?: React.ReactNode }) {
 	return (
@@ -181,7 +181,7 @@ export function Overview({ data, onNew, onHostSetup, onHelp }: { data: HostThrea
 	// Pi Hosts (D15 stage 1): agents start in Herdr, and there is no node to set up.
 	const piOnly = data.length > 0 && data.every((d) => isPiHost(d.host));
 	// One figure over both backends: the sum names the classes some of its Sessions do not count.
-	const spend = spendLabel(sumSpend(rows.filter((r) => r.t.updatedAt > dayAgo).map((r) => summarySpend(r.t))));
+	const spend = activeSpend(rows.map((r) => r.t), dayAgo);
 	const changed = rows.filter((r) => r.t.updatedAt > (since ?? dayAgo)).length;
 	const loading = data.some(reading);
 	const ended = unavailable(data);
@@ -191,7 +191,7 @@ export function Overview({ data, onNew, onHostSetup, onHelp }: { data: HostThrea
 			<div className="topbar">
 				<b>Overview</b>
 				<span className="crumbs">
-					{loading ? "Reading Sessions…" : rows.length === 0 && ended ? ended : <>{rows.length.toLocaleString()} Session{rows.length === 1 ? "" : "s"} · {data.length} Host{data.length === 1 ? "" : "s"} · {spend} in Sessions active today</>}
+					{loading ? "Reading Sessions…" : rows.length === 0 && ended ? ended : <>{rows.length.toLocaleString()} Session{rows.length === 1 ? "" : "s"} · {data.length} Host{data.length === 1 ? "" : "s"} · {spend.label} in Sessions active today</>}
 				</span>
 				{updating && <span className="hint" role="status">Updating…</span>}
 				<span className="spacer" />
@@ -199,7 +199,7 @@ export function Overview({ data, onNew, onHostSetup, onHelp }: { data: HostThrea
 					+ New agent
 				</button>
 			</div>
-			<div className="scroll" ref={scroller} onScroll={keepPlace.onScroll} onWheel={keepPlace.onWheel} data-page-scroller tabIndex={-1}>
+			<div className="scroll" ref={scroller} onScroll={keepPlace.onScroll} data-page-scroller tabIndex={-1}>
 				<div className="overview">
 					{!piOnly && <Onboarding data={data} onNew={onNew} onHostSetup={onHostSetup} onHelp={onHelp} />}
 					<section className="attention-summary" aria-label="Activity since your last visit">

@@ -54,6 +54,12 @@ export function arrangeByLayout(data: Pick<HostThreads, "threads" | "layout">): 
 	return { groups, unplaced };
 }
 
+/** The cache-health note for stale reads: the hub repaired them, so this reports a defect and its log, not an action. */
+function staleReadsNote({ reopened, behind, refused }: NonNullable<HostThreads["host"]["staleReads"]>): string {
+	const parts = [reopened && `${reopened} repaired by a reopen`, behind && `${behind} still behind after it`, refused && `${refused} refused in publish`].filter(Boolean);
+	return `Stale cache reads: ${parts.join(", ")}. The hub log names each one.`;
+}
+
 /** A bounded page keeps a large Host cheap without dropping its Herdr order or Team nesting. */
 function SessionRows({ list, host, active, expandedLeaders, toggleLeader, parentNavId }: { list: ThreadSummary[]; host: string; active?: string; expandedLeaders: Set<string>; toggleLeader: (id: string) => void; parentNavId: string }) {
 	const rows = projectTeamRows(list, expandedLeaders);
@@ -71,6 +77,12 @@ function SessionRows({ list, host, active, expandedLeaders, toggleLeader, parent
 			<button className="btn ghost small" disabled={start + 80 >= rows.length} onClick={() => setPage(page + 1)} aria-label="Next Sessions">→</button>
 		</div>}
 	</>;
+}
+
+/** The Sessions a Host still re-derives after a start (HostBase.upgrade). */
+function upgradeNote({ updated, total }: { updated: number; total: number }): string {
+	const left = total - updated;
+	return `Updating ${left.toLocaleString()} ${left === 1 ? "Session" : "Sessions"} after upgrade`;
 }
 
 export function PiHostSection({ data, route }: { data: HostThreads; route: { host?: string; thread?: string } }) {
@@ -123,6 +135,9 @@ export function PiHostSection({ data, route }: { data: HostThreads; route: { hos
 			{!fold.collapsed && <LinkNotes view={view} />}
 			{/* Cache health, apart from the link: a connected Host keeps its green dot. */}
 			{!fold.collapsed && host.indexError && <div className="host-note warn" data-index-error={host.id}>Index not saved: {host.indexError}</div>}
+			{!fold.collapsed && host.cacheFault && <div className="host-note warn" data-cache-fault={host.id}>Cache fault: {host.cacheFault}. Restart the hub if it lasts.</div>}
+			{!fold.collapsed && host.staleReads && <div className="host-note warn" data-stale-reads={host.id}>{staleReadsNote(host.staleReads)}</div>}
+			{!fold.collapsed && host.upgrade && <div className="host-note" role="status" data-upgrade={host.id}>{upgradeNote(host.upgrade)}</div>}
 			{!fold.collapsed && looking && <div className="host-note" role="status" data-listing>Looking for live Sessions…</div>}
 			{!fold.collapsed &&
 				groups.map((g) => (

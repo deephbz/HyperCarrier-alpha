@@ -60,6 +60,8 @@ export class HubClient {
 	#bySid = new Map<number, Sub>();
 	#listeners = new Set<() => void>();
 	hosts: HostState[] = [];
+	/** Whether the hub has listed its Hosts; until then a route's Host ID resolves to no link key. */
+	hostsListed = false;
 	/** The hub.json the hub read at start (hosts frame). */
 	config: string | undefined;
 	/** The hub's pinned Sessions (src/hub/pins.ts); replaced whole by each `pins` frame. */
@@ -115,6 +117,7 @@ export class HubClient {
 		switch (frame.t) {
 			case "hosts":
 				this.hosts = (frame.hosts as HubHostState[]).map((h) => ({ ...h, link: h.link ?? h.id }));
+				this.hostsListed = true;
 				this.config = frame.config as string | undefined;
 				this.#emit();
 				return;
@@ -281,11 +284,12 @@ export function useNow(active: boolean): number {
 	return now;
 }
 
-export function useHosts(): { hosts: HostState[]; connected: boolean } {
+export function useHosts(): { hosts: HostState[]; connected: boolean; listed: boolean } {
 	const subscribe = (listener: () => void) => hub.subscribeHosts(listener);
 	const hosts = useSyncExternalStore(subscribe, () => hub.hosts);
 	const connected = useSyncExternalStore(subscribe, () => hub.connected);
-	return { hosts, connected };
+	const listed = useSyncExternalStore(subscribe, () => hub.hostsListed);
+	return { hosts, connected, listed };
 }
 
 /** The hub's pinned Sessions, in pin order. */

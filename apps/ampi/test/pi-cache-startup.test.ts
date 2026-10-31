@@ -354,6 +354,7 @@ test("startup: a fresh cache lists nothing with indexing while init waits, and a
  assert.match(host.state.error ?? "", /^Host cache unavailable: /);
  assert.match(host.state.hint ?? "", /Restart the hub/, "the hint names the next step");
  assert.equal(host.state.cacheFailed, true);
+ assert.equal(host.state.errorClass, "reachability", "a lock that another process holds can clear");
 });
 
 test("startup: updating clears at UPDATING_MAX_MS when the startup refresh does not settle, and the log says which", async (t) => {

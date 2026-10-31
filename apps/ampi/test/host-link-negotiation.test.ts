@@ -111,8 +111,49 @@ test("a node of another protocol fails at once and names its pid", async () => {
 	const { link, states } = start();
 	const down = await until(link, (s) => s.status === "disconnected");
 	assert.match(down.error ?? "", /speaks ampi\/0/);
+	assert.equal(down.errorClass, "build");
 	assert.match(down.hint ?? "", /pid 4242/);
 	assert.ok(!states.some((s) => s.status === "connected"), "a mismatched node never counts as connected");
+	link.stop();
+});
+
+// The hub's own check of a hello can throw (on the durable line: a stale pinned package dist). The link must fail with
+// that error, which replaces the error from before; it must not stay in the hello phase while pings flow.
+test("a hello this hub cannot check fails with the check's error, which replaces the old one; a good hello clears it", async (t) => {
+	const localBuild = HostLink.localBuild;
+	t.after(() => { HostLink.localBuild = localBuild; });
+	answer = (socket) => socket.destroy();
+	const { link, states } = start();
+	const before = await until(link, (s) => s.status === "disconnected");
+	assert.match(before.error ?? "", /closed the connection before its hello/);
+	assert.equal(before.errorClass, "reachability");
+	HostLink.localBuild = () => {
+		throw new Error("the build check failed.");
+	};
+	answer = (socket) => socket.write(hello());
+	const broken = await until(link, (s) => s.status === "disconnected" && /build check/.test(s.error));
+	assert.equal(broken.error, "The node's hello broke this hub: the build check failed.");
+	assert.match(broken.hint ?? "", /Update AmPi/);
+	assert.equal(broken.errorClass, "build");
+	await until(link, (s) => s.attempts > broken.attempts, 5_000);
+	assert.ok(states.some((s) => s.status === "connecting" && s.errorClass === "build"), "a retry keeps the class with the error");
+	assert.ok(states.every((s) => !s.error === !s.errorClass), "every error has its class");
+	assert.ok(!states.some((s) => s.status === "connected"), "a hello the hub cannot check never counts as connected");
+	HostLink.localBuild = localBuild;
+	const up = await until(link, (s) => s.status === "connected", 8_000);
+	assert.equal(up.error, undefined, "a later hello clears the failure");
+	assert.equal(up.errorClass, undefined);
+	assertExplained(states);
+	link.stop();
+});
+
+test("a frame after the hello that throws in the hub keeps the link up and counts in frameErrors", async () => {
+	answer = (socket) => socket.write(hello() + `${JSON.stringify({ t: "event", n: 1 })}\n${JSON.stringify({ t: "event", n: 2 })}\n`);
+	const { link } = start();
+	link.on("frame", () => { throw new Error("a view broke."); });
+	const counted = await until(link, (s) => s.frameErrors === 2);
+	assert.equal(counted.status, "connected");
+	assert.equal(counted.lastFrameError, "event: a view broke");
 	link.stop();
 });
 

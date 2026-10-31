@@ -137,6 +137,18 @@ test("needs you: the macOS shell gets the thread tag, so a later Needs you repla
 	assert.deepEqual(posted.map((m) => (m as { tag?: string }).tag), ["devbox|tree-a.7", "devbox|tree-a.7"]);
 });
 
+test("needs you: a notification opens the Session's one route, which names the Host by Host ID", () => {
+	const posted: unknown[] = [];
+	Object.assign(globalThis, { webkit: { messageHandlers: { ampi: { postMessage: (m: unknown) => posted.push(m) } } } });
+	try {
+		notify("Needs you: lead", "devbox · asks", "devbox#pi", "pi:sess-a");
+	} finally {
+		delete (globalThis as { webkit?: unknown }).webkit;
+	}
+	assert.equal((posted[0] as { route?: string }).route, util.href.thread("devbox", "pi:sess-a"));
+	assert.equal((posted[0] as { route?: string }).route, "#/h/devbox/t/pi%3Asess-a");
+});
+
 test("Timeline: current Needs-you agrees with Overview; Team blockers and historical errors stay facts without a waiting flag", () => {
  const row = (summary: ThreadSummary) => {
   const session = { host: host.id, threadId: summary.id, ref: `${host.id}/${summary.id}`, title: summary.title, start: 0, end: 1000, live: true, blocked: false, waiting: false, marks: [[500, "old-error", "error"]], buckets: [], entries: [[500, "old-error"]], summary };

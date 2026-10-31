@@ -71,3 +71,21 @@ export function scrollFor(rows: Row<RowSession>[], anchor: Anchor, rowHeight: nu
 	while (rows[last + 1]?.group.key === anchor.group) last++;
 	return Math.min(last, first + anchor.row) * rowHeight + anchor.px;
 }
+
+type Box = Pick<HTMLElement, "getBoundingClientRect" | "closest">;
+
+/** How far the lanes have scrolled under the visible top, in CSS px. A desktop scrolls the lanes in .cos-scroll; a phone
+ * scrolls the whole page (cos.css), so the offset comes from whichever of the two clips the lanes. On a phone the sticky
+ * axis covers the first lanes under the page top; the render window's three spare rows above the offset cover them. A
+ * sticky element above the axis in the page would cover more and needs its height here. The Team toggle's restore adds
+ * the offset change to the scroller's scrollTop, so it assumes no zoom root between the scroller and the lanes. */
+export function laneOffset(node: Box, lanes: Pick<HTMLElement, "getBoundingClientRect" | "offsetHeight">): number {
+	const page = node.closest("main") ?? node;
+	const box = lanes.getBoundingClientRect();
+	const top = Math.max(node.getBoundingClientRect().top, page.getBoundingClientRect().top);
+	// Display zoom scales the client rects; the row height is in CSS px.
+	return Math.max(0, (top - box.top) * (box.height ? lanes.offsetHeight / box.height : 1));
+}
+
+/** The element that scrolls the lanes now: .cos-scroll when it overflows, else the page. */
+export const laneScroller = (node: HTMLElement): HTMLElement => (node.scrollHeight > node.clientHeight ? node : node.closest("main") ?? node);

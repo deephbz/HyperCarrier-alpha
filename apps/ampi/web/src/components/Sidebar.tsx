@@ -17,6 +17,11 @@ import { Segmented } from "./Segmented.tsx";
 /** `error`: why the Host ended or holds this list (pending or end frame); an ended list never loads further. */
 export type HostThreads = { host: HostState; threads: ThreadSummary[]; stale: boolean; layout?: HerdrLayout; error?: string } & Pick<ThreadsState, "indexing" | "listing" | "updating">;
 
+/** Why the browser has no hub, and the owner's next step; the client reconnects by itself (client.ts). */
+export function HubNotConnected() {
+	return <>Not connected to the hub. If it is running, open the link that <code>ampi open</code> prints: it carries this machine's access key.</>;
+}
+
 /** A Host link's last failure and next step. Each view shows both while the Host is not connected, so a retry keeps the reason. */
 export function LinkNotes({ view }: { view: LinkView }) {
 	return <>
@@ -30,9 +35,12 @@ export function ActivityIcon({ t }: { t: ThreadSummary }) {
 	return null;
 }
 
+const UPDATING_TITLE = "AmPi re-reads this Session after an upgrade; its title, cost and preview return when that ends";
+
 export function ThreadBadges({ t, compact = false, hideTeam = false }: { t: ThreadSummary; compact?: boolean; hideTeam?: boolean }) {
 	const attention = attentionOf(t);
 	if (compact) return <>
+		{t.updating && <span className="row-meta" title={UPDATING_TITLE}>updating</span>}
 		{t.queued > 0 && <span className="row-meta" title={`${t.queued.toLocaleString()} queued`}>{t.queued.toLocaleString()} ↵</span>}
 		{!hideTeam && t.team?.role === "lead" && <span className="row-meta">team</span>}
 	</>;
@@ -49,6 +57,7 @@ export function ThreadBadges({ t, compact = false, hideTeam = false }: { t: Thre
 					× error
 				</span>
 			)}
+			{t.updating && <span className="badge" title={UPDATING_TITLE}>updating</span>}
 			{t.queued > 0 && <span className="badge">{t.queued} queued</span>}
 			{attention.length === 0 && t.team?.role === "lead" && <span className="badge accent">team</span>}
 		</>
@@ -252,6 +261,11 @@ function HostSection({
 	);
 }
 
+/** ☰ for Show and Hide sidebar: a 16 px icon like the header's Find, so it matches the header icons in size and centre. */
+export const SidebarIcon = () => (
+	<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h11" /></svg>
+);
+
 export function Sidebar({
 	data,
 	route,
@@ -277,7 +291,7 @@ export function Sidebar({
 						AmPi
 					</a>
 					<span className={`dot hub-dot ${hubConnected ? "connected" : "disconnected"}`} title={hubConnected ? "Hub connected" : "Hub disconnected"} />
-					<button className="btn ghost small" aria-label="Hide sidebar" title={`Hide sidebar (${MOD}B)`} onClick={onToggle}>☰</button>
+					<button className="btn ghost small" aria-label="Hide sidebar" title={`Hide sidebar (${MOD}B)`} onClick={onToggle}><SidebarIcon /></button>
 				</div>
 				<button className="btn ghost" onClick={onNew}>
 					{data.length > 0 && data.every((d) => isPiHost(d.host)) ? "+ New agent" : "+ New thread"} <span className="kbd">{MOD}N</span>
@@ -286,11 +300,7 @@ export function Sidebar({
 				<button className="search search-open" onClick={() => dispatchKeyAction("session.palette", new KeyboardEvent("keydown"))}>
 					Search Sessions or prose… <span className="kbd">{MOD}K</span>
 				</button>
-				{!hubConnected && (
-					<div className="hint" data-hub-disconnected>
-						Not connected to the hub. If it is running, open the link that <code>ampi open</code> prints: it carries this machine's access key.
-					</div>
-				)}
+				{!hubConnected && <div className="hint" data-hub-disconnected><HubNotConnected /></div>}
 			</div>
 			<div className="side-scroll quiet-scroll">
 				{[...new Set(PAGES.map((p) => p.section))].map((section, i) => (

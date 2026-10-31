@@ -9,7 +9,7 @@ import { hostname } from "node:os";
 import { basename, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
-import type { HostsFrame, HubOps, NodeFrame, PinsFrame, Topic } from "../shared/protocol.ts";
+import { type HostsFrame, type HubOps, type NodeFrame, type PinsFrame, type Topic, threadSource } from "../shared/protocol.ts";
 import { type HostConfig, HostLink, type HostState, linkKey } from "./hosts.ts";
 import { type HubHome, newHubToken } from "./home.ts";
 import { Pins } from "./pins.ts";
@@ -204,19 +204,19 @@ export class Hub {
 	}
 
 	/**
-	 * The link key a browser frame names: a link key (`<id>#pi`, `<id>#durable`), or a Host ID that one source serves.
-	 * When two sources serve the Host ID, a thread ID names the source: `pi:` for Pi, any other for durable. Without
-	 * a thread ID, the Host ID is not a route.
+	 * The link key a browser frame names: a link key (`<id>#pi`, `<id>#durable`), or a Host ID. A thread ID names its
+	 * source (threadSource), so a thread frame resolves only to that source, as the web's findHost does. Without a thread
+	 * ID, a Host ID resolves when one source serves it.
 	 */
 	route(host: string, thread?: string): { key: string } | { error: { code: string; message: string } } {
 		if (this.links.has(host)) return { key: host };
 		const keys = [...this.links.keys()].filter((key) => key.slice(0, key.lastIndexOf("#")) === host);
-		if (keys.length === 1) return { key: keys[0]! };
-		if (keys.length > 1 && thread !== undefined) {
-			const key = `${host}#${thread.startsWith("pi:") ? "pi" : "durable"}`;
-			if (this.links.has(key)) return { key };
-		}
 		if (keys.length === 0) return { error: { code: "host_unavailable", message: `Host ${host} is unknown` } };
+		if (thread !== undefined) {
+			const key = `${host}#${threadSource(thread)}`;
+			return this.links.has(key) ? { key } : { error: { code: "source_unavailable", message: `Host ${host} has no ${threadSource(thread)} source for thread ${thread}` } };
+		}
+		if (keys.length === 1) return { key: keys[0]! };
 		return { error: { code: "ambiguous_host", message: `Host ${host} has two sources; name ${keys.join(" or ")}` } };
 	}
 

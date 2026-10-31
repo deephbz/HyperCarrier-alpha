@@ -70,7 +70,7 @@ function InfoPanel({ host, threadId, summary }: { host: string; threadId: string
 					{summary?.workingBudget ? ` (working budget; window ${tokens(summary.contextWindow)})` : ""}
 				</dd>
 				<dt>spend</dt>
-				<dd>{summary?.spendLabel ?? money(summary?.costUsd ?? 0)}</dd>
+				<dd>{summary?.updating ? "Updating" : summary?.spendLabel ?? money(summary?.costUsd ?? 0)}</dd>
 			</dl>
 			<PromptInputs host={host} cwd={agent.cwd ?? summary?.cwd} />
 			<h3>Compactions</h3>
@@ -112,7 +112,7 @@ export function Panel({ name, host, threadId, summary, setPanel }: { name: strin
 			<div className="panel-tabs">
 				<Segmented label="Panel" value={name} options={PANELS} onChange={setPanel} />
 				<span style={{ flex: 1 }} />
-				<button className="btn ghost small" onClick={() => setPanel(undefined)} title="Close panel">
+				<button className="btn ghost small panel-close" onClick={() => setPanel(undefined)} title="Close panel" aria-label="Close panel">
 					✕
 				</button>
 			</div>

@@ -121,3 +121,24 @@ test("connected Host with a failed index write: the dot stays green and a second
 	assert.match(head(html), /class="dot connected"/);
 	assert.match(html, /class="host-note warn" data-index-error="devbox">Index not saved: ENOSPC: no space left on device</);
 });
+
+test("connected Host with stale cache reads or a cache fault: the dot stays green and secondary warnings name them", () => {
+	store.clear();
+	const html = render({ ...away({ status: "connected", since: undefined, hint: undefined, error: undefined }), staleReads: { reopened: 2, behind: 0, refused: 1 } } as never);
+	assert.match(head(html), /class="dot connected"/);
+	assert.match(html, /class="host-note warn" data-stale-reads="devbox">Stale cache reads: 2 repaired by a reopen, 1 refused in publish. The hub log names each one.</);
+	assert.doesNotMatch(render(away({ status: "connected", since: undefined, hint: undefined, error: undefined }) as never), /data-stale-reads/);
+	const fault = render({ ...away({ status: "connected", since: undefined, hint: undefined, error: undefined }), cacheFault: "1 Session copy reads behind the derive Worker after a reopen" } as never);
+	assert.match(fault, /class="host-note warn" data-cache-fault="devbox">Cache fault: 1 Session copy reads behind the derive Worker after a reopen. Restart the hub if it lasts.</);
+});
+
+test("connected Host after an upgrade: a status note counts the Sessions still updating, and each such row says updating", async () => {
+	store.clear();
+	const connected = away({ status: "connected", since: undefined, hint: undefined, error: undefined });
+	const row = { id: "pi:synthetic-session-3", title: "proj3 · 00000000", cwd: "/synthetic/proj3", createdAt: NOW, updatedAt: NOW, kind: "thread", activity: "idle", queued: 0, costUsd: 0, updating: true, live: false, control: false };
+	assert.match(render({ ...connected, upgrade: { updated: 3, total: 50 } } as never), /class="host-note" role="status" data-upgrade="devbox">Updating 47 Sessions after upgrade</);
+	const { ThreadBadges } = await vite.ssrLoadModule("/src/components/Sidebar.tsx");
+	for (const compact of [true, false]) assert.match(renderToStaticMarkup(createElement(ThreadBadges, { t: row, compact })), />updating</);
+	assert.match(render({ ...connected, upgrade: { updated: 49, total: 50 } } as never), />Updating 1 Session after upgrade</);
+	assert.doesNotMatch(render(connected as never), /data-upgrade/);
+});

@@ -1,7 +1,7 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { anchorAt, groupSessions, orderGroups, scrollFor, timelineRows, type Group, type RowSession } from "../web/src/views/cos/rows.ts";
+import { anchorAt, groupSessions, laneOffset, orderGroups, scrollFor, timelineRows, type Group, type RowSession } from "../web/src/views/cos/rows.ts";
 
 type S = RowSession & { live: boolean; needs?: boolean };
 const s = (ref: string, start: number, end: number, extra: Partial<S> = {}): S => ({ ref, host: "devbox", start, end, live: false, ...extra });
@@ -71,4 +71,18 @@ test("A reused Team name stays two groups: each lead starts a lifetime, and a me
 	];
 	const groups = groupSessions(reused).map((g) => [g.key, g.members.map((m) => m.ref)]);
 	assert.deepEqual(groups, [["team:devbox/x@10", ["x-lead-1", "x-w-early", "x-w-1"]], ["team:devbox/x@40", ["x-lead-2", "x-w-2"]]]);
+});
+
+test("the lane offset follows whichever element scrolls the lanes, at any display zoom", () => {
+	const rect = (top: number, height = 0) => ({ top, height }) as DOMRect;
+	const el = (top: number, page?: unknown) => ({ getBoundingClientRect: () => rect(top), closest: () => page ?? null }) as never;
+	const lanes = (top: number, height: number, offsetHeight = height) => ({ getBoundingClientRect: () => rect(top, height), offsetHeight }) as never;
+	// A desktop: the page sits above .cos-scroll, which scrolled its lanes 300 px.
+	assert.equal(laneOffset(el(200, el(0)), lanes(-100, 560)), 300);
+	// A phone: .cos-scroll moved up with the page; the page clips the lanes 150 px under its top.
+	assert.equal(laneOffset(el(-150, el(40)), lanes(-110, 560)), 150);
+	// Lanes still below the visible top have scrolled nothing.
+	assert.equal(laneOffset(el(300, el(40)), lanes(320, 560)), 0);
+	// A 1.25 display zoom: 125 px of client rects is 100 CSS px.
+	assert.equal(laneOffset(el(-150, el(0)), lanes(-125, 700, 560)), 100);
 });

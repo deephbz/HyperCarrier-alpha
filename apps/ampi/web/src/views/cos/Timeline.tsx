@@ -5,13 +5,14 @@ import { navigate } from "../../nav.ts";
 import { href, isAttentionEligible, money, needsYou, tokens, type Route } from "../../util.ts";
 import { historySpend, spendLabel, spendSuffix } from "../../../../src/shared/spend.ts";
 import { dateTime, FeedStatus, useFleet } from "./data.tsx";
+import { shortTick } from "./axis.ts";
 import { seenAt } from "../../seen.ts";
 import { RangeBrush } from "./RangeBrush.tsx";
 import type { TimeRange } from "./range.ts";
 import { nextTimelineWindow, timelineWindow, windowRange } from "./window.ts";
 import { inPanel, type PanelSelection } from "./panel.ts";
 import { drawnSpan, laneSpend, laneTotal, mergeBuckets, type Unit } from "./totals.ts";
-import { anchorAt, groupSessions, orderGroups, scrollFor, timelineRows, type Anchor, type Group, type Row } from "./rows.ts";
+import { anchorAt, groupSessions, laneOffset, laneScroller, orderGroups, scrollFor, timelineRows, type Anchor, type Group, type Row } from "./rows.ts";
 import { SessionTitle } from "../../components/SessionTitle.tsx";
 import { useTopic } from "../../client.ts";
 import { isPiThreadId, type ThreadSummary } from "../../../../src/shared/protocol.ts";
@@ -149,6 +150,16 @@ function TimelineView({ route, selected }: { route: Route; selected?: PanelSelec
 	useEffect(() => setPreview(undefined), [routeQuery]);
 	const [now, setNow] = useState(Date.now());
 	const scrollRef = useRef<HTMLDivElement>(null);
+	const lanesRef = useRef<HTMLDivElement>(null);
+	useEffect(() => {
+		const node = scrollRef.current, lanes = lanesRef.current;
+		if (!node || !lanes) return;
+		const page = node.closest("main") ?? node;
+		const read = () => setScroll(laneOffset(node, lanes));
+		node.addEventListener("scroll", read, { passive: true });
+		page.addEventListener("scroll", read, { passive: true });
+		return () => { node.removeEventListener("scroll", read); page.removeEventListener("scroll", read); };
+	}, []);
 	useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 60_000); return () => clearInterval(timer); }, []);
 	const unit = queryParams.get("unit") === "dollars" ? 2 : 1;
 	const merged = queryParams.get("teams") !== "separate";
@@ -176,12 +187,12 @@ function TimelineView({ route, selected }: { route: Route; selected?: PanelSelec
 	// A Team toggle keeps the group at the top of the viewport in place (rows.ts anchorAt/scrollFor).
 	const place = useRef<Anchor | undefined>(undefined);
 	useLayoutEffect(() => {
-		const anchor = place.current, node = scrollRef.current;
+		const anchor = place.current, node = scrollRef.current, lanes = lanesRef.current;
 		place.current = undefined;
-		const top = anchor && node ? scrollFor(bands, anchor, ROW) : undefined;
-		if (top === undefined || !node) return;
-		node.scrollTop = top;
-		setScroll(node.scrollTop);
+		const top = anchor ? scrollFor(bands, anchor, ROW) : undefined;
+		if (top === undefined || !node || !lanes) return;
+		laneScroller(node).scrollTop += top - laneOffset(node, lanes);
+		setScroll(laneOffset(node, lanes));
 	}, [bands]);
 	const unreadable = feeds.flatMap((f) => (f.value?.unreadable ?? []).filter((u) => !selected || (f.host.link === selected.host && u.threadId === selected.threadId)));
 	const waitingOutside = sessions.filter((s) => attention(s, seen) && (s.end < from || s.start > to)).length;
@@ -240,7 +251,7 @@ function TimelineView({ route, selected }: { route: Route; selected?: PanelSelec
 				<a aria-current={unit === 1 ? "true" : undefined} href={change({ unit: "tokens" })}>Tokens</a>
 			</>}
 			<span className="cos-toolbar-divider" />
-			<button className={`btn small cos-team-toggle ${merged ? "cos-team-merged" : "cos-team-separate"}`} aria-pressed={merged} title={merged ? "Separate Team members" : "Merge Team members"} onClick={() => { place.current = anchorAt(bands, scrollRef.current?.scrollTop ?? 0, ROW); update({ teams: merged ? "separate" : "merged" }); }}>{merged ? "Team members merged" : "Team members separated"}</button>
+			<button className={`btn small cos-team-toggle ${merged ? "cos-team-merged" : "cos-team-separate"}`} aria-pressed={merged} title={merged ? "Separate Team members" : "Merge Team members"} onClick={() => { place.current = anchorAt(bands, scroll, ROW); update({ teams: merged ? "separate" : "merged" }); }}>{merged ? "Team members merged" : "Team members separated"}</button>
 			<span className="spacer" />
 			<button aria-label={`Time window: ${typeof window === "number" ? `${window} h` : window}`} title={`Show ${nextTimelineWindow(window, Boolean(selected))}${typeof nextTimelineWindow(window, Boolean(selected)) === "number" ? " h" : ""}`} onClick={cycleWindow}>{typeof window === "number" ? `${window} h` : window}</button>
 		</nav>
@@ -248,11 +259,11 @@ function TimelineView({ route, selected }: { route: Route; selected?: PanelSelec
 		<p className="cos-caption">Time → · thickness = {unit === 2 ? `reported dollars${spendSuffix(historySpend(0))}` : "tokens (input + output + cache)"} / 15 min · lane number = its total in range · same scale: {unit === 2 ? money(peak) : tokens(peak)} max · needs you = a current live signal or an open Arc ask · new answer = an answer since you last opened the Session.</p>
 		{unreadable.length > 0 && <p className="cos-caption">{unreadable.length === 1 ? "1 Session could not be read and is left out: " : `${unreadable.length} Sessions could not be read and are left out: `}{unreadable.slice(0, 3).map((u, i) => <Fragment key={u.ref}>{i ? ", " : ""}<a href={href.ref(u.ref)} title={u.message}>{u.title}</a></Fragment>)}{unreadable.length > 3 ? ", …" : ""}. The Session reader rejected {unreadable.length === 1 ? "its file" : "their files"} ({unreadable[0]!.message}); the copy refreshes when the Host sends new bytes.</p>}
 		{waitingOutside > 0 && <p className="cos-caption">{waitingOutside} Sessions that need you are outside this time range.</p>}
-		<div className="cos-axis"><span>Session / Team</span><div>{[0, 1, 2, 3, 4].map((i) => <time key={i}>{i === 4 && Math.abs(to - now) < 120_000 ? "Now · " : ""}{dateTime(from + (to - from) * i / 4)}</time>)}</div></div>
-		<div className="cos-scroll quiet-scroll" ref={scrollRef} onScroll={(e) => setScroll(e.currentTarget.scrollTop)}>
+		<div className="cos-axis"><span>Session / Team</span><div>{[0, 1, 2, 3, 4].map((i) => { const t = from + (to - from) * i / 4; const live = i === 4 && Math.abs(to - now) < 120_000; return <time key={i} dateTime={new Date(t).toISOString()}><span className="cos-tick-full">{live ? "Now · " : ""}{dateTime(t)}</span><span className="cos-tick-short">{live ? "Now" : shortTick(t, from, to)}</span></time>; })}</div></div>
+		<div className="cos-scroll quiet-scroll" ref={scrollRef}>
 			{!sessions.length && <p className="cos-empty">{feeds.some((f) => !f.value && !f.error) ? "Reading the Sessions…" : "No timestamped Sessions yet. Connect a Pi Host with Session copies to see its spend."}</p>}
 			{sessions.length > 0 && !bands.length && <p className="cos-empty">No Sessions in this range. Adjust the range below.</p>}
-			<div style={{ height: bands.length * ROW, position: "relative" }}><div style={{ position: "absolute", top: first * ROW, width: "100%" }}>{visible.map((band) => <TimelineStream key={band.key} band={band} from={from} to={to} now={now} moment={moment} bucketMs={bucketMs} unit={unit} scale={scale} color={band.key.split("").reduce((n, c) => (n * 31 + c.charCodeAt(0)) >>> 0, 0) % 6} focus={band.members.some((s) => s.ref === focus)} onHover={setHover} seen={seen} total={totals.get(band.key) ?? 0} />)}</div></div>
+			<div ref={lanesRef} style={{ height: bands.length * ROW, position: "relative" }}><div style={{ position: "absolute", top: first * ROW, width: "100%" }}>{visible.map((band) => <TimelineStream key={band.key} band={band} from={from} to={to} now={now} moment={moment} bucketMs={bucketMs} unit={unit} scale={scale} color={band.key.split("").reduce((n, c) => (n * 31 + c.charCodeAt(0)) >>> 0, 0) % 6} focus={band.members.some((s) => s.ref === focus)} onHover={setHover} seen={seen} total={totals.get(band.key) ?? 0} />)}</div></div>
 		</div>
 		<div className="cos-inspector" role="status">{hover}</div>
 		<RangeBrush bounds={[fullFrom, fullTo]} range={[from, to]} overview={overview} onPreview={setPreview} onCommit={(range) => { setPreview(range); update({ from: String(range[0]), to: String(range[1]) }); }} />

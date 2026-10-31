@@ -9,7 +9,7 @@ import { type ModelPurpose, resolveHelperModel, useHubConfig } from "../src/hub/
 import { cosDemo } from "../scripts/demo/cos.ts";
 import { ask } from "../src/pi/ask.ts";
 import { WorkingSet } from "../src/pi/working-set.ts";
-import type { Source } from "../src/pi/working-set-types.ts";
+import { derivedVersion, type Source } from "../src/pi/working-set-types.ts";
 import { buildArc, cosArc, type ArcValue } from "../src/pi/views/cos-arc.ts";
 import type { PiViewContext, PiViewSession } from "../src/pi/views/types.ts";
 import { HELPER_MODELS } from "./pi-host-fixtures.ts";
@@ -50,7 +50,7 @@ test("arc build store snapshot: a worker commit between two Rarebit pages leaves
 	const writer = new DatabaseSync(join(source.cacheDir, "working-set.sqlite"), { timeout: 5000 });
 	t.after(() => writer.close());
 	let commits = 0;
-	const commit = () => { commits++; writer.prepare("UPDATE sessions SET data=json_set(data,'$.version',?) WHERE path=?").run(`v-next-${commits}`, source.path); };
+	const commit = () => { commits++; writer.prepare("UPDATE sessions SET data=json_set(data,'$.version',?) WHERE path=?").run(derivedVersion(`v-next-${commits}`), source.path); };
 	const session = (): PiViewSession => {
 		const data = store.load(source.path)!;
 		return { threadId: "fixture-session", ref: "fixture/fixture-session", sourceVersion: data.version, data, bytes: data.bytes, summary: { cwd: "/synthetic" },
@@ -85,5 +85,5 @@ test("arc build store snapshot: a worker commit between two Rarebit pages leaves
 	const w = await settle(mixed.ctx);
 	assert.equal(w.job?.state, "error");
 	assert.equal(w.job?.lastError?.code, "source");
-	assert.match(w.job?.lastError?.message ?? "", /version v-next-\d+; the snapshot has (?:v-next-\d+|[0-9a-f]+)\./);
+	assert.match(w.job?.lastError?.message ?? "", /version \S+:v-next-\d+; the snapshot has (?:\S+:v-next-\d+|[0-9a-f]+)\./);
 });

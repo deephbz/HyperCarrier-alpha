@@ -172,6 +172,27 @@ function pageScroller(root: HTMLElement): HTMLElement {
 	return root;
 }
 
+/** Whether a key moves the focused scroller: a browser scroll key or a shared scroll key (handleRegionScrollKey). */
+export function isScrollKey(event: { key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; target: EventTarget | null }) {
+	if (event.ctrlKey || event.altKey || isEditableTarget(event.target)) return false;
+	if (/^(Page(Up|Down)|Arrow(Up|Down)|Home|End)$/.test(event.key)) return true;
+	if (event.metaKey) return false;
+	// Space activates a focused control instead.
+	if (event.key === " ") return !(event.target instanceof Element && event.target.closest("button, a, summary, select"));
+	return /^[jkdugG]$/.test(event.key);
+}
+
+/** Which way a key the browser scrolls (isScrollKey) moves the focused scroller: ↑, Page Up, Home and ⇧Space go up. */
+export function browserScrollWay(event: { key: string; shiftKey: boolean; metaKey: boolean; ctrlKey: boolean; altKey: boolean; target: EventTarget | null }): "up" | "down" | undefined {
+	if (!isScrollKey(event)) return undefined;
+	if (/^(ArrowUp|PageUp|Home)$/.test(event.key) || (event.key === " " && event.shiftKey)) return "up";
+	return /^(ArrowDown|PageDown|End| )$/.test(event.key) ? "down" : undefined;
+}
+
+/** The event a shared scroll key (handleRegionScrollKey) sends the scroller it moves, before it moves it. */
+export const READER_SCROLL = "ampi:reader-scroll";
+export type ReaderScroll = CustomEvent<{ up: boolean }>;
+
 /** Shared transcript/panel scroll keys. Region handlers stop propagation before window-level listeners. */
 export function handleRegionScrollKey(event: ReactKeyboardEvent<HTMLElement>) {
 	if (event.metaKey || event.ctrlKey || event.altKey || (event.shiftKey && event.key !== "G") || isEditableTarget(event.target)) return;
@@ -184,6 +205,7 @@ export function handleRegionScrollKey(event: ReactKeyboardEvent<HTMLElement>) {
 	event.stopPropagation();
 	const line = Number.parseFloat(getComputedStyle(scroller).lineHeight) || 24;
 	const pages = { j: 3 * line, k: -3 * line, d: scroller.clientHeight / 2, u: -scroller.clientHeight / 2 };
+	scroller.dispatchEvent(new CustomEvent(READER_SCROLL, { detail: { up: event.key === "k" || event.key === "u" || event.key === "g" } }) satisfies ReaderScroll);
 	// Jumps are instant: a windowed transcript loads entries near its edge and keeps place, which cancels a smooth scroll.
 	if (event.key === "g") scroller.scrollTo({ top: 0 });
 	else if (event.key === "G") scroller.scrollTo({ top: scroller.scrollHeight });

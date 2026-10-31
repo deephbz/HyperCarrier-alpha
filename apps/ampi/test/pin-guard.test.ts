@@ -121,6 +121,7 @@ test("pin guard: a copy run through a symlinked directory still checks (deploy-l
 	const real = join(dir, "extract-real"), link = join(dir, "extract-link");
 	mkdirSync(real);
 	copyFileSync(guard, join(real, "pin-guard.mjs"));
+	copyFileSync(join(dirname(guard), "stdio-sync.cjs"), join(real, "stdio-sync.cjs"));
 	symlinkSync(real, link);
 	const r = run(f.root, f.bad, f.good, {}, join(link, "pin-guard.mjs"));
 	assert.equal(r.status, 1, r.out);

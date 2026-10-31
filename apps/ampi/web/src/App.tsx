@@ -9,7 +9,8 @@ import { NewAgentDialog } from "./components/PiDialogs.tsx";
 import { PiPanel, piPanels } from "./views/PiPanel.tsx";
 import { PAGES } from "./views/registry.ts";
 import { Panel } from "./components/Panel.tsx";
-import { type HostThreads, Sidebar, isPiHost } from "./components/Sidebar.tsx";
+import { type HostThreads, Sidebar, SidebarIcon, isPiHost } from "./components/Sidebar.tsx";
+import { SessionUnresolved } from "./components/SessionUnresolved.tsx";
 import { type ModelChoice, ThreadView } from "./components/ThreadView.tsx";
 // xterm is most of the bundle; it loads the first time a terminal is shown.
 const TerminalView = lazy(() => import("./components/TerminalView.tsx").then((m) => ({ default: m.TerminalView })));
@@ -24,7 +25,9 @@ import { remember, transition, type KeyIntent, type Region, type SessionRegion, 
 import { PANEL_DEFAULT_KEY, panelClosed } from "./views/cos/arc-reopen.ts";
 import { arriveEntry, goBack, goForward, installNavLinks, navigate, noteFocus, ROUTE_EVENT } from "./nav.ts";
 
-import { scaleOf } from "./display.ts";
+import { applyDisplay, type DisplaySettings, scaleOf } from "./display.ts";
+import { bindDrawerSwipe } from "./drawer-swipe.ts";
+import { installTouchAxis } from "./touch-axis.ts";
 
 function savedWidth(key: string, fallback: number, min: number, max: number) {
 	const value = Number(localStorage.getItem(key) ?? fallback);
@@ -35,6 +38,8 @@ function savedWidth(key: string, fallback: number, min: number, max: number) {
 const MAIN_MIN = 480;
 /** The layout viewport in CSS px: the unit of the grid widths. `innerWidth` is in viewport px, which display zoom scales. */
 const viewWidth = () => document.documentElement.clientWidth;
+/** The side panels overlay the main (a phone). styles.css owns the width: its narrow rule sets --side-overlay. */
+const sideOverlay = () => getComputedStyle(document.documentElement).getPropertyValue("--side-overlay").trim() === "1";
 
 type Drag = { app: HTMLElement; pointer: number; x: number; scale: number; start: number; width: number };
 
@@ -134,20 +139,32 @@ function useRoute() {
 	);
 }
 
-/** The route with its Host named by link key, so every view and request below names one source. */
-function linkRoute(route: Route, hosts: HostState[]): Route {
-	return route.host ? { ...route, host: findHost(hosts, route.host, route.thread)?.link ?? route.host } : route;
+/**
+ * The route with its Host named by link key, so every view and request below names one source. A route is unresolved
+ * when no listed Host source matches it: before the hub lists its Hosts, after the hub drops a source, or for an ID
+ * that names nothing. App mounts no Session view for an unresolved route: a view that keys browser state or requests by
+ * the bare Host ID (a shell, a draft) would act on a source that is not there. Resolution reads hostStates, which lists
+ * every link in every status; filtering that list by status would unmount Sessions on a link blip.
+ */
+function linkRoute(route: Route, hosts: HostState[]): { route: Route; resolved: boolean } {
+	const link = route.host === undefined ? undefined : findHost(hosts, route.host, route.thread)?.link;
+	return { route: link ? { ...route, host: link } : route, resolved: route.host === undefined || link !== undefined };
 }
 
 export function App() {
-	const { hosts, connected } = useHosts();
+	const { hosts, connected, listed: hostsListed } = useHosts();
 	const hash = useRoute();
-	const route = linkRoute(hashRoute(), hosts);
+	const { route, resolved } = linkRoute(hashRoute(), hosts);
 	const [feeds, setFeeds] = useState<Record<string, HostThreads>>({});
 	const [dialog, setDialog] = useState<"new" | "host" | "palette" | "commands" | "display" | "help" | undefined>();
 	const [panel, setPanel] = useState<string | undefined>(() => localStorage.getItem("ampi.panel") ?? undefined);
 	const [sidebarHidden, setSidebarHidden] = useState(() => localStorage.getItem("ampi.sidebar.hidden") === "1");
 	const [sidebarPeek, setSidebarPeek] = useState(false);
+	// On a phone the sidebar is a drawer: it starts closed on every load and is never saved, so ampi.sidebar.hidden
+	// stays the desktop's choice. A width change across the narrow rule writes nothing.
+	const [oneSide, setOneSide] = useState(sideOverlay);
+	const [drawer, setDrawer] = useState(false);
+	const oneSideRef = useRef(false);
 	const squeezedRef = useRef(false);
 	const overlayRef = useRef(false);
 	const [sidebarWidth, setSidebarWidth] = useState(() => savedWidth("ampi.sidebar.width", 280, 220, 420));
@@ -158,7 +175,9 @@ export function App() {
 	// change, and walks the target chain once per request after commit. `recentRegions` is a ref: focus changes never re-render.
 	const recentRegions = useRef<SessionRegion[]>(["transcript"]);
 	const lastFocused = useRef<Element | null>(null);
-	const viewRef = useRef<View>({ session: false, sidebarHidden: false, panelShown: false, modal: false });
+	const viewRef = useRef<View>({ session: false, sidebarHidden: false, panelShown: false, modal: false, oneSide: false });
+	// Whether a panel name renders in the current Session; set each render, read by the stable panel writer.
+	const availableRef = useRef<(name: string) => boolean>(() => false);
 	const focusSeq = useRef(0);
 	const pendingFocus = useRef<{ seq: number; chain: Target[]; ifLost?: true } | undefined>(undefined);
 	const [focusRequest, setFocusRequest] = useState<{ seq: number; chain: Target[]; ifLost?: true }>();
@@ -173,16 +192,17 @@ export function App() {
 		try { return focusRegion(target); } finally { placing.current = false; }
 	}).current;
 	const applyView = useRef({ sidebar: (_show: boolean) => {}, panel: (_open: boolean) => {} });
-	const focusIntent = useRef((intent: KeyIntent, entry?: Target): boolean => {
+	// `set` is the View a writer just made and the last render does not hold yet (panel.set).
+	const focusIntent = useRef((intent: KeyIntent, entry?: Target, set?: Partial<View>): boolean => {
 		const region = (document.activeElement?.closest<HTMLElement>("[data-region]")?.dataset.region ?? null) as Region | null;
-		const next = transition({ ...viewRef.current, modal: openOverlay() !== undefined }, { region, recent: recentRegions.current, entry }, intent);
+		const next = transition({ ...viewRef.current, modal: openOverlay() !== undefined, ...set }, { region, recent: recentRegions.current, entry }, intent);
 		if (next.kind === "unavailable") return false;
+		if (next.change.sidebar) applyView.current.sidebar(next.change.sidebar === "show");
+		if (next.change.panel) applyView.current.panel(next.change.panel === "open");
 		// A view-change request never displaces a pending key request; both resolve from `last`.
 		if (next.ifLost && pendingFocus.current && !pendingFocus.current.ifLost) return true;
 		recentRegions.current = next.recent;
 		if (!next.ifLost) awaiting.current = undefined;
-		if (next.change.sidebar) applyView.current.sidebar(next.change.sidebar === "show");
-		if (next.change.panel) applyView.current.panel(next.change.panel === "open");
 		pendingFocus.current = { seq: ++focusSeq.current, chain: next.chain, ifLost: next.ifLost };
 		setFocusRequest(pendingFocus.current);
 		return true;
@@ -234,25 +254,16 @@ export function App() {
 	useKeyAction("new", () => setDialog("new"));
 	useEffect(() => installKeymapDispatcher(), []);
 	const changeOverallZoom = (delta: number) => {
-		const settings = JSON.parse(localStorage.getItem("ampi.display") ?? "{}") as { overall?: number };
+		const settings = JSON.parse(localStorage.getItem("ampi.display") ?? "{}") as DisplaySettings;
 		const overall = delta === 0 ? 1 : Math.min(1.6, Math.max(0.7, Math.round(((settings.overall ?? 1) + delta) * 100) / 100));
 		settings.overall = overall;
 		localStorage.setItem("ampi.display", JSON.stringify(settings));
-		document.documentElement.style.zoom = String(overall);
+		applyDisplay(settings);
 		window.dispatchEvent(new Event("ampi:display"));
 		setZoomToast(`Display size ${Math.round(overall * 100)}%`);
 	};
 	useEffect(() => {
-		const apply = () => {
-			const settings = JSON.parse(localStorage.getItem("ampi.display") ?? "{}") as { overall?: number; sidebar?: number; transcript?: number; composer?: number; panel?: number };
-			document.documentElement.style.zoom = String(settings.overall ?? 1);
-			// WebKit misplaces container-unit geometry under any zoom; zoom-sensitive layout keys off this flag.
-			document.documentElement.toggleAttribute("data-zoomed", (settings.overall ?? 1) !== 1 || (settings.transcript ?? 1) !== 1);
-			for (const region of ["sidebar", "transcript", "composer", "panel"] as const) {
-				const root = document.querySelector<HTMLElement>(`[data-region="${region}"]`);
-				if (root) root.style.zoom = String(settings[region] ?? 1);
-			}
-		};
+		const apply = () => applyDisplay();
 		apply();
 		window.addEventListener("ampi:display", apply);
 		return () => window.removeEventListener("ampi:display", apply);
@@ -318,7 +329,8 @@ export function App() {
 	}, []);
 	useEffect(() => {
 		// Display zoom changes the CSS width of the window without a resize event.
-		const resize = () => setWindowWidth(viewWidth());
+		// A width that leaves the narrow rule ends the drawer's visit: a later phone width (a rotation back) starts closed.
+		const resize = () => { const overlay = sideOverlay(); setWindowWidth(viewWidth()); setOneSide(overlay); if (!overlay) setDrawer(false); };
 		resize();
 		window.addEventListener("resize", resize);
 		window.addEventListener("ampi:display", resize);
@@ -347,13 +359,20 @@ export function App() {
 	useEffect(() => {
 		window.addEventListener("pointerdown", requestNotificationPermission, { once: true });
 	}, []);
-	const routeHost = findHost(hosts, route.host);
+	// An unresolved route names no source, so nothing below acts on its bare Host ID.
+	const routeHost = resolved ? findHost(hosts, route.host) : undefined;
 	const hostConnected = routeHost?.status === "connected";
 	const piHere = isPiHost(routeHost);
 	// A link can open a panel (`?p=`); after that the choice is the owner's and is remembered.
 	useEffect(() => {
-		if (route.panel) setPanel(route.panel);
+		if (!route.panel) return;
+		setPanel(route.panel);
+		// Only a phone has a view rule for a set panel (one side at a time); desktop focus stays as it was.
+		if (oneSideRef.current) focusIntent("panel.set", undefined, { panelShown: true });
 	}, [route.panel]);
+	// A route arrival from any source (a palette pick, a new Session, Back) closes a phone's drawer (focus.ts navigate).
+	// By design this includes a route change the app starts (a redirect): the drawer then shows a page the owner left.
+	useEffect(() => { focusIntent("navigate"); }, [route.host, route.thread, route.term, route.page]);
 	const models: ModelChoice[] = useModels(route.host, hostConnected) ?? [];
 	const [accounts, setAccounts] = useState<string>();
 	useEffect(() => {
@@ -390,15 +409,17 @@ export function App() {
 	const summary = route.host && route.thread ? feeds[route.host]?.threads.find((t) => t.id === route.thread) : undefined;
 	// Pi Sessions get the registered panel views (views/registry.ts); node threads keep the node's panels.
 	const panelAvailable = (name: string) => !piHere || piPanels(summary).some((p) => p.name === name);
-	const showPanel = Boolean(route.thread && panel && panelAvailable(panel));
+	const showPanel = Boolean(resolved && route.thread && panel && panelAvailable(panel));
 	// Every panel writer (✕, tabs, ⌘J, links, the Arc toggle) reports a view change; focus moves only if it was lost (R11).
-	const setPanelTracked = useCallback((next?: string) => { setPanel(next); focusIntent("panel.set"); }, []);
+	const setPanelTracked = useCallback((next?: string) => { setPanel(next); focusIntent("panel.set", undefined, { panelShown: Boolean(next && availableRef.current(next)) }); }, []);
+	availableRef.current = (name) => Boolean(route.thread) && panelAvailable(name);
 	const defaultPanel = () => {
 		const saved = localStorage.getItem(PANEL_DEFAULT_KEY) || "arc";
 		return panelAvailable(saved) ? saved : panelAvailable("arc") ? "arc" : piHere ? piPanels(summary)[0]?.name : "arc";
 	};
 	applyView.current = {
-		sidebar: (show) => (squeezedRef.current ? setSidebarPeek(show) : setSidebarHidden(!show)),
+		// The one sidebar writer: the phone's drawer, the squeezed sidebar's peek, or the saved desktop choice.
+		sidebar: (show) => (oneSideRef.current ? setDrawer(show) : squeezedRef.current ? setSidebarPeek(show) : setSidebarHidden(!show)),
 		panel: (open) => {
 			if (!open && panel) panelClosed(panel);
 			setPanel(open ? defaultPanel() : undefined);
@@ -408,33 +429,45 @@ export function App() {
 	};
 	// Where no shell panel exists (a Pi Session), ⌘J is unavailable: it does nothing and help names its context.
 	useKeyAction("shell", route.host && (!route.thread || panelAvailable("shell")) ? () => {
-		const r = linkRoute(hashRoute(), hosts);
-		if (r.host && r.thread) setPanelTracked(panel === "shell" ? undefined : "shell");
+		const { route: r, resolved } = linkRoute(hashRoute(), hosts);
+		if (r.host && r.thread) { if (resolved) setPanelTracked(panel === "shell" ? undefined : "shell"); }
 		else if (r.host) void openTerminal(r.host).catch(() => {});
 	} : undefined);
 	const page = PAGES.find((p) => p.name === (route.page ?? (!route.host ? "timeline" : undefined)));
+	// A phone's swipe drives the same commands as ☰, the hide button, ⌘L and the panel's ✕.
+	const appRef = useRef<HTMLDivElement>(null);
+	// The one touch-axis decision serves the swipe and the reader's scroll inputs (keep-place, ThreadView).
+	useEffect(() => installTouchAxis(), []);
+	useEffect(() => bindDrawerSwipe(appRef.current!, {
+		view: () => ({ ...viewRef.current, modal: openOverlay() !== undefined }),
+		commit: (side, open) => { focusIntent(side === "sidebar" ? (open ? "sidebar.show" : "sidebar.hide") : open ? "panel.toggle" : "panel.close"); },
+	}), []);
+	// While a swipe opens the panel, an empty sheet with the default panel's title follows the finger.
+	const sheet = oneSide && !page && route.host && route.thread && !showPanel ? (piHere ? piPanels(summary).find((p) => p.name === defaultPanel())?.label : defaultPanel()) : undefined;
 	// When a panel would squeeze the main below a usable width, the sidebar gives way first (not saved; ☰ peeks it back),
 	// and only then does the panel overlay the main.
-	const squeezed = showPanel && !sidebarHidden && windowWidth - sidebarWidth - panelWidth < MAIN_MIN;
-	const sideHidden = sidebarHidden || (squeezed && !sidebarPeek);
+	const squeezed = !oneSide && showPanel && !sidebarHidden && windowWidth - sidebarWidth - panelWidth < MAIN_MIN;
+	const sideHidden = oneSide ? !drawer : sidebarHidden || (squeezed && !sidebarPeek);
 	squeezedRef.current = squeezed;
+	oneSideRef.current = oneSide;
 	const overlayPanel = windowWidth - (sideHidden ? 0 : sidebarWidth) - panelWidth < MAIN_MIN;
 	overlayRef.current = overlayPanel && showPanel;
-	viewRef.current = { session: sessionView, sidebarHidden: sideHidden, panelShown: showPanel, modal: false };
+	viewRef.current = { session: sessionView, sidebarHidden: sideHidden, panelShown: showPanel, modal: false, oneSide };
 	void hash;
 	return (
 		<FeedsContext.Provider value={feeds}>
 		<FocusIntentContext.Provider value={focusIntent}>
-		<div className={`app ${sideHidden ? "sidebar-hidden" : ""} ${showPanel ? "has-panel" : ""} ${overlayPanel ? "panel-overlay" : ""}`} style={{ "--side-w": `${sidebarWidth}px`, "--side-visible": sideHidden ? "0px" : "var(--side-w)", "--panel-w": `${panelWidth}px` } as CSSProperties}>
+		<div ref={appRef} className={`app ${sideHidden ? "sidebar-hidden" : ""} ${showPanel ? "has-panel" : ""} ${overlayPanel ? "panel-overlay" : ""}`} style={{ "--side-w": `${sidebarWidth}px`, "--side-visible": sideHidden ? "0px" : "var(--side-w)", "--panel-w": `${panelWidth}px` } as CSSProperties}>
 			{zoomToast && <div className="toast" role="status" aria-live="polite">{zoomToast}</div>}
 			{hosts.map((host) => (
 				<HostFeed key={host.link} host={host} onData={onData} />
 			))}
-			<div className="sidebar-slot" data-region="sidebar" tabIndex={-1} inert={sideHidden}>
-				<Sidebar data={data} route={route} hubConnected={connected} onNew={() => setDialog("new")} onHostSetup={() => setDialog("host")} onToggle={() => (squeezed ? setSidebarPeek(false) : setSidebarHidden(true))} />
+			{/* A row that navigates closes a phone's drawer, also the open Session's row, which changes no route. */}
+			<div className="sidebar-slot" data-region="sidebar" tabIndex={-1} inert={sideHidden} onClickCapture={(event) => { const target = event.target as Element; if (target.closest("[data-nav-row], [data-thread]") && !target.closest("button")) focusIntent("navigate"); }}>
+				<Sidebar data={data} route={route} hubConnected={connected} onNew={() => setDialog("new")} onHostSetup={() => setDialog("host")} onToggle={() => { focusIntent("sidebar.hide"); }} />
 				<ResizeEdge side="sidebar" width={sidebarWidth} onChange={setSidebarWidth} />
 			</div>
-			{sideHidden && <button className="btn ghost sidebar-reveal" aria-label="Show sidebar" title={`Show sidebar (${MOD}B)`} onClick={() => (sidebarHidden ? setSidebarHidden(false) : setSidebarPeek(true))}>☰</button>}
+			{sideHidden && <button className="btn ghost small sidebar-reveal" aria-label="Show sidebar" title={`Show sidebar (${MOD}B)`} onClick={() => { focusIntent("sidebar.show"); }}><SidebarIcon /></button>}
 			<div className="main-slot" data-page-root tabIndex={-1}>
 			{page ? (
 				<page.component route={route} />
@@ -446,12 +479,15 @@ export function App() {
 				<Suspense fallback={<div className="main"><div className="empty">Loading the terminal…</div></div>}>
 					<TerminalView key={`${route.host}|${route.term}`} host={route.host} termId={route.term} />
 				</Suspense>
+			) : route.host && route.thread && !resolved ? (
+				<SessionUnresolved host={route.host} hosts={hosts} connected={connected} listed={hostsListed} />
 			) : route.host && route.thread ? (
 				<ThreadView key={`${route.host}|${route.thread}`} host={route.host} threadId={route.thread} summary={summary} models={models} panel={panel} setPanel={setPanelTracked} entry={route.entry} />
 			) : (
 				<Overview data={data} onNew={() => setDialog("new")} onHostSetup={() => setDialog("host")} onHelp={() => setDialog("help")} />
 			)}
 			</div>
+			{sheet && <div className="drawer-sheet" aria-hidden="true" inert><div className="panel-tabs"><span className="drawer-sheet-title">{sheet}</span></div></div>}
 			{!page && route.host && route.thread && panel && showPanel && <div className="panel-slot" data-region="panel" tabIndex={-1} onKeyDown={handleRegionScrollKey}>
 				<ResizeEdge side="panel" width={panelWidth} onChange={setPanelWidth} />
 				{(piHere ? (

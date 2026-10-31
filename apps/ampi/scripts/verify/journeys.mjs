@@ -695,7 +695,7 @@ export const journeys = [
     async run(j) {
       const p = j.page;
       await j.step('enter-with-key', 'Open the hub entry URL; the hub sets its cookie and drops the key from the URL', async () => {
-        await j.goto('#/v/overview');
+        await j.goto('#/v/overview', p.locator('.ov-host[data-host="devbox"] .dot.connected'));
         assert(!p.url().includes('?k='), 'key left in URL');
         return { url: p.url() };
       });
@@ -793,8 +793,7 @@ export const journeys = [
     async run(j) {
       const p = j.page;
       await autoBuildsSettled(j.state);
-      await j.goto('#/v/overview');
-      await p.locator('[data-card="running"] .row').first().waitFor();
+      await j.goto('#/v/overview', p.locator('[data-card="running"] .row').first());
       await j.step('count-updates', 'Read the activity summary and top bar', async () => {
         const summary = await p.getByRole('region', { name: 'Activity since your last visit' }).innerText();
         const crumbs = await p.locator('.topbar .crumbs').innerText();
@@ -910,8 +909,7 @@ export const journeys = [
     id: 'T2', feature: 't2-timeline.md', title: 'Read the Timeline',
     async run(j) {
       const p = j.page;
-      await j.goto(timeline);
-      await p.locator('.cos-band-label').first().waitFor();
+      await j.goto(timeline, p.locator('.cos-band-label').first());
       await j.step('streams-only', 'Read the stream plots', async () => {
         const plots = p.locator('svg[aria-label$=", spend over time"]');
         const count = await plots.count();
@@ -969,8 +967,9 @@ export const journeys = [
     async run(j) {
       const p = j.page;
       await j.step('from-overview', 'Choose the lead row in Running now', async () => {
-        await j.goto('#/v/overview');
-        await p.locator('[data-card="running"] .row[data-thread="pi:sess-lead"]').click();
+        const lead = p.locator('[data-card="running"] .row[data-thread="pi:sess-lead"]');
+        await j.goto('#/v/overview', lead);
+        await lead.click();
         await p.waitForURL(/\/t\/pi%3Asess-lead/);
         await p.locator('.composer').waitFor();
         return { url: p.url().split('#')[1] };
@@ -1024,7 +1023,7 @@ export const journeys = [
       const read = () => p.evaluate(() => ({ background: getComputedStyle(document.body).backgroundColor, dataTheme: document.documentElement.dataset.theme ?? null }));
       const pressed = async () => (await theme.getByRole('button', { pressed: true }).innerText()).trim();
       const choose = async label => { await theme.getByRole('button', { name: label, exact: true }).click(); await j.settle(); };
-      const reload = async () => { await p.reload({ waitUntil: 'domcontentloaded' }); const early = await read(); await p.locator('.app').waitFor({ timeout: 30_000 }); return early; };
+      const reload = () => j.reload(p.locator('.app'), read);
       let light, dark;
       await j.step('find-toggle', 'Open Overview on a light OS; find the System · Light · Dark control in the sidebar footer', async () => {
         await p.emulateMedia({ colorScheme: 'light' });
@@ -1081,8 +1080,7 @@ export const journeys = [
       await j.step('open', 'Add the A19 Session, then open it', async () => {
         const thread = addPreviewSession(j.state);
         await assertEventually(async () => (await threadsOf(j.state)).some(t => t.id === thread), `the hub does not list ${thread}`, 20_000);
-        await j.goto(`#/h/devbox/t/${encodeURIComponent(thread)}`);
-        await p.getByText('A19-long reply', { exact: false }).first().waitFor({ timeout: 20_000 });
+        await j.goto(`#/h/devbox/t/${encodeURIComponent(thread)}`, p.getByText('A19-long reply', { exact: false }).first());
         return { thread };
       });
       // A transcript-level "Preview shortened" disclosure sits outside every card. A card's own disclosure sits inside it.
@@ -1140,8 +1138,7 @@ export const journeys = [
       await j.step('open', 'Add the A20 Session, open it, open the thinking and expand the tool call', async () => {
         const thread = addDisclosureSession(j.state);
         await assertEventually(async () => (await threadsOf(j.state)).some(t => t.id === thread), `the hub does not list ${thread}`, 20_000);
-        await j.goto(`#/h/devbox/t/${encodeURIComponent(thread)}`);
-        await p.getByText('A20-long reply', { exact: false }).first().waitFor({ timeout: 20_000 });
+        await j.goto(`#/h/devbox/t/${encodeURIComponent(thread)}`, p.getByText('A20-long reply', { exact: false }).first());
         const thinking = p.locator('.transcript details.thinking').first();
         if (!(await thinking.evaluate(d => d.open))) await thinking.locator('summary').first().click();
         const head = p.locator('.transcript .tool-head', { hasText: 'A20-args' }).first();
@@ -1261,8 +1258,7 @@ export const journeys = [
       await j.step('open', 'Add the A25 Session, open it, and leave every row collapsed', async () => {
         const thread = addNoticeSession(j.state);
         await assertEventually(async () => (await threadsOf(j.state)).some(t => t.id === thread), `the hub does not list ${thread}`, 20_000);
-        await j.goto(`#/h/devbox/t/${encodeURIComponent(thread)}`);
-        await p.getByText('A25-final reply', { exact: false }).first().waitFor({ timeout: 20_000 });
+        await j.goto(`#/h/devbox/t/${encodeURIComponent(thread)}`, p.getByText('A25-final reply', { exact: false }).first());
         const thinking = p.locator('.transcript details.thinking').first();
         if (await thinking.evaluate(d => d.open)) await thinking.locator('summary').first().click();
         const missing = [];
@@ -1515,8 +1511,7 @@ export const journeys = [
       await j.step('open', 'Add the A24 Session, then open it', async () => {
         const thread = addProjectionSession(j.state);
         await assertEventually(async () => (await threadsOf(j.state)).some(t => t.id === thread), `the hub does not list ${thread}`, 20_000);
-        await j.goto(`#/h/devbox/t/${encodeURIComponent(thread)}`);
-        await message('A24-long-start').waitFor({ timeout: 20_000 });
+        await j.goto(`#/h/devbox/t/${encodeURIComponent(thread)}`, message('A24-long-start'));
         return { thread };
       });
       await j.step('medium-whole', 'Read the 2.5 KB reply', async () => {
@@ -1582,8 +1577,7 @@ export const journeys = [
       const stateOf = async command => (await tool(command).locator('.tool-head .state').innerText()).trim();
       await j.step('open-running', 'Start a working pane whose Session has a bash call in flight, then open the Session', async () => {
         await assertEventually(async () => { a21.ensurePane(); const t = (await threadsOf(j.state)).find(x => x.id === `pi:${A21.run}`); return t?.live && t.activity !== 'idle'; }, `pi:${A21.run} is not live and busy`, 30_000);
-        await j.goto(`#/h/devbox/t/${encodeURIComponent(`pi:${A21.run}`)}`);
-        await tool(A21.command).waitFor({ timeout: 20_000 });
+        await j.goto(`#/h/devbox/t/${encodeURIComponent(`pi:${A21.run}`)}`, tool(A21.command));
         return { thread: `pi:${A21.run}` };
       });
       await j.step('call-running', 'Read the in-flight bash call', async () => {
@@ -1663,9 +1657,8 @@ export const journeys = [
       const p = j.page;
       await autoBuildsSettled(j.state);
       await j.step('inventory', 'Choose Arcs', async () => {
-        await j.goto('#/v/arcs');
         const row = p.locator('.cos-list-row').first();
-        await row.waitFor();
+        await j.goto('#/v/arcs', row);
         const meta = await p.locator('.cos-header .cos-meta').innerText();
         assert.match(meta, /^\d+ long-running Sessions?/);
         // The demo's stopped Sessions build automatically at hub start (D16 option A); wait for that head here,
@@ -1910,8 +1903,7 @@ export const journeys = [
     id: 'T3b', feature: 't3b-rarebit.md', title: 'Read Rarebit messages',
     async run(j) {
       const p = j.page;
-      await j.goto(thread('worker-gui', 'rarebit'));
-      await p.locator('.rb-message').first().waitFor();
+      await j.goto(thread('worker-gui', 'rarebit'), p.locator('.rb-message').first());
       await j.step('retired-derivations', 'Read Rarebits and open Models; Summary and Recap have no controls', async () => {
         assert.equal(await p.getByRole('button', { name: /^(Recap|Summary)$/ }).count(), 0);
         await p.locator('.rb-controls').getByRole('button', { name: 'Timeline', exact: true }).waitFor();
@@ -1964,8 +1956,8 @@ export const journeys = [
         assert(Math.abs(after - before.y) <= 2, `anchor moved ${before.y} → ${after}`);
         return { anchor: before.id, before: before.y, after };
       });
-      // I17 at 39b5240: the first visible message stays first but moves down 24 px (one continuation row).
-      await j.gap('I17', 'show-keeps-place', 'Choose Show continuations; the first visible message must not move', async () => {
+      // I17: the Show remap can end the window a few continuations below the anchor; newer messages or, at the newest message, tail space keep the anchor in place.
+      await j.step('show-keeps-place', 'Choose Show continuations; the first visible message keeps its place', async () => {
         const before = await anchor();
         await p.getByRole('button', { name: 'Show continuations', exact: true }).click();
         await p.getByRole('button', { name: 'Hide continuations', exact: true }).waitFor();
@@ -2049,8 +2041,7 @@ export const journeys = [
       await j.step('open', 'Add the A26b Session, then open it with the full transcript', async () => {
         const thread = addMixedRunSession(j.state);
         await assertEventually(async () => (await threadsOf(j.state)).some(t => t.id === thread), `the hub does not list ${thread}`, 20_000);
-        await j.goto(`#/h/devbox/t/${encodeURIComponent(thread)}`);
-        await p.getByText('A26b-after', { exact: false }).first().waitFor({ timeout: 20_000 });
+        await j.goto(`#/h/devbox/t/${encodeURIComponent(thread)}`, p.getByText('A26b-after', { exact: false }).first());
         await p.getByRole('button', { name: 'Full', exact: true, pressed: true }).waitFor();
         const notices = await p.locator('.msg.notice').count();
         assert.equal(notices, 4, `the full transcript shows ${notices} extension messages`);
@@ -2161,7 +2152,9 @@ export const journeys = [
       await assertEventually(async () => (await rows.count()) >= 2, 'the sidebar lists fewer than 2 Sessions', 20_000);
       const [a, b] = await rows.evaluateAll(r => r.slice(0, 2).map(x => x.dataset.thread));
       // The Host route key (HostState `link`, such as devbox#pi), as the row's href encodes it.
-      const linkOf = async id => decodeURIComponent((await p.locator(`.side-scroll .row[data-thread="${id}"] a.title`).first().getAttribute('href')).split('/')[2]);
+      // The link key of the Host section that lists the Session. A Session href names the Host by Host ID; a pin hint
+      // keeps the link key.
+      const linkOf = id => p.locator(`.side-scroll .row[data-thread="${id}"]`).first().evaluate(row => { const s = row.closest('.side-section'); return `${s.dataset.host}#${s.dataset.backend === 'pi' ? 'pi' : 'durable'}`; });
       await j.step('menu-pins-everywhere', 'Right-click a Session row and choose Pin to top; a second window shows the pin', async () => {
         await rows.first().click({ button: 'right' });
         const label = await p.locator('.row-menu button').innerText();
@@ -2206,7 +2199,7 @@ export const journeys = [
         await hubOp(p, 'pins.set', { host: 'verify-old-host', threadId: a, pinned: true, intent: 'owner', title: '' });
         try {
           const link = pinRow(p, a).locator('a.title');
-          await assertEventually(async () => ((await link.getAttribute('href')) ?? '').includes(`/h/${encodeURIComponent(real)}/`), 'the pin does not open on the listing Host');
+          await assertEventually(async () => ((await link.getAttribute('href')) ?? '').includes(`/h/${encodeURIComponent(real.replace(/#(pi|durable)$/, ''))}/t/`), 'the pin does not open on the listing Host');
           await assertEventually(async () => (await pinsNow()).find(x => x.threadId === a)?.host === real, 'the hub kept the old host hint');
           return { href: await link.getAttribute('href'), hint: real };
         } finally { await unpin(a); }
@@ -2230,11 +2223,12 @@ export const journeys = [
         const w = await window2({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
         try {
           await w.page.goto(`${j.state.origin}/#/h/${encodeURIComponent(await linkOf(a))}/t/${encodeURIComponent(a)}`);
-          // A phone opens with the sidebar over the Session; the owner hides it to reach the top bar.
+          // A phone opens on the Session with its sidebar drawer closed (App.tsx oneSide), so the star is in reach.
           const star = w.page.locator('.pin-star');
+          await star.waitFor();
+          assert.equal(await w.page.locator('[aria-label="Hide sidebar"]').isVisible(), false, 'a phone opens with its sidebar drawer open');
           // The star takes the tap only when nothing covers its center.
           const tapStar = async pressed => {
-            await w.page.locator('[aria-label="Hide sidebar"]').tap();
             await assertEventually(() => star.evaluate(e => { const b = e.getBoundingClientRect(); return e.contains(document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2)); }), 'the sidebar still covers the star');
             // The star must show the opposite state first, so a stale read cannot pass for the tap's result.
             await assertEventually(async () => (await star.getAttribute('aria-pressed')) === String(pressed !== 'true'), `the star was already aria-pressed=${pressed} before the tap`);
@@ -2246,6 +2240,8 @@ export const journeys = [
           await w.page.locator('[aria-label="Show sidebar"]').tap();
           const x = await w.page.locator(`[data-pinned] .pin-row[data-pin="${a}"] .pin-x`).evaluate(e => ({ display: getComputedStyle(e).display, width: Math.round(e.getBoundingClientRect().width) }));
           assert.notEqual(x.display, 'none', 'the × hides on touch');
+          // The open drawer covers the top bar; the owner hides it to reach the star.
+          await w.page.locator('[aria-label="Hide sidebar"]').tap();
           await tapStar('false');
           await assertEventually(async () => !(await pinsNow()).some(x => x.threadId === a), 'the second star tap did not unpin');
           return { x };
@@ -2719,16 +2715,36 @@ export const journeys = [
         }
         return { wideReopened: true, focusAfterReopen: afterReopen, narrowCollapsed: true };
       });
-      await j.step('session-switch', 'Press Alt+↓ in the transcript: the next Session opens with focus in its composer', async () => {
+      await j.step('session-switch', 'Press Alt+↓ in the transcript: the next Session opens with focus in its composer; Alt+↑ opens the one above it', async () => {
         await startIn('transcript');
         const before = p.url();
-        await p.keyboard.press('Alt+ArrowDown');
-        await assertEventually(async () => p.url() !== before, 'Alt+↓ did not open another Session', 5000);
+        // Alt+↑/↓ open the row above or below the active sidebar row at the press. Other journeys add rows meanwhile
+        // (addLateTeam, addCommandSession), so the expected row is read in the key's own task, before App's handler.
+        const pressSwitch = async (key, label) => {
+          await p.evaluate(() => {
+            window.__switchTo = undefined;
+            const read = e => {
+              if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+              window.removeEventListener('keydown', read, true);
+              const rows = [...document.querySelectorAll('.side-scroll .row[data-thread]')], at = rows.findIndex(r => r.classList.contains('active'));
+              window.__switchTo = rows[at + (e.key === 'ArrowDown' ? 1 : -1)]?.dataset.thread ?? null;
+            };
+            window.addEventListener('keydown', read, true);
+          });
+          await p.keyboard.press(key);
+          const to = await p.evaluate(() => window.__switchTo);
+          assert(to, `${label}: the active Session has no sidebar row there`);
+          await assertEventually(async () => p.url().includes(`/t/${encodeURIComponent(to)}`), `${label} did not open ${to}, the next sidebar row at the press`, 5000);
+          return to;
+        };
+        const down = await pressSwitch('Alt+ArrowDown', 'Alt+↓');
         await regionIs('composer', 'the Session switch did not focus the composer');
-        await p.keyboard.press('Alt+ArrowUp');
-        await assertEventually(async () => p.url() === before, 'Alt+↑ did not return to the Session', 5000);
+        const up = await pressSwitch('Alt+ArrowUp', 'Alt+↑');
+        // The next steps read the long transcript: an arrival between the presses leaves another Session open.
+        if (p.url() !== before) await p.locator('.side-scroll .row[data-thread="pi:sess-big"] a.title').click({ timeout: 15_000 });
+        await p.waitForURL(before);
         await p.locator(transcript).waitFor({ timeout: 15_000 });
-        return { switched: true };
+        return { down, up };
       });
       // D20: ⌘0 focuses the Overview content (the marked page scroller), so Space and ↓ scroll it at once.
       const pageContentFocused = () => p.evaluate(() => document.activeElement?.matches('[data-page-root] [data-page-scroller]') ?? false);
@@ -2774,7 +2790,7 @@ export const journeys = [
         const gone = {};
         for (const [name, swap, text] of [
           ['session', h => h.replace(/\/t\/[^?]+/, '/t/pi%3Agone-session'), /Unknown Session on this Host/],
-          ['host', h => h.replace(/^#\/h\/[^/]+/, '#/h/gone-host'), /Unknown host gone-host/],
+          ['host', h => h.replace(/^#\/h\/[^/]+/, '#/h/gone-host'), /This Host is not listed: gone-host\./],
         ]) {
           await p.evaluate(hash => { location.hash = hash; }, swap(new URL(session).hash));
           await assertEventually(async () => text.test(await p.locator('[data-page-root]').innerText()), `a gone ${name} does not say "${text.source}"; it shows: ${(await p.locator('[data-page-root]').innerText()).trim().slice(0, 160)}`, 15_000);

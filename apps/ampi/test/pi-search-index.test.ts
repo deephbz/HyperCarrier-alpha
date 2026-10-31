@@ -6,18 +6,19 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { backfillSearch, fleetSearch, forgetSearch, forgetSearchBatch, indexProse, searchSchema } from "../src/pi/search.ts";
-import { openWorkingSet, readWorkingSet } from "../src/pi/working-set-db.ts";
+import { openWorkingSet, readWorkingSet, sameIndexFunction } from "../src/pi/working-set-db.ts";
+import { DERIVATION_VERSION, derivedVersion, sameIndex } from "../src/pi/working-set-types.ts";
 import type { PiReaderEntry } from "../src/pi/views/types.ts";
 
 const human = (id: string, text: string) => ({ id, kind: "human", blocks: [{ type: "text", text }] }) as unknown as PiReaderEntry;
 function store() {
-	const db = new DatabaseSync(":memory:");
+	const db = sameIndexFunction(new DatabaseSync(":memory:"));
 	db.exec("CREATE TABLE sessions (path TEXT PRIMARY KEY, data TEXT NOT NULL)");
 	searchSchema(db);
 	return db;
 }
 function session(db: DatabaseSync, path: string) {
-	db.prepare("INSERT OR REPLACE INTO sessions VALUES (?,?)").run(path, JSON.stringify({ session: { id: path, ref: `ref-${path}`, title: path }, version: "2:v", asOf: 1 }));
+	db.prepare("INSERT OR REPLACE INTO sessions VALUES (?,?)").run(path, JSON.stringify({ session: { id: path, ref: `ref-${path}`, title: path }, version: derivedVersion("v"), asOf: 1 }));
 }
 const fill = (db: DatabaseSync, paths: number, rows: number) => {
 	db.exec("BEGIN");
@@ -80,7 +81,7 @@ test("search index: opening a 100k-row cache written before prose_path does not 
 });
 
 test("search index: an old cache forgets correctly before, during and after the bounded Worker backfill, one-shot and batched", () => {
-	const db = new DatabaseSync(":memory:");
+	const db = sameIndexFunction(new DatabaseSync(":memory:"));
 	db.exec("CREATE TABLE sessions (path TEXT PRIMARY KEY, data TEXT NOT NULL); CREATE VIRTUAL TABLE prose USING fts5(path UNINDEXED, id UNINDEXED, text, cjk, tokenize='unicode61');");
 	const paths = ["a", "b", "c", "d", "kept"];
 	for (const path of paths) { session(db, path); for (let i = 0; i < 3; i++) db.prepare("INSERT INTO prose(path,id,text,cjk) VALUES (?,?,?,?)").run(path, `e${i}`, `legacy ${path}`, ""); }
@@ -144,4 +145,12 @@ test("search index: the hub's read-only connection never creates or backfills pr
 	writer.exec("BEGIN"); assert.equal(forgetSearchBatch(writer, "old", 8), 1); writer.exec("COMMIT");
 	assert.equal(prose(writer), 0);
 	writer.close();
+});
+
+test("SQL same_index agrees with sameIndex on current, older, prefix-sharing and malformed versions", () => {
+	const db = store();
+	const select = db.prepare("SELECT same_index(?) AS same");
+	const versions = [derivedVersion("src"), `${DERIVATION_VERSION}:src`, `${DERIVATION_VERSION - 1}/1/1:src`, `${DERIVATION_VERSION}0/1/1:src`, `${DERIVATION_VERSION}`, "", "fixture"];
+	for (const version of versions) assert.equal(Boolean(select.get(version)!.same), sameIndex(version), version);
+	assert.deepEqual(versions.map(sameIndex), [true, true, false, false, false, false, false]);
 });

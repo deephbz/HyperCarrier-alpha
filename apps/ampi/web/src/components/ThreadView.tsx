@@ -33,8 +33,9 @@ import { toCss } from "../display.ts";
 import { SessionTitle } from "./SessionTitle.tsx";
 import { PinStar } from "./Pinned.tsx";
 import { perfMarkPainted } from "../perf.ts";
-import { handleRegionScrollKey, isEditableTarget, useKeyAction } from "../keymap.ts";
+import { handleRegionScrollKey, isEditableTarget, isScrollKey, useKeyAction } from "../keymap.ts";
 import { useFocusIntent } from "../context.ts";
+import { touchAxis } from "../touch-axis.ts";
 
 // biome-ignore lint: live and inbox docs are loosely typed JSON
 type Any = any;
@@ -525,14 +526,20 @@ export function ThreadView({
 		setTip({ id: newest, marks });
 		if (away && tip.id && newest && !entries.some((e) => e.id === tip.id) && marks.some((m) => !tip.marks.includes(m))) setAway({ last: newest });
 	}
-	const toEnd = () => {
-		const el = scroller.current;
-		if (!el) return;
+	// The reader's own move ends the reveal request in flight and its settling (nav.ts revealStore.end).
+	const readerMoved = () => revealStore.end(threadId);
+	// The reader goes to the newest end, past a frozen window's bottom: G, "↓ N new", and their own send.
+	const goEnd = () => {
+		if (!scroller.current) return;
+		readerMoved();
 		pinned.current = true;
 		thaw();
 		keepPlace.follow();
-		el.focus({ preventScroll: true }); // the button goes away; the keys keep scrolling the transcript
 		setAway(undefined);
+	};
+	const toEnd = () => {
+		goEnd();
+		scroller.current?.focus({ preventScroll: true }); // the button goes away; the keys keep scrolling the transcript
 	};
 	const [title, setTitle] = useState(summary?.title ?? "");
 	useEffect(() => setTitle(summary?.title ?? ""), [summary?.title]);
@@ -795,6 +802,8 @@ export function ThreadView({
 	const waitingIndex = missing?.why === "indexing" ? view?.sourceVersion : undefined;
 	useEffect(() => {
 		const entry = want?.entry;
+		// An ended request leaves nothing missing.
+		if (!entry) setMissing(undefined);
 		if (!entry || !view) return;
 		if (missing?.why !== "indexing") setMissing(undefined);
 		setHistoryError(undefined);
@@ -926,7 +935,7 @@ export function ThreadView({
 	const parent = summary?.parentId;
 	const outline = useThreadOutline(host, threadId, reader ? view?.sourceVersion : undefined, missing?.entry);
 	const promptPlace = usePromptPlace(scroller, outline.outline, reader);
-	const closeFind = () => { find.close(); focusIntent("find.close"); };
+	const closeFind = () => { readerMoved(); find.close(); focusIntent("find.close"); };
 	// A reveal from elsewhere (a link, a prompt step, the rail) shows the full transcript.
 	// eslint-disable-next-line react-hooks/exhaustive-deps
 	useEffect(() => { if (want) find.endFilter(); }, [want?.seq]);
@@ -1042,7 +1051,16 @@ export function ThreadView({
 					</button>
 				</div>
 			)}
-			<div className={rail.layout ? "transcript-frame strip" : "transcript-frame"}>
+			<div
+				className={rail.layout ? "transcript-frame strip" : "transcript-frame"}
+				// A scroll the reader starts ends a pending reveal: a wheel or trackpad over the transcript or the rail, a touch
+				// drag, a scroll key, a drag on the native bar. Layout, arrivals and a lens toggle are not the reader's. Known gap:
+				// a text-selection drag that autoscrolls the transcript does not end it.
+				onWheelCapture={(event) => { if (event.deltaY && !event.ctrlKey && (scroller.current?.contains(event.target as Node) || (event.target as Element).closest(".companion-scrollbar"))) readerMoved(); }}
+				onTouchMoveCapture={(event) => { if (touchAxis() === "y" && scroller.current?.contains(event.target as Node)) readerMoved(); }}
+				onKeyDownCapture={(event) => { if (scroller.current?.contains(event.target as Node) && isScrollKey(event)) readerMoved(); }}
+				onPointerDownCapture={(event) => { if (event.target === scroller.current) readerMoved(); }}
+			>
 			{find.open && find.filter && <FindFiltered find={find} outline={outline.outline} />}
 			<div
 				className="scroll"
@@ -1067,7 +1085,6 @@ export function ThreadView({
 					if (event.key === "i" && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && focusIntent("insert")) event.preventDefault();
 				}}
 				ref={scroller}
-				onWheel={keepPlace.onWheel}
 				onScroll={(e) => {
 					const el = e.currentTarget;
 					keepPlace.onScroll();
@@ -1096,7 +1113,7 @@ export function ThreadView({
 									<div className="compaction">{reader ? "Newest messages below · intermediate entries may be omitted" : "The model's active context starts below"}</div>
 								</>
 							)}
-							{view.entries.length === 0 && !busy && <div className="empty">Send a message to start.</div>}
+							{view.entries.length === 0 && !busy && <div className="empty">{(view as { updating?: true }).updating ? "Updating this Session…" : "Send a message to start."}</div>}
 							{segments(shown, omitted.current, head.current).map((part, i, parts) => (
 								<Fragment key={part.key}>
 									{i > 0 && <div className="omitted">Some entries after this one were never shown here. ↓ new goes to the newest.</div>}
@@ -1141,7 +1158,7 @@ export function ThreadView({
 			{pi && PI_BANDS.map((Band, i) => <Band key={i} host={host} threadId={threadId} lens={lens} />)}
 			{/* A quote goes to a composer that can send it: an open thread, or a Pi Session with its control socket. */}
 			{view && !summary?.closed && (!pi || summary?.control) && <QuoteSelection key={`${host}/${threadId}`} onQuote={(text, note) => composer.current?.quote(text, note)} transcript={scroller} />}
-			{view && <Composer composerRef={composer} host={host} threadId={threadId} view={view} summary={summary} models={models} actions={{ openPanel: setPanel }} pi={pi} />}
+			{view && <Composer composerRef={composer} host={host} threadId={threadId} view={view} summary={summary} models={models} actions={{ openPanel: setPanel, follow: goEnd }} pi={pi} />}
 		</div>
 	);
 }

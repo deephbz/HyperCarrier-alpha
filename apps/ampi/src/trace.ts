@@ -102,23 +102,38 @@ export function traceDb(db: DatabaseSync, label: string): DatabaseSync {
 					complete(name, "sqlite", start, { db: label, op: "all", rows: rows.length });
 					return rows;
 				};
-				if (key === "iterate") return function* sqliteIterate(...params: never[]) {
+				if (key === "iterate") return function sqliteIterate(...params: never[]) {
+					// The cursor forwards next/return/throw to the native one, so an early exit (break, throw, a failed step)
+					// resets the statement exactly as a raw cursor does. An unreset statement pins its connection's read
+					// snapshot. A cursor abandoned without return() stays active until GC, traced or raw (working-set reopen).
 					// Consumers interleave work between rows, so only the SQLite steps count as this statement's time.
-					const iterator = stmt.iterate(...params);
+					const inner = stmt.iterate(...params);
 					const first = nowUs();
-					let rows = 0, busy = 0;
-					try {
-						for (;;) {
-							const start = nowUs();
-							const next = iterator.next();
-							busy += nowUs() - start;
-							if (next.done) break;
-							rows++;
-							yield next.value;
-						}
-					} finally {
+					let rows = 0, busy = 0, open = true;
+					const close = () => {
+						if (!open) return;
+						open = false;
 						push({ ph: "i", s: "t", name, cat: "sqlite", ts: first, args: { db: label, op: "iterate", rows, busyUs: busy } });
-					}
+					};
+					const end = () => {
+						try { return inner.return?.() ?? { done: true as const, value: undefined }; } finally { close(); }
+					};
+					// The native cursor's prototype chain ends in Iterator.prototype: toArray, map and the rest work unchanged.
+					const cursor: typeof inner = Object.assign(Object.create(Object.getPrototypeOf(Object.getPrototypeOf(inner))), {
+						next() {
+							const start = nowUs();
+							let next: ReturnType<typeof inner.next>;
+							try { next = inner.next(); } catch (error) {
+								try { end(); } catch { /* The step's own error explains the failure. */ }
+								throw error;
+							} finally { busy += nowUs() - start; }
+							if (next.done) close(); else rows++;
+							return next;
+						},
+						return: end,
+						throw(error?: unknown): never { end(); throw error; },
+					});
+					return cursor;
 				};
 				return value.bind(stmt);
 			},

@@ -54,6 +54,11 @@ for (const engine of Object.keys(ENGINES) as Engine[]) {
 			await page.hover(".model-hud-trigger");
 			const m = await assertInside(page, `${corner}: hover opens the card`);
 			const [left, top, right, bottom] = m.box as [number, number, number, number];
+			// The pointer crosses from the trigger into the card's near edge, then moves inside the card. The card stays
+			// open only over the anchor or the card, so a diagonal path can leave a short trigger through its side.
+			const at = (await page.locator(".model-hud-trigger").boundingBox())!;
+			const x = Math.min(Math.max(at.x + at.width / 2, left + 4), right - 4);
+			await page.mouse.move(x, bottom <= at.y + 1 ? bottom - 4 : top + 4, { steps: 4 });
 			await page.mouse.move((left + right) / 2, (top + bottom) / 2, { steps: 12 });
 			await frames(page);
 			assert.ok(await measure(page), `${corner}: the card stays open while the pointer moves into it`);

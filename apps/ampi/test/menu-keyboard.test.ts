@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Locator, Page } from "playwright";
 import { engineSkip } from "./engines.ts";
-import { ENGINES, open } from "./resize-edges-fixture.ts";
+import { ENGINES, open, sidesSettled } from "./resize-edges-fixture.ts";
 
 // An action menu takes the keyboard (Popover `menu`). Its portal follows the page's other controls, so without it Tab
 // left an open More for "Read an earlier page" in the transcript. Focus moves into the menu, Tab, Shift+Tab and the
@@ -37,6 +37,7 @@ for (const [engine, type, path] of ENGINES) {
 		const closePanel = page.getByTitle("Close panel", { exact: true });
 		if (await closePanel.isVisible()) await closePanel.click();
 		await page.setViewportSize({ width: 390, height: 720 });
+		await sidesSettled(page);
 		const hide = page.getByRole("button", { name: "Hide sidebar", exact: true });
 		if (await hide.isVisible()) await hide.click();
 		const more = page.getByLabel("More actions", { exact: true });

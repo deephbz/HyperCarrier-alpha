@@ -6,7 +6,7 @@
  */
 import type { Target } from "./focus.ts";
 import { native } from "./native.ts";
-import { parseRoute } from "./util.ts";
+import { canonicalRoute, parseRoute } from "./util.ts";
 
 /** `nav`: depth from the first AmPi entry; null when unknown (an entry written before this code). */
 /** `revealed`: the entry's linked entry (`?e=`) was revealed; a return to the entry keeps its place instead. */
@@ -107,7 +107,8 @@ export function noteFocus(target: Target) {
 /**
  * A request to reveal the route's linked entry (`?e=`). A followed link is an event and the route is a place: a link to
  * the route already shown still asks again, so `seq` counts requests. Every surface of the Session that shows the entry
- * (the transcript, the Rarebit panel) reveals each request once.
+ * (the transcript, the Rarebit panel) reveals each request once. A request serves the reader only until their next
+ * move in its Session (`end`).
  */
 export type RevealRequest = { entry: string; thread?: string; seq: number };
 let reveal: RevealRequest | undefined;
@@ -122,6 +123,16 @@ function requestReveal(to: string) {
 export const revealStore = {
 	subscribe(listener: () => void) { revealListeners.add(listener); return () => { revealListeners.delete(listener); }; },
 	get: () => reveal,
+	/**
+	 * The reader moved in `thread` (a scroll, G, a Find close, a send): the request there ends, also while its entry
+	 * still loads or settles, and a return to this history entry keeps the reader's place (D20).
+	 */
+	end(thread: string) {
+		if (reveal?.thread !== thread) return;
+		reveal = undefined;
+		noteEntry({ revealed: true }, state().id);
+		for (const listener of revealListeners) listener();
+	},
 };
 
 /**
@@ -129,8 +140,9 @@ export const revealStore = {
  * it is already the route; `reveal: false` keeps the current request (a panel change that keeps the linked entry).
  */
 export function navigate(to: string, hint?: "replace", { reveal: ask = true }: { reveal?: boolean } = {}): boolean {
+	to = canonicalRoute(to);
 	if (ask) requestReveal(to);
-	if (to === location.hash) return false;
+	if (to === canonicalRoute(location.hash)) return false;
 	flushEntry();
 	const was = entryState();
 	if (entryKind(location.hash, to, hint) === "push") {
@@ -161,13 +173,15 @@ export function arriveEntry(): Arrival {
 		current = { id: s.id, nav: s.nav ?? null };
 		if (unwritten.has(s.id)) timer ??= setTimeout(flushEntry, FLUSH_MS);
 		// Back, Forward and a reload return to the place the entry held (D20); only an entry never revealed reveals its link.
+		if (canonicalRoute(location.hash) !== location.hash) history.replaceState(s, "", canonicalRoute(location.hash));
 		requestReveal(entryState().place || entryState().revealed ? "" : location.hash);
 		return { kind: "traverse", focus: entryState().focus };
 	}
 	const boot = current.id === undefined;
 	const nav = boot ? (history.state === null ? 0 : null) : current.nav === null ? null : current.nav + 1;
 	current = { id: newId(), nav };
-	history.replaceState({ ...s, id: current.id, nav }, "");
+	// An older link-key link (a bookmark, a pasted URL) arrives in place as the Session's one route: no new entry.
+	history.replaceState({ ...s, id: current.id, nav }, "", canonicalRoute(location.hash));
 	// A boot or an external hash edit arrives without navigate: its linked entry is a request too.
 	requestReveal(location.hash);
 	return { kind: "new" };

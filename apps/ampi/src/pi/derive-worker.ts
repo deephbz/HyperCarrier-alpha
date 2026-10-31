@@ -192,7 +192,11 @@ function derive(source: Source, reader: any, db: ReturnType<typeof openWorkingSe
  };
 }
 
+/** Test fault `AMPI_FAULT=derive-delay:<ms>`: each derive starts that much later, like a slow backlog under load. */
+const DERIVE_DELAY = Number(/^derive-delay:(\d+)$/.exec(process.env.AMPI_FAULT ?? "")?.[1] ?? 0);
+
 export async function materialize(source: Source): Promise<Derived | null> {
+ if (DERIVE_DELAY) await new Promise((resolve) => setTimeout(resolve, DERIVE_DELAY));
  const started = performance.now(), reader = openPiSessionRange(source.file, { host: source.host, indexPath: indexFile(source) });
  const db = openWorkingSet(source.cacheDir);
  try {

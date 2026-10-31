@@ -137,11 +137,19 @@ export async function read(page: Page, side: Side) {
 	}, [side, EDGES[side].css, EDGES[side].key] as const);
 }
 
+/** Waits until the sides match the width: a phone width closes the sidebar drawer itself (App.tsx oneSide). */
+export async function sidesSettled(page: Page) {
+	await page.waitForFunction(() => getComputedStyle(document.documentElement).getPropertyValue("--side-overlay").trim() !== "1" || document.querySelector(".app")!.classList.contains("sidebar-hidden"));
+}
+
 export async function eventually(check: () => Promise<boolean>, what: string) {
 	for (let i = 0; i < 40; i++) { if (await check()) return; await new Promise((r) => setTimeout(r, 50)); }
 	assert.fail(what);
 }
 export const near = (actual: number, expected: number, what: string, tolerance = 1) => assert.ok(Math.abs(actual - expected) <= tolerance, `${what}: ${actual.toFixed(2)} vs ${expected.toFixed(2)}`);
+
+/** The demo agent's Session directory: a test may add Session files, and the hub reads them as new Sessions. */
+export const demoSessions = () => join(hub!.demo, "agent/sessions");
 
 /** Streams one reply into the lead Session's file; the hub's feeds re-render App and the transcript. */
 function stream(text: string) {

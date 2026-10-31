@@ -2,7 +2,7 @@ import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState 
 import { createPortal } from "react-dom";
 import { hostSetupPrompt } from "../../../src/shared/host-setup.ts";
 import { findHost, hub, type HostState } from "../client.ts";
-import { scaleOf } from "../display.ts";
+import { applyDisplay, scaleOf } from "../display.ts";
 import { MOD, go } from "../util.ts";
 import { COMPOSER_KEYS, freshPress } from "../composer-keys.ts";
 import { dispatchKeyAction, keyAvailable, KEYMAP, registerOverlay, type KeyBinding } from "../keymap.ts";
@@ -357,11 +357,7 @@ export function DisplayDialog({ onClose }: { onClose: () => void }) {
 	const save = (next: typeof values) => {
 		setValues(next);
 		localStorage.setItem("ampi.display", JSON.stringify(next));
-		document.documentElement.style.zoom = String(next.overall);
-		for (const region of ["sidebar", "transcript", "composer", "panel"] as const) {
-			const root = document.querySelector<HTMLElement>(`[data-region="${region}"]`);
-			if (root) root.style.zoom = String(next[region]);
-		}
+		applyDisplay(next);
 		window.dispatchEvent(new Event("ampi:display"));
 	};
 	return <Modal onClose={onClose}><h2>Display</h2>{(["overall", "sidebar", "transcript", "composer", "panel"] as const).map((key) => <label className="field" key={key}>{key[0]!.toUpperCase() + key.slice(1)} text size · {Math.round(values[key] * 100)}%<input aria-label={`${key} display size`} type="range" min="0.7" max="1.6" step="0.05" value={values[key]} onChange={(e) => save({ ...values, [key]: Number(e.target.value) })} /><button className="btn small" onClick={() => save({ ...values, [key]: 1 })}>Reset</button></label>)}<div className="actions"><button className="btn primary" onClick={onClose}>Close</button></div></Modal>;

@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { ALL_COVERS, historySpend, spendLabel, sumSpend, summarySpend } from "../src/shared/spend.ts";
-import { laneSpend } from "../web/src/views/cos/totals.ts";
+import { ALL_COVERS, historySpend, spendLabel, sumSpend, summarySpend, unreadSpend } from "../src/shared/spend.ts";
+import { activeSpend, laneSpend } from "../web/src/views/cos/totals.ts";
 import { money } from "../web/src/util.ts";
 
 const pi = (usd: number | null) => ({ costUsd: usd ?? 0, spend: historySpend(usd) });
@@ -40,4 +40,15 @@ test("spend label: the suffix words come from the one spend rule", () => {
 	const copies = [...files(join(root, "src")), ...files(join(root, "web/src"))]
 		.filter((path) => /tool model calls|\(excludes |exclude compaction/.test(readFileSync(path, "utf8")));
 	assert.deepEqual(copies, [], "only apps/trace-analytics/src/sources/spend.mjs spells the label words");
+});
+
+test("spend label: a total over updating Sessions is a lower bound that counts them", () => {
+	const updating = { costUsd: 0, spend: unreadSpend(), updating: true as const };
+	assert.equal(total([durable(0.75), updating, updating]), "≥ $0.75 · 2 updating", "the only gap is the unread Sessions");
+	assert.equal(total([pi(0.75), updating]), "≥ $0.75 (excludes compaction, tool model calls) · 1 updating");
+	assert.equal(total([pi(0.75), durable(0.25), updating]), "≥ $1.00 (some Sessions exclude compaction, tool model calls) · 1 updating");
+	assert.equal(total([updating]), "≥ $0 · 1 updating");
+	assert.equal(total([durable(null), updating]), "no price reported · 1 updating");
+	const day = (over: object) => ({ id: "pi:x", title: "", cwd: "", createdAt: 0, updatedAt: 2, kind: "thread", activity: "idle", queued: 0, costUsd: 0.75, spend: historySpend(0.75), ...over }) as never;
+	assert.deepEqual(activeSpend([day({}), day(updating), day({ updatedAt: 0 })], 1), { label: "≥ $0.75 (excludes compaction, tool model calls) · 1 updating", updating: 1 });
 });
