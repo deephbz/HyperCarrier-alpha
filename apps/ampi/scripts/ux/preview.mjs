@@ -11,6 +11,7 @@
 // one child per side in parallel (its own synthetic demo hub, the same DEMO_NOW seed, a frozen page clock) ->
 // full-viewport pixel diffs -> output/ampi-preview/<run>/index.html. The scenes are recipes.mjs; the steps setup.mjs.
 // The harness comes from this checkout; the app and the demo seed come from each side's commit.
+import '../stdio-sync.cjs';
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';

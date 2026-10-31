@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Page } from "playwright";
 import { engineSkip } from "./engines.ts";
-import { ENGINES, open } from "./resize-edges-fixture.ts";
+import { ENGINES, open, sidesSettled } from "./resize-edges-fixture.ts";
 
 // A hover card opens only on hover intent (hoverIntent, Popover.tsx). At 390 px, "Hide sidebar" slides the Session
 // title under the pointer that pressed it. The browser fires enter and over events there; the card stays closed until
@@ -24,7 +24,11 @@ for (const [engine, type, path] of ENGINES) for (const zoom of [1, 1.3]) {
 		const closePanel = page.getByTitle("Close panel", { exact: true });
 		if (await closePanel.isVisible()) await closePanel.click();
 		await page.setViewportSize({ width: 390, height: 720 });
+		// A phone width closes the drawer itself; open it again for its hide button.
+		await sidesSettled(page);
+		await page.getByRole("button", { name: "Show sidebar" }).click();
 		const hide = page.getByRole("button", { name: "Hide sidebar", exact: true });
+		await hide.waitFor({ state: "visible" });
 		const box = (await hide.boundingBox())!;
 		const x = box.x + box.width / 2, y = box.y + box.height / 2;
 		await page.mouse.click(x, y);

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+require("./stdio-sync.cjs");
 const fs = require("node:fs");
 const path = require("node:path");
 

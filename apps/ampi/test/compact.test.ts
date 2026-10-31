@@ -1,6 +1,6 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
-import { utimesSync } from "node:fs";
+import { utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { runDaemon } from "../src/node/daemon.ts";
@@ -354,14 +354,17 @@ test("HC trigger single-flight: responses above W during a slow HC summary start
 	const client = await TestClient.connect(daemon.socket);
 	let watch: Awaited<ReturnType<typeof watchCompactions>> | undefined;
 	try {
-		const { threadId } = await client.req("thread.create", { cwd: home, model: SIM, prompt: `Plan the orders migration\n/sim compact-slow 3000\n${GROW}` });
+		const release = join(home, "hc-release");
+		const { threadId } = await client.req("thread.create", { cwd: home, model: SIM, prompt: `Plan the orders migration\n/sim compact-hold ${release}\n${GROW}` });
 		// The summary method: the large outputs that grow the context would be over the keepset cap.
 		await client.req("thread.command", { threadId, name: "auto-compact", args: "method summary" });
 		watch = await watchCompactions(daemon, threadId);
-		// Turn 2 crosses the trigger and starts the slow summary; turns 3 to 6 each answer above W while it runs. They stay short,
+		// Turn 2 crosses the trigger and starts the held summary; turns 3 to 6 each answer above W while it runs. They stay short,
 		// so the summary still fits beside them when it installs.
 		await turns(client, threadId, 1, 2, GROW);
+		while (!(await watch.live())) await new Promise((r) => setTimeout(r, 20));
 		await turns(client, threadId, 3, 6, "/sim long 1");
+		writeFileSync(release, "");
 		const view = await client.until<any>(client.sub({ kind: "thread", threadId }), (v) => v.entries.some((e: any) => e.kind === "compaction"), 20_000);
 		assert.equal(await watch.settle(), 1, "at most one HC compaction in flight");
 		const { records } = await client.req("compact.records", { threadId });
@@ -384,9 +387,12 @@ test("HC trigger single-flight releases after a failed compaction task: the next
 	const client = await TestClient.connect(daemon.socket);
 	let watch: Awaited<ReturnType<typeof watchCompactions>> | undefined;
 	try {
-		const { threadId } = await client.req("thread.create", { cwd: home, model: SIM, prompt: "Plan the orders migration\n/sim compact-fail\n/sim compact-slow 500\n/sim long 4" });
+		const release = join(home, "hc-release");
+		const { threadId } = await client.req("thread.create", { cwd: home, model: SIM, prompt: `Plan the orders migration\n/sim compact-fail\n/sim compact-hold ${release}\n/sim long 4` });
 		watch = await watchCompactions(daemon, threadId);
 		await turns(client, threadId, 1, 3);
+		while (!(await watch.live())) await new Promise((r) => setTimeout(r, 20));
+		writeFileSync(release, "");
 		// The first compaction fails (both summarizers); the guard holds while it runs, then releases.
 		while ((await client.req("compact.records", { threadId })).records.length < 1) await new Promise((r) => setTimeout(r, 20));
 		while (await watch.live()) await new Promise((r) => setTimeout(r, 20));
@@ -413,14 +419,18 @@ test("HC trigger single-flight releases after stale placement; an owner's manual
 	const client = await TestClient.connect(daemon.socket);
 	let watch: Awaited<ReturnType<typeof watchCompactions>> | undefined;
 	try {
-		const { threadId } = await client.req("thread.create", { cwd: home, model: SIM, prompt: "Plan the orders migration\n/sim compact-slow 4000\n/sim long 4" });
+		const release = join(home, "hc-release");
+		const { threadId } = await client.req("thread.create", { cwd: home, model: SIM, prompt: `Plan the orders migration\n/sim compact-hold ${release}\n/sim long 4` });
 		watch = await watchCompactions(daemon, threadId);
-		// Turn 3 starts the slow HC summary. After turn 4, a manual compaction cuts later and is placed first, so the
-		// HC summary, whose cut now lies before the context start, settles stale.
+		// Turn 3 starts the held HC summary. After turn 4, a manual compaction cuts later and is placed first, so the
+		// HC summary, whose cut now lies before the context start, settles stale once the test releases it.
 		await turns(client, threadId, 1, 4);
+		while (!(await watch.live())) await new Promise((r) => setTimeout(r, 20));
 		await client.req("thread.compact", { threadId });
-		assert.equal(await watch.settle(), 2, "current behavior: a manual compaction does not wait for the HC one");
 		const history = async () => (await client.req("thread.history", { threadId, before: "1000000", limit: 500 })).entries;
+		while (!(await history()).some((e: any) => e.kind === "compaction" && e.reason === "manual")) await new Promise((r) => setTimeout(r, 20));
+		writeFileSync(release, "");
+		assert.equal(await watch.settle(), 2, "current behavior: a manual compaction does not wait for the HC one");
 		assert.deepEqual((await history()).filter((e: any) => e.kind === "compaction").map((e: any) => e.reason), ["manual"], "two compactions, one placed: the HC summary settled stale");
 		const before = (await client.req("compact.records", { threadId })).records;
 		assert.deepEqual(before.map((r: any) => r.reason).sort(), ["manual", "working_budget"]);

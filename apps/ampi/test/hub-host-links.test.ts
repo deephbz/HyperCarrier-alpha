@@ -56,6 +56,22 @@ test("hub host links: one Host ID carries a Pi source and a durable source; link
 	assert.deepEqual(b.gaps, []);
 });
 
+test("hub host links: a thread frame resolves only to the thread's own source, also when the Host ID has one source (failure: a lone durable source took a Pi thread, so an old client got the wrong source's not-found)", async (t) => {
+	const home = tempHome();
+	const hub = new Hub({ hosts: [{ id: "devbox", label: "devbox", kind: "local", home }] }, { token: TOKEN });
+	const port = await hub.listen(0);
+	const b = await Browser.open(port, undefined, `ampi_k_${port}=${TOKEN}`);
+	t.after(async () => { b.ws.terminate(); await hub.close(); });
+
+	assert.deepEqual(hub.route("devbox"), { key: "devbox#durable" }, "without a thread, one source serves the Host ID");
+	assert.deepEqual(hub.route("devbox", "t-1"), { key: "devbox#durable" });
+	assert.deepEqual(hub.route("devbox", "pi:sess-a"), { error: { code: "source_unavailable", message: "Host devbox has no pi source for thread pi:sess-a" } });
+	const piThread = b.sub("devbox", { kind: "thread", threadId: "pi:sess-a" });
+	await b.when(() => b.closing.get(piThread)?.t === "end", 5000, "Pi thread sub ended");
+	assert.equal(b.closing.get(piThread)!.reason, "Host devbox has no pi source for thread pi:sess-a");
+	await assert.rejects(b.req("devbox", "thread.get", { threadId: "pi:sess-a" }), (e: any) => e.code === "source_unavailable");
+});
+
 test("hub host links: removing one source of a shared Host ID keeps the other in hub.json and in the hub (failure: remove filtered hub.json by Host ID); the hosts frame names the hub.json for the setup prompt", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "ampi-links-")), file = join(dir, "hub.json");
 	const hosts = [{ id: "linuxbox", label: "linuxbox", kind: "pi-ssh", target: "linuxbox.invalid" }, { id: "linuxbox", label: "linuxbox", kind: "ssh", target: "linuxbox.invalid" }];
@@ -90,6 +106,8 @@ test("web host routing: findHost takes a link key or a single-source Host ID, an
 	assert.equal(findHost(hosts, "mac"), undefined, "a shared ID without a thread names no source");
 	assert.equal(findHost(hosts, "mac", "pi:s1")?.link, "mac#pi");
 	assert.equal(findHost(hosts, "mac", "t-1")?.link, "mac#durable");
+	assert.equal(findHost(hosts, "linuxbox", "pi:s1")?.link, "linuxbox#pi");
+	assert.equal(findHost(hosts, "linuxbox", "t-1"), undefined, "a thread resolves only to its own source");
 	assert.equal(hostLabel(hosts[0]!, hosts), "mac · Pi in Herdr");
 	assert.equal(hostLabel(hosts[2]!, hosts), "linuxbox");
 	assert.equal(hostLabelFor("gone#pi", hosts), "gone");

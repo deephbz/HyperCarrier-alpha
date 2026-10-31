@@ -4,7 +4,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import type { Page } from "playwright";
-import { ENGINES, open } from "./resize-edges-fixture.ts";
+import { ENGINES, open, sidesSettled } from "./resize-edges-fixture.ts";
 import { engineSkip } from "./engines.ts";
 
 // Owner incidents B1/B2: an overlay must neither scroll its ancestors nor grow the document. Every Popover member
@@ -46,6 +46,7 @@ for (const [engine, type, path] of ENGINES) for (const zoom of [0.8, 1, 1.3]) fo
     await page.setViewportSize({ width, height: width === 390 ? 720 : 650 });
     await page.emulateMedia({ colorScheme: theme });
     await page.evaluate(theme => { localStorage.setItem("ampi.theme", theme); document.documentElement.dataset.theme = theme; }, theme);
+    await sidesSettled(page);
     const hide = page.getByRole("button", { name: "Hide sidebar", exact: true });
     if (width === 390 && await hide.isVisible()) await hide.click();
     await page.locator("[data-user-mark]").first().waitFor({ state: "attached" });

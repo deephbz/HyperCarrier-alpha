@@ -5,6 +5,7 @@
 // Pi runs in RPC mode with a disposable HOME, the fixture's settings, and the repository's Pi Team Bright and Cache
 // Goblin extensions, the two the node also carries into the first request;
 // a local endpoint answers with a synthetic stream, so the run costs nothing and sends nothing out.
+import "./stdio-sync.cjs";
 import { once } from "node:events";
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";

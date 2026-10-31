@@ -1,4 +1,5 @@
 // Test-only native Team fixture. Simulator tools create the Team and deliveries; no real agent or provider runs.
+import '../stdio-sync.cjs';
 import assert from 'node:assert/strict';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';

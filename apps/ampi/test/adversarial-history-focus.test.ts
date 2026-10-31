@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { ENGINES, open } from "./resize-edges-fixture.ts";
+import { ENGINES, open, sidesSettled } from "./resize-edges-fixture.ts";
 import { engineSkip } from "./engines.ts";
 const proof = process.env.ADV_PROOF ?? "output/adversarial-history-focus";
 mkdirSync(proof, { recursive: true });
@@ -12,6 +12,7 @@ for (const [engine, type, path] of ENGINES) for (const zoom of [0.8, 1, 1.3]) fo
   const page = await open(t, engine, type, path(), { display: { overall: zoom }, route: "#/h/devbox/t/pi%3Asess-big" });
   if (await page.getByTitle("Close panel", { exact: true }).isVisible()) await page.getByTitle("Close panel", { exact: true }).click();
   await page.setViewportSize({ width, height: 720 });
+  await sidesSettled(page);
   const hide = page.getByRole("button", { name: "Hide sidebar", exact: true });
   if (await hide.isVisible()) await hide.click();
   const transcript = page.locator('[data-region="transcript"]');

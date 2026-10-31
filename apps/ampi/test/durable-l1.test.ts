@@ -17,7 +17,7 @@ import { Hub } from "../src/hub/hub.ts";
 import { Browser } from "./helpers.ts";
 import { ALL_COVERS, HISTORY_COVERS, historySpend, spendSuffix } from "../src/shared/spend.ts";
 import { control, fixture } from "./pi-fixtures.ts";
-import { href, parseRef, parseRoute } from "../web/src/util.ts";
+import { href, parseRef, parseRoute, threadRef } from "../web/src/util.ts";
 
 /** Normalize exact fixture identities only. Keep every field, array order, number, and unknown value. */
 function normalize(value: any, aliases: Map<string, string>): any {
@@ -209,7 +209,8 @@ async function ownerScenario(driver: L1Driver) {
 	const link = href.ref(hit.ref);
 	assert.ok(link, "the committed web helper accepts the actual search reference");
 	const route = parseRoute(link);
-	assert.equal(route.host, `devbox#${driver.backend === "pi" ? "pi" : "durable"}`);
+	assert.equal(route.host, "devbox", "a thread route names the Host by Host ID");
+	assert.equal(threadRef(route.host, route.thread!), hit.ref.replace(/#.*$/, ""), "the route maps back to the citation's source");
 	assert.equal(route.thread, threadId, "the committed web route names the actual source thread");
 	assert.equal(route.entry, hit.entry, "the route keeps the actual hit's entry");
 	driver.citationRoute = { ref: hit.ref, href: link, host: route.host!, threadId: route.thread!, entry: route.entry! };

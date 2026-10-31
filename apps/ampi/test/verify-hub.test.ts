@@ -8,7 +8,7 @@ import { after, test } from "node:test";
 
 // The script is untyped .mjs; a URL specifier keeps it out of the TypeScript project.
 const hub = new URL("../scripts/verify/hub.mjs", import.meta.url).href;
-const { refusingPath } = (await import(hub)) as { refusingPath(dir: string, path?: string): string };
+const { refusingPath, relocateImports } = (await import(hub)) as { refusingPath(dir: string, path?: string): string; relocateImports(source: string, sourceURL: URL): string };
 const dir = mkdtempSync(join(tmpdir(), "verify-hub-"));
 after(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -55,4 +55,24 @@ test("verify hub: PATH refuses every herdr and keeps every other tool", () => {
 	assert.match(herdr.stderr, /herdr on PATH is refused/);
 	assert.deepEqual(path.split(":").slice(0, 2), [join(dir, "bin"), decoy], "the shim comes first; no directory is dropped");
 	assert.match(execFileSync("git", ["--version"], { env: { ...process.env, PATH: path }, encoding: "utf8" }), /^git version/);
+});
+
+// 2026-10-31: the durable charter's copy of pi-demo.ts kept `import "./stdio-sync.cjs"` relative, and its hub exited
+// ERR_MODULE_NOT_FOUND before any step. Every relative specifier form must leave the copy absolute.
+// The export closure scan reads a literal dynamic import in any string as a real one, so the fixture builds it.
+const DYNAMIC = "import";
+const RELATIVE = /\b(from|import)\s*\(?\s*(["'])\.{1,2}\//;
+test("verify hub: a relocated module keeps side-effect, named and dynamic relative imports resolvable", () => {
+	const base = new URL("file:///repo/apps/ampi/scripts/pi-demo.ts");
+	const out = relocateImports(`import "./stdio-sync.cjs";\nimport { Hub } from '../src/hub/hub.ts';\nexport * from "./demo/index.ts";\nconst m = await ${DYNAMIC}("./web-inputs.mjs");\nimport { join } from "node:path";\n`, base);
+	assert.doesNotMatch(out, RELATIVE, out);
+	for (const href of ["scripts/stdio-sync.cjs", "src/hub/hub.ts", "scripts/demo/index.ts", "scripts/web-inputs.mjs"]) assert.ok(out.includes(JSON.stringify(`file:///repo/apps/ampi/${href}`)), `${href}: ${out}`);
+	assert.match(out, /import \{ join \} from "node:path";/, "a bare package specifier stays");
+});
+
+test("verify hub: the relocated pi-demo.ts that the durable charter runs has no relative specifier left", () => {
+	const sourceURL = new URL("../scripts/pi-demo.ts", import.meta.url);
+	const out = relocateImports(readFileSync(sourceURL, "utf8"), sourceURL);
+	assert.doesNotMatch(out, RELATIVE, out.match(new RegExp(`.*${RELATIVE.source}.*`))?.[0] ?? "");
+	assert.ok(out.includes(JSON.stringify(new URL("../scripts/stdio-sync.cjs", import.meta.url).href)));
 });

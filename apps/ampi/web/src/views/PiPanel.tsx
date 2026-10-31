@@ -29,7 +29,7 @@ export function PiPanel({ name, host, threadId, summary, entry, durable = false,
 					))}
 				</div>
 				<span style={{ flex: 1 }} />
-				<button className="btn ghost small" onClick={() => { panelClosed(name); setPanel(undefined); }} title="Close panel">
+				<button className="btn ghost small panel-close" onClick={() => { panelClosed(name); setPanel(undefined); }} title="Close panel" aria-label="Close panel">
 					✕
 				</button>
 			</div>

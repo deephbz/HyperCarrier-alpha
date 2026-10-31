@@ -86,6 +86,19 @@ export const ENGINES: [string, BrowserType, () => string | undefined][] = [
 	["webkit", webkit, () => webkit.executablePath()],
 ];
 
+/**
+ * A mobile WebKit document starts at a 980 px layout viewport and takes the phone's width only when its meta viewport
+ * applies; a slow machine can draw the transcript first. Until then the page is a desktop page, and App shows the
+ * desktop's saved sidebar. So each navigation of a phone page returns only once the page has the phone's width.
+ */
+function phoneWidth(page: Page) {
+	const settled = () => page.waitForFunction((width) => innerWidth === width, page.viewportSize()!.width);
+	for (const name of ["goto", "reload"] as const) {
+		const navigate = page[name].bind(page) as (...args: unknown[]) => Promise<unknown>;
+		(page as unknown as Record<string, unknown>)[name] = async (...args: unknown[]) => { const response = await navigate(...args); await settled(); return response; };
+	}
+}
+
 export async function open(t: TestContext, engine: string, type: BrowserType, path: string | undefined, { display, route = LEAD, context: options }: { display?: Record<string, number>; route?: string; context?: BrowserContextOptions } = {}): Promise<Page> {
 	// A fulfilled document loses its loopback address space; Chromium's Local Network Access check then blocks the hub socket.
 	const args = engine === "chromium" ? ["--disable-features=LocalNetworkAccessChecks"] : [];
@@ -95,6 +108,7 @@ export async function open(t: TestContext, engine: string, type: BrowserType, pa
 	t.after(() => context.close());
 	const page = await context.newPage();
 	page.setDefaultTimeout(20_000);
+	if (options?.isMobile) phoneWidth(page);
 	const errors: string[] = [];
 	page.on("pageerror", (e) => errors.push(e.message));
 	t.after(() => assert.deepEqual(errors, [], "no page error"));
@@ -137,11 +151,19 @@ export async function read(page: Page, side: Side) {
 	}, [side, EDGES[side].css, EDGES[side].key] as const);
 }
 
+/** Waits until the sides match the width: a phone width closes the sidebar drawer itself (App.tsx oneSide). */
+export async function sidesSettled(page: Page) {
+	await page.waitForFunction(() => getComputedStyle(document.documentElement).getPropertyValue("--side-overlay").trim() !== "1" || document.querySelector(".app")!.classList.contains("sidebar-hidden"));
+}
+
 export async function eventually(check: () => Promise<boolean>, what: string) {
 	for (let i = 0; i < 40; i++) { if (await check()) return; await new Promise((r) => setTimeout(r, 50)); }
 	assert.fail(what);
 }
 export const near = (actual: number, expected: number, what: string, tolerance = 1) => assert.ok(Math.abs(actual - expected) <= tolerance, `${what}: ${actual.toFixed(2)} vs ${expected.toFixed(2)}`);
+
+/** The demo agent's Session directory: a test may add Session files, and the hub reads them as new Sessions. */
+export const demoSessions = () => join(hub!.demo, "agent/sessions");
 
 /** Streams one reply into the lead Session's file; the hub's feeds re-render App and the transcript. */
 function stream(text: string) {

@@ -15,7 +15,7 @@ export function SessionTitle({ children, title, summary, host, parent }: { child
 	// A durable thread has a tab and no pane (node-design.md, "Tabs and placement").
 	const durable = summary !== undefined && !summary.id.startsWith("pi:");
 	const rows = [
-		["Title", title], ["Directory", summary?.cwd || "Unknown"], ["Cost", summary ? summary.spendLabel ?? money(summary.costUsd) : "Unknown"],
+		["Title", title], ["Directory", summary?.cwd || "Unknown"], ["Cost", summary?.updating ? "Updating" : summary ? summary.spendLabel ?? money(summary.costUsd) : "Unknown"],
 		["Workspace", location?.workspaceLabel || location?.workspace || "Unknown"],
 		["Tab", location?.tabLabel || location?.tab || "Unknown"], ["Pane", durable ? undefined : location?.pane || "Unknown"],
 		["Kind", summary?.kind || "Unknown"], ["Team", summary?.team?.teamId],

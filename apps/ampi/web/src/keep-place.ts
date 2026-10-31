@@ -1,5 +1,7 @@
 import { useCallback, useLayoutEffect, useRef, type RefObject } from "react";
 import { scaleOf, toCss } from "./display.ts";
+import { browserScrollWay, READER_SCROLL, type ReaderScroll } from "./keymap.ts";
+import { touchAxis } from "./touch-axis.ts";
 
 // DOM references belong only to the mounted reader; history stores entry IDs and offsets separately.
 // `fragment` names one rendered part of an entry (FRAGMENT), so a remounted fragment is found again.
@@ -76,6 +78,9 @@ export function restorePlace(el: HTMLElement, selector: string, attribute: strin
  * passes END_BAND, the last line or so of reading.
  */
 export const END_BAND = 60;
+
+/** A hand-off ends within two renders (the window change, then its tail space); a dev build reports one older than this. */
+const HAND_OFF_FRAMES = 2;
 export const atEnd = (el: HTMLElement, band = 2) => el.scrollHeight - el.scrollTop - el.clientHeight <= band;
 
 /**
@@ -122,6 +127,30 @@ function addedBelow(el: HTMLElement, records: MutationRecord[]) {
 	return height / scale;
 }
 
+/** Puts `input` on every reader scroll input `el` receives (useKeepPlace); returns the unbind. */
+function listen(el: HTMLElement, input: (el: HTMLElement, up: boolean | undefined, target: EventTarget | null) => void) {
+	const wheel = (event: WheelEvent) => { if (event.deltaY && !event.ctrlKey) input(el, event.deltaY < 0, event.target); };
+	const key = (event: KeyboardEvent) => { const way = browserScrollWay(event); if (way) input(el, way === "up", event.target); };
+	const shared = (event: Event) => input(el, (event as ReaderScroll).detail.up, el);
+	// Only a vertical drag is reader input; a sideways drag belongs to a drawer or a wide block (touch-axis.ts).
+	const touch = () => { if (touchAxis() === "y") input(el, undefined, null); };
+	// A press on the scroller itself lands on its bar or its padding. A press on the padding scrolls nothing, so it only
+	// takes a hand-off back; its way is unknown, so it never moves the pin.
+	const press = (event: PointerEvent) => { if (event.target === el) input(el, undefined, null); };
+	el.addEventListener("wheel", wheel, { passive: true });
+	el.addEventListener("keydown", key);
+	el.addEventListener(READER_SCROLL, shared);
+	el.addEventListener("touchmove", touch, { passive: true });
+	el.addEventListener("pointerdown", press);
+	return () => {
+		el.removeEventListener("wheel", wheel);
+		el.removeEventListener("keydown", key);
+		el.removeEventListener(READER_SCROLL, shared);
+		el.removeEventListener("touchmove", touch);
+		el.removeEventListener("pointerdown", press);
+	};
+}
+
 export function useKeepPlace(
 	scroller: RefObject<HTMLElement | null>,
 	selector: string,
@@ -132,10 +161,14 @@ export function useKeepPlace(
 	tail: () => boolean = () => true,
 ) {
 	const saved = useRef<ReadingPlace | undefined>(undefined);
+	/** Whether the view places the reader itself (a step, a toggle): the hook restores nothing until its `record`. */
+	const placing = useRef(false);
 	/** A place captured before a render that changes rows, with scrollTop then and the capture's options. */
 	const pending = useRef<{ place: ReadingPlace; top: number; options?: Options } | undefined>(undefined);
 	const size = useRef({ width: 0, height: 0 });
 	const top = useRef(0);
+	/** The scroller's display scale (scaleOf) at the record. */
+	const scale = useRef(1);
 	/** The least scrollHeight since the last record: a mutation, scroll, resize or render reads it. */
 	const low = useRef(0);
 	/** Reads mutations not yet delivered: a render's layout effects run before its MutationObserver callback. */
@@ -160,6 +193,7 @@ export function useKeepPlace(
 		saved.current = capturePlace(el, selector, attribute, pinned.current);
 		size.current = { width: el.clientWidth, height: el.clientHeight };
 		top.current = el.scrollTop;
+		scale.current = scaleOf(el);
 		pinTop.current = !pinned.current ? undefined : pinTop.current === undefined || el.scrollTop > pinTop.current || atEnd(el) ? el.scrollTop : pinTop.current;
 		// Mutations before this record are measured in it.
 		mutations.current?.takeRecords();
@@ -190,20 +224,64 @@ export function useKeepPlace(
 	// The one record of a place the view wrote itself (Back's restore, a reveal): it is the reader's place at once. Until
 	// that write's scroll event arrives, a resize (the prompt rail mounts) or a render restores the record, and the place
 	// from before the write would undo it.
-	const record = remember;
-	// The reader's wheel up leaves the end at its input, before its scroll lands. WebKit on macOS applies a wheel's scroll
-	// asynchronously: a render between the wheel and its scroll still sees scrollTop at the end and would follow. A wheel
-	// that a nested scroller takes, a pinch zoom, or a scroller already at its top moves nothing here.
-	const onWheel = useCallback((event: { deltaY: number; ctrlKey: boolean; target: EventTarget | null }) => {
+	const record = useCallback(() => { placing.current = false; remember(); }, [remember]);
+	/** The current hand-off's number. The reader's own scroll input takes the place back and moves it on (`holds`). */
+	const handOffs = useRef(0);
+	// The view takes the place over: it writes scrollTop once, in a later layout effect, and then calls `record`. Until
+	// then no hook restore writes, whatever order the layout effects run in. The view keeps the returned number with its
+	// pending write and writes only while it `holds` that number.
+	const handOff = useCallback(() => {
+		placing.current = true;
+		pending.current = undefined;
+		const seq = ++handOffs.current;
+		// Node tests import this file and have no `import.meta.env`; Vite sets DEV only in a dev build.
+		if (!(import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV) return seq;
+		// A hand-off that outlives its renders turns the hook off: no restore, no scroll record, no resize follow.
+		let frames = 0;
+		const check = () => {
+			if (!placing.current || handOffs.current !== seq) return;
+			if (++frames < HAND_OFF_FRAMES) { requestAnimationFrame(check); return; }
+			console.error(`useKeepPlace: a hand-off lasted ${HAND_OFF_FRAMES} frames without record(); the hook restores nothing until the view records`);
+		};
+		requestAnimationFrame(check);
+		return seq;
+	}, []);
+	/** Whether hand-off `seq` still owns the place: no reader input and no later hand-off came since. */
+	const holds = useCallback((seq: number) => handOffs.current === seq, []);
+	/** The first surviving anchor on screen now, without a restore. The view that measures it places it (`handOff`). */
+	const measure = useCallback((options?: Options) => {
 		const el = scroller.current;
-		if (!el || !pinned.current || event.deltaY >= 0 || event.ctrlKey || el.scrollTop <= 0) return;
-		for (let node = event.target instanceof Element ? event.target : null; node && node !== el; node = node.parentElement) {
-			if (node.scrollTop > 0 && /auto|scroll/.test(getComputedStyle(node).overflowY)) return;
+		return el ? capturePlace(el, selector, attribute, false, options).anchors[0] : undefined;
+	}, [scroller, selector, attribute]);
+	// The reader's own scroll input acts at the input, before its scroll lands. It takes back a place the view holds: the
+	// reader wins over a pending step or toggle. A scroll up also leaves the end: a render between the input and its
+	// scroll still sees scrollTop at the end and would follow, and that write cancels a smooth scroll. WebKit on macOS
+	// applies a wheel's scroll asynchronously, and a scroll key (k, ↑) animates over frames. `up` is undefined for a touch
+	// drag or a press on the scroller's own bar: their scroll event decides the pin, so an arrival in that frame follows.
+	// A writer that moves scrollTop at once (the companion bar) needs no input here: `following` reads the moved scrollTop.
+	// An input that a nested scroller takes, or a scroll past an edge the scroller is at, moves nothing here.
+	const readerInput = useCallback((el: HTMLElement, up: boolean | undefined, target: EventTarget | null) => {
+		if (up !== undefined && (up ? el.scrollTop <= 0 : atEnd(el, 0))) return;
+		for (let node = up === undefined || !(target instanceof Element) ? null : target; node && node !== el; node = node.parentElement) {
+			if ((up ? node.scrollTop > 0 : node.scrollTop + node.clientHeight < node.scrollHeight - 1) && /auto|scroll/.test(getComputedStyle(node).overflowY)) return;
 		}
+		if (placing.current) { placing.current = false; handOffs.current++; }
+		if (!up || !pinned.current) return;
 		pinned.current = false;
 		pinTop.current = undefined;
 		saved.current = capturePlace(el, selector, attribute, false);
-	}, [scroller, selector, attribute, pinned]);
+	}, [selector, attribute, pinned]);
+	// The hook listens on its scroller itself, so every scroller it keeps gets every input: a vertical wheel (a pinch zoom
+	// is ctrl+wheel), a key the browser scrolls, a shared scroll key wherever focus is (READER_SCROLL), a touch drag, a
+	// press on the scroller's own bar. A remounted scroller gets the listeners again.
+	const bound = useRef<{ el: HTMLElement; input: typeof readerInput; unbind: () => void } | undefined>(undefined);
+	useLayoutEffect(() => {
+		const el = scroller.current;
+		if (bound.current?.el === el && bound.current.input === readerInput) return;
+		bound.current?.unbind();
+		bound.current = el ? { el, input: readerInput, unbind: listen(el, readerInput) } : undefined;
+	});
+	useLayoutEffect(() => () => { bound.current?.unbind(); bound.current = undefined; }, []);
 	const capture = useCallback((options?: Options) => {
 		const el = scroller.current;
 		if (!el) return;
@@ -212,19 +290,41 @@ export function useKeepPlace(
 		pending.current = { place, top: el.scrollTop, options };
 		return place.anchors[0];
 	}, [scroller, selector, attribute, following, clamp]);
+	// Only the reader or a clamp moves scrollTop. A scrollTop moved since the record is the reader's own scroll, and its
+	// scroll event comes a frame later: a render or a resize before it reads the move first and takes it as the event
+	// would (`took`). A record taken first leaves the event no move to read. A display-size change (html zoom) moves
+	// scrollTop too: WebKit keeps the scroll offset in screen px. The resize that comes with it restores the place.
+	const moved = useCallback(() => {
+		const el = scroller.current;
+		return el ? Math.abs(el.scrollTop - top.current) >= 1 && Math.abs(scaleOf(el) - scale.current) < 0.001 && !clamp() : false;
+	}, [scroller, clamp]);
+	/**
+	 * The reader's own scroll keeps its place. A scroll up leaves the end (`following`); only a scroll down into the end
+	 * band follows again.
+	 */
+	const took = useCallback(() => {
+		const el = scroller.current;
+		if (!el) return;
+		if (following()) pinned.current = tail();
+		else if (el.scrollTop > top.current && atEnd(el, band) && tail()) pinned.current = true;
+		remember();
+	}, [scroller, following, pinned, band, tail, remember]);
 	const resized = useCallback(() => {
 		const el = scroller.current;
 		if (!el || (el.clientWidth === size.current.width && el.clientHeight === size.current.height)) return false;
+		if (moved()) { took(); return true; }
 		if (saved.current) restorePlace(el, selector, attribute, saved.current);
 		// One render can resize the scroller and shrink its content (a run ends: the Composer shrinks while the live reply
 		// gives way to its entry). The restore then cannot reach the place, and a clamped reader keeps the record.
 		if (clamp()) size.current = { width: el.clientWidth, height: el.clientHeight };
 		else remember();
 		return true;
-	}, [scroller, selector, attribute, remember, clamp]);
+	}, [scroller, selector, attribute, remember, clamp, moved, took]);
 	const onScroll = useCallback(() => {
 		const el = scroller.current;
-		if (!el) return;
+		// While the view places (at most two renders), a reader's scroll event is dropped: the view writes its place, and
+		// its record() reads the scroller as it is then.
+		if (!el || placing.current) return;
 		// The reader scrolled after a capture, before its render: the rows have not changed yet, so capture here again.
 		// The render restores where the reader is now, not where they were.
 		if (pending.current) {
@@ -236,11 +336,8 @@ export function useKeepPlace(
 		if (resized()) return;
 		// A clamp's scroll event is no scroll: the pin and the place stay until the content grows back.
 		if (clamp()) return;
-		// The reader's scroll up leaves the end (`following`); only their scroll down into the end band follows again.
-		if (following()) pinned.current = tail();
-		else if (el.scrollTop > top.current && atEnd(el, band) && tail()) pinned.current = true;
-		remember();
-	}, [scroller, selector, attribute, following, pinned, band, tail, resized, remember, clamp]);
+		took();
+	}, [scroller, selector, attribute, following, resized, clamp, took]);
 	// Scroll anchoring stays off from mount to unmount. React runs every layout cleanup of a commit before its effects:
 	// a cleanup that turned anchoring on would let the browser move scrollTop when the restore below reads layout.
 	useLayoutEffect(() => {
@@ -252,18 +349,19 @@ export function useKeepPlace(
 	}, [scroller]);
 	useLayoutEffect(() => {
 		const el = scroller.current;
-		if (!el) return;
+		if (!el || placing.current) return;
 		if (pending.current) {
 			// A scroll whose event has not arrived yet is the reader's too. A clamp lands at the bottom and is no scroll.
 			const shift = atEnd(el, 0) ? 0 : el.scrollTop - pending.current.top;
 			restorePlace(el, selector, attribute, pending.current.place, shift);
 			pending.current = undefined;
-		} else {
-			const follow = following();
+		} else if (!resized()) {
 			// A render that adds or drops rows above a reader away from the bottom (a paint window that slides as entries
 			// arrive) keeps the read entry at its screen height; so does a render that shrank the content below the
-			// reader and clamped scrollTop. Any other moved scrollTop is the reader's own scroll.
-			if (!resized() && !follow && saved.current && (Math.abs(el.scrollTop - top.current) < 1 || clamp())) restorePlace(el, selector, attribute, saved.current);
+			// reader and clamped scrollTop. Any other moved scrollTop is the reader's own scroll. In the middle of a smooth
+			// scroll, the render takes the scroll so far; each later scroll event takes the rest from that record (`took`).
+			if (moved()) took();
+			else if (!following() && saved.current) restorePlace(el, selector, attribute, saved.current);
 		}
 		// Until the content grows back, a clamped reader keeps the record, so a later render restores the place.
 		if (!clamp()) remember();
@@ -274,7 +372,7 @@ export function useKeepPlace(
 		// Content can also change in a render this hook does not see (one child only). A following reader follows it; a
 		// reader away keeps the place a clamp took.
 		const observer = new ResizeObserver(() => {
-			if (resized() || pending.current) return;
+			if (placing.current || resized() || pending.current) return;
 			if (!following()) {
 				if (saved.current && clamp()) { restorePlace(el, selector, attribute, saved.current); if (!clamp()) remember(); }
 				return;
@@ -296,5 +394,5 @@ export function useKeepPlace(
 			mutations.current = undefined;
 		};
 	}, [scroller, selector, attribute, resized, following, tail, remember, clamp]);
-	return { capture, onScroll, onWheel, following, follow, record };
+	return { capture, measure, handOff, holds, onScroll, following, follow, record };
 }

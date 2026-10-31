@@ -39,13 +39,21 @@ jobs:
       - run: npm run build:ampi
       - run: npm run build:trace-viewer
 
+  # AmPi.app renders in macOS WebKit, so the WebKit cases run on macOS. Only the
+  # files with engine cases run here; the verify job runs the rest. The
+  # selection, shards and pool match the webkit job of HyperCarrier's own CI
+  # (scripts/test/public-workflow-closure.test.mjs).
   webkit:
-    # AmPi.app renders in macOS WebKit, so its browser cases run on macOS.
     runs-on: macos-latest
-    # macos-latest has 3 cores; the default pool of 8 overloads it.
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1/4, 2/4, 3/4, 4/4]
     env:
       AMPI_TEST_ENGINES: webkit
-      AMPI_TEST_CONCURRENCY: 3
+      # macos-latest has 3 cores; a pool of 3 files overloaded it, and reader-place waits timed out.
+      AMPI_TEST_CONCURRENCY: 2
     steps:
       - uses: actions/checkout@v4
         with:
@@ -61,4 +69,4 @@ jobs:
       # Scripts stay off for dependencies; the pinned package checkouts build and stamp their dist here.
       - run: npm run prepare
       - run: npx playwright install webkit
-      - run: npm --workspace @hypercarrier/ampi test
+      - run: npm --workspace @hypercarrier/ampi test -- --engine-cases --shard=${{ matrix.shard }}

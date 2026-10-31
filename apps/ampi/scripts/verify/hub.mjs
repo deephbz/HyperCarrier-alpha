@@ -7,6 +7,7 @@
 //
 // A run directory holds the disposable HOME, AMPI_HOME, demo data, and hub log. Proof lives elsewhere
 // (proofDir) and survives stop. The access key stays in <run>/hub.key (mode 600); logs carry no key.
+import '../stdio-sync.cjs';
 import { spawn, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -213,6 +214,11 @@ export function tieToProcess(state, onSignal = () => {}) {
     process.exit(128 + constants.signals[signal]);
   });
 }
+
+// A copy of a module that runs from another directory resolves each relative specifier against the original file:
+// a `from` clause, a side-effect import and a dynamic import alike.
+export const relocateImports = (source, sourceURL) =>
+  source.replace(/\b(from|import)(\s*\(?\s*)(["'])(\.{1,2}\/[^"']+)\3/g, (_, word, gap, q, path) => `${word}${gap}${JSON.stringify(new URL(path, sourceURL).href)}`);
 
 /**
  * The hub must never reach the owner's Herdr: a `herdr` in `dir` that refuses every call comes first on `path`.

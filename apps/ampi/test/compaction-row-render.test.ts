@@ -57,7 +57,7 @@ test("compaction row: a keepset record names method, kept, dropped and planner c
 	assert.match(t, /t3 · bash · 8\.1k tokens · cut at 8k tokens · open in history/);
 	assert.match(t, /export const a = 1;/);
 	const links = [...html.matchAll(/href="([^"]*)"/g)].map((m) => m[1]!.replace(/&amp;/g, "&"));
-	assert.deepEqual(links, ["#/h/devbox%23durable/t/c1?e=21", "#/h/devbox%23durable/t/c1?e=25", "#/h/devbox%23durable/t/c1?e=17"]);
+	assert.deepEqual(links, ["#/h/devbox/t/c1?e=21", "#/h/devbox/t/c1?e=25", "#/h/devbox/t/c1?e=17"]);
 	assert.match(t, /… 2 more/);
 	const order = ["Goal: rename the parser.", "Tool outputs kept verbatim", "Conversation record", "Dropped tool outputs (3)"].map((s) => t.indexOf(s));
 	assert.ok(order.every((at, i) => at >= 0 && (i === 0 || at > order[i - 1]!)), `body order: ${order}`);

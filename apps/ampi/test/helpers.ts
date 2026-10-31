@@ -77,6 +77,20 @@ export function heldSummaries(contextWindow?: number) {
 	return { models, state };
 }
 
+/** A sim run that lasts until the test calls `release`, so a test orders events by its own steps instead of a run's duration. `text` is the message the node receives. */
+export function heldRun(home: string, name = "run") {
+	const path = join(home, `release-${name}`);
+	return { text: `/sim hold ${path}`, release: () => writeFileSync(path, "") };
+}
+
+/**
+ * Resolves when a `thread` topic shows `predicate` and no live run. Only the thread topic is a barrier for its run
+ * state: the `threads` summary is a display summary, and it can still say idle after the thread placed an entry.
+ */
+export function runEnded<T = any>(client: { until<V>(sid: number, predicate: (value: V) => boolean, timeoutMs?: number): Promise<V> }, topic: number, predicate: (view: T) => boolean = () => true, timeoutMs?: number): Promise<T> {
+	return client.until<T>(topic, (view) => predicate(view) && !(view as { live?: { run?: unknown } }).live?.run, timeoutMs);
+}
+
 /** A minimal ampi/1 client over the unix socket, for tests. */
 export class TestClient {
 	socket!: Socket;

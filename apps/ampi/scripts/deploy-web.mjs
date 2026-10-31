@@ -6,6 +6,7 @@
 // build, plus the build configuration, the lock file and the Node version. A new import changes an existing input, so
 // a lookup that recomputes each entry's key over the current files is exact.
 // The inputs come from web-inputs.mjs, which also stamps every build of web/vite.config.ts for the disposable hubs.
+import "./stdio-sync.cjs";
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";

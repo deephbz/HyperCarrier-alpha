@@ -59,8 +59,11 @@ test("hub mixed hosts: one Host ID carries a Pi source and a durable source; lin
 		const value = await b.until<any>(b.sub(link!, { kind: "thread", threadId: thread }), (v) => Array.isArray(v.entries) && v.entries.length > 0);
 		assert.equal(value.entries.some((e: any) => e.kind === "user"), true, `${row.ref} opened ${link}`);
 	}
-	assert.equal(decodeURIComponent(href.ref("devbox/pi:sess-a#a1")!), "#/h/devbox#pi/t/pi:sess-a?e=a1");
-	assert.equal(decodeURIComponent(href.ref(`devbox/pi-durable:${threadId}#7`)!), `#/h/devbox#durable/t/${threadId}?e=7`);
+	// An older route names the link key; it maps back to the same citations.
+	assert.equal(threadRef("devbox#durable", threadId), durable.threads[threadId].ref);
+	assert.equal(threadRef("devbox#pi", "pi:sess-a"), piList.threads["pi:sess-a"].ref);
+	assert.equal(decodeURIComponent(href.ref("devbox/pi:sess-a#a1")!), "#/h/devbox/t/pi:sess-a?e=a1");
+	assert.equal(decodeURIComponent(href.ref(`devbox/pi-durable:${threadId}#7`)!), `#/h/devbox/t/${threadId}?e=7`);
 
 	// One source per Host ID still resolves the bare ID (older links, single-source configs).
 	assert.equal(hub.route("devbox#pi").hasOwnProperty("key"), true);

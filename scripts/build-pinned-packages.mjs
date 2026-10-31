@@ -6,6 +6,9 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+// Alpha exports this file without scripts/lib/stdio-sync.mjs, so it carries that line inline.
+for (const stream of [process.stdout, process.stderr]) stream._handle?.setBlocking?.(true);
+
 const root = new URL("..", import.meta.url).pathname;
 const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
 let rows;

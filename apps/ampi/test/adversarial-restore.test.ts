@@ -8,7 +8,7 @@ import { IMAGE_LIMITS } from "@hypercarrier/pi-hc-control/control";
 import type { WebSocketRoute } from "playwright";
 // @ts-ignore plain ESM synthetic protocol projection.
 import { routeFixture } from "../scripts/ux/fixtures.mjs";
-import { ENGINES, open, eventually } from "./resize-edges-fixture.ts";
+import { ENGINES, open, eventually, sidesSettled } from "./resize-edges-fixture.ts";
 import { engineSkip } from "./engines.ts";
 const proof = process.env.ADV_PROOF ?? "output/adversarial-restore";
 mkdirSync(proof, { recursive: true });
@@ -32,6 +32,7 @@ for (const [engine, type, path] of ENGINES) for (const heldEnter of [false, true
   await page.getByTitle("Attach images (or paste or drop them)").waitFor();
   if (await page.getByTitle("Close panel", { exact: true }).isVisible()) await page.getByTitle("Close panel", { exact: true }).click();
   await page.setViewportSize({ width: 390, height: 720 });
+  await sidesSettled(page);
   const hide = page.getByRole("button", { name: "Hide sidebar", exact: true });
   if (await hide.isVisible()) await hide.click();
   const input = page.getByRole("textbox", { name: "Message the agent" });

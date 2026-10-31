@@ -313,6 +313,26 @@ test("working set: saved heads are readable before the derive Worker initializes
  await restarted.ready;
 });
 
+test("working set: a saved head of another derivation version is not served before its re-derive (wire-boundary.md, mixed-version index)", async (t) => {
+ const { source, store, own } = setup(t, [msg("e1", null, "stalehead prose")]);
+ const saved = (await store.refresh(source))!;
+ assert.deepEqual(store.search("stalehead").hits.map((h) => h.entry), ["e1"]);
+ store.close();
+ const db = new DatabaseSync(join(source.cacheDir, "working-set.sqlite"));
+ try { db.prepare("UPDATE sessions SET data=? WHERE path=?").run(JSON.stringify({ ...saved, version: `5:${saved.version.split(":").slice(1).join(":")}` }), source.path); }
+ finally { db.close(); }
+ const restarted = own(new WorkingSet(source.host, source.cacheDir));
+ await restarted.readable;
+ assert.equal(restarted.load(source.path), undefined);
+ assert.throws(() => restarted.page(source.path), /not indexed yet/);
+ const search = restarted.search("stalehead");
+ assert.deepEqual([search.hits, search.coverage?.indexed], [[], 0]);
+ const data = (await restarted.refresh(source))!;
+ assert.equal(restarted.load(source.path)?.version, data.version);
+ assert.deepEqual(restarted.page(source.path).entries.map((e) => e.id), ["e1"]);
+ assert.deepEqual(restarted.search("stalehead").hits.map((h) => h.entry), ["e1"]);
+});
+
 /** The DERIVATION_VERSION before the whole-preview tool-args bound: its rows kept every path after clipping. */
 const UNBOUNDED_ARGS_VERSION = 6;
 

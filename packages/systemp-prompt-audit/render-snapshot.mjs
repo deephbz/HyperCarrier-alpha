@@ -2,6 +2,9 @@
 
 import { writeSystemPromptReviewProjection } from "./system-prompt-review.mjs";
 
+// process.exit drops output a pipe has not taken yet (Node writes pipes asynchronously on POSIX); blocking writes keep it.
+for (const stream of [process.stdout, process.stderr]) stream._handle?.setBlocking?.(true);
+
 function usage() {
   return "Usage: node render-snapshot.mjs SNAPSHOT.json [REVIEW.md]";
 }

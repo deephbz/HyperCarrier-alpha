@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { encodeFrame, lineReader } from "../shared/framing.ts";
 import { type ClientFrame, type NodeFrame, type NodeInfo, PROTOCOL } from "../shared/protocol.ts";
 import { ampiHome, connectOrStart, socketPath } from "../node/daemon.ts";
-import { sameBuild } from "../shared/build.ts";
+import { StalePackageBuild, buildId, sameBuild } from "../shared/build.ts";
 
 export type HostConfig = {
 	id: string;
@@ -30,17 +30,26 @@ export type HostConfig = {
 export type LinkPhase = "transport" | "hello";
 
 /**
+ * Why a link failed. A build failure needs an update or `npm run prepare`, because the hub or the node runs the wrong
+ * build or protocol; a retry cannot fix it. A reachability failure (the Host, ssh, the node process) can end with a
+ * retry. A status without a class, as from an older hub, counts as reachability. The deploy smoke fails every build
+ * failure (scripts/verify/live-rows.mjs linkWatch).
+ */
+export type ErrorClass = "build" | "reachability";
+
+/**
  * A link's status. Every status but connected carries since when it holds, a hint that says what the link does or
  * what to do next, and the last failure, which stays through retries until a hello proves recovery. Connecting also
  * names its phase, and disconnected names its failure. So no view can show a bare "connecting" without its reason.
  */
 export type LinkStatus =
-	| { status: "connected"; connectedAt: number; since?: never; phase?: never; hint?: never; error?: never; retryAt?: never }
-	| { status: "connecting"; phase: LinkPhase; since: number; hint: string; error?: string; connectedAt?: never; retryAt?: never }
+	| { status: "connected"; connectedAt: number; since?: never; phase?: never; hint?: never; error?: never; errorClass?: never; retryAt?: never }
+	| { status: "connecting"; phase: LinkPhase; since: number; hint: string; error?: string; errorClass?: ErrorClass; connectedAt?: never; retryAt?: never }
 	| {
 			status: "disconnected";
 			since: number;
 			error: string;
+			errorClass?: ErrorClass;
 			hint: string;
 			/** When the next attempt starts; absent when the link stopped. */
 			retryAt?: number;
@@ -78,13 +87,25 @@ export type HostBase = {
 	 * copy carries a readError; its next commit reopens and checks again, and a clean check clears it.
 	 */
 	cacheFault?: string;
+	/**
+	 * A Pi Host's re-derive after a start: `total` Session copies had no head of this build's derivation (an upgrade
+	 * bumped it, or no head was saved), and `updated` of them have settled. Their rows list by identity only, marked
+	 * updating. Absent when none remains.
+	 */
+	upgrade?: { updated: number; total: number };
+	/**
+	 * Frames after the hello that threw in this hub since it started, and the last such error. The link stays up, so a
+	 * link that keeps throwing shows here.
+	 */
+	frameErrors?: number;
+	lastFrameError?: string;
 	/** The hub's route to this Host's source, `<id>#pi` or `<id>#durable`. Set by the hub; the web names a link by it. */
 	link?: string;
 };
 
 export type HostState = HostBase & LinkStatus;
 
-const STATUS_KEYS = ["status", "connectedAt", "since", "phase", "hint", "error", "retryAt"] as const;
+const STATUS_KEYS = ["status", "connectedAt", "since", "phase", "hint", "error", "errorClass", "retryAt"] as const;
 
 /** `state` with its status replaced by `next`: no field of the old status outlives it. */
 export function withStatus(state: HostState, next: LinkStatus): HostState {
@@ -95,7 +116,7 @@ export function withStatus(state: HostState, next: LinkStatus): HostState {
 
 /** A negotiating status that keeps the last failure, so a retry never hides why the link is not connected. */
 export function negotiating(state: HostState, phase: LinkPhase, hint: string, now = Date.now()): LinkStatus {
-	return { status: "connecting", phase, since: now, hint, ...(state.error ? { error: state.error } : {}) };
+	return { status: "connecting", phase, since: now, hint, ...(state.error ? { error: state.error, ...(state.errorClass ? { errorClass: state.errorClass } : {}) } : {}) };
 }
 
 /** The route key of one source on one Host. One Host ID can carry a Pi source and a durable source. */
@@ -119,6 +140,8 @@ export class HostLink extends EventEmitter {
 	static PING_MS = 10_000;
 	/** Opens a local node's socket, starting the node when nothing answers. Tests replace it to script a slow start. */
 	static connectNode: (home?: string) => Promise<Socket> = connectOrStart;
+	/** This hub's node build ID. It throws StalePackageBuild when a pinned package's dist is stale. Tests replace it. */
+	static localBuild: () => string = buildId;
 
 	readonly config: HostConfig;
 	state: HostState;
@@ -194,14 +217,14 @@ export class HostLink extends EventEmitter {
 		let ignored = "";
 		let heard = Date.now();
 		// The first failure this attempt diagnosed; the close it causes reports it instead of a generic reason.
-		let failure: { error: string; hint: string } | undefined;
+		let failure: { error: string; hint: string; errorClass: ErrorClass } | undefined;
 		const awaitHello = () => {
 			if (this.state.status === "connecting" && this.state.phase === "transport")
 				this.#set({}, negotiating(this.state, "hello", where.local ? "The node socket is open; waiting for the node's hello." : "ssh is open; waiting for the node's hello from the bridge."));
 		};
-		const fail = (error: string, hint: string) => {
+		const fail = (error: string, hint: string, errorClass: ErrorClass) => {
 			if (generation !== this.#generation || failure || attempt.ended) return;
-			failure = { error, hint };
+			failure = { error, hint, errorClass };
 			if (this.#pipe) this.#pipe.close();
 			else attempt.end(error, hint);
 		};
@@ -211,6 +234,7 @@ export class HostLink extends EventEmitter {
 				fail(
 					where.local ? `No node socket after ${seconds} s.` : `ssh sent nothing in ${seconds} s.`,
 					where.local ? `Run ampi doctor; the node log is ${where.log}.` : `Run \`${where.ssh}\` in a terminal; it must print the node's hello.`,
+					"reachability",
 				);
 			else if (bytes === 0)
 				fail(
@@ -218,11 +242,13 @@ export class HostLink extends EventEmitter {
 					where.local
 						? `The node may be stuck, or another program answers at ${where.socket}. Run ampi doctor; stopping the node lets the next attempt start a fresh one.`
 						: `The node on ${this.config.target ?? "the host"} may be stuck. Run \`ssh ${this.config.target ?? ""} ampi doctor\`.`,
+					"reachability",
 				);
 			else
 				fail(
 					`The node sent ${bytes} bytes but no valid hello in ${seconds} s${ignored ? `; it sent: ${ignored}` : ""}.`,
 					where.local ? UPDATE_HINT : `The host may run an older AmPi, or its shell startup prints text. ${UPDATE_HINT}`,
+					"build",
 				);
 		}, HostLink.NEGOTIATE_MS);
 		// After the hello, the ping keeps frames coming; silence means a stalled node or link, which may never close.
@@ -237,6 +263,7 @@ export class HostLink extends EventEmitter {
 			fail(
 				`No frame from the node for ${Math.round((now - heard) / 1000)} s, though the hub pings every ${Math.round(HostLink.PING_MS / 1000)} s.`,
 				"The node or its connection stalled. The hub reconnects; if this repeats, run ampi doctor on the host.",
+				"reachability",
 			);
 		}, HostLink.SILENT_TICK_MS);
 		watchdog.unref();
@@ -249,16 +276,19 @@ export class HostLink extends EventEmitter {
 					fail(
 						`The node on this host speaks ${String(frame.protocol)}; this hub speaks ${PROTOCOL}.`,
 						`Update AmPi on the host and stop its node${frame.node?.pid ? ` (pid ${frame.node.pid})` : ""}; the next connection starts the new build.`,
+						"build",
 					);
 					return;
 				}
 				if (typeof frame.node !== "object" || frame.node === null) {
-					fail("The node sent a hello this hub cannot read: it names no node.", UPDATE_HINT);
+					fail("The node sent a hello this hub cannot read: it names no node.", UPDATE_HINT, "build");
 					return;
 				}
+				// This hub's own build check can throw (StalePackageBuild), so it runs before the link counts the hello.
+				const buildMismatch = sameBuild(frame.node.build, HostLink.localBuild()) ? undefined : true;
 				helloSeen = true;
 				clearTimeout(deadline);
-				this.#set({ node: frame.node, attempts: 0, buildMismatch: sameBuild(frame.node.build) ? undefined : true }, { status: "connected", connectedAt: Date.now() });
+				this.#set({ node: frame.node, attempts: 0, buildMismatch }, { status: "connected", connectedAt: Date.now() });
 				this.emit("connected");
 				return;
 			}
@@ -285,10 +315,21 @@ export class HostLink extends EventEmitter {
 				try {
 					onFrame(frame);
 				} catch (error) {
-					if (!helloSeen) fail(`The node's hello broke this hub: ${(error as Error).message}.`, UPDATE_HINT);
+					// Any failure while handling the hello ends the attempt with its reason, also one thrown after helloSeen:
+					// a dropped one leaves the link negotiating while pings keep it from the deadline and the watchdog.
+					// A later frame that throws keeps the link up, and frameErrors counts it.
+					const message = (error as Error).message.replace(/\.$/, "");
+					if (helloSeen && frame.t !== "hello") {
+						console.error(`host ${this.config.id}: a ${String(frame.t)} frame threw:`, error);
+						this.#set({ frameErrors: (this.state.frameErrors ?? 0) + 1, lastFrameError: `${String(frame.t)}: ${message}` });
+						return;
+					}
+					if (error instanceof StalePackageBuild)
+						fail(`This hub cannot check the node's build: ${message}.`, "The hub's checkout has a pinned package built from another commit. Run npm run prepare there, then restart the hub.", "build");
+					else fail(`The node's hello broke this hub: ${message}.`, UPDATE_HINT, "build");
 				}
 			},
-			() => fail("The node sent a line longer than the frame limit.", UPDATE_HINT),
+			() => fail("The node sent a line longer than the frame limit.", UPDATE_HINT, "build"),
 		);
 		const onData = (chunk: Buffer) => {
 			if (generation !== this.#generation) return;
@@ -317,7 +358,7 @@ export class HostLink extends EventEmitter {
 				const wasConnected = this.state.status === "connected";
 				const delay = Math.min(30_000, 500 * 2 ** Math.min(this.state.attempts, 6));
 				const now = Date.now();
-				this.#set({}, { status: "disconnected", since: now, error: failure?.error ?? reason, hint: failure?.hint ?? hint, ...(this.#stopped ? {} : { retryAt: now + delay }) });
+				this.#set({}, { status: "disconnected", since: now, error: failure?.error ?? reason, errorClass: failure?.errorClass ?? "reachability", hint: failure?.hint ?? hint, ...(this.#stopped ? {} : { retryAt: now + delay }) });
 				if (wasConnected) this.emit("disconnected");
 				if (!this.#stopped) this.#timer = setTimeout(() => void this.#connect(), delay);
 			},

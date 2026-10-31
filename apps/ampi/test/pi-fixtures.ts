@@ -1,6 +1,7 @@
 // Fixtures for the Pi backend tests: a fake Herdr CLI, synthetic Pi Session files, and a fake control socket.
 import { type ChildProcess, spawn } from "node:child_process";
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { createServer, type Server } from "node:net";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,10 +10,19 @@ import { tempHome } from "./helpers.ts";
 
 export const AGENT = fileURLToPath(new URL("../src/pi/remote-agent.cjs", import.meta.url));
 
+/** A file that a running fake CLI or agent reads while a test writes it goes through fixture-files.cjs; a fake `require`s FIXTURE_FILES. */
+export const FIXTURE_FILES = fileURLToPath(new URL("./fixture-files.cjs", import.meta.url));
+export const { replaceFile, appendRecord, readRecords } = createRequire(import.meta.url)(FIXTURE_FILES) as {
+	replaceFile(file: string, text: string): void;
+	appendRecord(file: string, record: unknown): void;
+	readRecords(file: string): any[];
+};
+
 // A fake `herdr` CLI: answers list/get from a state file and records every write call.
 export const FAKE_HERDR = `#!${process.execPath}
 const fs = require("fs");
 const path = require("path");
+const { replaceFile, appendRecord } = require(${JSON.stringify(FIXTURE_FILES)});
 let argv = process.argv.slice(2);
 if (argv[0] === "--version") {
   // FAKE_HERDR_SLOW_ONCE names a file: while it exists, the next probe removes it and answers after 4 s.
@@ -22,8 +32,8 @@ if (argv[0] === "--version") {
 }
 if (argv[0] === "--session") argv = argv.slice(2);
 const state = JSON.parse(fs.readFileSync(process.env.FAKE_HERDR_STATE, "utf8"));
-const save = () => fs.writeFileSync(process.env.FAKE_HERDR_STATE, JSON.stringify(state));
-const log = () => fs.appendFileSync(process.env.FAKE_HERDR_LOG, JSON.stringify(argv) + "\\n");
+const save = () => replaceFile(process.env.FAKE_HERDR_STATE, JSON.stringify(state));
+const log = () => appendRecord(process.env.FAKE_HERDR_LOG, argv);
 const reply = (result) => console.log(JSON.stringify({ result }));
 const refuse = (code, message) => { console.log(JSON.stringify({ error: { code, message } })); process.exit(1); };
 const opt = (name) => { const i = argv.indexOf(name); return i < 0 ? undefined : argv[i + 1]; };
@@ -156,11 +166,10 @@ export function fixture(): Fixture {
 			return JSON.parse(readFileSync(join(dir, "state.json"), "utf8"));
 		},
 		setState(next) {
-			writeFileSync(join(dir, "state.json"), JSON.stringify(next));
+			replaceFile(join(dir, "state.json"), JSON.stringify(next));
 		},
 		herdrCalls() {
-			const log = join(dir, "calls.jsonl");
-			return existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
+			return readRecords(join(dir, "calls.jsonl"));
 		},
 	};
 	// Herdr order is deliberately not sorted: w2 before w1, p2 before p1.
@@ -286,7 +295,8 @@ export async function control(f: Fixture, session: string, opts: { nonce?: strin
 		});
 	});
 	await new Promise<void>((resolve) => server.listen(socket, resolve));
-	writeFileSync(join(dir, `${sessionId}.json`), JSON.stringify({
+	// Like the real endpoint (pi-hc-control endpoint.mjs), the descriptor appears whole: the agent may scan meanwhile.
+	replaceFile(join(dir, `${sessionId}.json`), JSON.stringify({
 		schema: "hc-control/1", sessionId, sessionFile: session, pid: process.pid, nonce: opts.descriptorNonce ?? nonce, startedAt: Date.now(), version: "test",
 	}));
 	return { requests, submissions, close: () => server.close() };

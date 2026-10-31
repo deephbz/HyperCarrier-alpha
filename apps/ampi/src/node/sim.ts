@@ -2,6 +2,7 @@
 // faux core) and follows small directives in the user's text, so every AmPi surface (tools, diffs, Team, Rarebit,
 // compaction) can be exercised without network access or credentials. It is a test double, not a product model.
 
+import { existsSync } from "node:fs";
 import type { AssistantMessage, Message, ToolCall } from "@earendil-works/pi-ai";
 import { fauxAssistantMessage, fauxProvider, fauxText, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { PLAN_PROMPT_PREFIX } from "@hypercarrier/auto-compact-durable";
@@ -42,7 +43,14 @@ function findJson(texts: string, key: string): string | undefined {
 	return match?.[1];
 }
 
-/** Builds the plan the sim follows for one user (or delivered) message. */
+/**
+ * Builds the plan the sim follows for one user (or delivered) message.
+ *
+ * `/sim hold <path>` holds the run, and `/sim compact-hold <path>` holds the first HC summary, until the test creates
+ * the file. A duration is not a barrier: `/sim long N` only makes a run long or grows the context, and a test orders
+ * its steps by a hold and its release. The help answer leaves these out, because compaction tests size their context
+ * by that answer.
+ */
 export function planFor(input: string): Plan {
 	const steps: Step[] = [];
 	let think = false;
@@ -52,6 +60,9 @@ export function planFor(input: string): Plan {
 		const trimmed = line.trim();
 		let m: RegExpExecArray | null;
 		if ((m = /^\/sim bash (.+)$/.exec(trimmed))) steps.push({ tool: "bash", args: { command: m[1] } });
+		// A run the test ends: a bash step waits until the test creates the file. Stop aborts it. The path pattern
+		// excludes the quote, so the command stays one quoted word.
+		else if ((m = /^\/sim hold ([^\s']+)$/.exec(trimmed))) steps.push({ tool: "bash", args: { command: `until [ -e '${m[1]}' ]; do sleep 0.05; done` } });
 		else if ((m = /^\/sim tool (\S+)\s*(.*)$/.exec(trimmed))) steps.push({ tool: m[1], args: parseJson(m[2] || "{}") });
 		else if (trimmed === "/sim think") think = true;
 		else if ((m = /^\/sim error\s*(.*)$/.exec(trimmed))) error = m[1] || "Simulated provider error";
@@ -247,20 +258,21 @@ export function simProvider(options: { tokensPerSecond?: number; contextWindow?:
 			},
 		],
 	});
-	let slowed = false;
+	let held = false;
 	const step = async (context: { messages: readonly Message[] }, options?: { signal?: AbortSignal }) => {
 		handle.appendResponses([step]);
-		// A slow HC summarizer: `/sim compact-slow <ms>` in the summarized range delays this provider's first
-		// working-state summary or keepset plan; later ones answer at once.
+		// An HC summarizer the test releases: `/sim compact-hold <path>` in the summarized range holds this provider's
+		// first working-state summary or keepset plan until the test creates the file; later ones answer at once.
 		const first = context.messages.length === 1 && context.messages[0]!.role === "user" ? text(context.messages[0]!) : "";
 		const lastUser = [...context.messages].reverse().find((m) => m.role === "user");
 		const planning = lastUser !== undefined && text(lastUser).startsWith(PLAN_PROMPT_PREFIX);
 		const source = planning ? context.messages.map(text).join("\n") : first;
-		const slow = !slowed && (planning || first.startsWith("You are compacting")) ? /\/sim compact-slow (\d+)/.exec(source) : null;
-		if (slow) slowed = true;
-		if (slow) await new Promise<void>((resolve) => {
-			const timer = setTimeout(resolve, Number(slow[1]));
-			options?.signal?.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
+		const hold = !held && (planning || first.startsWith("You are compacting")) ? /\/sim compact-hold ([^\s']+)/.exec(source) : null;
+		if (hold) held = true;
+		if (hold) await new Promise<void>((resolve) => {
+			const timer = setInterval(() => { if (existsSync(hold[1]!)) done(); }, 20);
+			const done = () => { clearInterval(timer); resolve(); };
+			options?.signal?.addEventListener("abort", done, { once: true });
 		});
 		return respond(context.messages);
 	};

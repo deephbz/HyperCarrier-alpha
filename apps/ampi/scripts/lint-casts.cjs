@@ -2,6 +2,7 @@
 // Bans the escapes that hide a wire value's type (docs/wire-boundary.md, rule 3): `as never`, `as unknown as`, and
 // `any`, in the files that produce hub → browser values. It reads the syntax tree, so comments and strings never match.
 // `npm run typecheck` runs it; `node scripts/lint-casts.cjs` runs it alone.
+require("./stdio-sync.cjs");
 const { readdirSync, readFileSync } = require("node:fs");
 const path = require("node:path");
 

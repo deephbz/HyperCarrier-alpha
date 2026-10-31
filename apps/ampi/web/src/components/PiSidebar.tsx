@@ -40,6 +40,12 @@ function SessionRows({ list, host, active, expandedLeaders, toggleLeader, parent
 	</>;
 }
 
+/** The Sessions a Host still re-derives after a start (HostBase.upgrade). */
+function upgradeNote({ updated, total }: { updated: number; total: number }): string {
+	const left = total - updated;
+	return `Updating ${left.toLocaleString()} ${left === 1 ? "Session" : "Sessions"} after upgrade`;
+}
+
 export function PiHostSection({ data, hosts, route, showArchived }: { data: HostThreads; hosts: HostState[]; route: { host?: string; thread?: string }; showArchived: boolean }) {
 	const { host } = data;
 	const pi = isPiHost(host);
@@ -95,6 +101,7 @@ export function PiHostSection({ data, hosts, route, showArchived }: { data: Host
 			{!fold.collapsed && host.indexError && <div className="host-note warn" data-index-error={host.id}>Index not saved: {host.indexError}</div>}
 			{!fold.collapsed && host.cacheFault && <div className="host-note warn" data-cache-fault={host.id}>Cache fault: {host.cacheFault}. Restart the hub if it lasts.</div>}
 			{!fold.collapsed && host.staleReads && <div className="host-note warn" data-stale-reads={host.id}>{staleReadsNote(host.staleReads)}</div>}
+			{!fold.collapsed && host.upgrade && <div className="host-note" role="status" data-upgrade={host.id}>{upgradeNote(host.upgrade)}</div>}
 			{!fold.collapsed && looking && <div className="host-note" role="status" data-listing>Looking for live Sessions…</div>}
 			{!fold.collapsed &&
 				groups.map((g) => (

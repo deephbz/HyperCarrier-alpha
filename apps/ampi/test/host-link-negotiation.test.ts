@@ -9,7 +9,7 @@ import { after, before, test } from "node:test";
 import { socketPath } from "../src/node/daemon.ts";
 import { HostLink, type HostState } from "../src/hub/hosts.ts";
 import { PROTOCOL } from "../src/shared/protocol.ts";
-import { buildId } from "../src/shared/build.ts";
+import { StalePackageBuild, buildId } from "../src/shared/build.ts";
 
 // A local HostLink against a fake node socket. The fake node always listens, so the link never starts a real node.
 // Each case sets what the fake node says when the link connects.
@@ -111,8 +111,49 @@ test("a node of another protocol fails at once and names its pid", async () => {
 	const { link, states } = start();
 	const down = await until(link, (s) => s.status === "disconnected");
 	assert.match(down.error ?? "", /speaks ampi\/0/);
+	assert.equal(down.errorClass, "build");
 	assert.match(down.hint ?? "", /pid 4242/);
 	assert.ok(!states.some((s) => s.status === "connected"), "a mismatched node never counts as connected");
+	link.stop();
+});
+
+// The live outage: a pin bump without `npm run prepare` made the hub's own build check throw on each durable hello.
+// The link stayed in the hello phase while pings flowed, and kept the ssh error from before the Host came back.
+test("a hello this hub cannot check fails with the check's error, which replaces the old one; a good hello clears it", async (t) => {
+	const localBuild = HostLink.localBuild;
+	t.after(() => { HostLink.localBuild = localBuild; });
+	answer = (socket) => socket.destroy();
+	const { link, states } = start();
+	const before = await until(link, (s) => s.status === "disconnected");
+	assert.match(before.error ?? "", /closed the connection before its hello/);
+	assert.equal(before.errorClass, "reachability");
+	HostLink.localBuild = () => {
+		throw new StalePackageBuild("packages/rarebit-durable/dist was built from ca720e6, but the checkout pins aaaf5dc. Run npm run prepare.");
+	};
+	answer = (socket) => socket.write(hello());
+	const stale = await until(link, (s) => s.status === "disconnected" && /aaaf5dc/.test(s.error));
+	assert.match(stale.error ?? "", /^This hub cannot check the node's build: packages\/rarebit-durable\/dist was built from ca720e6.*Run npm run prepare\.$/);
+	assert.match(stale.hint ?? "", /npm run prepare.*restart the hub/);
+	assert.equal(stale.errorClass, "build", "the deploy smoke fails a build failure whatever the link was before");
+	await until(link, (s) => s.attempts > stale.attempts, 5_000);
+	assert.ok(states.some((s) => s.status === "connecting" && s.errorClass === "build"), "a retry keeps the class with the error");
+	assert.ok(states.every((s) => !s.error === !s.errorClass), "every error has its class");
+	assert.ok(!states.some((s) => s.status === "connected"), "a hello the hub cannot check never counts as connected");
+	HostLink.localBuild = localBuild;
+	const up = await until(link, (s) => s.status === "connected", 8_000);
+	assert.equal(up.error, undefined, "a later hello clears the failure");
+	assert.equal(up.errorClass, undefined);
+	assertExplained(states);
+	link.stop();
+});
+
+test("a frame after the hello that throws in the hub keeps the link up and counts in frameErrors", async () => {
+	answer = (socket) => socket.write(hello() + `${JSON.stringify({ t: "event", n: 1 })}\n${JSON.stringify({ t: "event", n: 2 })}\n`);
+	const { link } = start();
+	link.on("frame", () => { throw new Error("a view broke."); });
+	const counted = await until(link, (s) => s.frameErrors === 2);
+	assert.equal(counted.status, "connected");
+	assert.equal(counted.lastFrameError, "event: a view broke");
 	link.stop();
 });
 

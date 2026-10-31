@@ -12,6 +12,8 @@ export function proseRows(results: HostProse[]): { rows: ProseRow[]; notes: stri
 		if (error) notes.push(`${host.label} not searched: ${error}`);
 		if (!value) continue;
 		if (host.status && host.status !== "connected") notes.push(`${host.label}: Host away; searched its last copy`);
+		const updating = value.coverage?.updating;
+		if (updating) notes.push(`${host.label}: searching ${value.coverage!.indexed} of ${value.coverage!.indexed + updating} Sessions — updating after upgrade`);
 		const gaps = value.coverage && [
 			value.coverage.notIndexed && `${value.coverage.notIndexed} copies not indexed`,
 			value.coverage.stale && `${value.coverage.stale} behind source or unavailable`,

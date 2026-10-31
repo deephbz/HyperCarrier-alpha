@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Locator, Page } from "playwright";
 import { engineSkip } from "./engines.ts";
-import { ENGINES, open } from "./resize-edges-fixture.ts";
+import { ENGINES, open, sidesSettled } from "./resize-edges-fixture.ts";
 
 // The adversarial finding R7a: on a 390 px phone at display size 130%, the Find bar slid off the left edge and its
 // query box showed "Fi" while its chips kept their width; the Session header squeezed its title to nothing and pushed ⋯
@@ -72,6 +72,7 @@ for (const [engine, type, path] of ENGINES) for (const zoom of [0.8, 1, 1.3]) {
 		const failures: string[] = [];
 		for (const [label, width, height] of VIEWPORTS) {
 			await page.setViewportSize({ width, height });
+			await sidesSettled(page);
 			const hide = page.getByRole("button", { name: "Hide sidebar", exact: true });
 			if (width < 500 && await hide.isVisible()) await hide.click();
 			await settle(page);

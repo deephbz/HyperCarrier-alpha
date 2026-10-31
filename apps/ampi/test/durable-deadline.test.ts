@@ -23,11 +23,14 @@ async function setup(t: any) {
  const pending = new Set<{ ms: number; expire(): void }>();
  const deadline: Deadline = (ms, expire) => { const d = { ms, expire }; pending.add(d); return () => { pending.delete(d); }; };
  const expire = () => { for (const d of [...pending]) { pending.delete(d); assert.equal(d.ms, READER_CALL_DEADLINE_MS); d.expire(); } };
+ // The first run ends on the node before the hub connects: a row change after the baseline would queue one more open.
+ const { threadId } = await ops.get("thread.create")!({ requestId: "dl", cwd: tempHome(), model: { provider: "ampi-sim", modelId: "sim-1" }, prompt: "Hello", place: { workspace: "new", label: "main" } }, daemon.runtime) as { threadId: string };
+ const row = () => daemon.runtime.threads.value.threads[threadId];
+ await until(() => row()?.activity === "idle" && row()?.contextTokens != null, "the first run ended");
  const host = new DurableHost({ id: "devbox", label: "devbox", kind: "local", home }, { deadline });
  t.after(async () => { await host.stop(); await daemon.stop(); });
  host.start();
  await until(() => host.state.status === "connected", "connected");
- const { threadId } = await ops.get("thread.create")!({ requestId: "dl", cwd: tempHome(), model: { provider: "ampi-sim", modelId: "sim-1" }, prompt: "Hello", place: { workspace: "new", label: "main" } }, daemon.runtime) as { threadId: string };
  await until(() => Boolean(host.views.threadValue(threadId)?.entries.some((e: any) => e.kind === "assistant")), "first sync");
  const stats = () => readerStats(daemon.runtime);
  await until(() => stats().handles === 0, "unheld sync closed");

@@ -5,13 +5,13 @@ import { teamBadge } from "../../../src/shared/team-origin.ts";
 import { hub, useHosts } from "../client.ts";
 import { hostErrorMessage, sendOutcome } from "../composer-outcomes.ts";
 import { hostLabelFor } from "./host-label.ts";
-import { COMPOSER_BUSY_HINT, composerSubmission } from "../composer-keys.ts";
+import { composerHint, composerSubmission } from "../composer-keys.ts";
 import { type Custody, type Draft, type Outcome, type SendIntent, appendDraftQuote, appendDraftText, carriedDraft, dismissNotice, editDraft, giveBack, isEmpty, noticeKeyed, outcomeText, prependDraftText, restoreReturned, takeDraft } from "../composer-drafts.ts";
 import { openAccounts } from "./Accounts.tsx";
 import { ModelHudCard } from "./ModelHudCard.tsx";
 import { Popover, hoverIntent } from "./Popover.tsx";
 import { MOD, closedState, go, tokens } from "../util.ts";
-import { toCss } from "../display.ts";
+import { toCss, touchFields } from "../display.ts";
 import type { ModelChoice } from "./ThreadView.tsx";
 import { newId } from "../ids.ts";
 
@@ -22,7 +22,8 @@ export const THINKING = ["off", "minimal", "low", "medium", "high", "xhigh"];
 
 type Image = { data: string; mimeType: string; name: string };
 
-export type ComposerActions = { panel?: string; openPanel: (name: string) => void };
+/** `follow`: the owner's own send goes to the newest end of the transcript and ends a pending reveal. */
+export type ComposerActions = { panel?: string; openPanel: (name: string) => void; follow: () => void };
 
 /** `disabled`: listed but not runnable from here. Host commands have no `run`; they use typed ops. */
 type Command = { name: string; args?: string; help: string; disabled?: boolean; run?: (arg: string) => Promise<void> | void };
@@ -465,6 +466,15 @@ export function Composer({
 			: summary?.control ? "this Pi Session cannot take images from AmPi yet: update pi-hc-control and /reload in the Pi pane"
 			: "this Session has no live control socket, so AmPi cannot send images; paste them in the Pi pane");
 	const takesImages = typeof capability !== "string";
+	// --touch-fields is the one definition; read it again after mount and when the pointer media changes.
+	const [touch, setTouch] = useState(touchFields);
+	useLayoutEffect(() => {
+		const read = () => setTouch(touchFields());
+		read();
+		const coarse = matchMedia("(pointer: coarse)");
+		coarse.addEventListener("change", read);
+		return () => coarse.removeEventListener("change", read);
+	}, []);
 	// Attached images plus files still being read, so two quick drops cannot both pass the same limit.
 	const reading = useRef<{ base64: number }[]>([]);
 	const attach = async (files: Iterable<File>) => {
@@ -605,6 +615,7 @@ export function Composer({
 		const { images: sent } = item;
 		const { whenBusy } = item.intent;
 		const wasArchived = summary?.archived;
+		actionsRef.current.follow();
 		const ack = await hub.request(host, "thread.submit", {
 			threadId, content, whenBusy, requestId: item.key, ...(asText ? { asText } : {}),
 			...(sent.length ? { images: sent.map(({ data, mimeType }) => ({ data, mimeType })) } : {}),
@@ -913,15 +924,7 @@ export function Composer({
 					rows={1}
 					disabled={closed}
 					aria-label="Message the agent"
-					placeholder={
-						busy
-							? COMPOSER_BUSY_HINT
-							: pi
-								? summary?.control
-									? `Message the agent… (Enter starts a turn, Shift+Enter adds a line, / for commands${takesImages ? ", paste or drop images" : ""})`
-									: "Message the agent… (Enter types it into the Herdr pane, Shift+Enter adds a line)"
-								: "Message the agent… (Enter sends, Shift+Enter adds a line, / for commands, paste or drop images)"
-					}
+					placeholder={composerHint({ busy, pi, control: Boolean(summary?.control), images: takesImages, touch })}
 					onChange={(e) => {
 						setText(e.target.value);
 						setChoice(undefined);

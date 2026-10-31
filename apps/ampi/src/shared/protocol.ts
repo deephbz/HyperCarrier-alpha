@@ -137,6 +137,13 @@ export type ThreadSummary = {
 	cacheHit?: number;
 	/** The newest user/assistant prose, at most 160 characters, for the sidebar. */
 	preview?: string;
+	/**
+	 * The Host lists this Session by identity only while it re-derives it, after an upgrade changed the derivation or
+	 * when no head was saved (HostBase.upgrade). The title is the cwd basename and short id; the derived fields are
+	 * absent, `costUsd` is 0, and `spend` counts no class (unreadSpend), so a total over the row reads as partial.
+	 * Indexed reads refuse with `indexing` until the mark clears.
+	 */
+	updating?: true;
 	/** Pi backend: Host-qualified citation of the Session (`<host>/pi:<id>`). */
 	ref?: string;
 	/** Where the Session shows: a Herdr pane on a Pi Host, a tab (no pane) on a durable node. Layout, not identity. */
@@ -167,6 +174,12 @@ export type HerdrLayout = { workspaces: { id: string; label?: string; tabs: { id
 /** A Pi Session's thread id: `pi:` and the Session id. The threads map declares its keys with it. */
 export type PiThreadId = `pi:${string}`;
 export const isPiThreadId = (id: string): id is PiThreadId => id.startsWith("pi:");
+/**
+ * The Host source a thread id names, when one Host ID serves a Pi source and a durable source: a `pi:` id is Pi, every
+ * other id is durable. The node writes store ids as `t…` or `r…` (node/runtime.ts), so the two never collide. The hub's
+ * Hub.route and the GUI's findHost and routes read the source here, and nowhere else.
+ */
+export const threadSource = (id: string): "pi" | "durable" => (isPiThreadId(id) ? "pi" : "durable");
 /**
  * What a Pi Host's list does not know yet. `indexing`: the working set has not initialized, so the list holds saved
  * state only and an empty list proves no absence. `listing`: no agents list since the Host connected, so no row has
@@ -251,6 +264,8 @@ export type PiThreadView = {
 	agent: { cwd?: string; asOf?: number | null; readError?: string | null; model?: string };
 	/** `models`: a durable thread's pi.usage model buckets, keyed `provider/modelId`, which its Info panel lists. A Pi Session has none. */
 	usage: { costUsd?: number; models?: { [model: `${string}/${string}`]: UsageBucket } };
+	/** The Session has no head of this build's derivation yet (ThreadSummary.updating): no entries, no usage. */
+	updating?: true;
 };
 
 /** One pi.usage bucket: summed token counters and cost of the requests keyed by one model or tool. */
@@ -327,7 +342,8 @@ export type HistoryPage = { entries: PiEntry[]; more: boolean; version?: string 
  * - `stale_version`: the Session moved past that version. The read can succeed again at the newer version.
  * - `not_found`: the entry is not on the Session's current branch.
  * A `thread.history` miss while the Host still indexes the Session refuses with `indexing` instead: the entry may be in
- * bytes not indexed yet, so the read can succeed at a later version.
+ * bytes not indexed yet, so the read can succeed at a later version. A Session without a head of this build's
+ * derivation (an upgrade, ThreadSummary.updating) refuses every indexed read with `indexing` until its derive commits.
  */
 export const STALE_VERSION = "stale_version";
 export const NOT_FOUND = "not_found";

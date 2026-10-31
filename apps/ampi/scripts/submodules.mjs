@@ -12,6 +12,7 @@
 // submoduleGit, and the printed fix for a missing or drifted submodule is the guarded command:
 //
 //   node apps/ampi/scripts/submodules.mjs pin [--root <checkout>] <path>...
+import './stdio-sync.cjs';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';

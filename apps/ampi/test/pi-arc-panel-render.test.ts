@@ -53,7 +53,7 @@ test("arc panel parity: the Session panel and the Arc page render the same stale
 	const b = tier2(renderToStaticMarkup(createElement(panel as never, props(v))));
 	assert.match(a, /Covered up to .+ · 2 newer messages\. Build arc to cover them\./);
 	assert.match(a, /Needs you <span class="cos-meta">2<\/span>/);
-	assert.match(a, /href="#\/h\/devbox%23pi\/t\/pi%3Asess-a\?e=u2"/, "a citation links to its entry in the Session");
+	assert.match(a, /href="#\/h\/devbox\/t\/pi%3Asess-a\?e=u2"/, "a citation links to its entry in the Session");
 	assert.match(a, /closed → answered/);
 	assert.match(a, /Evidence: 4\/4 Rarebit messages cited[^<]*<\/p><\/section>$/, "the whole tree, through its evidence line");
 	assert.equal(b, a);
@@ -79,7 +79,7 @@ test("arc tree fold: Unassigned and answered asks stay outside the folded thread
 	assert.match(html, /<\/details><section class="cos-context-thread"><h3>Unassigned<\/h3>/, "Unassigned follows the fold, never inside it");
 	assert.match(html, /<details class="cos-context-answered"><summary>Answered asks <span class="cos-meta">1<\/span>/);
 	assert.match(html, /title="“Should I cap it at 64 MB\?”"/, "the verbatim quote is one hover away");
-	assert.match(html, /closed → answered <a href="#\/h\/devbox%23pi\/t\/pi%3Asess-a\?e=u2"/, "the stored answer cite links to the owner turn");
+	assert.match(html, /closed → answered <a href="#\/h\/devbox\/t\/pi%3Asess-a\?e=u2"/, "the stored answer cite links to the owner turn");
 });
 
 test("arc tree overtaken: overtaken asks leave Needs you for their own fold, keep their age and cite the owner turn (failure: overtaken asks were hidden or still read as open)", () => {
@@ -87,7 +87,7 @@ test("arc tree overtaken: overtaken asks leave Needs you for their own fold, kee
 	const html = tier2(renderToStaticMarkup(createElement(page as never, props(value({ context: { ...context, overtaken } })))));
 	assert.match(html, /Needs you <span class="cos-meta">2 · 2 overtaken<\/span>/, "the head counts overtaken asks next to Needs you");
 	assert.match(html, /<details class="cos-context-overtaken"><summary>Overtaken asks <span class="cos-meta">2 · /);
-	assert.match(html, /Tag the release\?<\/span> <span class="badge cos-badge">decision<\/span> <a [^>]*>\[#a1\]<\/a><span class="cos-meta"> · asked [^<]* ago<\/span><span class="cos-meta"> · overtaken by <a href="#\/h\/devbox%23pi\/t\/pi%3Asess-a\?e=u2"/);
+	assert.match(html, /Tag the release\?<\/span> <span class="badge cos-badge">decision<\/span> <a [^>]*>\[#a1\]<\/a><span class="cos-meta"> · asked [^<]* ago<\/span><span class="cos-meta"> · overtaken by <a href="#\/h\/devbox\/t\/pi%3Asess-a\?e=u2"/);
 	assert.match(html, /overtaken by a later owner turn/, "an owner turn outside the evidence has no link");
 	assert.doesNotMatch(html, /closed → answered <a href="[^"]*e=u2"/, "an overtaken ask never reads as answered");
 });
@@ -398,7 +398,7 @@ test("arc page: the toolbar names the Host by its label, never by the source lin
 	assert.doesNotMatch(html, />[^<]*devbox#pi/, "no visible text carries the link key");
 });
 
-test("arc citation: a durable citation opens the typed durable route, a Pi citation the typed Pi route, on both surfaces (failure: reader-3 linked a durable cite to the bare Host)", async () => {
+test("arc citation: a durable citation opens the durable source and a Pi citation the Pi source, on both surfaces, by the Session's one route (failure: reader-3 kept the prefixed thread on the bare Host)", async () => {
 	const { parseRoute } = await vite.ssrLoadModule("/src/util.ts");
 	const { findHost } = await vite.ssrLoadModule("/src/client.ts");
 	const durable = (entryId: string) => ({ session: "devbox/pi-durable:tree-a.7", entryId, chunkHash: "h0", at: 1_760_000_000_000 });
@@ -406,16 +406,18 @@ test("arc citation: a durable citation opens the typed durable route, a Pi citat
 	const v = value({ context: ctx });
 	const durableProps = { ...props(v), host: "devbox#durable", threadId: "tree-a.7" };
 	for (const html of [renderToStaticMarkup(createElement(page as never, durableProps)), renderToStaticMarkup(createElement(panel as never, durableProps))]) {
-		assert.match(html, /<a href="#\/h\/devbox%23durable\/t\/tree-a\.7\?e=502" title="devbox\/pi-durable:tree-a\.7 · entry 502">\[#502\]<\/a>/, "the durable cite names the durable source and the native thread");
+		assert.match(html, /<a href="#\/h\/devbox\/t\/tree-a\.7\?e=502" title="devbox\/pi-durable:tree-a\.7 · entry 502">\[#502\]<\/a>/, "the durable cite names the durable source and the native thread");
 		assert.doesNotMatch(html, /#\/h\/devbox\/t\/pi-durable/, "no cite keeps the prefixed thread on the bare Host");
 	}
-	// A Pi cite opens the same Host source and entry as before, by its typed key.
 	const hosts = [{ id: "devbox", link: "devbox#pi" }, { id: "devbox", link: "devbox#durable" }];
+	const cite = parseRoute("#/h/devbox/t/tree-a.7?e=502");
+	assert.deepEqual([findHost(hosts, cite.host, cite.thread)?.link, cite.thread, cite.entry], ["devbox#durable", "tree-a.7", "502"], "the durable cite opens the durable source");
+	// A Pi cite opens the same Host source and entry as before.
 	const pi = /href="([^"]*e=u1)"/.exec(renderToStaticMarkup(createElement(page as never, props(value({})))))![1]!;
-	assert.equal(pi, "#/h/devbox%23pi/t/pi%3Asess-a?e=u1");
+	assert.equal(pi, "#/h/devbox/t/pi%3Asess-a?e=u1");
 	const route = parseRoute(pi);
 	assert.deepEqual([findHost(hosts, route.host, route.thread)?.link, route.thread, route.entry], ["devbox#pi", "pi:sess-a", "u1"]);
-	// An old bare Pi URL (owner bookmarks, cites stored in Rarebit text) still opens the same Host, thread and entry.
-	const bare = parseRoute("#/h/devbox/t/pi%3Asess-a?e=u1");
-	assert.deepEqual([findHost(hosts, bare.host, bare.thread)?.link, bare.thread, bare.entry], ["devbox#pi", "pi:sess-a", "u1"]);
+	// An older link-key URL (owner bookmarks) still opens the same Host, thread and entry.
+	const typed = parseRoute("#/h/devbox%23pi/t/pi%3Asess-a?e=u1");
+	assert.deepEqual([findHost(hosts, typed.host, typed.thread)?.link, typed.thread, typed.entry], ["devbox#pi", "pi:sess-a", "u1"]);
 });

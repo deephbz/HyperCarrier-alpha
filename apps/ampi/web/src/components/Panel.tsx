@@ -63,7 +63,7 @@ export function InfoPanel({ host, threadId, summary }: { host: string; threadId:
 					{summary?.workingBudget ? ` (working budget; window ${tokens(summary.contextWindow)})` : ""}
 				</dd>
 				<dt>spend</dt>
-				<dd>{summary?.spendLabel ?? money(summary?.costUsd ?? 0)}</dd>
+				<dd>{summary?.updating ? "Updating" : summary?.spendLabel ?? money(summary?.costUsd ?? 0)}</dd>
 			</dl>
 			<PromptInputs host={host} cwd={agent.cwd ?? summary?.cwd} />
 			<h3>Compactions</h3>

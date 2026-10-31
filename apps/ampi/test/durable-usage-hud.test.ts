@@ -57,7 +57,11 @@ test("durable usage: the thread topic carries pi.usage by model with cache count
 	const row = views.summaryFields(threadId)!;
 	assert.equal(Math.floor(row.cacheHit!), Math.floor(100 * 15796 / (3 + 15796 + 441)), "CH% is the last reply's prompt share read from cache");
 	const hud = hudView({ id: threadId, title: "t", createdAt: 0, updatedAt: 0, kind: "thread", activity: "idle", queued: 0, ...row } as never);
-	assert.match(hud.lines[1]!.map((s) => s.text).join(""), / CH97%$/);
+	const lines = hud.lines.map((line) => line.map((s) => s.text).join(""));
+	assert.ok(lines.some((line) => / CH97%$/.test(line)), "the usage line shows CH%");
+	assert.ok(row.model?.includes("/"), "the summary carries a provider-prefixed model");
+	assert.equal(hud.modelId, row.model, "the card shows the summary's full model ID unchanged");
+	assert.ok(!("gaps" in hud), "the card lists no hub gaps");
 });
 
 const web = fileURLToPath(new URL("../web/", import.meta.url));

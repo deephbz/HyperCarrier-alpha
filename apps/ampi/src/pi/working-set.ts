@@ -11,8 +11,8 @@ import { openCopyReader } from "./copy-reader.ts";
 import { readWorkingSet } from "./working-set-db.ts";
 import { counter, tracing } from "../trace.ts";
 import { trackDerive } from "./derive-queue.ts";
-import { derivedVersion, WINDOW_BYTES, WINDOW_ENTRIES, ENTRY_PAGE_BYTES, type Source, type Derived, type WorkerJob } from "./working-set-types.ts";
-import { NOT_FOUND, STALE_VERSION, type PiEntry, type ThreadOutline } from "../shared/protocol.ts";
+import { derivedVersion, sameIndex, WINDOW_BYTES, WINDOW_ENTRIES, ENTRY_PAGE_BYTES, type Source, type Derived, type WorkerJob } from "./working-set-types.ts";
+import { INDEXING, NOT_FOUND, STALE_VERSION, type PiEntry, type ThreadOutline } from "../shared/protocol.ts";
 import { projectEntry, wireEntry } from "./projection.ts";
 import type { RarebitItem, RarebitValue } from "./views/rarebit.ts";
 
@@ -22,6 +22,8 @@ const pending = new Map<number, { job: WorkerJob | { op: "close"; cacheDir: stri
 const opened = new Map<string, number>();
 /** A versioned read's typed refusal; the wire carries `code` to the client (protocol.ts STALE_VERSION). */
 const refusal = (code: string, message: string) => Object.assign(new Error(message), { code });
+/** No head of this build's derivation yet (load); the read can succeed after the derive commits. */
+const notIndexed = () => refusal(INDEXING, "This Session is not indexed yet");
 const jobDir = (job: WorkerJob | { op: "close"; cacheDir: string }) => "cacheDir" in job ? job.cacheDir : job.source.cacheDir;
 function ensureWorker() {
  if (worker) return;
@@ -137,7 +139,12 @@ export class WorkingSet {
   this.db = readWorkingSet(this.cacheDir); this.#head = undefined;
   old.close();
  }
- load(path: string): Derived | undefined { if (!this.db) return undefined; const row = (this.#head ??= this.db.prepare('SELECT data FROM sessions WHERE path=?')).get(path); return row ? JSON.parse(String(row.data)) : undefined; }
+ #saved(path: string): Derived | undefined { if (!this.db) return undefined; const row = (this.#head ??= this.db.prepare('SELECT data FROM sessions WHERE path=?')).get(path); return row ? JSON.parse(String(row.data)) : undefined; }
+ /**
+  * The saved head of `path` that this build's derivation wrote. A head of another derivation version is not served:
+  * its rows wait for the re-derive (wire-boundary.md, Proof: mixed-version index). Every hub read goes through here.
+  */
+ load(path: string): Derived | undefined { const data = this.#saved(path); return data && sameIndex(data.version) ? data : undefined; }
  refresh(source: Source, onStart?: () => void, urgent = false): Promise<Derived | null> {
   return trackDerive(async () => {
    await this.ready;
@@ -166,7 +173,7 @@ export class WorkingSet {
  page(path: string, args: { before?: string; around?: string; limit?: number; version?: string } = {}) { return this.snapshot(() => this.#page(path, args)); }
  #page(path: string, { before, around, limit = WINDOW_ENTRIES, version }: { before?: string; around?: string; limit?: number; version?: string } = {}) {
   const data = this.load(path);
-  if (!data) throw new Error("This Session is not indexed yet");
+  if (!data) throw notIndexed();
   if (version && version !== data.version) throw refusal(STALE_VERSION, "History changed; refresh this Session");
   let end = Number.MAX_SAFE_INTEGER, target: number | undefined;
   if (before || around) {
@@ -199,7 +206,7 @@ export class WorkingSet {
  outline(path: string): ThreadOutline {
   return this.snapshot(() => {
    const data = this.load(path);
-   if (!data) throw new Error("This Session is not indexed yet");
+   if (!data) throw notIndexed();
    const cached = this.#outlines.get(path);
    if (cached?.version === data.version) return cached;
    const totalEntries = Number(this.db.prepare("SELECT count(*) AS n FROM entries WHERE path=? AND ui IS NOT NULL AND ui <> 'null'").get(path)!.n);
@@ -220,7 +227,7 @@ export class WorkingSet {
  }
  rarebits(path: string, revision: number, before?: string, fullText = false, around?: string): RarebitValue { return this.snapshot(() => this.#rarebits(path, revision, before, fullText, around)); }
  #rarebits(path: string, revision: number, before?: string, fullText = false, around?: string): RarebitValue {
-  const data = this.load(path); if (!data) throw new Error("This Session is not indexed yet");
+  const data = this.load(path); if (!data) throw notIndexed();
   if (data.invalidLines) throw new Error("The local Session copy could not be read. Reconnect the Host to receive new Session bytes.");
   let found: "item" | "entry" | "missing" | undefined;
   if (around) {
@@ -287,7 +294,7 @@ export class WorkingSet {
  entry(source: Source, id: string, offset = 0, version?: string): { text: string; next: number; more: boolean; version: string } {
   // The reader below writes the copy's index file in this cache, so a closed store must not reach it.
   if (this.#closed) throw new Error("Working set stopped");
-  const data = this.load(source.path); if (!data) throw new Error("Session unavailable");
+  const data = this.load(source.path); if (!data) throw notIndexed();
   if (version && version !== data.version) throw refusal(STALE_VERSION, "Entry changed; refresh this Session");
   const row = this.db.prepare('SELECT id FROM entries WHERE path=? AND id=?').get(source.path, id);
   if (!row) throw refusal(NOT_FOUND, "Entry is not on the current branch");
@@ -310,7 +317,8 @@ export class WorkingSet {
  expired(id: string): string | undefined { const row = this.db.prepare("SELECT ref FROM evicted WHERE id=?").get(id); return row ? String(row.ref) : undefined; }
  async forget(source: Source, watermark?: unknown): Promise<boolean> {
   if (this.#closed) throw new Error("Working set stopped");
-  const data = this.load(source.path);
+  // Eviction also removes a head that no build re-derives, so it reads the saved head of any version.
+  const data = this.#saved(source.path);
   if (!data) return false;
   try {
    const removed = await request<boolean>({ op: "forget", source, version: data.version, watermark }, (id) => this.#forgetIds.set(source.path, id));

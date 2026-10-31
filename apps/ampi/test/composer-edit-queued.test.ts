@@ -2,6 +2,8 @@ import "./bound.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { bounded, deferred, fixture } from "./composer-fixture.ts";
+import { heldRun } from "./helpers.ts";
+import { runEnded } from "./helpers.ts";
 
 const users = (v: any): string[] => (v?.entries ?? []).filter((e: any) => e.kind === "user").map((e: any) => e.text);
 
@@ -17,7 +19,8 @@ async function queueFollowUp(f: Awaited<ReturnType<typeof fixture>>, run: string
 test("Esc cancels a queued edit without a request or a stop; Enter saves it and the run places only the edited text", async (t) => {
 	const f = await fixture(t, 200);
 	const topic = f.wire.sub("devbox", { kind: "thread", threadId: f.threadId });
-	const row = await queueFollowUp(f, "//sim long 3", "Old follow-up");
+	const run = heldRun(f.home);
+	const row = await queueFollowUp(f, `/${run.text}`, "Old follow-up");
 	await row.getByRole("button", { name: "Edit" }).click();
 	const editor = f.page.getByRole("textbox", { name: "Edit queued message" });
 	await editor.fill("Discarded edit");
@@ -32,9 +35,10 @@ test("Esc cancels a queued edit without a request or a stop; Enter saves it and 
 	await editor.press("Enter");
 	await f.page.getByRole("status").filter({ hasText: "Queued message edited" }).waitFor();
 	await f.page.locator(".queue-item .text").getByText("New follow-up", { exact: true }).waitFor();
+	run.release();
 	const view = await f.wire.until<any>(topic, (v) => users(v).includes("New follow-up"), 10_000);
-	assert.deepEqual(users(view), ["/sim long 3", "New follow-up"]);
-	assert.deepEqual(f.sent.filter((frame) => frame.op === "thread.submit").map((frame) => frame.args.content), ["/sim long 3", "Old follow-up"], "the edit resent nothing");
+	assert.deepEqual(users(view), [run.text, "New follow-up"]);
+	assert.deepEqual(f.sent.filter((frame) => frame.op === "thread.submit").map((frame) => frame.args.content), [run.text, "Old follow-up"], "the edit resent nothing");
 	assert.equal(await f.input.inputValue(), "");
 	assert.deepEqual(f.errors, []);
 });
@@ -52,12 +56,14 @@ test("a queued message the run takes during the edit keeps the edit as an unsent
 		server.onMessage((message) => client.send(message));
 	});
 	const topic = f.wire.sub("devbox", { kind: "thread", threadId: f.threadId });
-	const row = await queueFollowUp(f, "//sim long 1", "Old follow-up");
+	const run = heldRun(f.home);
+	const row = await queueFollowUp(f, `/${run.text}`, "Old follow-up");
 	await row.getByRole("button", { name: "Edit" }).click();
 	const editor = f.page.getByRole("textbox", { name: "Edit queued message" });
 	await editor.fill("Edited follow-up");
 	await editor.press("Enter");
 	await bounded(editSeen.promise);
+	run.release();
 	// The run takes the original text while the edit is in flight.
 	await f.wire.until<any>(topic, (v) => users(v).includes("Old follow-up"), 10_000);
 	await f.page.getByText("Saving…").waitFor();
@@ -67,9 +73,9 @@ test("a queued message the run takes during the edit keeps the edit as an unsent
 	assert.equal(await f.input.inputValue(), "Edited follow-up", "the edited text is an unsent draft");
 	assert.equal(await f.page.locator(".queue-item").count(), 0, "no queued row remains");
 	await new Promise((resolve) => setTimeout(resolve, 300));
-	assert.deepEqual(f.sent.filter((frame) => frame.op === "thread.submit").map((frame) => frame.args.content), ["/sim long 1", "Old follow-up"], "nothing was resent");
+	assert.deepEqual(f.sent.filter((frame) => frame.op === "thread.submit").map((frame) => frame.args.content), [run.text, "Old follow-up"], "nothing was resent");
 	const now = await f.wire.until<any>(topic, () => true);
-	assert.deepEqual(users(now), ["/sim long 1", "Old follow-up"], "the run placed the original once and never the edit");
+	assert.deepEqual(users(now), [run.text, "Old follow-up"], "the run placed the original once and never the edit");
 	assert.deepEqual(f.errors, []);
 });
 
@@ -105,13 +111,15 @@ test("a lost edit answer, then the run takes the message: the retry under the sa
 		});
 	});
 	const topic = f.wire.sub("devbox", { kind: "thread", threadId: f.threadId });
-	const row = await queueFollowUp(f, "//sim long 1", "Old follow-up");
+	const run = heldRun(f.home);
+	const row = await queueFollowUp(f, `/${run.text}`, "Old follow-up");
 	await f.input.fill("My draft");
 	await row.getByRole("button", { name: "Edit" }).click();
 	const editor = f.page.getByRole("textbox", { name: "Edit queued message" });
 	await editor.fill("Edited follow-up");
 	await editor.press("Enter");
 	await bounded(retrySeen.promise);
+	run.release();
 	// The run places the edited text before the retry reaches the node.
 	await f.wire.until<any>(topic, (v) => users(v).includes("Edited follow-up"), 10_000);
 	release.resolve();
@@ -121,8 +129,8 @@ test("a lost edit answer, then the run takes the message: the retry under the sa
 	const saves = f.sent.filter((frame) => frame.op === "thread.editQueued");
 	assert.equal(saves.length, 2);
 	assert.equal(saves[1]!.args.editId, saves[0]!.args.editId, "the retry is the same edit");
-	assert.deepEqual(f.sent.filter((frame) => frame.op === "thread.submit").map((frame) => frame.args.content), ["/sim long 1", "Old follow-up"]);
-	assert.deepEqual(users(await f.wire.until<any>(topic, () => true)), ["/sim long 1", "Edited follow-up"]);
+	assert.deepEqual(f.sent.filter((frame) => frame.op === "thread.submit").map((frame) => frame.args.content), [run.text, "Old follow-up"]);
+	assert.deepEqual(users(await f.wire.until<any>(topic, () => true)), [run.text, "Edited follow-up"]);
 	assert.deepEqual(f.errors, []);
 });
 
@@ -139,7 +147,8 @@ test("while A saves, B's Edit waits; after Esc on A, a late taken for A appends 
 		server.onMessage((message) => client.send(message));
 	});
 	const topic = f.wire.sub("devbox", { kind: "thread", threadId: f.threadId });
-	const a = await queueFollowUp(f, "//sim long 2", "A old");
+	const run = heldRun(f.home);
+	const a = await queueFollowUp(f, `/${run.text}`, "A old");
 	await f.input.fill("B old");
 	await f.input.press("Alt+Enter");
 	const b = f.page.locator(".queue-item").filter({ hasText: "B old" });
@@ -154,6 +163,7 @@ test("while A saves, B's Edit waits; after Esc on A, a late taken for A appends 
 	await editor.press("Escape");
 	await b.getByRole("button", { name: "Edit" }).click();
 	await editor.fill("B edit in progress");
+	run.release();
 	// The run takes A while A's save is still on its way to the node.
 	await f.wire.until<any>(topic, (v) => users(v).includes("A old"), 10_000);
 	release.resolve();
@@ -161,7 +171,7 @@ test("while A saves, B's Edit waits; after Esc on A, a late taken for A appends 
 	assert.equal(await f.input.inputValue(), "My draft\n\nA edit", "A's text follows the draft; the draft stays");
 	assert.equal(await editor.inputValue(), "B edit in progress", "B's editor is intact");
 	assert.equal(await f.page.locator(".queue-edit").count(), 1);
-	assert.deepEqual(f.sent.filter((frame) => frame.op === "thread.submit").map((frame) => frame.args.content), ["/sim long 2", "A old", "B old"]);
+	assert.deepEqual(f.sent.filter((frame) => frame.op === "thread.submit").map((frame) => frame.args.content), [run.text, "A old", "B old"]);
 	assert.deepEqual(f.errors, []);
 });
 
@@ -170,7 +180,10 @@ test("a queue editor belongs to its thread: switching threads shows no editor an
 	await f.page.goto(`${f.origin}/?thread=${encodeURIComponent(f.threadId)}&unkeyed=1`);
 	await f.input.waitFor();
 	const row = await queueFollowUp(f, "//sim long 20", "Thread A follow-up");
+	await f.input.evaluate((el) => { (window as any).composerInput = el; });
 	const { threadId: other } = await f.wire.req("devbox", "thread.create", { requestId: "edit-other", cwd: f.home, model: { provider: "ampi-sim", modelId: "sim-1" } });
+	await f.page.getByRole("button", { name: `Thread ${other}`, exact: true }).waitFor();
+	assert.equal(await f.page.evaluate(() => (window as any).composerInput.isConnected), true, "a new thread in the list keeps the same composer mounted");
 	// Visit B once: its view stays warm, so the next switch keeps the same composer mounted, as in ThreadView.
 	await f.page.evaluate((id) => (window as any).switchThread(id), other);
 	await f.page.waitForFunction(() => document.querySelectorAll(".queue-item").length === 0);
@@ -236,8 +249,8 @@ test("an older user entry with the edited text is no evidence: both answers lost
 	const f = await fixture(t, 200, false, false, drop.transport);
 	const topic = f.wire.sub("devbox", { kind: "thread", threadId: f.threadId });
 	await f.enter("Same text");
-	const threads = f.wire.sub("devbox", { kind: "threads" });
-	await f.wire.until<any>(threads, (v) => v.threads[f.threadId]?.activity === "idle" && users(f.wire.values.get(topic)).includes("Same text"), 10_000);
+	// A run still going would take the next command as a steer, and the follow-up would not wait in the queue.
+	await runEnded(f.wire, topic, (v) => users(v).includes("Same text") && v.entries.some((e: any) => e.kind === "assistant"));
 	const row = await queueFollowUp(f, "//sim long 20", "Old follow-up");
 	await row.getByRole("button", { name: "Edit" }).click();
 	const editor = f.page.getByRole("textbox", { name: "Edit queued message" });
@@ -319,7 +332,8 @@ test("a late taken while the owner is on another thread: back on the edit's thre
 		});
 	});
 	const topic = f.wire.sub("devbox", { kind: "thread", threadId: f.threadId });
-	const row = await queueFollowUp(f, "//sim long 1", "Old follow-up");
+	const run = heldRun(f.home);
+	const row = await queueFollowUp(f, `/${run.text}`, "Old follow-up");
 	await f.input.fill("My draft");
 	await row.getByRole("button", { name: "Edit" }).click();
 	const editor = f.page.getByRole("textbox", { name: "Edit queued message" });
@@ -331,6 +345,7 @@ test("a late taken while the owner is on another thread: back on the edit's thre
 	// The default fixture keys the composer by thread, as App keys ThreadView, so this switch unmounts A's composer.
 	await f.page.evaluate((id) => (window as any).switchThread(id), other);
 	await f.page.waitForFunction(() => document.querySelectorAll(".queue-item").length === 0);
+	run.release();
 	await f.wire.until<any>(topic, (v) => users(v).includes("Old follow-up"), 10_000);
 	release.resolve();
 	await bounded(answered.promise);
@@ -343,7 +358,7 @@ test("a late taken while the owner is on another thread: back on the edit's thre
 	await note.getByRole("button", { name: "Dismiss" }).click();
 	await note.waitFor({ state: "detached" });
 	assert.equal(await f.input.inputValue(), "My draft\n\nA edit", "Dismiss keeps the text");
-	assert.deepEqual(f.sent.filter((frame) => frame.op === "thread.submit").map((frame) => frame.args.content), ["/sim long 1", "Old follow-up"], "nothing was resent");
+	assert.deepEqual(f.sent.filter((frame) => frame.op === "thread.submit").map((frame) => frame.args.content), [run.text, "Old follow-up"], "nothing was resent");
 	assert.deepEqual(f.errors, []);
 });
 

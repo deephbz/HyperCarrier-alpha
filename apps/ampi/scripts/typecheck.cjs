@@ -3,6 +3,7 @@
 // `--agree` also runs tsc and fails unless both compilers pass or fail alike
 // and report the same error set per project (tsc exits 2 where tsgo exits 1). `test:full` runs `--agree`;
 // `npm run typecheck:tsc` is the fallback when tsgo is unavailable or suspect. Both modes also run lint-casts.cjs.
+require("./stdio-sync.cjs");
 const { spawn } = require("node:child_process");
 const path = require("node:path");
 

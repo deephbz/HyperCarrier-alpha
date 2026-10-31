@@ -50,7 +50,8 @@ async function componentScript(): Promise<string> {
 					const [panelCalls, setPanelCalls] = React.useState(0);
 					if (!view || !connected) return null;
 					return React.createElement(React.Fragment, null,
-						...Object.keys(threads?.threads ?? {}).map(id => React.createElement('button', { key: id, onClick: () => switchThread(id) }, 'Thread ' + id)),
+						// The thread list is one child, so a new thread never moves the Composer to a new slot and remounts it.
+						React.createElement('nav', null, Object.keys(threads?.threads ?? {}).map(id => React.createElement('button', { key: id, onClick: () => switchThread(id) }, 'Thread ' + id))),
 						React.createElement('output', { 'data-panel': true }, panel ?? 'none'),
 						React.createElement('output', { 'data-panel-calls': true }, panelCalls),
 						React.createElement('button', { onClick: () => setPanel(undefined) }, 'Close panel'),
@@ -61,7 +62,7 @@ async function componentScript(): Promise<string> {
 						view,
 						// \`summary\` passes the thread's row, as ThreadView does; other tests keep the summaryless composer.
 						...(new URLSearchParams(location.search).has('summary') ? { summary: threads?.threads?.[threadId] } : {}),
-						models: [], actions: { panel, openPanel(name) { setPanelCalls(n => n + 1); setPanel(name); } }
+						models: [], actions: { panel, openPanel(name) { setPanelCalls(n => n + 1); setPanel(name); }, follow() {} }
 					}));
 				}
 				createRoot(document.getElementById('root')).render(React.createElement(Fixture));

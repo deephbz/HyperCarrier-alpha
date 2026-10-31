@@ -10,7 +10,9 @@ import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { applyImmutable } from "@earendil-works/chord/delta";
 import { Hub } from "../src/hub/hub.ts";
-import { PiHost } from "../src/pi/host.ts";
+import { PiHost, cacheErrorClass } from "../src/pi/host.ts";
+import { RootOwned } from "../src/hub/home.ts";
+import { StalePackageBuild } from "../src/shared/build.ts";
 import { repairReplicaTail } from "../src/pi/replica-file.ts";
 import { WorkingSet, workingSetUsage } from "../src/pi/working-set.ts";
 import { fixture as herdrFixture } from "./pi-fixtures.ts";
@@ -354,6 +356,17 @@ test("startup: a fresh cache lists nothing with indexing while init waits, and a
  assert.match(host.state.error ?? "", /^Host cache unavailable: /);
  assert.match(host.state.hint ?? "", /Restart the hub/, "the hint names the next step");
  assert.equal(host.state.cacheFailed, true);
+ assert.equal(host.state.errorClass, "reachability", "a lock that another process holds can clear");
+});
+
+// The deploy smoke fails a build failure whatever the link was before, so only a build cause may say build.
+test("startup: a cache failure is a build failure only for a stale pinned package build", () => {
+ const stale = "packages/rarebit-durable/dist was built from ca720e6, but the checkout pins aaaf5dc. Run npm run prepare.";
+ assert.equal(cacheErrorClass(new StalePackageBuild(stale)), "build");
+ assert.equal(cacheErrorClass(new Error(stale)), "build", "the derive Worker relays it as text");
+ assert.equal(cacheErrorClass(new RootOwned({ pid: 7, dir: "/x" }, "Pi Host mac's copies")), "reachability");
+ assert.equal(cacheErrorClass(Object.assign(new Error("EACCES: permission denied, mkdir '/x'"), { code: "EACCES" })), "reachability");
+ assert.equal(cacheErrorClass(new SyntaxError("Unexpected end of JSON input")), "reachability");
 });
 
 test("startup: updating clears at UPDATING_MAX_MS when the startup refresh does not settle, and the log says which", async (t) => {

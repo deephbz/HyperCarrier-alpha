@@ -1,4 +1,5 @@
 // T3place fixture: the node owns its disposable store. No external model transport.
+import '../stdio-sync.cjs';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';

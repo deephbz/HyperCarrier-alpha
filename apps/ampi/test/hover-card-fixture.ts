@@ -45,7 +45,7 @@ async function componentScript(): Promise<string> {
 					generation++;
 					const extra = rows ? h('div', null, Array.from({ length: rows }, (_, i) => h('p', { key: i }, 'Worker ' + i + ' ' + id))) : undefined;
 					const anchor = card === 'hud'
-						? h(ModelHudCard, { summary: rows ? { ...summary, title: Array.from({ length: rows }, (_, i) => 'line ' + i).join(' ') } : summary, label: 'HUD' })
+						? h(ModelHudCard, { summary: rows ? { ...summary, cwd: summary.cwd + Array.from({ length: rows }, (_, i) => '\\nline ' + i).join('') } : summary, label: 'HUD' })
 						: h(SessionTitle, { title: 'Placement', summary, host: 'devbox', parent: extra }, h('span', { className: 'session-title-text' }, 'Placement'));
 					root.render(h('div', { key, 'data-setup': String(generation), 'data-region': 'composer', className: 'composer-bar', style: { position: 'fixed', padding: '6px', ...corners[corner] } }, anchor));
 					return String(generation);

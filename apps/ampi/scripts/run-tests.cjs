@@ -22,6 +22,7 @@
 // earlier runs in ~/.cache/ampi-test/times.json. Each file's output prints in one block when the file ends;
 // AMPI_TEST_QUIET=1 prints a passing file as its one status line. Failures stay visible: there are no retries.
 // Timeouts are their own class in the totals, beside the load average, because load is their usual cause.
+require("./stdio-sync.cjs");
 const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -103,7 +104,7 @@ const expected = (file) => times[name(file)] ?? (manifest.costs?.[name(file)] ??
 const queue = [...files].sort((a, b) => expected(b) - expected(a));
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), "ampi-test-runner-"));
-const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null" };
+const env = { ...process.env };
 // Playwright's browser cache holds browser binaries only; a WebKit test needs it under the per-file HOME.
 env.PLAYWRIGHT_BROWSERS_PATH ??= path.join(os.homedir(), process.platform === "darwin" ? "Library/Caches/ms-playwright" : ".cache/ms-playwright");
 // The one thing a test takes from the owner's home: the installed Pi program, the anchor of test/node-prompt-parity.test.ts.

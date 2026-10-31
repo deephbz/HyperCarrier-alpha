@@ -4,6 +4,7 @@
 // against 32 panes, while the local agent restarted every ~30 s (stdout ENOBUFS, then exit 0).
 // Starts its own disposable hub on an OS port, so killing its agent cannot disturb other journeys.
 // Prints one JSON line; exit 0 on pass, 1 on fail.
+import "../stdio-sync.cjs";
 import { renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Hub } from "../../src/hub/hub.ts";

@@ -13,7 +13,7 @@ const settle = (page: Page) => page.evaluate(() => new Promise((r) => requestAni
 const region = (page: Page) => page.evaluate(() => document.activeElement?.closest<HTMLElement>("[data-region]")?.dataset.region ?? document.activeElement?.tagName);
 
 for (const [engine, type, path] of ENGINES) {
-	test(`focus loss ${engine}: Hide sidebar (inert) and Show sidebar (removal) return focus to the Composer`, { skip: engineSkip(engine) }, async (t) => {
+	test(`focus loss ${engine}: Hide sidebar (inert) and Show sidebar (removal) return focus to the transcript`, { skip: engineSkip(engine) }, async (t) => {
 		const page = await open(t, engine, type, path(), { route: "#/h/devbox/t/pi%3Asess-long-title" });
 		// No panel: a panel squeezes the sidebar away at 390 px once its data loads, so the sidebar would depend on timing.
 		await page.evaluate(() => localStorage.removeItem("ampi.panel"));
@@ -22,7 +22,8 @@ for (const [engine, type, path] of ENGINES) {
 		const composer = page.getByRole("textbox", { name: "Message the agent", exact: true });
 		const hide = page.getByRole("button", { name: "Hide sidebar", exact: true });
 		const show = page.getByRole("button", { name: "Show sidebar", exact: true });
-		await hide.click();
+		// At 390 px the sidebar is a drawer that starts closed (App.tsx oneSide); its hide still inerts the button. A
+		// phone's close returns to the transcript, never the composer, whose focus raises the keyboard (focus.ts).
 		const seen = [];
 		for (let round = 0; round < 6; round++) {
 			await composer.click();
@@ -36,6 +37,6 @@ for (const [engine, type, path] of ENGINES) {
 				.catch(() => {});
 			seen.push(await region(page));
 		}
-		assert.deepEqual(seen, Array(6).fill("composer"));
+		assert.deepEqual(seen, Array(6).fill("transcript"));
 	});
 }

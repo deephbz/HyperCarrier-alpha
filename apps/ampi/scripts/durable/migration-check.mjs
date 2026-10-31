@@ -6,6 +6,9 @@ import { createConnection } from 'node:net';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+// This script runs as a lone copy (ptb-indexed-migration-runbook.md), so it carries scripts/stdio-sync.cjs inline.
+for (const stream of [process.stdout, process.stderr]) stream._handle?.setBlocking?.(true);
+
 const [directory, mode, countsFile] = process.argv.slice(2);
 assert(directory && ['before', 'after'].includes(mode) && (mode !== 'before' || countsFile),
  'usage: migration-check.mjs BACKUP_DIRECTORY before APPROVED_COUNTS_JSON | BACKUP_DIRECTORY after');

@@ -2,7 +2,7 @@ import "./bound.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { runDaemon } from "../src/node/daemon.ts";
-import { TestClient, tempHome } from "./helpers.ts";
+import { heldRun, TestClient, tempHome } from "./helpers.ts";
 
 const SIM = { provider: "ampi-sim", modelId: "sim-1" };
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABpfZFQAAAAABJRU5ErkJggg==";
@@ -20,14 +20,15 @@ async function thread(tps: number) {
 		client.close();
 		await daemon.stop();
 	};
-	return { client, threadId, view, users, idle, stop };
+	return { home, client, threadId, view, users, idle, stop };
 }
 
 test("an edit replaces a queued steer and follow-up in place; the run places only the edited text", async () => {
 	const t = await thread(400);
 	try {
 		const { client, threadId, view } = t;
-		await client.req("thread.submit", { threadId, content: "/sim long 3" });
+		const run = heldRun(t.home);
+		await client.req("thread.submit", { threadId, content: run.text });
 		const steer = await client.req("thread.submit", { threadId, content: "steer old", whenBusy: "steer" });
 		const follow = await client.req("thread.submit", { threadId, content: "follow old", whenBusy: "followUp" });
 		const after = await client.req("thread.submit", { threadId, content: "follow after", whenBusy: "followUp" });
@@ -45,10 +46,11 @@ test("an edit replaces a queued steer and follow-up in place; the run places onl
 			],
 			"each item keeps its ID, mode and place",
 		);
+		run.release();
 
 		await t.idle();
 		const placed = t.users(await client.until<any>(view, (v) => t.users(v).includes("follow after")));
-		assert.deepEqual(placed, ["/sim long 3", "steer new", "follow new", "follow after"], "the run placed the edited texts once, in queue order, and never the old ones");
+		assert.deepEqual(placed, [run.text, "steer new", "follow new", "follow after"], "the run placed the edited texts once, in queue order, and never the old ones");
 	} finally {
 		await t.stop();
 	}
@@ -58,8 +60,10 @@ test("an item the run took before the edit answers taken; nothing is sent and th
 	const t = await thread(4000);
 	try {
 		const { client, threadId, view } = t;
-		await client.req("thread.submit", { threadId, content: "/sim long 2" });
+		const run = heldRun(t.home);
+		await client.req("thread.submit", { threadId, content: run.text });
 		const follow = await client.req("thread.submit", { threadId, content: "follow old", whenBusy: "followUp" });
+		run.release();
 		// The owner opened the editor on "follow old"; the run takes the item before the owner saves.
 		await client.until<any>(view, (v) => t.users(v).includes("follow old"), 10_000);
 		await t.idle();
@@ -67,7 +71,7 @@ test("an item the run took before the edit answers taken; nothing is sent and th
 		await new Promise((resolve) => setTimeout(resolve, 200));
 		const now = await t.idle();
 		assert.equal(now.threads[threadId].queued, 0, "the failed edit queued nothing");
-		assert.deepEqual(t.users(await client.until<any>(view, () => true)), ["/sim long 2", "follow old"], "the edited text was not sent");
+		assert.deepEqual(t.users(await client.until<any>(view, () => true)), [run.text, "follow old"], "the edited text was not sent");
 	} finally {
 		await t.stop();
 	}
@@ -100,7 +104,8 @@ test("a stale expected text answers changed; a retry is idempotent; images stay;
 	const t = await thread(300);
 	try {
 		const { client, threadId, view } = t;
-		await client.req("thread.submit", { threadId, content: "/sim long 2" });
+		const run = heldRun(t.home);
+		await client.req("thread.submit", { threadId, content: run.text });
 		const follow = await client.req("thread.submit", { threadId, content: "look at this", whenBusy: "followUp", images: [{ data: PNG, mimeType: "image/png" }] });
 		assert.deepEqual(await client.req("thread.editQueued", { threadId, submissionId: follow.submission, editId: "e5", expected: "look at this", text: "first edit" }), { edited: true });
 		assert.deepEqual(
@@ -115,6 +120,7 @@ test("a stale expected text answers changed; a retry is idempotent; images stay;
 		);
 		assert.deepEqual(await client.req("thread.editQueued", { threadId, submissionId: "999999", editId: "e8", expected: "x", text: "y" }), { edited: false, reason: "taken" });
 		await assert.rejects(client.req("thread.editQueued", { threadId, submissionId: follow.submission, editId: "e9", expected: "first edit", text: "  " }), /cannot be empty/);
+		run.release();
 
 		await t.idle();
 		const entry = (await client.until<any>(view, (v) => t.users(v).includes("first edit"))).entries.find((e: any) => e.kind === "user" && e.text === "first edit");
@@ -129,11 +135,13 @@ test("a retry gets its recorded answer after placement; after 51 later edits evi
 	const t = await thread(4000);
 	try {
 		const { client, threadId, view } = t;
-		await client.req("thread.submit", { threadId, content: "/sim long 2" });
+		const run = heldRun(t.home);
+		await client.req("thread.submit", { threadId, content: run.text });
 		const follow = await client.req("thread.submit", { threadId, content: "follow old", whenBusy: "followUp" });
 		const edit = { threadId, submissionId: follow.submission, editId: "lost-reply", expected: "follow old", text: "follow new" };
 		// The edit commits; its answer is lost on the way back. The run then places the item.
 		assert.deepEqual(await client.req("thread.editQueued", edit), { edited: true });
+		run.release();
 		await client.until<any>(view, (v) => t.users(v).includes("follow new"), 10_000);
 		await t.idle();
 		assert.deepEqual(await client.req("thread.editQueued", { ...edit, retry: true }), { edited: true }, "the retry learns that its edit landed");
@@ -142,8 +150,8 @@ test("a retry gets its recorded answer after placement; after 51 later edits evi
 		assert.deepEqual(await client.req("thread.editQueued", ghost), { edited: false, reason: "taken" }, "a first attempt finds the item gone");
 		assert.deepEqual(await client.req("thread.editQueued", { ...ghost, retry: true }), { edited: false, reason: "unknown" }, "a retry without a record and without its text placed stays unknown");
 
-		// 51 later edits of another queued item push the first record out of the newest 50.
-		await client.req("thread.submit", { threadId, content: "/sim long 40" });
+		// 51 later edits of another queued item push the first record out of the newest 50. The abort below ends this held run.
+		await client.req("thread.submit", { threadId, content: heldRun(t.home, "evict").text });
 		const other = await client.req("thread.submit", { threadId, content: "b 0", whenBusy: "followUp" });
 		for (let i = 0; i < 51; i++)
 			assert.deepEqual(await client.req("thread.editQueued", { threadId, submissionId: other.submission, editId: `b ${i}`, expected: `b ${i}`, text: `b ${i + 1}` }), { edited: true });
@@ -154,7 +162,7 @@ test("a retry gets its recorded answer after placement; after 51 later edits evi
 		assert.deepEqual(await client.req("thread.editQueued", { ...late, retry: false, editId: "b fresh" }), { edited: false, reason: "changed" }, "a first attempt that finds other text is changed");
 		await client.req("thread.abort", { threadId });
 		await t.idle();
-		assert.deepEqual(t.users(await client.until<any>(view, () => true)).slice(0, 2), ["/sim long 2", "follow new"]);
+		assert.deepEqual(t.users(await client.until<any>(view, () => true)).slice(0, 2), [run.text, "follow new"]);
 	} finally {
 		await t.stop();
 	}

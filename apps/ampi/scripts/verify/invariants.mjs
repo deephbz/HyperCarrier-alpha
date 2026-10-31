@@ -8,6 +8,7 @@
 // States come from scripts/ux/recipes.mjs and reach the page through routeFixture and setup.mjs, as in capture.mjs.
 // The demo hub serves only HTTP. `--web` swaps the served index and assets, so a seed's pre-fix build can be checked
 // with this checkout's runner. Feature doc: .pi/skills/verify-ampi/features/ui-invariants.md.
+import '../stdio-sync.cjs';
 import { mkdirSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { loadavg } from 'node:os';
 import { extname, join, resolve } from 'node:path';

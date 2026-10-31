@@ -1,4 +1,5 @@
 import type { HostState } from "../../../src/hub/hosts.ts";
+import { threadSource } from "../../../src/shared/protocol.ts";
 
 export function isPiHost(host: Pick<HostState, "kind"> | undefined): boolean {
 	return host?.kind === "pi-local" || host?.kind === "pi-ssh";
@@ -17,18 +18,16 @@ export function hostLabel(host: Labelled, hosts: readonly Labelled[]): string {
 }
 
 /**
- * The Host source a route names: its link key, or a Host ID that one source serves. When two sources serve the Host
- * ID, a thread ID names the source: `pi:` for Pi, any other for durable.
+ * The Host source a route names: its link key, or a Host ID. A thread ID names its source (threadSource), so a thread
+ * route resolves only to that source; without a thread, a Host ID resolves when one source serves it.
  */
 export function findHost<H extends { id: string; link: string }>(hosts: readonly H[], key: string | undefined, thread?: string): H | undefined {
 	if (key === undefined) return undefined;
 	const exact = hosts.find((h) => h.link === key);
 	if (exact) return exact;
 	const byId = hosts.filter((h) => h.id === key);
-	if (byId.length === 1) return byId[0];
-	if (thread === undefined) return undefined;
-	const source = thread.startsWith("pi:") ? "pi" : "durable";
-	return byId.find((h) => h.link === `${key}#${source}`);
+	if (thread !== undefined) return byId.find((h) => h.link === `${key}#${threadSource(thread)}`);
+	return byId.length === 1 ? byId[0] : undefined;
 }
 
 /**

@@ -37,3 +37,8 @@ test("prose notes name partial coverage and an away Host, so a miss is not read 
 	]);
 	assert.deepEqual(notes, ["Alpha: Host away; searched its last copy", "Alpha: 2 copies not indexed · 1 behind source or unavailable · 3 invalid records excluded"]);
 });
+
+test("prose notes count the Sessions an upgrade still re-derives, so a miss there is not read as absence", () => {
+	const { notes } = proseRows([{ host: { link: "a", label: "Alpha" }, value: { ...result([]), coverage: { indexed: 3, notIndexed: 0, stale: 0, invalidLines: 0, updating: 47 } } }]);
+	assert.deepEqual(notes, ["Alpha: searching 3 of 50 Sessions — updating after upgrade"]);
+});
