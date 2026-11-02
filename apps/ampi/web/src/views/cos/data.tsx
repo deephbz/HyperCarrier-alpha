@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ViewFailure } from "../../../../src/shared/protocol.ts";
 import { useHosts, type HostState } from "../../client.ts";
-import { servesHostOps } from "../../components/Sidebar.tsx";
-import { hostLabel } from "../../components/host-label.ts";
+import { hostLabel, servesHostOps } from "../../components/host-label.ts";
 
-export type ViewError = { error: { code: string; message: string } };
 type Feed<T> = { host: HostState; value?: T; stale: boolean; error?: string };
 /** One Host's replica of a fleet view, as `useTopic` returns it. Define it at module scope: it is a hook. */
-export type FleetFeed<T> = (host: string) => { value: T | ViewFailure | undefined; stale: boolean; error?: string };
+type FleetFeed<T> = (host: string) => { value: T | ViewFailure | undefined; stale: boolean; error?: string };
 const failed = (value: unknown): value is ViewFailure => typeof value === "object" && value !== null && "error" in value;
 function HostValue<T>({ host, feed: useFeed, onValue }: { host: HostState; feed: FleetFeed<T>; onValue: (id: string, value: Omit<Feed<T>, "host">) => void }) {
 	const feed = useFeed(host.link);

@@ -4,7 +4,7 @@
 
 /** pending: jobs queued or running. done: jobs settled, ok or failed, since the process started.
  * drainedAt: epoch ms when pending last reached 0; null while jobs run and before the first job. */
-export type DeriveQueue = { pending: number; done: number; drainedAt: number | null };
+type DeriveQueue = { pending: number; done: number; drainedAt: number | null };
 
 function counter() {
 	let pending = 0, done = 0, drainedAt: number | null = null;
@@ -23,10 +23,6 @@ function counter() {
 	return { track, read: (): DeriveQueue => ({ pending, done, drainedAt }) };
 }
 
-const derives = counter(), builds = counter(), roleWaits = counter();
+const derives = counter();
 /** Session derive jobs (working set). */
 export const trackDerive = derives.track, deriveQueue = derives.read;
-/** Arc Builds of either trigger (cos.arc). */
-export const trackBuild = builds.track, buildQueue = builds.read;
-/** Automatic Builds held back until the Worker role is known (cos.arc). A wait is not a Build: it may end without one. */
-export const trackRoleWait = roleWaits.track, roleWaitQueue = roleWaits.read;

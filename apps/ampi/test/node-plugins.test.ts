@@ -9,7 +9,33 @@ import { TestClient, tempHome } from "./helpers.ts";
 import { recordingModels } from "./node-plugin-fixture.ts";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { defineDoc } from "@earendil-works/pi-durable";
-import { MetaDoc, type NodePlugin } from "../src/node/runtime.ts";
+import { MetaDoc, type NodePlugin, parseThreadKey } from "../src/node/runtime.ts";
+import { NodeError } from "../src/node/errors.ts";
+import { MetaDoc as LeafMetaDoc } from "../src/node/meta-doc.ts";
+
+// The node's metadata document and its error type are stored and wire contracts: a store written before a change
+// must read the same, and the server maps a NodeError's `code` onto the wire. `.name` stays "Error" on purpose:
+// NodeError sets no name of its own, and wire codes come from `code`, never from `name`.
+test("node contracts: the metadata document definition and NodeError keep their shape", () => {
+	assert.ok(MetaDoc === LeafMetaDoc, "runtime.ts re-exports the one metadata document definition");
+	const { definition } = MetaDoc as unknown as { definition: { kind: string; version: number; scope: string; checkpointWhen: () => boolean; initial: () => unknown } };
+	assert.equal(definition.kind, "ampi.meta");
+	assert.equal(definition.version, 1);
+	assert.equal(definition.scope, "session");
+	assert.equal(definition.checkpointWhen(), false);
+	const initial = definition.initial() as { createdAt: number; convs: unknown };
+	assert.deepEqual(Object.keys(initial), ["createdAt", "convs"]);
+	assert.equal(typeof initial.createdAt, "number");
+	assert.deepEqual(initial.convs, {});
+	assert.throws(() => parseThreadKey("x"), (error: any) => {
+		assert.equal(error.name, "Error");
+		assert.equal(error.code, "bad_request");
+		assert.equal(error.message, "Bad thread id x");
+		assert.ok(error instanceof Error);
+		assert.ok(error instanceof NodeError, "the runtime throws the one NodeError class");
+		return true;
+	});
+});
 
 function controls(value: unknown): { ttl?: string }[] {
 	if (!value || typeof value !== "object") return [];

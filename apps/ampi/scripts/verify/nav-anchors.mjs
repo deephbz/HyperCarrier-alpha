@@ -227,13 +227,6 @@ export async function navAnchors(j) {
     },
   });
 
-  await source('arc-chunk', 'Open the long Session Arc and click a middle chunk start', async () => {
-    await j.goto(`#/v/arcs/devbox/${encodeURIComponent(thread)}`);
-    const starts = p.locator('a.cos-chunk-start');
-    await starts.first().waitFor({ timeout: 60_000 });
-    await starts.nth(Math.floor(await starts.count() / 2)).click();
-  });
-
   await source('timeline', 'Open Timeline and click the long Session stream at its middle', async () => {
     await j.goto('#/v/timeline');
     const stream = p.locator(`svg a[aria-label$=" at nearest entry"][href*="${encodeURIComponent(s.id)}"]`).first();
@@ -242,10 +235,9 @@ export async function navAnchors(j) {
     await p.mouse.click(box.x + box.width * 0.5, box.y + box.height / 2);
   });
 
-  await source('citation', 'Open the big Session Arc and click a Work tree citation', async () => {
+  await source('citation', 'Open the big Session Arc panel and click a claim citation', async () => {
     await j.goto(arc);
-    const tree = p.getByRole('region', { name: 'Evergreen context' });
-    const cites = tree.getByRole('link', { name: /^\[#/ });
+    const cites = p.locator('[data-panel="arc"] a.arc-cite');
     await cites.first().waitFor({ timeout: 30_000 });
     await cites.nth(Math.floor(await cites.count() / 2)).click();
   });

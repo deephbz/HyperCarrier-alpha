@@ -2,65 +2,13 @@
 // projected object (memoized by the immutable EntryRecord), so chord's structural diff between two projections only
 // walks what a commit changed.
 
+import type { UiBlock, UiEntry, UiThreadView } from "../shared/durable-entry.ts";
 import { clipInjected } from "../shared/entry-shapes.ts";
-import type { Activity, Every, InjectedMessage, PiQueuedItem, QueueOrigin, ThreadField } from "../shared/protocol.ts";
+import type { Activity, Every, PiQueuedItem, QueueOrigin, ThreadField } from "../shared/protocol.ts";
+import { TOOL_TEXT_LIMIT } from "../shared/tool-text-limit.ts";
 import type { ConversationView, EntryRecord, JsonValue } from "./durable-types.ts";
 import { noticeMessage, queueOrigin } from "../shared/team-origin.ts";
-
-export const TOOL_TEXT_LIMIT = 48_000;
 const DETAILS_LIMIT = 24_000;
-
-export type UiBlock =
-	| { type: "text"; text: string }
-	| { type: "thinking"; text: string; clipped?: boolean }
-	| { type: "tool"; callId: string; name: string; args: JsonValue; argsClipped?: boolean }
-	| { type: "image"; mimeType: string };
-
-/** A card the preview shortened at its own bound; the card offers the source entry of `clippedBytes` UTF-8 bytes. */
-export type Clipped = { clipped?: boolean; clippedBytes?: number };
-
-export type UiEntry = { bodyAvailable?: boolean } & (
-	| { id: string; kind: "user"; ts?: number; text: string; images: number; as?: string; data?: JsonValue }
-	| {
-			id: string;
-			kind: "assistant";
-			ts?: number;
-			blocks: UiBlock[];
-			stop?: string;
-			error?: string;
-			model?: string;
-			usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number };
-	  }
-	| ({
-			id: string;
-			kind: "tool-result";
-			ts?: number;
-			callId: string;
-			name: string;
-			isError: boolean;
-			text: string;
-			truncated: boolean;
-			details?: JsonValue;
-	  } & Clipped)
-	| ({ id: string; kind: "compaction"; summary: string; reason?: string; ts?: number; byTaskId?: string } & Clipped)
-	| { id: string; kind: "reset"; handoff?: string; ts?: number }
-	| { id: string; kind: "system"; changed: string[] }
-	| ({ id: string; kind: "custom"; entryKind: string; ts?: number; data?: JsonValue; text?: string; message?: InjectedMessage } & Clipped));
-
-export type UiThreadView = {
-	/** Content key for bounded Pi pages and body reads. */
-	sourceVersion?: string;
-	conversationId: string;
-	parent?: { conversationId: string; at: string };
-	owner?: { conversationId: string; taskId: string };
-	/** Entries before the active context's head that this view does not carry (compacted or reset away). */
-	hiddenBefore: boolean;
-	entries: UiEntry[];
-	live: JsonValue;
-	inbox: JsonValue;
-	agent: JsonValue;
-	usage: JsonValue;
-};
 
 const memo = new WeakMap<EntryRecord, UiEntry>();
 

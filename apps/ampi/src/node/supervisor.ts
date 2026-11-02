@@ -18,16 +18,16 @@ import { lock } from "./owner-lock.ts";
 /** The exit code of a node that stopped cleanly to be restarted (`node.restart`); EX_TEMPFAIL. */
 export const RESTART_EXIT = 75;
 
-export type ServicePlatform = "launchd" | "systemd";
+type ServicePlatform = "launchd" | "systemd";
 /** `$AMPI_HOME/supervised`. `start` is the command that starts the node through its supervisor. */
 export type Supervised = { platform: ServicePlatform; label: string; unitPath: string; start: string[] };
-export type ServiceSpec = { home: string; label: string; program: string[]; env: Record<string, string> };
+type ServiceSpec = { home: string; label: string; program: string[]; env: Record<string, string> };
 
 const BIN = fileURLToPath(new URL("../../bin/ampi.mjs", import.meta.url));
 const DEFAULT_HOME = join(homedir(), ".ampi");
 
 /** `dev.hypercarrier.ampi-node`, with a hash suffix for any other AMPI_HOME, so two homes get two services. */
-export function serviceLabel(home: string): string {
+function serviceLabel(home: string): string {
 	const base = "dev.hypercarrier.ampi-node";
 	return home === DEFAULT_HOME ? base : `${base}-${createHash("sha256").update(home).digest("hex").slice(0, 8)}`;
 }
@@ -100,7 +100,7 @@ export function readSupervised(home: string): Supervised | undefined {
 	}
 }
 
-export type InstallOptions = {
+type InstallOptions = {
 	platform?: ServicePlatform;
 	/** Where the unit file goes; default ~/Library/LaunchAgents or ~/.config/systemd/user. */
 	unitDir?: string;

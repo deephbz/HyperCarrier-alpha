@@ -59,10 +59,10 @@ tests and README. No per-plugin copies or generated launchers are needed.
 Link the plugin from a full HC or Alpha checkout; copying only a plugin
 subdirectory omits its shared dependency.
 
-Run the bootstrap tests and the three existing plugin suites:
+Run the bootstrap tests and the plugin suites:
 
 ```sh
-node --test tools/herdr-node/launch.test.mjs tools/*/scripts/*.test.mjs
+node --test tools/herdr-node/launch.test.mjs tools/agent-view-presets/scripts/*.test.mjs tools/pi-teams-hierarchy/scripts/*.test.mjs tools/rarebit-status/scripts/*.test.mjs
 ```
 
 Tests launch `/usr/bin/env -i HOME=... PATH=/usr/bin:/bin` with temporary config

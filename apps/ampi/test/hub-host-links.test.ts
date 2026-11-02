@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { runDaemon } from "../src/node/daemon.ts";
 import { Hub } from "../src/hub/hub.ts";
-import type { HostState as HubHostState } from "../src/hub/hosts.ts";
+import type { HostState as HubHostState } from "../src/shared/hosts.ts";
 import { findHost, hostLabel, hostLabelFor } from "../web/src/components/host-label.ts";
 import { Browser, ownHome, tempHome } from "./helpers.ts";
 import { fixture } from "./pi-fixtures.ts";
@@ -58,10 +58,12 @@ test("hub host links: one Host ID carries a Pi source and a durable source; link
 
 test("hub host links: a thread frame resolves only to the thread's own source, also when the Host ID has one source (failure: a lone durable source took a Pi thread, so an old client got the wrong source's not-found)", async (t) => {
 	const home = tempHome();
+	// A `local` Host with no node answering makes the hub autostart a detached one that outlives the file (OF-27).
+	const daemon = await runDaemon({ home });
 	const hub = new Hub({ hosts: [{ id: "devbox", label: "devbox", kind: "local", home }] }, { token: TOKEN });
 	const port = await hub.listen(0);
 	const b = await Browser.open(port, undefined, `ampi_k_${port}=${TOKEN}`);
-	t.after(async () => { b.ws.terminate(); await hub.close(); });
+	t.after(async () => { b.ws.terminate(); await hub.close(); await daemon.stop(); });
 
 	assert.deepEqual(hub.route("devbox"), { key: "devbox#durable" }, "without a thread, one source serves the Host ID");
 	assert.deepEqual(hub.route("devbox", "t-1"), { key: "devbox#durable" });

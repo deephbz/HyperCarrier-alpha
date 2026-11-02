@@ -1,5 +1,4 @@
 import { newId } from "./ids.ts";
-export type DraftImage = { data: string; mimeType: string; name: string };
 /**
  * How a submission went out: its busy mode and the request that carried it. A draft carries it only while its key
  * names a send with an unknown outcome, so a retry repeats the same request under the same key.
@@ -19,7 +18,7 @@ export type Outcome = { uncertain: boolean; text: string; once?: string };
  * The outcome of recovered text in the draft, until a send or a dismiss. A refusal ends when `text` leaves the
  * draft; an uncertain send stays uncertain whatever the owner types. `key` is the draft key the text came back under.
  */
-export type DraftNotice = { id: string; text: string; key: string; outcome: Outcome };
+type DraftNotice = { id: string; text: string; key: string; outcome: Outcome };
 
 /** What a draft says about an uncertain send once its key is gone: an edit, a merge, or a fork. */
 export const MAYBE_SENT = "This message may already be in the history; check before you send.";

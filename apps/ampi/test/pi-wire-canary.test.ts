@@ -175,7 +175,7 @@ function scanOnce() {
 				rarebit: [{ kind: "view", view: "rarebit", threadId: THREAD }],
 				team: [{ kind: "view", view: "team", threadId: THREAD }],
 				"cos.timeline": [{ kind: "view", view: "cos.timeline" }],
-				"cos.arc": [{ kind: "view", view: "cos.arc" }, { kind: "view", view: "cos.arc", threadId: THREAD }],
+				arc: [{ kind: "view", view: "arc", threadId: THREAD }],
 			};
 			const topics: Topic[] = Object.values(topicTable).flat();
 			const sids = topics.map((topic) => browser.sub("devbox", topic));
@@ -191,7 +191,7 @@ function scanOnce() {
 				"view.cos.timeline.locate": [{ threadId: THREAD, at: Date.parse(iso(2)) }],
 
 				"view.rarebit.ask": [{ threadId: THREAD, question: "What happened?" }],
-				"view.cos.arc.build": [{ threadId: THREAD }],
+				"view.arc.build": [{ threadId: THREAD }],
 				// Resume first, so the later control ops reach a pane.
 				"thread.resume": [{ threadId: THREAD, requestId: randomUUID(), place: { workspace: "new" } }],
 				"thread.submit": [{ threadId: THREAD, content: "Canary follow-up" }],
@@ -227,7 +227,7 @@ test("wire canary: no frame carries any native-field sentinel", async () => {
 	const { leaks, outcomes, sources } = await scanOnce();
 	assert.deepEqual(leaks, [], `leaks: ${leaks.join("; ")} · sources ${sources.join(", ")} · ops ${JSON.stringify(outcomes)}`);
 	// Every topic and op answered: a source that never sent a frame was not scanned.
-	assert.equal(sources.length, 33, `scanned sources: ${sources.join(", ")}`);
+	assert.equal(sources.length, 32, `scanned sources: ${sources.join(", ")}`);
 });
 
 /** The pre-bump DERIVATION_VERSION: every index row written by a build before A24 step 5 carries it. */

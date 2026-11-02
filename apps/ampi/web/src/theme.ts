@@ -7,11 +7,11 @@ export type ThemeChoice = "system" | "light" | "dark";
 export type Theme = "light" | "dark";
 
 /** localStorage key; index.html's inline script reads the same key. */
-export const THEME_KEY = "ampi.theme";
+const THEME_KEY = "ampi.theme";
 const CHANGE = "ampi:theme";
 const system = () => matchMedia("(prefers-color-scheme: dark)");
 
-export function themeChoice(): ThemeChoice {
+function themeChoice(): ThemeChoice {
 	const v = localStorage.getItem(THEME_KEY);
 	return v === "light" || v === "dark" ? v : "system";
 }

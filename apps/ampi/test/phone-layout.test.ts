@@ -22,7 +22,6 @@ const SESSION = "#/h/devbox/t/pi%3Asess-lead";
 const PAGES: [string, string, string][] = [
 	["Overview", "#/v/overview", '.main .topbar b:text-is("Overview")'],
 	["Timeline", "#/v/timeline", ".cos-axis time"],
-	["Arcs", "#/v/arcs", "main.cos-page"],
 	["Session", SESSION, ".transcript [data-entry]"],
 ];
 const WIDE = `<table><thead><tr>${"<th>column</th>".repeat(10)}</tr></thead><tbody><tr>${"<td>wordwordword</td>".repeat(10)}</tr></tbody></table>`

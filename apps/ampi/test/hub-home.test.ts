@@ -3,11 +3,25 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { test } from "node:test";
+import { homedir } from "node:os";
+import { socketPath } from "../src/node/daemon.ts";
 import { HubHome, RootOwned } from "../src/hub/home.ts";
+import { ampiHome } from "../src/shared/home.ts";
 import { Hub } from "../src/hub/hub.ts";
 import type { PiHost } from "../src/pi/host.ts";
 import { lockHome } from "../src/shared/home-lock.ts";
 import { tempHome } from "./helpers.ts";
+
+test("home defaults read AMPI_HOME at call time, including an empty override", (t) => {
+	const original = process.env.AMPI_HOME;
+	t.after(() => { if (original === undefined) delete process.env.AMPI_HOME; else process.env.AMPI_HOME = original; });
+	for (const override of [undefined, tempHome(), "", tempHome()]) {
+		if (override === undefined) delete process.env.AMPI_HOME; else process.env.AMPI_HOME = override;
+		const expected = override ?? join(homedir(), ".ampi");
+		assert.equal(ampiHome(), expected);
+		assert.equal(socketPath(), join(expected, "node.sock"));
+	}
+});
 
 const HOME_MODULE = new URL("../src/hub/home.ts", import.meta.url).href;
 const LOCK_MODULE = new URL("../src/shared/home-lock.ts", import.meta.url).href;

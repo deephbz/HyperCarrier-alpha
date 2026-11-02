@@ -12,7 +12,7 @@ export type ReadingPlace = { bottom: boolean; anchors: Anchor[] };
 type Options = { anchor?: HTMLElement | null; accept?: (node: HTMLElement) => boolean };
 
 /** The attribute that names one rendered part of an entry; the entry ID attribute keeps naming the entry. */
-export const FRAGMENT = "data-fragment";
+const FRAGMENT = "data-fragment";
 
 /** Keep surviving content at its screen height; a bottom-pinned reader follows the bottom. Never moves focus. */
 export function capturePlace(el: HTMLElement, selector: string, attribute: string, bottom: boolean, options: Options = {}): ReadingPlace {

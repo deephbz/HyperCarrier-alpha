@@ -1,7 +1,8 @@
 // `ampi [hub] | open | doctor | status | stop | version | node | bridge`
 // This module and its static imports are node code: `ampi node` loads them, and the node build hashes them
 // (shared/build.ts). The hub-side commands live in commands.ts, which `ampi node` never loads.
-import { ampiHome, connectSocket, lock, runBridge, runDaemon, socketPath } from "./node/daemon.ts";
+import { connectSocket, lock, runBridge, runDaemon, socketPath } from "./node/daemon.ts";
+import { ampiHome } from "./shared/home.ts";
 import { RESTART_EXIT } from "./node/supervisor.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";

@@ -1,13 +1,14 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
-import type { HostConfig } from "../src/hub/hosts.ts";
+import type { HostConfig } from "../src/shared/hosts.ts";
 import { type Server, type Socket, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { socketPath } from "../src/node/daemon.ts";
-import { HostLink, type HostState } from "../src/hub/hosts.ts";
+import { HostLink } from "../src/hub/hosts.ts";
+import type { HostState } from "../src/shared/hosts.ts";
 import { PROTOCOL } from "../src/shared/protocol.ts";
 import { StalePackageBuild, buildId } from "../src/shared/build.ts";
 

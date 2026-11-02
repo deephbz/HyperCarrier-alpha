@@ -3,17 +3,15 @@ import { createHash } from "node:crypto";
 import { parentPort } from "node:worker_threads";
 import { setImmediate as yieldLoop } from "node:timers/promises";
 import { contextTokensOf } from "@hypercarrier/auto-compact-durable/budget";
-import { getImportedRarebitEntryIds } from "@hypercarrier/rarebit/fork-lineage";
 import { openCopyReader, sourceVersionOf } from "./copy-reader.ts";
 import { indexProse, forgetSearch, forgetSearchBatch, findInSession, backfillSearch } from "./search.ts";
 import { openWorkingSet } from "./working-set-db.ts";
 import { derivedVersion, sameIndex, SUMMARY_VERSION, PROSE_CHARS, MESSAGE_CHARS, TOOL_CHARS, TOOL_ARGS_CHARS, type Source, type Derived, type WorkerJob } from "./working-set-types.ts";
 import { projectEntry } from "./projection.ts";
-import { emptyKinds as kinds, inheritedBefore, rarebitSelectorVersion, visitIngestItems, type LineageRecord } from "./reader-item.ts";
+import { emptyKinds as kinds, rarebitSelectorVersion, visitIngestItems, type LineageRecord } from "./reader-item.ts";
 import { boundToolArgs, clipInjected } from "../shared/entry-shapes.ts";
 import type { ToolArgsPreview } from "../shared/protocol.ts";
 import { OpenCalls } from "../shared/tool-state.ts";
-import { chunkSession } from "./views/cos-arc-chunks.ts";
 import type { PiReaderEntry } from "./views/types.ts";
 import type { Kinds, RarebitItem } from "./views/rarebit.ts";
 import { complete, flushTrace, nameThread, nowUs, tracing } from "../trace.ts";
@@ -37,7 +35,7 @@ function targetArgs(raw: Record<string, unknown>) {
 }
 
 function compact(e: PiReaderEntry): PiReaderEntry {
- const value = { ...e, bodyChars: body(e).length };
+ const value = { ...e };
  value.text = e.text?.slice(0, 700); value.summary = e.summary?.slice(0, 700); value.error = e.error?.slice(0, 140);
  if (e.result) value.result = { ...e.result, text: e.result.text.slice(0, 140) };
  if (e.blocks) value.blocks = e.blocks.map((b) => {
@@ -102,24 +100,23 @@ export function overrideTokens(reader: any, id: string): number | undefined {
 
 function derive(source: Source, reader: any, db: ReturnType<typeof openWorkingSet>, version: string, started: number): Derived {
  const session = reader.session();
- const records: PiReaderEntry[] = [], lineage: LineageRecord[] = [], occurrences: any[] = [], rarebitChars = new Map<string, number>();
+ let trigger: Derived["rarebit"]["trigger"];
  const buckets = new Map<number, [number, number, number]>(), hints: [number, string][] = [], marks: [number, string, "stop" | "error"][] = [];
  let whole = kinds(), live = kinds(), totalChars = 0, rareChars = 0, count = 0, cost = 0, staleItems = 0, priced = false;
  const rarebitHash = createHash("sha256");
  let model: string | undefined, budgetEntry: string | undefined, contextTokens: number | undefined, cacheHit: number | undefined, lastPreview: string | undefined;
- let lastUser = -1, lastStop = -1, selector = "", title = session.title;
+ let lastUser = -1, lastStop = -1, lastStopAt: string | undefined, selector = "", title = session.title;
  const open = new OpenCalls();
  const counts = { user: 0, continuation: 0, stop: 0, compactions: 0 };
  for (const row of db.prepare('SELECT * FROM entries WHERE path=? ORDER BY position').iterate(source.path)) {
   const e = parse<PiReaderEntry>(row.feature), occurrence = row.occurrence ? parse<any>(row.occurrence) : null;
   const meta = parse<LineageRecord>(row.native_meta);
-  records.push(e); lineage.push(meta); count++;
+  count++;
   // A model change (Pi's `/model`) can precede any turn that uses it; the latest of either names the model.
   if (meta.model) model = meta.model;
   // hc-auto-compact reads the latest `auto-compact.budget` entry on the branch; its value is read once after the loop.
   if (meta.customType === "auto-compact.budget") budgetEntry = e.id;
   if (occurrence) {
-   occurrences.push(occurrence);
    if (occurrence.outcome === "user") lastUser = count;
    if (occurrence.outcome === "stop") lastStop = count;
   }
@@ -128,12 +125,12 @@ function derive(source: Source, reader: any, db: ReturnType<typeof openWorkingSe
   const chars = parse<Kinds>(row.kinds);
   for (const key of Object.keys(whole) as (keyof Kinds)[]) { whole[key] += chars[key]; live[key] += chars[key]; }
   totalChars += Number(row.totalchars); rareChars += Number(row.rarechars);
-  if (Number(row.rarechars) > 0) rarebitChars.set(e.id, Number(row.rarechars));
   if (row.rarebit) {
    const r = parse<RarebitItem>(row.rarebit);
    if (r.kind === "user" || r.kind === "stop" || r.kind === "continuation") counts[r.kind]++;
-   // A compaction restarts the agent's context, so it makes a built Arc stale like a new message does.
-   if (r.kind !== "error") { staleItems++; rarebitHash.update(JSON.stringify([r.id, r.kind, r.text])); }
+   staleItems++; rarebitHash.update(JSON.stringify([r.id, r.kind, r.text]));
+   if (r.kind === "user" || r.kind === "stop") trigger = { id: r.id, kind: r.kind };
+   if (r.kind === "stop") lastStopAt = r.t ?? undefined;
   }
   cost += positive(costOf(e.usage)); priced ||= hasPrice(e.usage);
   // The reader's names for the turn, call and result evidence that projectEntry maps to user, tool and tool-result.
@@ -166,12 +163,6 @@ function derive(source: Source, reader: any, db: ReturnType<typeof openWorkingSe
  // The index keeps no custom data, so read the one override entry; `tokens: null` restores the default.
  const budgetOverride = budgetEntry ? overrideTokens(reader, budgetEntry) : undefined;
  selector = rarebitSelectorVersion();
- const imported = getImportedRarebitEntryIds(lineage);
- const arc = chunkSession(records, { selection: { occurrences }, imported, inheritedBefore: inheritedBefore(session), rarebitChars }, session.cwd ?? "");
- db.prepare('DELETE FROM arc_evidence WHERE path=?').run(source.path);
- const putEvidence = db.prepare('INSERT INTO arc_evidence VALUES (?,?,?)');
- let inputChars = 0;
- for (const [id, text] of arc.evidence) { putEvidence.run(source.path, id, text); inputChars += text.length; }
  hints.sort((a, b) => a[0] - b[0]); marks.sort((a, b) => a[0] - b[0]);
  const sampled = hints.length <= 64 ? hints : Array.from({ length: 64 }, (_, i) => hints[Math.round(i * (hints.length - 1) / 63)]!);
  const tokens = (value: Kinds) => Object.fromEntries(Object.entries(value).map(([key, n]) => [key, Math.ceil(n / 4)])) as Kinds;
@@ -183,10 +174,9 @@ function derive(source: Source, reader: any, db: ReturnType<typeof openWorkingSe
   timeline: { start: hints[0]?.[0] ?? 0, end: hints.at(-1)?.[0] ?? 0, entries: sampled, entryCount: count,
    omittedHints: hints.length - sampled.length, marks: marks.slice(-256), omittedMarks: Math.max(0, marks.length - 256),
    stopped: marks.at(-1)?.[2] === "stop" && lastStop > lastUser, priced, buckets: [...buckets.values()].sort((a, b) => a[0] - b[0]) },
-  arc: { chunks: arc.chunks, excludedEntries: arc.excludedEntries, shortenedChunks: arc.shortenedChunks, inputChars },
   rarebit: { stats: { ...counts, rarebitTokens: Math.ceil(rareChars / 4), totalTokens: Math.ceil(totalChars / 4), ratio: totalChars ? rareChars / totalChars : null },
    diagnosis: { session: tokens(whole), live: tokens(live), entries: count, ms: Math.round(performance.now() - started) }, selector,
-   count: staleItems, fingerprint: rarebitHash.digest("hex") },
+   count: staleItems, fingerprint: rarebitHash.digest("hex"), ...(lastStopAt ? { lastStopAt } : {}), ...(trigger ? { trigger } : {}) },
  };
 }
 
@@ -242,7 +232,7 @@ async function forget(source: Source, version: string, watermark?: unknown): Pro
   });
   const batch = 128;
   while (transaction(() => forgetSearchBatch(db, source.path, batch))) await yieldLoop();
-  for (const table of ["entries", "arc_evidence"]) {
+  for (const table of ["entries"]) {
    const remove = db.prepare(`DELETE FROM ${table} WHERE rowid IN (SELECT rowid FROM ${table} WHERE path=? LIMIT ?)`);
    while (transaction(() => Number(remove.run(source.path, batch).changes))) await yieldLoop();
   }

@@ -4,7 +4,8 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { TeamDoc, openAuthority, taskCards, readObservationCursor, snapshotResult, updates, pageEvents, UPDATE_PAGE_EVENTS, UPDATE_SCAN_ENTRIES,
  projectGraphTaskCards, type Team, type TeamState } from '@hypercarrier/pi-team-durable/authority';
 import type { CommandAck } from '../shared/protocol.ts';
-import { NodeError, type NodeRuntime } from './runtime.ts';
+import { NodeError } from './errors.ts';
+import type { NodeRuntime } from './runtime.ts';
 
 type Thread=Awaited<ReturnType<NodeRuntime['thread']>>;
 type Card=ReturnType<typeof projectGraphTaskCards>[number];

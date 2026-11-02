@@ -14,11 +14,14 @@ import {
 	select,
 } from "@hypercarrier/rarebit-durable";
 import { contentText } from "../node/projection.ts";
-import { type Effect, EffectAborted, MetaDoc, NodeError, type NodePlugin, type NodeRuntime, parseThreadKey, type Store } from "../node/runtime.ts";
+import { NodeError } from "../node/errors.ts";
+import { MetaDoc } from "../node/meta-doc.ts";
+import { type Effect, EffectAborted, type NodePlugin, type NodeRuntime, parseThreadKey, type Store } from "../node/runtime.ts";
 import { type TopicSource, topics } from "../node/server.ts";
 import { defaultModel } from "../node/models.ts";
 import type { CommandAck } from "../shared/protocol.ts";
 import { CommandsDoc, type CommandResult } from "../node/commands.ts";
+import { commandPorts } from "./rarebit-port.ts";
 
 const BOOT = randomBytes(4).toString("hex");
 const TEXT_LIMIT = 6_000;
@@ -117,7 +120,7 @@ function rarebitView(entries: readonly EntryRecord[], state: RarebitState | unde
 /** The runtime that owns each store (several runtimes can share a process, as tests do). */
 const owners = new WeakMap<Store, NodeRuntime>();
 const runtimes = new Set<NodeRuntime>();
-export function runtimeOf(store: Store): NodeRuntime {
+function runtimeOf(store: Store): NodeRuntime {
 	const runtime = owners.get(store);
 	if (!runtime) throw new Error(`storage ${store.id} is not attached`);
 	return runtime;
@@ -128,15 +131,6 @@ export function storeById(id: string): Store {
 		if (store && !store.closed) return store;
 	}
 	throw new Error(`thread storage ${id} is unavailable on this node`);
-}
-
-type CommandPort = (conversationId: string, args: string, key?: string) => Promise<CommandResult>;
-const commandPorts = new WeakMap<Store, CommandPort>();
-/** Called inside runtime.admit; the plugin owns jobs and their receipts. */
-export function rarebitCommand(store: Store, conversationId: string, args: string, key?: string): Promise<CommandResult> {
-	const port = commandPorts.get(store);
-	if (!port) throw new NodeError("unavailable", "Rarebit is unavailable on this node.");
-	return port(conversationId, args, key);
 }
 
 function manualResult(state: RarebitState): { notice: string } {

@@ -20,7 +20,7 @@ before(async () => {
 	// client.ts opens its hub WebSocket at import; this stub never connects.
 	Object.assign(globalThis, { location: { protocol: "http:", host: "127.0.0.1:1", hash: "" }, WebSocket: class { send() {} close() {} } });
 	vite = await createServer({ configFile: `${web}vite.config.ts`, root: web, logLevel: "silent", server: { middlewareMode: true, hmr: false } });
-	row = (await vite.ssrLoadModule("/src/components/Sidebar.tsx")).ThreadRow;
+	row = (await vite.ssrLoadModule("/src/components/SidebarRows.tsx")).ThreadRow;
 	threadHref = (await vite.ssrLoadModule("/src/util.ts")).href.thread;
 });
 after(async () => { await vite?.close(); });

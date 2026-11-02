@@ -1,21 +1,9 @@
 // Timeline renders ingestion-time aggregates. Exact navigation is an indexed query;
 // Host-wide subscriptions carry at most 64 citation hints per Session.
-import { sourceStatus, type SourceStatus, type PiView, type PiViewContext } from "./types.ts";
+import type { TimelineSession, TimelineValue } from "../../shared/timeline.ts";
+import { sourceStatus, type PiView, type PiViewContext } from "./types.ts";
 
-export const BUCKET_MS = 15 * 60_000;
-export type TimelineSession = {
- source: SourceStatus;
- threadId: string; ref: string; title: string; cwd: string; team?: string; role?: string;
- start: number; end: number; live: boolean; waiting: boolean; blocked: boolean;
- /** Rarebit messages, the count the Arc floor (arcFloor) reads. */
- messages: number;
- marks: [number, string, "stop" | "error"][]; buckets: [number, number, number][];
- /** Whether any entry reported a price; the buckets count history entries (spend.ts HISTORY_COVERS). */
- priced: boolean;
- entries: [number, string][]; entryCount: number; omittedHints: number; omittedMarks: number;
-};
-export type TimelineValue = { bucketMs: number; sessions: TimelineSession[]; unreadable?: { threadId: string; ref: string; title: string; message: string }[] };
-export const entryTime = (t: unknown): number => typeof t === "number" ? t : typeof t === "string" ? Date.parse(t) : NaN;
+const BUCKET_MS = 15 * 60_000;
 
 export const cosTimeline: PiView<"cos.timeline"> = {
  name: "cos.timeline", scope: "any",

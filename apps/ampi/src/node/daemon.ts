@@ -5,7 +5,7 @@
 import { spawn } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, unlinkSync } from "node:fs";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
-import { homedir } from "node:os";
+import { ampiHome } from "../shared/home.ts";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { encodeFrame, lineReader } from "../shared/framing.ts";
@@ -13,10 +13,6 @@ import type { ClientFrame } from "../shared/protocol.ts";
 import type { NodeOptions, NodeRuntime } from "./runtime.ts";
 import type { Connection } from "./server.ts";
 import { autostartOffPath, readSupervised, startSupervised, supervisedHint } from "./supervisor.ts";
-
-export function ampiHome(): string {
-	return process.env.AMPI_HOME ?? join(homedir(), ".ampi");
-}
 
 export function socketPath(home = ampiHome()): string {
 	return process.env.AMPI_SOCKET ?? join(home, "node.sock");

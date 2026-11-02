@@ -14,8 +14,8 @@ import { FormRow } from "./FormRow.tsx";
 import { hoverIntent } from "./Popover.tsx";
 import { Segmented } from "./Segmented.tsx";
 import { paletteSessions } from "./palette-sessions.ts";
-import { servesHostOps, type HostThreads } from "./Sidebar.tsx";
-import { hostLabel } from "./host-label.ts";
+import type { HostThreads } from "./Sidebar.tsx";
+import { hostLabel, servesHostOps } from "./host-label.ts";
 import { proseRows, type HostProse, type ProseRow } from "./palette-prose.ts";
 
 /** The opener of the open Modal. A Modal opened from inside another (palette switching) inherits it. */
@@ -115,7 +115,7 @@ export function HostSetupDialog({ onClose }: { onClose: () => void }) {
 }
 
 /** The ⌘K palette's two searches: Session names and titles (local), or prose in retained copies (each Host's `sessions.search`). */
-export type PaletteScope = "sessions" | "prose";
+type PaletteScope = "sessions" | "prose";
 let lastScope: PaletteScope = "sessions";
 const SCOPES = [["sessions", "Sessions"], ["prose", "Prose"]] as const;
 

@@ -8,7 +8,7 @@ const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
 const ts = require(require.resolve("typescript", { paths: [root] }));
-const SCOPE = ["src/pi/host.ts", "src/pi/projection.ts", ...readdirSync(path.join(root, "src/pi/views")).filter((f) => f.endsWith(".ts")).map((f) => `src/pi/views/${f}`)];
+const SCOPE = ["src/pi/host.ts", "src/pi/host-wire.ts", "src/pi/copy-index-file.ts", "src/pi/projection.ts", ...readdirSync(path.join(root, "src/pi/views")).filter((f) => f.endsWith(".ts")).map((f) => `src/pi/views/${f}`)];
 
 /** Every banned escape in one source, as `file:line:col what`. */
 function scan(file, text) {

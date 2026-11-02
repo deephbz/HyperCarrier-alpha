@@ -14,6 +14,7 @@ import { PiHost, cacheErrorClass } from "../src/pi/host.ts";
 import { RootOwned } from "../src/hub/home.ts";
 import { StalePackageBuild } from "../src/shared/build.ts";
 import { repairReplicaTail } from "../src/pi/replica-file.ts";
+import { indexEntry, indexText, readIndex } from "../src/pi/copy-index-file.ts";
 import { WorkingSet, workingSetUsage } from "../src/pi/working-set.ts";
 import { fixture as herdrFixture } from "./pi-fixtures.ts";
 import { openWorkingSet } from "../src/pi/working-set-db.ts";
@@ -409,4 +410,59 @@ test("startup: a failed index write shows as cache health, apart from the link, 
  rmSync(blocker, { recursive: true });
  await until(() => host.state.indexError === undefined);
  assert.ok(existsSync(join(host.cacheDir, "index.json")), "the next write succeeds and clears the warning");
+});
+
+// index.json is the copy index's on-disk format: old files must load, and a write keeps entry order, key order,
+// escapes and the dropped fields byte for byte. starting.json rides in the same write.
+test("startup: an old index loads and the next write keeps its order, keys and bytes, with starting.json beside it", async (t) => {
+ const { config } = fixture(t);
+ const host = new PiHost(config);
+ mkdirSync(host.cacheDir, { recursive: true });
+ writeFileSync(join(host.cacheDir, "b.jsonl"), "{}\npartial");
+ writeFileSync(join(host.cacheDir, "a.jsonl"), "{}\n");
+ writeFileSync(join(host.cacheDir, "c.jsonl"), "{}\n{}\n");
+ const escaped = "/synthetic/q\"uote\\back\u00e9\u4e2d";
+ const index = join(host.cacheDir, "index.json"), starting = join(host.cacheDir, "starting.json");
+ // Not sorted; an old entry with a directory in `file`, one with only file and offset, one fully populated in
+ // another key order, and one whose copy file is gone.
+ writeFileSync(index, "{" + [
+  `${JSON.stringify(escaped)}:{"file":"nested/dir/b.jsonl","offset":999,"closedAt":5,"lastKnownLive":false}`,
+  `"/synthetic/a":{"file":"a.jsonl","offset":1}`,
+  `"/synthetic/full":{"closedAt":7,"lastKnownLive":true,"offset":0,"file":"c.jsonl"}`,
+  `"/synthetic/gone":{"file":"missing.jsonl","offset":3}`,
+ ].join(",") + "}");
+ // The first entry's thread matches no copy; the second has no pane; the third is not an entry.
+ const kept = { threadId: "pi:sess-00000000-0000-0000-0000-000000000001", sessionId: "00000000-0000-0000-0000-000000000001", name: "synthetic", cwd: "/synthetic", pane: "w1:p1", createdAt: 1, seen: false };
+ writeFileSync(starting, JSON.stringify([kept, { threadId: "pi:sess-no-pane" }, null]));
+ host.start();
+ await host.stop();
+ assert.equal(readFileSync(index, "utf8"), "{" + [
+  `${JSON.stringify(escaped)}:{"file":"b.jsonl","offset":3,"lastKnownLive":false,"closedAt":5}`,
+  `"/synthetic/a":{"file":"a.jsonl","offset":3}`,
+  `"/synthetic/full":{"file":"c.jsonl","offset":6,"lastKnownLive":true,"closedAt":7}`,
+ ].join(",") + "}");
+ assert.equal(readFileSync(starting, "utf8"), JSON.stringify([kept]));
+ for (const file of [index, starting]) assert.equal(statSync(file).mode & 0o777, 0o600);
+ assert.equal(existsSync(index + ".tmp") || existsSync(starting + ".tmp"), false, "no temporary file is left");
+});
+
+test("startup: an index.json that cannot be read ends lists as cache unavailable and stop rejects with its error", async (t) => {
+ const { config } = fixture(t); const host = new PiHost(config);
+ mkdirSync(join(host.cacheDir, "index.json"), { recursive: true });
+ host.start(); const received = once(host, "frame");
+ host.send({ t: "sub", sid: 1, topic: { kind: "threads" } });
+ const [frame] = await received;
+ assert.equal(frame.t, "end"); assert.match(frame.reason, /Host cache unavailable/);
+ await assert.rejects(host.stop(), (error: NodeJS.ErrnoException) => error.code === "EISDIR");
+});
+
+test("startup: the copy index file text is each entry's JSON joined inside braces, and a missing file reads as empty", async (t) => {
+ const { dir } = fixture(t);
+ const entries = [
+  ["/synthetic/q\"uote\\backé中", indexEntry({ file: "/cache/nested/b.jsonl", offset: 3, lastKnownLive: true, closedAt: 5 })],
+  ["/synthetic/a", indexEntry({ file: "a.jsonl", offset: 0, closedAt: 0 })],
+ ] as const;
+ assert.equal(await indexText(entries), "{" + JSON.stringify("/synthetic/q\"uote\\backé中") + ':{"file":"b.jsonl","offset":3,"lastKnownLive":true,"closedAt":5},"/synthetic/a":{"file":"a.jsonl","offset":0}}');
+ assert.equal(await indexText([]), "{}");
+ assert.deepEqual(await readIndex(join(dir, "missing", "index.json")), {});
 });

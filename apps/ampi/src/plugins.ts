@@ -8,7 +8,7 @@ import { rarebitPlugin } from "./plugins/rarebit.ts";
 import { teamPlugin } from "./plugins/team.ts";
 
 /** Node services that plugins receive instead of reading host configuration themselves. */
-export type NodePorts = {
+type NodePorts = {
 	/** The Worker model-role catalog of a working directory, from Pi's settings. */
 	modelRoles: ModelRolePort;
 	/** Durable Auto Compact settings of a working directory, from Pi's settings. */

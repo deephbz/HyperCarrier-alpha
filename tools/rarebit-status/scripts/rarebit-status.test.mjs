@@ -150,7 +150,7 @@ test("plugin manifest declares the v4 consumer release without changing its iden
     "utf8",
   );
   assert.match(manifest, /^id = "rarebit-status"$/m);
-  assert.match(manifest, /^version = "0\.4\.0"$/m);
+  assert.match(manifest, /^version = "0\.5\.0"$/m);
   assert.match(manifest, /\[\[actions\]\]\nid = "open"/);
 });
 

@@ -5,7 +5,7 @@ import { centerInList, href } from "../util.ts";
 import { Popover, hoverIntent } from "./Popover.tsx";
 import { railLayout, type RailLayout } from "./rail-layout.ts";
 
-export type OutlineState = { outline?: ThreadOutline; busy: boolean; error: string };
+type OutlineState = { outline?: ThreadOutline; busy: boolean; error: string };
 
 /**
  * The thread's prompt outline: versioned branch data. A new version replaces the outline in place when it arrives, so
@@ -35,11 +35,11 @@ export function useThreadOutline(host: string, threadId: string, version?: strin
  * The reader's place by prompt, read from the rendered user messages: exact IDs, never an estimated ordinal. The
  * current prompt is the last one above the reading line; `scrolledPast` holds once it has left the screen.
  */
-export type PromptPlace = { inView: ReadonlySet<string>; current?: { id: string; text: string }; scrolledPast: boolean };
+type PromptPlace = { inView: ReadonlySet<string>; current?: { id: string; text: string }; scrolledPast: boolean };
 export const NO_PLACE: PromptPlace = { inView: new Set(), scrolledPast: false };
 
 /** The reading line: the transcript's middle, where a reveal (Find, a link, a step) puts its target. */
-export const readingLine = (box: DOMRect) => box.top + box.height / 2;
+const readingLine = (box: DOMRect) => box.top + box.height / 2;
 
 /**
  * The reader's place as one entry: the first transcript entry whose bottom lies past the reading line. A folded group's
@@ -100,9 +100,9 @@ export function usePromptPlace(scroller: RefObject<HTMLElement | null>, outline:
 const NO_USERS: ThreadOutline["users"] = [];
 
 /** A Find match for the rail, by entry and the prompt it lies under. */
-export type RailMark = { id: string; prompt?: string; cur: boolean };
+type RailMark = { id: string; prompt?: string; cur: boolean };
 /** The rail a transcript shows: its layout, and the ref that measures its strip. No layout means no rail. */
-export type PromptRail = { layout?: RailLayout; strip: (el: HTMLElement | null) => void };
+type PromptRail = { layout?: RailLayout; strip: (el: HTMLElement | null) => void };
 
 /**
  * The one owner of whether a transcript has a rail: railLayout over the outline's prompts, the prompts on screen, the

@@ -1,6 +1,8 @@
-import { threadSource, type ThreadSummary } from "../../src/shared/protocol.ts";
+import type { ThreadSummary } from "../../src/shared/protocol.ts";
 import { navigate } from "./nav.ts";
 import { perfMark } from "./perf.ts";
+import { href, parseRoute, type Route } from "./route.ts";
+
 
 /** The shortcut modifier as the platform shows it: ⌘ on a Mac, Ctrl+ elsewhere. */
 export const MOD = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl+";
@@ -52,11 +54,11 @@ export function isBusy(t: ThreadSummary | undefined): boolean {
 
 /**
  * Does this thread need the owner? The one Needs-you derivation over every ask source: a live signal first
- * (`attentionOf`), else the open asks of its Arc. The notifier, the Dock count and Overview all read it. Only
+ * (`attentionOf`), else its Arc Needs-you count. The notifier, the Dock count and Overview all read it. Only
  * positive evidence counts (domain.md attention rules).
  */
 export function needsYou(t: ThreadSummary): string | undefined {
-	return attentionOf(t)[0]?.reason ?? arcAsks(t);
+	return attentionOf(t)[0]?.reason ?? arcNeedsYou(t);
 }
 
 /** Closed and archived threads keep history but never need owner attention. */
@@ -64,18 +66,14 @@ export function isAttentionEligible(t: ThreadSummary): boolean {
 	return !t.closed && !t.archived;
 }
 
-const ASK_NOUN: Record<NonNullable<ThreadSummary["arc"]>["asks"][number]["kind"], [string, string]> = {
-	decision: ["decision", "decisions"], approval: ["approval", "approvals"], input: ["input request", "input requests"], blocker: ["blocker", "blockers"],
-};
-/** The open asks of a thread's Arc, each kind with a positive count. Closed and archived threads ask nothing: their kept Arcs are history. */
-export function openAsks(t: ThreadSummary): NonNullable<ThreadSummary["arc"]>["asks"] {
-	return isAttentionEligible(t) ? (t.arc?.asks ?? []).filter((a) => a.n > 0) : [];
+/** Closed and archived Sessions never need attention from their kept Arc. */
+export function arcNeedsCount(t: ThreadSummary): number {
+	return isAttentionEligible(t) ? t.arc?.needsYou ?? 0 : 0;
 }
 
-/** The open asks of a thread's Arc as one reason, such as "Arc: 1 open decision". */
-export function arcAsks(t: ThreadSummary): string | undefined {
-	const asks = openAsks(t);
-	return asks.length ? `Arc: ${asks.map((a) => `${a.n} open ${ASK_NOUN[a.kind][a.n === 1 ? 0 : 1]}`).join(", ")}` : undefined;
+export function arcNeedsYou(t: ThreadSummary): string | undefined {
+	const count = arcNeedsCount(t);
+	return count > 0 ? `Arc: ${count} need you` : undefined;
 }
 
 /**
@@ -97,97 +95,11 @@ export function closedState(t: ThreadSummary): string | undefined {
 	return t.attention?.[0]?.reason ?? t.lastError;
 }
 
-/**
- * The GUI's one address space (docs/one-gui-views.md, "Links"):
- * - `#/h/<host>/t/<thread>?e=<entry>&p=<panel>`: a Session, optionally scrolled to one entry, with a side panel open;
- * - `#/v/<page>/<rest…>?<query>`: a page (Chief of Staff timeline, arcs, …).
- */
-export type Route = { host?: string; thread?: string; entry?: string; panel?: string; page?: string; rest: string[]; query: URLSearchParams };
+// route.ts is the canonical home for route helpers; this re-export is a temporary bridge until the Arc v2 freeze lifts.
+export { canonicalRoute, href, parseRef, parseRoute, threadRef, type Route } from "./route.ts";
 
 export function hashRoute(): Route {
 	return parseRoute(location.hash);
-}
-
-/**
- * The Host name in a route. One Session has one route, so a thread route names its Host by Host ID: a link key's source
- * suffix (`devbox#pi`) adds nothing there, because the thread ID picks the source (threadSource in
- * src/shared/protocol.ts), and findHost and the hub's Hub.route resolve the Host ID by it. A route without a thread (a
- * Host) keeps the link key: there a Host ID can name two sources.
- */
-function routeHost(host: string, thread: string | undefined): string {
-	return thread === undefined ? host : host.replace(/#(pi|durable)$/, "");
-}
-
-export function parseRoute(hash: string): Route {
-	const [path = "", search = ""] = hash.replace(/^#/, "").split("?");
-	const query = new URLSearchParams(search);
-	let parts: string[];
-	try {
-		parts = path.split("/").filter(Boolean).map(decodeURIComponent);
-	} catch {
-		// A malformed escape (`%E0%A4`) names nothing; the App shows the Overview.
-		return { page: "overview", rest: [], query };
-	}
-	if (parts[0] === "v" && parts[1]) return { page: parts[1], rest: parts.slice(2), query };
-	if (parts[0] !== "h" || !parts[1]) return { rest: [], query };
-	const thread = parts[2] === "t" ? parts[3] : undefined;
-	return { host: routeHost(parts[1], thread), thread, entry: query.get("e") ?? undefined, panel: query.get("p") ?? undefined, rest: [], query };
-}
-
-/** `hash` with a thread route's Host named by Host ID; an older link-key form (`#/h/devbox%23pi/t/…`) reads the same. */
-export function canonicalRoute(hash: string): string {
-	const m = /^#\/h\/([^/?]+)\/t\/([^/?]+)(.*)$/.exec(hash);
-	if (!m) return hash;
-	// A hash with a malformed escape (`%E0%A4`) names no Session; navigation keeps it as typed.
-	try {
-		return `#/h/${encodeURIComponent(routeHost(decodeURIComponent(m[1]!), decodeURIComponent(m[2]!)))}/t/${m[2]}${m[3]}`;
-	} catch {
-		return hash;
-	}
-}
-
-/** Hrefs for every place in the GUI; components link with these, never with hand-built hashes. */
-export const href = {
-	thread(host: string, thread: string, opts: { entry?: string; panel?: string } = {}): string {
-		const q = new URLSearchParams();
-		if (opts.entry) q.set("e", opts.entry);
-		if (opts.panel) q.set("p", opts.panel);
-		const qs = q.toString();
-		return `#/h/${encodeURIComponent(routeHost(host, thread))}/t/${encodeURIComponent(thread)}${qs ? `?${qs}` : ""}`;
-	},
-	page(page: string, rest: string[] = [], query: Record<string, string | undefined> = {}): string {
-		const q = new URLSearchParams(Object.entries(query).filter((kv): kv is [string, string] => kv[1] !== undefined));
-		const qs = q.toString();
-		return `#/v/${[page, ...rest].map(encodeURIComponent).join("/")}${qs ? `?${qs}` : ""}`;
-	},
-	/**
-	 * A Session or entry citation as a place in the GUI: `<host>/pi:<sessionId>[#<entryId>]` (K5.I3) opens the Pi
-	 * source of the Host, and `<host>/pi-durable:<threadId>[#<entryId>]` its durable source.
-	 */
-	ref(ref: string, opts: { panel?: string } = {}): string | undefined {
-		const parsed = parseRef(ref);
-		if (!parsed) return undefined;
-		const durable = parsed.thread.startsWith(DURABLE_HARNESS);
-		return href.thread(parsed.host, durable ? parsed.thread.slice(DURABLE_HARNESS.length) : parsed.thread, { entry: parsed.entry, ...opts });
-	},
-};
-
-const DURABLE_HARNESS = "pi-durable:";
-
-/**
- * The Session citation of a thread on a Host source (`<id>#pi`, `<id>#durable`), as views write `ref`. A bare Host ID,
- * as a thread route names it, picks the source by the thread ID (threadSource), so a route maps back to its citation.
- */
-export function threadRef(link: string, threadId: string): string {
-	const at = link.lastIndexOf("#");
-	const host = at < 0 ? link : link.slice(0, at);
-	const durable = (at < 0 ? threadSource(threadId) : link.slice(at + 1)) === "durable";
-	return durable ? `${host}/${DURABLE_HARNESS}${threadId}` : `${host}/${threadId}`;
-}
-
-export function parseRef(ref: string): { host: string; thread: string; entry?: string } | undefined {
-	const m = /^([^/#]+)\/([^#]+?)(?:#(.+))?$/.exec(ref);
-	return m ? { host: m[1]!, thread: m[2]!, entry: m[3] } : undefined;
 }
 
 export function go(host?: string, thread?: string, opts: { entry?: string; panel?: string } = {}): void {

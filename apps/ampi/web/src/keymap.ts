@@ -2,7 +2,7 @@ import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "rea
 import { overlayChord, type Overlay } from "./focus.ts";
 import { carrier } from "./nav.ts";
 
-export type KeyAction =
+type KeyAction =
 	| "sidebar.toggle" | "panel.toggle" | "focus.composer"
 	| "session.palette" | "command.palette" | "help" | "find"
 	| "overview" | "new" | "archive" | "display" | "transcript.mode" | "zoom.in" | "zoom.out" | "zoom.reset"
@@ -134,7 +134,7 @@ export function isEditableTarget(target: EventTarget | null): boolean {
 }
 
 /** Focus the region root when no navigable row exists. */
-export type RegionToggle = "show-and-focus" | "focus" | "hide-and-return";
+type RegionToggle = "show-and-focus" | "focus" | "hide-and-return";
 
 /** The focus-first toggle contract. `hidden` must be the derived visibility state. */
 export function regionToggle(hidden: boolean, focused: boolean): RegionToggle {

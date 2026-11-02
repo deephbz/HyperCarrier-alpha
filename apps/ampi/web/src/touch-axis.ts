@@ -6,7 +6,7 @@
  */
 export type Axis = "pending" | "x" | "y";
 
-export const LOCK_PX = 10;
+const LOCK_PX = 10;
 
 /** x when the travel is mostly sideways (|dx| > 1.5·|dy|), y otherwise; pending below LOCK_PX. */
 export function lockAxis(dx: number, dy: number): Axis {

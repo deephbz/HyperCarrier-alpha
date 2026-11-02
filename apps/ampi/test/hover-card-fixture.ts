@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { after, test, type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium, webkit, type Browser, type Page } from "playwright";
+import { loadBudget } from "./page-load.ts";
 import { build } from "vite";
 import react from "@vitejs/plugin-react";
 // @ts-ignore: shared browser discovery is plain ESM.
@@ -71,6 +72,7 @@ export async function open(t: TestContext, engine: Engine): Promise<Page> {
 	const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 	t.after(() => page.context().close());
 	page.setDefaultTimeout(3000);
+	loadBudget(page);
 	const css = readFileSync(join(web, "src/styles.css"), "utf8");
 	await page.route("**/*", (route) => {
 		const url = new URL(route.request().url());

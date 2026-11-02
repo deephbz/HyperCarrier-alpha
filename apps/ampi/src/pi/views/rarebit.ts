@@ -1,13 +1,14 @@
+import type { SideTurn, RarebitSide } from "../../shared/rarebit.ts";
 import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { sourceStatus, type SourceStatus, type PiView, type PiViewContext } from "./types.ts";
-import { buildLog, type ArcBuildRun } from "./cos-arc.ts";
+import { sourceStatus, type PiView, type PiViewContext } from "./types.ts";
+import type { SourceStatus } from "../../shared/source-status.ts";
 import { ModelNotFound } from "../../hub/helper-models.ts";
 import type { RarebitAskResult } from "../../shared/protocol.ts";
 
-export type RarebitKind = "user" | "continuation" | "stop" | "error" | "compaction";
-export type RarebitItem = { id: string; kind: RarebitKind; t: string | null; text: string; truncated?: boolean };
+type RarebitKind = "user" | "continuation" | "stop" | "error" | "compaction";
+export type RarebitItem = { id: string; kind: RarebitKind; owner: boolean; t: string | null; text: string; truncated?: boolean };
 export type Kinds = Record<"user" | "continuation" | "stop" | "toolCalls" | "toolResults" | "thinking" | "summary" | "other", number>;
 export type RarebitValue = {
 	items: RarebitItem[];
@@ -24,17 +25,12 @@ export type RarebitValue = {
 	before?: string;
 	around?: { id: string; found: "item" | "entry" | "missing" | "indexing" };
 	source?: SourceStatus;
-	/** Automatic Arc Builds (D16), newest last; each follows the agent stop `afterEntryId` names. */
-	arcBuilds?: ArcBuildRun[];
 };
-export type RarebitFailure = { error: { code: string; message: string } };
-export type SideTurn = { question: string; answer?: string; error?: string };
-export type RarebitSide = { id: string; at: string; count: number; included: number; omittedChars: number; revision: number; turns: SideTurn[]; model: string };
 const sides = new WeakMap<PiViewContext, Map<string, { threadId: string; file: string; side: RarebitSide; busy: boolean; override?: string }>>();
 
 function value(ctx: PiViewContext, threadId: string, before?: string, around?: string): RarebitValue | undefined {
  const session = ctx.session(threadId);
- return session ? { ...session.rarebits(before, false, around), source: sourceStatus(session), arcBuilds: buildLog(ctx, threadId).filter((b) => b.trigger === "auto").slice(-20) } : undefined;
+ return session ? { ...session.rarebits(before, false, around), source: sourceStatus(session) } : undefined;
 }
 function snapshot(ctx: PiViewContext, threadId: string, maxChars: number) {
  const session = ctx.session(threadId);
@@ -48,6 +44,8 @@ function failure(e: unknown): string {
 	const error = e as { code?: string; message?: string };
 	// A model name that names no model says where to change it.
 	if (e instanceof ModelNotFound) return e.message;
+	// Capacity is not a model or sign-in problem.
+	if (error.code === "busy") return "All model slots are busy. Ask again in a moment.";
 	return `${error.code ?? "ask_failed"}: ${error.message ?? "Model call failed"}. Check the hub's model and Pi sign-in, then retry`;
 }
 

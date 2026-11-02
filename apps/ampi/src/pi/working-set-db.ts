@@ -31,6 +31,7 @@ export function openWorkingSet(cacheDir: string): DatabaseSync {
  const db = traceDb(span("sqlite-open", "sqlite", () => new DatabaseSync(path, { timeout: BUSY_MS }), { db: "write" }), "write");
  chmodSync(path, 0o600);
  db.exec(`PRAGMA journal_mode=WAL; PRAGMA cache_size=-2048; PRAGMA mmap_size=0;
+ DROP TABLE IF EXISTS arc_evidence;
  CREATE TABLE IF NOT EXISTS sessions (path TEXT PRIMARY KEY, data TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS evicted (path TEXT PRIMARY KEY, id TEXT, ref TEXT, watermark TEXT);
  CREATE TABLE IF NOT EXISTS entries (
@@ -40,7 +41,7 @@ export function openWorkingSet(cacheDir: string): DatabaseSync {
   PRIMARY KEY(path,id));
  CREATE INDEX IF NOT EXISTS entry_order ON entries(path,position);
  CREATE INDEX IF NOT EXISTS entry_time ON entries(path,t);
- CREATE TABLE IF NOT EXISTS arc_evidence (path TEXT NOT NULL, id TEXT NOT NULL, text TEXT NOT NULL, PRIMARY KEY(path,id));`);
+`);
  searchSchema(db);
  return db;
 }

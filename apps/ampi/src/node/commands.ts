@@ -13,9 +13,10 @@ import { AgentDoc, CompactionTask, type ConversationId, defineDoc, type EntryRec
 import type { CommandAck, SlashCommand, SlashCommands } from "../shared/protocol.ts";
 import { expandTemplate } from "../shared/prompt-template.ts";
 import { frontmatter, loadPrompts, loadSkills } from "./core-extension.ts";
-import { NodeError, type NodeRuntime, parseThreadKey, type Store } from "./runtime.ts";
+import { NodeError } from "./errors.ts";
+import { type NodeRuntime, parseThreadKey, type Store } from "./runtime.ts";
 import { CacheTtlDoc } from "../plugins/cache-goblin.ts";
-import { rarebitCommand } from "../plugins/rarebit.ts";
+import { rarebitCommand } from "../plugins/rarebit-port.ts";
 import { auditSnapshot } from "../plugins/prompt-audit.ts";
 import { homedir } from "node:os";
 import { ptbCommand } from "./ptb-command.ts";
@@ -40,8 +41,8 @@ const NAME = /^[A-Za-z0-9][\w:.-]*$/;
 const KEEP_KEYS = 200;
 
 /** One keyed command: its intent, committed before the effect, and its reply, committed after it. */
-export type CommandRecord = { name: string; args: string; at: number; after: number | null; reply?: CommandAck };
-export type CommandsState = { keys: Record<string, CommandRecord>; retired?: Record<string, true> };
+type CommandRecord = { name: string; args: string; at: number; after: number | null; reply?: CommandAck };
+type CommandsState = { keys: Record<string, CommandRecord>; retired?: Record<string, true> };
 /** Admission returns the wait as data, so Close never queues behind a provider. */
 export type CommandResult = CommandAck | { completion: Promise<CommandAck> };
 const pendingCommands = new WeakMap<NodeRuntime, Map<string, Promise<CommandAck>>>();
@@ -97,7 +98,7 @@ export async function listCommands(runtime: NodeRuntime, key: string): Promise<S
 }
 
 /** Pi's skill message (pi-coding-agent `/skill:` expansion): the skill file without frontmatter, then the arguments. */
-export function expandSkill(name: string, path: string, args: string): string {
+function expandSkill(name: string, path: string, args: string): string {
 	const { body } = frontmatter(readFileSync(path, "utf8"));
 	const block = `<skill name="${name}" location="${path}">\nReferences are relative to ${dirname(path)}.\n\n${body.trim()}\n</skill>`;
 	return args ? `${block}\n\n${args}` : block;

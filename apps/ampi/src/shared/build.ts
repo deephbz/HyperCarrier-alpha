@@ -8,7 +8,7 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** The node's entry, relative to the app: `ampi node` starts here. */
-export const NODE_ROOTS = ["bin/ampi.mjs"];
+const NODE_ROOTS = ["bin/ampi.mjs"];
 /**
  * Modules the scan does not enter: cli.ts loads the hub-side commands from here, and `ampi node` never does.
  * test/build-id.test.ts runs the real `ampi node` and fails when it loads any module outside the node build.
@@ -32,7 +32,7 @@ const IMPORTS = [/(?:^|[\n;])\s*(?:import|export)\s+(?!type\s)[^;]*?\bfrom\s*["'
 // Files the node reads beside its own module: `new URL("<file>", import.meta.url)`.
 const ASSETS = /\bnew URL\(\s*["']([^"']+)["']\s*,\s*import\.meta\.url\s*\)/g;
 
-export type NodeBuild = {
+type NodeBuild = {
 	/** `n1-<hash>`, or UNKNOWN_BUILD when an input is missing. */
 	id: string;
 	/** Repo-relative paths of the hashed files, sorted. */

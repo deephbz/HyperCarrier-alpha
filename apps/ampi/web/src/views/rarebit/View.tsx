@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
-import type { RarebitFailure, RarebitItem, RarebitSide, RarebitValue } from "../../../../src/pi/views/rarebit.ts";
+import type { RarebitItem, RarebitValue } from "../../../../src/pi/views/rarebit.ts";
+import type { RarebitFailure, RarebitSide } from "../../../../src/shared/rarebit.ts";
 import { hub, useTopic } from "../../client.ts";
 import { useKeepPlace } from "../../keep-place.ts";
 import { revealStore } from "../../nav.ts";
@@ -8,7 +9,6 @@ import { Markdown } from "../../components/Markdown.tsx";
 import { clock, href, tokens } from "../../util.ts";
 import { freshPress } from "../../composer-keys.ts";
 import { rarebitState, useRarebitState } from "./state.ts";
-import { buildDetail, buildText } from "../cos/builds.ts";
 import "./rarebit.css";
 
 const MARK = { user: "□ You", continuation: "• Agent continues", stop: "● Agent stops", error: "× Terminal error", compaction: "Compacted" };
@@ -57,9 +57,6 @@ export function RarebitView({ host, threadId, entry }: { host: string; threadId:
 	const revealed = useRef(0);
 	const [settings, setSettings] = useState(false);
 	const filtered = value?.items.filter((i) => !state.hide || i.kind !== "continuation") ?? [];
-	// An automatic Arc update shows after the stop it followed: model spend the owner did not ask for stays visible.
-	const builds = new Map<string, NonNullable<RarebitValue["arcBuilds"]>>();
-	for (const b of value?.arcBuilds ?? []) if (b.afterEntryId) builds.set(b.afterEntryId, [...(builds.get(b.afterEntryId) ?? []), b]);
 	const start = Math.max(0, filtered.length - state.window);
 	const visible = filtered.slice(start, start + 60);
 	const [steps, setSteps] = useState<{ prev?: number; next?: number }>({});
@@ -208,7 +205,6 @@ export function RarebitView({ host, threadId, entry }: { host: string; threadId:
 				{visible.map((item) => item.kind === "compaction" ? <div key={item.id} className="rb-compaction" data-rarebit={item.id}><a href={href.thread(host, threadId, { entry: item.id })}>── compacted {time(item.t)} · context restarts here ──</a>{item.t && <a className="rb-timeline" href={href.page("timeline", [], { host, thread: threadId, at: String(Date.parse(item.t)) })}>Timeline ↗</a>}</div> : <article key={item.id} className={`rb-message rb-${item.kind}${item.kind === "user" ? " you" : ""}${item.id === entry ? " rb-target" : ""}`} data-rarebit={item.id} data-kind={item.kind}>
 					<div className={item.kind === "user" ? "rb-message-heading you-label" : "rb-message-heading"}><span aria-label={MARK[item.kind]} title={MARK[item.kind]}>{GLYPH[item.kind]}</span><time dateTime={item.t ?? undefined} title={item.t ?? "Time unavailable"}>{messageTime(item.t)}</time><span className="rb-item-actions"><Copy text={item.text} icon /><a className="rb-icon" title="Transcript" aria-label="Transcript" href={href.thread(host, threadId, { entry: item.id, panel: "rarebit" })}><Icon name="transcript" /></a>{item.t && <a className="rb-icon" title="Timeline" aria-label="Timeline" href={href.page("timeline", [], { host, thread: threadId, at: String(Date.parse(item.t)) })}><Icon name="timeline" /></a>}</span></div>
 					<Markdown text={item.text} />{item.truncated && <p className="rb-meta">Preview shortened · open Transcript to read the source entry.</p>}
-					{builds.get(item.id)?.map((b) => <p key={b.startedAt} className="cos-arc-build-row" data-state={b.state} title={buildDetail(b)}><span>{buildText(b)}</span><a href={href.page("arcs", [host, threadId])}>Arc ↗</a></p>)}
 				</article>)}
 				{!newest && <button className="btn ghost small rb-earlier" onClick={() => { pinned.current = false; set({ window: Math.max(60, state.window - 60) }); scroller.current?.scrollTo({ top: 0 }); }}>Show 60 newer</button>}
 			</>}

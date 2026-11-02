@@ -4,7 +4,7 @@
 // @ts-ignore: the audit package is plain ESM without types.
 import { renderSystemPromptReviewHtml, renderSystemPromptReviewMarkdown, validateSystemPromptSnapshot } from "@hypercarrier/systemp-prompt-audit/system-prompt-review.mjs";
 
-export type AuditSnapshot = {
+type AuditSnapshot = {
  schemaVersion: 1;
  capturedAt: string;
  cwd: string;
@@ -13,9 +13,9 @@ export type AuditSnapshot = {
  provenance?: unknown;
  integrity: { contentSha256: string };
 };
-export type AuditReview = { source: string; snapshot: AuditSnapshot; markdown: string; html: string };
+type AuditReview = { source: string; snapshot: AuditSnapshot; markdown: string; html: string };
 /** One request to the node. */
-export type NodeCall = (op: string, args: Record<string, unknown>) => Promise<unknown>;
+type NodeCall = (op: string, args: Record<string, unknown>) => Promise<unknown>;
 
 /** Fetch the node's snapshot for a thread (at an entry when given) and render both review forms. */
 export async function durableAuditReview(call: NodeCall, host: string, at: { threadId: string; entryId?: string }): Promise<AuditReview> {

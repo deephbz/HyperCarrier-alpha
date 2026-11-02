@@ -6,7 +6,7 @@ import type { Pin, ThreadSummary } from "../../../src/shared/protocol.ts";
 
 /** The part of a Host's sidebar state that resolving needs (Sidebar.tsx HostThreads). */
 export type PinHost = { host: { id: string; link: string; label?: string }; threads: ThreadSummary[]; stale: boolean; listing?: boolean; indexing?: boolean };
-export type Listed = { host: string; label: string; t: ThreadSummary };
+type Listed = { host: string; label: string; t: ThreadSummary };
 
 export const settled = (d: PinHost) => !d.stale && !d.listing && !d.indexing;
 

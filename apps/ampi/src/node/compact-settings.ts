@@ -34,7 +34,10 @@ export type CompactSettingsPort = {
 	global(): CompactSettings;
 	/** The settings of a working directory: global, then its trusted project's. Without a cwd, the global settings. */
 	forCwd(cwd?: string): CompactSettings;
-	/** `forCwd(cwd).stamp` from `stat` calls only, with no parse: the cost of a poll stays one stat per file. */
+	/**
+	 * `forCwd(cwd).stamp` with no parse: a poll costs one stat per settled file, plus a hash of a file edited in the
+	 * last two seconds (`fileStamp`).
+	 */
 	stamp(cwd?: string): string;
 	/** The global settings file: the node's settings notice names it, so the owner knows where to fix it. */
 	file(): string;

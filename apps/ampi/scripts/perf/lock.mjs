@@ -14,9 +14,9 @@ import { basename, dirname, join } from "node:path";
 export const PERF_HOME = process.env.AMPI_PERF_HOME ?? join(homedir(), ".cache", "ampi-perf");
 export const RUN_LOCK = join(PERF_HOME, "run.lock");
 /** A holder may name a child pid and release a little after that child exits; its lock is not stale in that window. */
-export const STALE_GRACE_MS = 60_000;
+const STALE_GRACE_MS = 60_000;
 /** A clearer acts within milliseconds of its last look, so a tomb kept this long outlives every clearer that saw it. */
-export const TOMB_KEEP_MS = 10 * 60_000;
+const TOMB_KEEP_MS = 10 * 60_000;
 
 const alive = (pid) => {
 	try {

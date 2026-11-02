@@ -14,12 +14,14 @@ import { AgentDoc, CompactionTask, defineDoc } from "@earendil-works/pi-durable"
 import { fallbackRun, plannerLine, recordDetail, recordLine } from "../shared/compact-record.ts";
 import { type BudgetOptions, type CompactMethod, type CompactRecord, compactionSettings, compactTrigger, hcCompactExtension, keepCap, workingBudget } from "@hypercarrier/auto-compact-durable";
 import { type CompactSettings, type CompactSettingsPort, compactSettingsPort } from "../node/compact-settings.ts";
-import { MetaDoc, NodeError, type NodePlugin, type NodeRuntime, type Store } from "../node/runtime.ts";
+import { NodeError } from "../node/errors.ts";
+import { MetaDoc } from "../node/meta-doc.ts";
+import type { NodePlugin, NodeRuntime, Store } from "../node/runtime.ts";
 import { lastRequest } from "./cache-goblin.ts";
 import { history, storeById } from "./rarebit.ts";
 import type { CommandAck } from "../shared/protocol.ts";
 
-export type CompactState = {
+type CompactState = {
 	records: CompactRecord[];
 	controls?: { enabled?: boolean; budgetTokens?: number; thresholdPercent?: number; method?: CompactMethod };
 	/** Budget crossings the node decided to compact, by the assistant entry that crossed W; `taskId` once admitted. */
@@ -50,7 +52,7 @@ export function budgetOptions(settings: CompactSettings, model: string | undefin
 }
 
 /** pi-durable's harness-wide compaction settings: Pi's keep-recent, else the package default for the global budget. */
-export function harnessCompaction(settings: CompactSettings) {
+function harnessCompaction(settings: CompactSettings) {
 	const modelOverrides = Object.fromEntries(Object.entries(settings.modelKeepRecent).map(([model, keepRecentTokens]) => [model, { keepRecentTokens }]));
 	return { ...compactionSettings({ budgetTokens: settings.budgetTokens, keepRecentTokens: settings.keepRecentTokens }), ...(Object.keys(modelOverrides).length ? { modelOverrides } : {}) };
 }
@@ -82,7 +84,7 @@ async function agentOf(port: CompactSettingsPort, api: HookApi, context: Context
 	return { model: modelKey(ref), window, settings: port.forCwd(agent?.cwd) };
 }
 
-export async function compactStatus(port: CompactSettingsPort, runtime: NodeRuntime, store: Store, conversationId: ConversationId) {
+async function compactStatus(port: CompactSettingsPort, runtime: NodeRuntime, store: Store, conversationId: ConversationId) {
 	const state = await store.harness.snapshot(CompactDoc, conversationId, BACKGROUND_CONTEXT);
 	const agent = await store.harness.snapshot(AgentDoc, conversationId, BACKGROUND_CONTEXT);
 	const model = agent?.model ? runtime.models.getModel(agent.model.provider, agent.model.modelId) : undefined;
@@ -95,7 +97,7 @@ export async function compactStatus(port: CompactSettingsPort, runtime: NodeRunt
 }
 
 /** Policy controls only. The command adapter sends manual runs through the existing compact admission. */
-export async function compactCommand(port: CompactSettingsPort, runtime: NodeRuntime, thread: Awaited<ReturnType<NodeRuntime["thread"]>>, args: string): Promise<CommandAck> {
+async function compactCommand(port: CompactSettingsPort, runtime: NodeRuntime, thread: Awaited<ReturnType<NodeRuntime["thread"]>>, args: string): Promise<CommandAck> {
 	const [option = "status", value, ...extra] = args.split(/\s+/).filter(Boolean);
 	const reply = (notice: string, body?: string): CommandAck => ({ via: "node", disposition: "handled", notice, ...(body ? { body } : {}) });
 	const alternatives: Record<string, string> = {

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { after, test, type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium, webkit, type Browser, type Page } from "playwright";
+import { loadBudget } from "./page-load.ts";
 import { build } from "vite";
 // @ts-ignore: shared browser discovery is plain ESM.
 import { findChrome } from "../scripts/perf/browser.mjs";
@@ -31,7 +32,7 @@ const REGIONS: Record<string, RegExp | string> = {
 	".session-metadata": /<Popover className="session-metadata /, ".tool-body": /<div className="tool-body /,
 	".rb-header": /<header className="rb-header /, ".rb-scroll": /<div className="rb-scroll /, ".rb-band": /<div className="rb-band /,
 	".rb-tools summary": /<summary className="quiet-scroll">\{run\.entries/, ".cos-scroll": /<div className="cos-scroll /,
-	".cos-models ul": /models Pi lists<\/summary><ul /, ".ptb-graph-scroll": /<div className="ptb-graph-scroll /,
+	".ptb-graph-scroll": /<div className="ptb-graph-scroll /,
 	".composer textarea": /^\t+ref=\{ref\}\n\t+className="quiet-scroll"\n\t+data-scrollbar="none"/m, ".queue": /<div className="queue /,
 	".composer-feedback": /composer-feedback/, ".prompt-outline": /<Popover className="prompt-outline quiet-scroll" /,
 	".scroll": "transcript: owned by Task ui-transcript-strip",
@@ -128,6 +129,7 @@ async function open(t: TestContext, engine: Engine, zoom: number): Promise<Page>
 	const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
 	t.after(() => page.context().close());
 	page.setDefaultTimeout(3000);
+	loadBudget(page);
 	const css = readFileSync(join(web, "src/styles.css"), "utf8");
 	await page.route("**/*", (route) => {
 		const url = new URL(route.request().url());

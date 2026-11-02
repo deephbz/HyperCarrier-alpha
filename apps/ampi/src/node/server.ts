@@ -15,7 +15,8 @@ import { auditSnapshot } from "../plugins/prompt-audit.ts";
 import { type CommandArgs, listCommands, runCommand } from "./commands.ts";
 import { loadPrompts, loadSkills } from "./core-extension.ts";
 import { projectEntry, projectView, projectViewFields, type ReturnedState } from "./projection.ts";
-import { expandHome, NodeError, type NodeRuntime } from "./runtime.ts";
+import { NodeError } from "./errors.ts";
+import { expandHome, type NodeRuntime } from "./runtime.ts";
 import { IMAGE_MAGIC, NODE_IMAGE_LIMITS } from "./images.ts";
 import { admitImages, rejectionLine } from "../shared/image-admission.ts";
 import { claimSubmitKey, submitDigest } from "./submit-keys.ts";
@@ -31,7 +32,7 @@ export type TopicSource = {
 	dispose?(): void;
 };
 
-export type OpHandler = (args: Record<string, unknown>, runtime: NodeRuntime) => Promise<unknown>;
+type OpHandler = (args: Record<string, unknown>, runtime: NodeRuntime) => Promise<unknown>;
 export type TopicHandler = (topic: Topic, runtime: NodeRuntime) => Promise<TopicSource>;
 
 /** Registries plugins extend. */
@@ -42,7 +43,7 @@ export const topics = new Map<string, TopicHandler>();
  * Registers one node op. Its result must be the op's declared `NodeOps` result; its arguments arrive unchecked from the
  * wire, so the handler validates them.
  */
-export function defineOp<K extends NodeOpName>(name: K, handler: (args: Record<string, unknown>, runtime: NodeRuntime) => Promise<NodeOps[K]["result"]>): void {
+function defineOp<K extends NodeOpName>(name: K, handler: (args: Record<string, unknown>, runtime: NodeRuntime) => Promise<NodeOps[K]["result"]>): void {
 	ops.set(name, handler);
 }
 

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { PiTeamTask, TeamValue } from "../../../../src/pi/views/team.ts";
+import type { PiTeamTask, TeamValue } from "../../../../src/shared/team.ts";
 import { findHost, useHosts, useTopic } from "../../client.ts";
 import { href } from "../../util.ts";
 import { hostLabelFor } from "../../components/host-label.ts";

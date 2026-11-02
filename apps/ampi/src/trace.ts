@@ -14,7 +14,7 @@ import { isMainThread, threadId } from "node:worker_threads";
 const dir = process.env.AMPI_TRACE;
 /** True when this process records a trace. Guard any argument building with it. */
 export const tracing = Boolean(dir);
-export type TraceCat = "startup" | "http" | "ws" | "sqlite" | "derive" | "ipc" | "render" | "gc";
+type TraceCat = "startup" | "http" | "ws" | "sqlite" | "derive" | "ipc" | "render" | "gc";
 type Args = Record<string, string | number | boolean | null | undefined>;
 
 const pid = process.pid;
@@ -70,7 +70,7 @@ export function nameThread(name: string): void {
 }
 
 /** A statement's span name: its SQL shape (code, never bound values), whitespace-collapsed and bounded. */
-export function sqlName(sql: string): string {
+function sqlName(sql: string): string {
 	const flat = sql.replace(/\s+/g, " ").trim();
 	return flat.length > 80 ? `${flat.slice(0, 79)}…` : flat;
 }

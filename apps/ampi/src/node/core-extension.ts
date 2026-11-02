@@ -30,7 +30,7 @@ function escapeXml(text: string): string {
 }
 
 /** Pi's `<project_context>` body (system-prompt.js renderProjectContext). */
-export function renderProjectContext(files: PiResources["contextFiles"]): string | undefined {
+function renderProjectContext(files: PiResources["contextFiles"]): string | undefined {
 	if (files.length === 0) return undefined;
 	return [
 		"Project-specific instructions and guidelines:",
@@ -39,7 +39,7 @@ export function renderProjectContext(files: PiResources["contextFiles"]): string
 }
 
 /** Pi's `<skills>` body (skills.js formatSkillsForPrompt): skills that allow model invocation, with the reader hint. */
-export function renderSkills(skills: Skill[], tools: string[]): string | undefined {
+function renderSkills(skills: Skill[], tools: string[]): string | undefined {
 	const reader = tools.includes("read") ? "read" : tools.includes("bash") ? "bash" : undefined;
 	const visible = skills.filter((skill) => !skill.disableModelInvocation);
 	if (!reader || visible.length === 0) return undefined;
@@ -87,5 +87,3 @@ export function ampiCore(options: PiConfigOptions = {}): Extension {
 		],
 	});
 }
-
-export const AmpiCore = ampiCore();

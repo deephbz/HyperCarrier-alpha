@@ -17,7 +17,7 @@ export function observeLayoutShifts() {
 }
 
 /** Row a, part 1: shifts after `since` (performance.now() ms) sum to zero. */
-export function layoutShiftsSince({ since }) {
+function layoutShiftsSince({ since }) {
   const shifts = (window.__uiShifts ?? []).filter(s => s.at > since);
   const total = shifts.reduce((n, s) => n + s.value, 0);
   return total > 0 ? [{ row: 'a', rule: 'cls-zero', at: 'document', detail: `CLS ${total.toFixed(4)} without user input: ${JSON.stringify(shifts.slice(0, 3))}` }] : [];
@@ -37,7 +37,7 @@ export const CLASSIC_SCROLLBARS = '*::-webkit-scrollbar { width: 15px; height: 1
  * For each visible vertical scroller, flip it between "no overflow" and "overflow", then compare the boxes of its
  * row-like descendants. Restores the DOM afterwards.
  */
-export function scrollbarStability({ rowSelector, tolerance = 0.5, limit = 40 }) {
+function scrollbarStability({ rowSelector, tolerance = 0.5, limit = 40 }) {
   const name = el => el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + [...el.classList].slice(0, 3).map(c => '.' + c).join('') +
     [...el.attributes].filter(a => a.name.startsWith('data-')).slice(0, 2).map(a => `[${a.name}=${JSON.stringify(a.value)}]`).join('');
   const findings = [];
@@ -102,7 +102,7 @@ function hierarchyPairs({ rowSelector, childSelector, labelSelector }) {
 }
 
 /** Row b: a child's text starts at least `indent` px right of its parent's text. */
-export function childIndent({ rowSelector, childSelector, labelSelector, indent = 12, pairsSource, textStartSource }) {
+function childIndent({ rowSelector, childSelector, labelSelector, indent = 12, pairsSource, textStartSource }) {
   const pairs = (0, eval)(pairsSource)({ rowSelector, childSelector, labelSelector });
   const start = (0, eval)(textStartSource);
   return pairs.flatMap(({ parent, child, parentLabel, childLabel }) => {
@@ -115,7 +115,7 @@ export function childIndent({ rowSelector, childSelector, labelSelector, indent 
  * Row c: a label does not repeat its parent's label or the parent's leading segment.
  * Segments split on "/", "·", ":", "|", " - " and " — ".
  */
-export function labelRepeat({ rowSelector, childSelector, labelSelector, groupSelector, groupLabelSelector, pairsSource }) {
+function labelRepeat({ rowSelector, childSelector, labelSelector, groupSelector, groupLabelSelector, pairsSource }) {
   const pairs = (0, eval)(pairsSource)({ rowSelector, childSelector, labelSelector });
   const norm = s => s.toLowerCase().replace(/\s+/g, ' ').trim();
   const head = s => norm(s).split(/\s*(?:\/|·|:|\||\s-\s|\s—\s)\s*/)[0];
@@ -143,7 +143,7 @@ export function labelRepeat({ rowSelector, childSelector, labelSelector, groupSe
  * mark, or one mark appearance on more than `share` of the rows, has a constant marker (the resting state needs
  * no mark).
  */
-export function constantStatusMark({ listSelector, rowSelector, markSelector, min = 3, share = 0.5 }) {
+function constantStatusMark({ listSelector, rowSelector, markSelector, min = 3, share = 0.5 }) {
   const findings = [];
   for (const list of document.querySelectorAll(listSelector)) {
     const rows = [...list.querySelectorAll(rowSelector)].filter(r => r.getBoundingClientRect().width > 0);
@@ -165,7 +165,7 @@ export function constantStatusMark({ listSelector, rowSelector, markSelector, mi
 }
 
 /** Row e: an open popover, menu, tooltip, card or dialog lies inside the viewport and inside every clipping ancestor. */
-export function popoverContained({ popoverSelector, tolerance = 1 }) {
+function popoverContained({ popoverSelector, tolerance = 1 }) {
   const name = el => el.tagName.toLowerCase() + [...el.classList].slice(0, 2).map(c => '.' + c).join('') + (el.getAttribute('role') ? `[role=${el.getAttribute('role')}]` : '');
   const findings = [];
   for (const el of document.querySelectorAll(popoverSelector)) {
@@ -257,8 +257,8 @@ export function textOverlap({ overlaySelector, minArea = 4, minShare = 0.15, lim
   return findings;
 }
 
-export const textStartSource = textStart;
-export const pairsSource = `(${hierarchyPairs.toString()})`;
+const textStartSource = textStart;
+const pairsSource = `(${hierarchyPairs.toString()})`;
 
 /** The AmPi selector contract. data-* first (hc-lenses sidebar), then the classes of earlier builds. */
 export const AMPI = {

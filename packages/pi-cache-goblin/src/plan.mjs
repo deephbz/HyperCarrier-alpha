@@ -49,25 +49,31 @@ const withoutMarker = (block) => {
 
 const contentArray = (content) => (typeof content === "string" ? [{ type: "text", text: content }] : content);
 
-/** Deep-copy the parts we edit and remove every existing marker. */
-export function stripMarkers(payload) {
+function stripHeadMarkers(payload) {
   const out = { ...payload };
   if (Array.isArray(payload.tools)) out.tools = payload.tools.map(withoutMarker);
   if (typeof payload.system === "string") out.system = [{ type: "text", text: payload.system }];
   else if (Array.isArray(payload.system)) out.system = payload.system.map(withoutMarker);
+  delete out.cache_control; // top-level automatic caching would add a 5th marker
+  return out;
+}
+
+/** Deep-copy the parts we edit and remove every existing marker. */
+export function stripMarkers(payload) {
+  const out = stripHeadMarkers(payload);
   out.messages = payload.messages.map((message) =>
     Array.isArray(message.content) || typeof message.content === "string"
       ? { ...message, content: contentArray(message.content).map(withoutMarker) }
       : { ...message },
   );
-  delete out.cache_control; // top-level automatic caching would add a 5th marker
   return out;
 }
 
 /** Conservative request-head fingerprint, independent of marker layout and output cap. */
 export function headOf(payload) {
   // Keep unknown request-head fields: new provider cache keys must invalidate pins too.
-  const { messages: _messages, max_tokens: _cap, stream: _stream, ...head } = stripMarkers(payload);
+  const { messages: _messages, max_tokens: _cap, stream: _stream, ...fields } = payload;
+  const head = stripHeadMarkers(fields);
   if (Array.isArray(head.system)) {
     head.system = head.system.reduce((blocks, block) => {
       const previous = blocks.at(-1);
@@ -210,18 +216,12 @@ export function placeMarkers(payload, plan) {
     }
     const result = { name: pin.name, at: pin.at, status: "placed" };
     pinResults.push(result);
-    if (samePosition(pin.at, tail) || pinMarkers.some((m) => samePosition(m, pin.at))) continue;
+    if (samePosition(pin.at, tail)) continue;
     pinMarkers.push({ layer: "pin", ttl: sessionTtl, name: pin.name, messageIndex: pin.at.messageIndex, blockIndex: pin.at.blockIndex, result });
   }
 
   const tailMarkers = tail ? [{ layer: "tail", ttl: sessionTtl, ...tail }] : [];
-  // Over budget: drop the oldest pins first; layers and the tail stay.
-  const room = MAX_MARKERS - layerMarkers.length - tailMarkers.length;
-  while (pinMarkers.length > Math.max(0, room)) {
-    const dropped = pinMarkers.shift();
-    dropped.result.status = "dropped";
-  }
-  pinMarkers.sort((a, b) => a.messageIndex - b.messageIndex || a.blockIndex - b.blockIndex);
+  // Newest pin wins: at most one pin, two system layers, and one tail fit four markers.
 
   const markers = [...layerMarkers, ...pinMarkers.map(({ result: _r, ...m }) => m), ...tailMarkers];
   assertTtlOrder(markers);

@@ -118,7 +118,7 @@ try {
   if (!health.ok) throw new Error('Doctor failed: ' + JSON.stringify(health.checks.filter(c => !c.ok)));
   console.log(`doctor ok · port ${state.port} · ${state.revision.slice(0, 12)} · ${elapsed()}`);
   mark('doctor');
-  // Hub-start derives and automatic Builds (D16) call the model; side-effect deltas count only after they finish.
+  // Demo setup seeds receipts with auto off. Side-effect deltas count only after background jobs finish.
   console.log(`hub settled · ${await settled(state)} · ${elapsed()}`);
   mark('settled');
   browser = await browserReady;
@@ -171,7 +171,7 @@ try {
       },
       settle: () => page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)))),
       /**
-       * Runs a fixture mutation that can start background model work (derives, automatic Builds D16) under the
+       * Runs a fixture mutation that can start background work (derives or explicit Builds) under the
        * side-effect gate. `add` returns once the hub has picked the change up; the gate opens when the jobs settle,
        * so no alone step counts their model calls.
        */

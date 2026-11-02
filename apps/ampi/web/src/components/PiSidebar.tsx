@@ -9,9 +9,10 @@ import { useEffect, useState } from "react";
 import type { ThreadSummary } from "../../../src/shared/protocol.ts";
 import { type HostState, useNow } from "../client.ts";
 import { ago } from "../util.ts";
-import { type HostThreads, isPiHost, LinkNotes, NodeNotes, ThreadRow } from "./Sidebar.tsx";
+import type { HostThreads } from "./Sidebar.tsx";
+import { LinkNotes, NodeNotes, ThreadRow } from "./SidebarRows.tsx";
 import { hostMeta, linkView, readHostFold, saveHostFold } from "./host-fold.ts";
-import { hostLabel } from "./host-label.ts";
+import { hostLabel, isPiHost } from "./host-label.ts";
 import { arrangeByLayout } from "./sidebar-layout.ts";
 import { projectTeamRows } from "./team-nesting.ts";
 

@@ -6,9 +6,9 @@
 import { appendFileSync, existsSync } from "node:fs";
 import type { Context } from "@earendil-works/chord/context";
 import { CompactionTask, defineExtension, type Extension, GenerationTask, type HookApi, hook, ToolTask } from "@earendil-works/pi-durable";
-import { MetaDoc } from "./runtime.ts";
+import { MetaDoc } from "./meta-doc.ts";
 
-export const GUARD_EXTENSION = "ampi.guard";
+const GUARD_EXTENSION = "ampi.guard";
 
 export function toolBlockReason(state: "closed" | "stopped"): string {
 	return state === "closed" ? "This thread is closed." : "This work was stopped.";

@@ -51,7 +51,7 @@ export function teamBadge(origin: Pick<QueueOrigin, "delivery" | "interrupt">): 
  * interruption outcome. An update or older notice keeps its text in the collapsed body, fenced only when it is JSON.
  * Undefined when the data names no Team origin.
  */
-export function teamNoticeMessage(data: unknown, text: string): InjectedMessage | undefined {
+function teamNoticeMessage(data: unknown, text: string): InjectedMessage | undefined {
 	const origin = queueOrigin({ kind: "team.notice", data }, text);
 	if (!origin) return undefined;
 	// biome-ignore lint: the payload is parsed loosely; each field is checked where it is read

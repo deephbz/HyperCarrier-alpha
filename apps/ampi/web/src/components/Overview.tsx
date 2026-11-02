@@ -1,5 +1,5 @@
 import type { ThreadSummary } from "../../../src/shared/protocol.ts";
-import { ACTIVITY_LABEL, MOD, ago, attentionOf, go, href, isBusy, needsYou } from "../util.ts";
+import { ACTIVITY_LABEL, MOD, ago, arcNeedsYou, attentionOf, go, href, isBusy, needsYou } from "../util.ts";
 import { useEffect, useRef, useState } from "react";
 import { useKeepPlace } from "../keep-place.ts";
 import { hasRealModel, useModels } from "../models.ts";
@@ -7,10 +7,12 @@ import { openAccounts } from "./Accounts.tsx";
 import { ONBOARDING_KEY } from "./Dialogs.tsx";
 import { useNow } from "../client.ts";
 import { linkLine, linkView } from "./host-fold.ts";
-import { hostLabel } from "./host-label.ts";
-import { ActivityIcon, type HostThreads, ThreadBadges, isPiHost } from "./Sidebar.tsx";
+import { hostLabel, isPiHost } from "./host-label.ts";
+import type { HostThreads } from "./Sidebar.tsx";
+import { ActivityIcon, ThreadBadges } from "./ThreadStatus.tsx";
 import { emptyNote, reading, unavailable } from "../host-lists.ts";
-import { KIND_LABEL, arcCoverage, arcFinished, asksByKind, coverageNote } from "../views/cos/needs.ts";
+import { arcCoverage, arcNeedsRows, coverageNote } from "../views/cos/needs.ts";
+
 import { activeSpend } from "../views/cos/totals.ts";
 
 function Step({ done, title, children, action }: { done: boolean | undefined; title: string; children?: React.ReactNode; action?: React.ReactNode }) {
@@ -160,17 +162,25 @@ export function Overview({ data, onNew, onHostSetup, onHelp }: { data: HostThrea
 	const inScope = (t: ThreadSummary) => !t.archived;
 	const hosts = data.map((d) => d.host);
 	const rows: Row[] = data.flatMap((d) => d.threads.filter(inScope).map((t) => ({ host: d.host.link, hostLabel: hostLabel(d.host, hosts), t })));
+	// One pass over the rows; Hosts that share a link share its counts.
+	const perHost = new Map<string, { total: number; busy: number }>();
+	for (const r of rows) {
+		const c = perHost.get(r.host) ?? { total: 0, busy: 0 };
+		c.total++;
+		if (isBusy(r.t)) c.busy++;
+		perHost.set(r.host, c);
+	}
 	const byRecent = (a: Row, b: Row) => b.t.updatedAt - a.t.updatedAt;
-	// Live signals (errors, Herdr, node Summaries) first; then Pi Sessions' open tier-2 asks by kind (D16).
+	// Live signals first; then the cached Arc Needs-you count.
 	const signals = rows.filter((r) => attentionOf(r.t).length).sort(byRecent);
-	const asks = asksByKind(rows);
+	const asks = arcNeedsRows(rows);
 	const needs = rows.filter((r) => needsYou(r.t));
 	const running = rows.filter((r) => isBusy(r.t)).sort(byRecent);
 	const dayAgo = Date.now() - 24 * 3600_000;
 	const weekAgo = Date.now() - 7 * 24 * 3600_000;
 	const coverage = arcCoverage(rows, weekAgo);
-	// Node Sessions: a fresh Summary; Pi Sessions: every tier-2 thread done on a current Arc.
-	const finished = (t: ThreadSummary) => (t.rarebit?.status === "finished" && t.rarebit.fresh) || arcFinished(t);
+	// An empty Arc Needs-you count gives no evidence that work finished.
+	const finished = (t: ThreadSummary) => t.rarebit?.status === "finished" && t.rarebit.fresh;
 	const open = (t: ThreadSummary) => Boolean(needsYou(t));
 	const recent = rows.filter((r) => !isBusy(r.t) && !open(r.t) && finished(r.t) && r.t.updatedAt > weekAgo).sort(byRecent);
 	// Idle is not done (P5): quiet threads without positive evidence of being finished stay on the board.
@@ -216,7 +226,7 @@ export function Overview({ data, onNew, onHostSetup, onHelp }: { data: HostThrea
 								<b>{hostLabel(host, hosts)}</b>
 								<span className="hint">
 									{host.status === "connected"
-										? reading(d) ? "Reading Sessions…" : d.error ? d.error : `${host.node?.hostname ? `${host.node.hostname} · ` : ""}${rows.filter((r) => r.host === host.link && isBusyT(r.t)).length} running · ${rows.filter((r) => r.host === host.link).length.toLocaleString()} Sessions in scope`
+										? reading(d) ? "Reading Sessions…" : d.error ? d.error : `${host.node?.hostname ? `${host.node.hostname} · ` : ""}${perHost.get(host.link)?.busy ?? 0} running · ${(perHost.get(host.link)?.total ?? 0).toLocaleString()} Sessions in scope`
 										: linkLine(linkView(host, now))}
 								</span>
 							</div>
@@ -232,17 +242,7 @@ export function Overview({ data, onNew, onHostSetup, onHelp }: { data: HostThrea
 								empty="No error or waiting pane. Idle threads are not necessarily done."
 								reason={(t) => attentionOf(t).map((a) => `${a.source}: ${a.reason}`).join(" · ")}
 							/>}
-							{asks.map(({ kind, rows: list }) => (
-								<section key={kind} className="ov-needs-kind" data-kind={kind} aria-label={KIND_LABEL[kind]}>
-									<h3>{KIND_LABEL[kind]} <span className="hint">{list.length.toLocaleString()}</span></h3>
-									<List {...paging(`needs-${kind}`)}
-										rows={list.map((a) => a.row)}
-										empty=""
-										link={(r) => href.page("arcs", [r.host, r.t.id])}
-										reason={(t) => { const a = list.find((x) => x.row.t === t)!; return `${a.n} open · ${a.since ? `asked ${ago(a.since)} ago` : "ask time unknown"}${a.stale ? " · Arc out of date" : ""}`; }}
-									/>
-								</section>
-							))}
+							{asks.length > 0 && <List {...paging("needs-arc")} rows={asks} empty="" reason={(t) => `${arcNeedsYou(t)}${t.arc?.stale ? " · Arc out of date" : ""}`} />}
 							{note && <p className="hint" data-arc-coverage>{note}</p>}
 						</div>
 						<div className="ov-card" data-card="running">
@@ -260,20 +260,16 @@ export function Overview({ data, onNew, onHostSetup, onHelp }: { data: HostThrea
 							<List {...paging("quiet")}
 								rows={quiet}
 								empty="Every idle thread appears finished."
-								reason={(t) => (t.arc ? (t.arc.stale ? `Arc out of date · ${t.arc.newMessages} new since build` : "Arc: work still open") : t.rarebit ? (t.rarebit.status === "error" ? "Summary failed" : t.rarebit.fresh ? "Summary up to date" : "Summary out of date") : t.ref ? "no Arc yet" : "no Summary yet")}
+								reason={(t) => (t.arc ? (t.arc!.stale ? `Arc out of date · ${t.arc!.stale} new since build` : "No completion signal") : t.rarebit ? (t.rarebit.status === "error" ? "Summary failed" : t.rarebit.fresh ? "Summary up to date" : "Summary out of date") : t.ref ? "no Arc yet" : "no Summary yet")}
 							/>
 						</div>
 						<div className="ov-card" data-card="recent">
 							<h2>Appear finished (this week) <span className="hint">{recent.length.toLocaleString()}</span></h2>
-							<List {...paging("recent")} rows={recent} empty="No thread appears finished: no current Arc has every thread done, and no fresh Summary says so." />
+							<List {...paging("recent")} rows={recent} empty="No fresh Summary says a thread finished." />
 						</div>
 					</div>}
 				</div>
 			</div>
 		</div>
 	);
-}
-
-function isBusyT(t: ThreadSummary) {
-	return isBusy(t);
 }

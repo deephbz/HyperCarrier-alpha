@@ -6,7 +6,6 @@ import { tokens } from "../../util.ts";
 import { Diagnosis } from "./Diagnosis.tsx";
 import { useRarebitState } from "./state.ts";
 import { useRevealOpen } from "../../components/reveal-open.ts";
-import { toggleArcPanel } from "../cos/ArcPanel.tsx";
 import { Segmented, type Segment } from "../../components/Segmented.tsx";
 import "./rarebit.css";
 
@@ -36,8 +35,8 @@ export function RarebitControls({ host, threadId, panel, setPanel, beforeLensCha
 	const btn = place === "bar" ? "btn ghost small" : undefined;
 	const mode = <Segmented label="Transcript mode" value={state.lens ? "chat" : "full"} options={MODES} onChange={(next) => { beforeLensChange(); set({ lens: next === "chat" }); }} />;
 	const items = <>
+		<button className={btn} aria-pressed={panel === "arc"} onClick={() => togglePanel("arc")}>Arc</button>
 		<button className={btn} aria-pressed={panel === "timeline"} onClick={() => togglePanel("timeline")}>Timeline</button>
-		<button className={btn} aria-pressed={panel === "arc"} onClick={() => toggleArcPanel(panel, setPanel)}>Arc</button>
 		{!panel && <a className={btn} href={href.thread(host, threadId, { panel: "rarebit" })}>Rarebit</a>}
 	</>;
 	return place === "bar" ? <span className="rb-controls">{mode}{items}</span> : <><div className="t-more-row"><span>Transcript</span>{mode}</div>{items}</>;

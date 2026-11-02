@@ -41,7 +41,10 @@ import { CodemodeSandbox } from "@earendil-works/pi-codemode";
 import { contextTokensOf } from "@hypercarrier/auto-compact-durable/budget";
 import type { ActionAck, Activity, CommandAck, ControlCompaction, ControlSubmission, EditQueuedResult, NodeHealth, NodeInfo, NodeOpName, NodeOps, Placement, ThreadCreated, ThreadSummary, ThreadsState } from "../shared/protocol.ts";
 
-/** The frozen node backend keys its threads by conversation id, outside the Pi wire contract (docs/wire-boundary.md). */
+/**
+ * The durable node keys its threads `<store>.<conversation>` (`Store.threadKey`), outside the Pi wire contract
+ * (docs/wire-boundary.md).
+ */
 type NodeThreadsState = Omit<ThreadsState, "threads"> & { threads: Record<string, ThreadSummary> };
 import { ampiCore } from "./core-extension.ts";
 import { defaultModel, listModels, openModels, startModel, testSafeModels } from "./models.ts";
@@ -52,45 +55,18 @@ import { nodeGuard, recordStop, stopLatch, toolBlockReason } from "./guard.ts";
 import { type Marked, markStops, returnedInput, type StopIntent, type StopOutcome, settleStops } from "./stops.ts";
 import { FIRST_ORDER, newTab, orderAfter, type Placed, type Tab, tabLayout } from "./tabs.ts";
 import { Accounts } from "./accounts.ts";
+import { NodeError } from "./errors.ts";
+import { MetaDoc, type MetaState } from "./meta-doc.ts";
 import { NODE_IMAGE_LIMITS } from "./images.ts";
 import { buildId } from "../shared/build.ts";
 import { type CacheTtl, cacheGoblinModels, CacheTtlDoc } from "../plugins/cache-goblin.ts";
 import { photonImages, piCodingTools } from "./coding-tools.ts";
 import { backupReason, backupStore, rootConversations, writeStoreFile } from "./store-file.ts";
+import { ampiHome } from "../shared/home.ts";
 
 export const VERSION = "0.1.0";
 
-/** Session-scoped AmPi metadata: thread presentation and per-conversation migrations, never identity (P4). */
-export type MetaState = {
-	createdAt: number;
-	root?: string;
-	/** This storage's ID, so tools running inside it can find their own store. */
-	store?: string;
-	convs: Record<string, ConvMeta>;
-};
-/**
- * One conversation's AmPi metadata. `tab` and `order` place it (node-design.md, Tabs); stores written before tabs
- * have none and show unplaced. `closed` is the stored Close intent: the thread is read-only from then on. Its
- * `attention` keeps the reasons of the runs that were parked at Close, because Close removes their tasks.
- */
-export type ConvMeta = {
-	kind: ThreadSummary["kind"];
-	createdAt: number;
-	title?: string;
-	archived?: boolean;
-	/** Summary retirement committed; later boots skip the legacy document scan. */
-	rarebitSummaryRetired?: true;
-	tab?: Tab;
-	order?: string;
-	closed?: { at: number; by: string; attention?: string[] };
-};
-export const MetaDoc = defineDoc<MetaState>({
-	kind: "ampi.meta",
-	version: 1,
-	checkpointWhen: () => false,
-	scope: "session",
-	initial: () => ({ createdAt: Date.now(), convs: {} }),
-});
+export { MetaDoc } from "./meta-doc.ts";
 
 /** The newest queued-message edits by `editId`, so a retry after an unknown outcome gets the first answer. */
 export type EditsState = { edits: Record<string, { submission: string; text: string; result: EditQueuedResult; at: number }> };
@@ -272,14 +248,6 @@ export type Effect = {
 	readonly models: MutableModels;
 };
 
-export class NodeError extends Error {
-	readonly code: string;
-	constructor(code: string, message: string) {
-		super(message);
-		this.code = code;
-	}
-}
-
 export function parseThreadKey(key: string): { storeId: string; conversationId: string } {
 	const dot = key.lastIndexOf(".");
 	if (dot <= 0) throw new NodeError("bad_request", `Bad thread id ${key}`);
@@ -401,7 +369,7 @@ export class NodeRuntime {
 
 	constructor(options: NodeOptions = {}) {
 		assertTestIsolation();
-		this.home = options.home ?? process.env.AMPI_HOME ?? join(homedir(), ".ampi");
+		this.home = options.home ?? ampiHome();
 		mkdirSync(join(this.home, "threads"), { recursive: true, mode: 0o700 });
 		this.piConfig = options.agentDir ? { agentDir: options.agentDir } : {};
 		this.models = testSafeModels(

@@ -4,7 +4,8 @@ import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { Hub } from "../src/hub/hub.ts";
-import { type RarebitFailure, type RarebitSide, type RarebitValue } from "../src/pi/views/rarebit.ts";
+import type { RarebitValue } from "../src/pi/views/rarebit.ts";
+import type { RarebitFailure, RarebitSide } from "../src/shared/rarebit.ts";
 import { Browser } from "./helpers.ts";
 import { fixture } from "./pi-fixtures.ts";
 

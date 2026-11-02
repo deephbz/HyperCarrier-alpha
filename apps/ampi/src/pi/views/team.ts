@@ -1,14 +1,7 @@
-import type { PiTeamTask, PiTeamsFrame, PiView, PiViewContext } from "./types.ts";
+import type { PiTeamsFrame, PiView, PiViewContext } from "./types.ts";
+import type { TeamValue } from "../../shared/team.ts";
 
-import type { TeamMessages } from "../../shared/team-messages.ts";
-
-export type { PiTeamTask };
 type TeamFrame = Omit<PiTeamsFrame, "t">;
-
-export type TeamValue = {
-	availability: string;
-	teams: { name: string; members: { member: string; role: string; threadId?: string; ref?: string; pane?: string; live: boolean; status: string }[]; tasks: PiTeamTask[]; messages: TeamMessages; issues: string[] }[];
-};
 
 function project(ctx: PiViewContext, snapshot: TeamFrame, threadId?: string): TeamValue {
 	const sessions = ctx.sessions();

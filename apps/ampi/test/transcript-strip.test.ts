@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { after, test, type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium, webkit, type Browser, type Page } from "playwright";
+import { loadBudget } from "./page-load.ts";
 import { build } from "vite";
 import react from "@vitejs/plugin-react";
 import { ENGINES, entries, frames, view, type Engine } from "./thread-scroll-fixture.ts";
@@ -86,6 +87,7 @@ async function open(t: TestContext, engine: Engine, opts: { zoom?: number; regio
 	const page = await browser.newPage({ viewport: { width: Math.round((opts.panel ? 1360 : 1000) * zoom), height: Math.round(700 * zoom) } });
 	t.after(() => page.context().close());
 	page.setDefaultTimeout(4000);
+	loadBudget(page);
 	const css = readFileSync(join(web, "src/styles.css"), "utf8");
 	const globals = opts.strip ? `window.MODE='strip';window.PROPS=${JSON.stringify(opts.strip)};` : `window.PANEL=${Boolean(opts.panel)};`;
 	await page.route("**/*", (route) => {

@@ -5,12 +5,13 @@
 import { createHash } from "node:crypto";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { type ConversationId, defineDoc } from "@earendil-works/pi-durable";
-import { NodeError, type NodeRuntime } from "./runtime.ts";
+import { NodeError } from "./errors.ts";
+import type { NodeRuntime } from "./runtime.ts";
 
 const KEEP_KEYS = 1000;
 
-export type SubmitKeysState = { keys: Record<string, { digest: string; at: number }> };
-export const SubmitKeysDoc = defineDoc<SubmitKeysState>({
+type SubmitKeysState = { keys: Record<string, { digest: string; at: number }> };
+const SubmitKeysDoc = defineDoc<SubmitKeysState>({
 	kind: "ampi.submit-keys",
 	version: 1,
 	checkpointWhen: () => false,
@@ -21,7 +22,7 @@ export const SubmitKeysDoc = defineDoc<SubmitKeysState>({
 	initial: () => ({ keys: {} }),
 });
 
-export type SubmitPayload = { text: string; whenBusy: string; images: readonly { data: string; mimeType: string }[] };
+type SubmitPayload = { text: string; whenBusy: string; images: readonly { data: string; mimeType: string }[] };
 
 /** The digest of a message: its text, its busy mode, and each image's type and data digest, in order. */
 export function submitDigest(payload: SubmitPayload): string {

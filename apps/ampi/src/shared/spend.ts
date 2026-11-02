@@ -3,7 +3,7 @@
 // @ts-ignore: shared reader is plain ESM.
 import * as rule from "../../../trace-analytics/src/sources/spend.mjs";
 
-export type SpendClass = "responses" | "failed" | "compaction" | "tools";
+type SpendClass = "responses" | "failed" | "compaction" | "tools";
 /**
  * A cost figure and the request classes it counts. `usd` is null when no price was reported. `unread`: how many
  * Sessions the figure could not count yet (ThreadSummary.updating); the rest of the figure is a lower bound.

@@ -2,6 +2,7 @@
 // and credentials shared with pi (auth.json and the usual environment variables), plus the offline ampi-sim provider.
 // The node home's own models.json, when present, layers over Pi's for this node only.
 
+import type { ModelChoice } from "../shared/models.ts";
 import type { CredentialStore } from "@earendil-works/pi-ai";
 import { createModels, type MutableModels } from "@earendil-works/pi-ai/models";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
@@ -11,17 +12,6 @@ import { layerModelsJson, readModelsJson, withModelsJson } from "./models-json.t
 import { piAgentDir, type PiSettings } from "./pi-config.ts";
 import { SIM_MODEL, SIM_PROVIDER, simProvider } from "./sim.ts";
 import { assertTestIsolation, isTestMode } from "./test-mode.ts";
-
-export type ModelChoice = {
-	provider: string;
-	id: string;
-	name: string;
-	reasoning: boolean;
-	contextWindow: number;
-	available: boolean;
-	/** The model new threads on this host start with. */
-	default?: true;
-};
 
 const stores = new WeakMap<MutableModels, CredentialStore>();
 const configErrors = new WeakMap<MutableModels, string[]>();
@@ -108,7 +98,7 @@ export async function listModels(models: MutableModels): Promise<ModelChoice[]> 
 	return choices;
 }
 
-export type ModelStart = { provider: string; modelId: string; thinkingLevel: string };
+type ModelStart = { provider: string; modelId: string; thinkingLevel: string };
 
 const THINKING = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 

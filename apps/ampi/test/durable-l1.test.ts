@@ -130,9 +130,7 @@ type L1Driver = {
 	frames: any[]; checkpoints: L1Checkpoint[]; identities: Map<string, string>; submissions: Map<string, string>;
 	readiness?: { checkpoint: string; status: "settled" | "not-settled"; reason?: string; frameEnd: number }[];
 	readerRange?: { upper: number | null; records: { id: number; kind: string }[] };
-	arcCalls?: unknown[];
 	citationRoute?: { ref: string; href: string; host: string; threadId: string; entry: string };
-	readArcCalls(): unknown[];
 	captureReaderRange?(): Promise<void>;
 	prepareTeam(): Promise<void>;
 	stop(): Promise<void>; effects(): unknown;
@@ -222,15 +220,6 @@ async function ownerScenario(driver: L1Driver) {
 	}
 	const rarebit = browser.sub("devbox", { kind: "view", view: "rarebit", threadId });
 	record("rarebit", await browser.until<any>(rarebit, v => Array.isArray(v.items) || !!v.error, 5000));
-	const arc = browser.sub("devbox", { kind: "view", view: "cos.arc", threadId });
-	record("arc-evidence", await browser.until<any>(arc, v => Array.isArray(v.chunks) || !!v.error || !!v.missing, 5000));
-	const askStart = driver.readArcCalls().length;
-	await request("arc-build", "view.cos.arc.build", { threadId });
-	const built = await browser.until<any>(arc, v => ["done", "error"].includes(v.job?.state) || !!v.error || !!v.missing, 5000);
-	record("arc-built", built);
-	driver.arcCalls = driver.readArcCalls().slice(askStart);
-	assert.equal(built.job?.state, "done", "the offline helper completes through the hub ask path");
-	assert.equal(driver.arcCalls.length, 2, "the hub command records both label and synthesis requests");
 	await driver.prepareTeam();
 	const team = browser.sub("devbox", { kind: "view", view: "team", threadId });
 	record("team", await browser.until<any>(team, v => v.teams?.some((t: any) => t.members?.length >= 2), 5000));
@@ -301,18 +290,16 @@ function teamPanelShape(value: any): unknown {
 	return shape(panel);
 }
 
-type L1EntryRanges = { pi: { id: unknown; ts: unknown }[]; durable: { id: unknown; ts: unknown }[] };
 type L1Difference = ReturnType<typeof differences>[number] & {
 	checkpoint: string;
 	spendCoverage?: { pi: { usd?: unknown; covers?: unknown }; durable: { usd?: unknown; covers?: unknown } };
 	referenceEntries?: { pi: unknown; durable: unknown };
 	auditRange?: { rows: { id: number; kind: string }[]; upper: number | null };
-	entryRanges?: L1EntryRanges;
 	inputDeltas?: L1Difference[];
 };
 
 /** Keep full spend context so a coverage leaf cannot hide a changed or missing amount. */
-function checkpointDifferences(pi: any, durable: any, checkpoint: string, range?: L1Driver["readerRange"], entryRanges?: L1EntryRanges): L1Difference[] {
+function checkpointDifferences(pi: any, durable: any, checkpoint: string, range?: L1Driver["readerRange"]): L1Difference[] {
 	if (citationCheckpoint(checkpoint) && typeof pi?.value?.text === "string" && typeof durable?.value?.text === "string") {
 		try {
 			const left = JSON.parse(pi.value.text), right = JSON.parse(durable.value.text);
@@ -328,42 +315,20 @@ function checkpointDifferences(pi: any, durable: any, checkpoint: string, range?
 		let rows: L1Difference["auditRange"];
 		if (range) {
 			if ((checkpoint === "find" && delta.path === "/value/scanned") || (checkpoint === "rarebit" && delta.path === "/diagnosis/entries")) rows = { rows: range.records, upper: range.upper };
-			const chunk = /^\/chunks\/(\d+)\/entries$/.exec(delta.path)?.[1];
-			if (arcCheckpoint(checkpoint) && chunk !== undefined) {
-				const index = Number(chunk), end = Number(durable.chunks[index].lastEntryId);
-				const before = index ? Number(durable.chunks[index - 1].lastEntryId) : 0;
-				// The first chunk includes leading system audit rows. firstEntryId can name the first timed message.
-				if (range.records.some(r => r.id === end) && (!index || range.records.some(r => r.id === before))) rows = { rows: range.records.filter(r => r.id > before && r.id <= end), upper: end };
-			}
 		}
 		return { checkpoint, ...delta, ...(thread ? { spendCoverage: { pi: pi.threads[thread].spend, durable: durable.threads[thread].spend } } : {}),
-			...(hit !== undefined ? { referenceEntries: { pi: pi.value.hits[hit].entry, durable: durable.value.hits[hit].entry } } : {}), ...(rows ? { auditRange: rows } : {}),
-			...(checkpoint === "arc-built" && (terminalEntryPath(delta.path) || delta.path === "/contextStatus/coveredAt") && entryRanges ? { entryRanges } : {}) };
+			...(hit !== undefined ? { referenceEntries: { pi: pi.value.hits[hit].entry, durable: durable.value.hits[hit].entry } } : {}), ...(rows ? { auditRange: rows } : {}) };
 	});
 	const inputs = deltas.filter(d => !derivedHashPath(d));
 	return deltas.map(d => derivedHashPath(d) ? { ...d, inputDeltas: inputs } : d);
 }
-const arcCheckpoint = (name: string) => ["arc-evidence", "arc-built"].includes(name);
 const hitCheckpoint = (name: string) => ["fleet-search", "find"].includes(name);
 const citationCheckpoint = (name: string) => ["citation", "citation-web"].includes(name);
 const nativeId = (value: unknown) => typeof value === "string" && /^[A-Za-z0-9_-]+$/.test(value);
 const decimalId = (value: unknown) => typeof value === "string" && /^[1-9][0-9]*$/.test(value);
 const nonnegative = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0;
 const isoClock = (value: unknown) => typeof value === "string" && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value) && nonnegative(Date.parse(value)) && new Date(value).toISOString() === value;
-const terminalEntryPath = (path: string) => ["/builds/0/afterEntryId", "/cards/0/resumeEntryId", "/context/asOfEntryId"].includes(path);
-const terminalIsoClockPath = (path: string) => ["/builds/0/startedAt", "/builds/0/endedAt", "/context/builtAt", "/keptAt", "/synthesis/builtAt"].includes(path);
-const terminalDurationPath = (path: string) => /^\/builds\/0\/ms\/[^/]+$/.test(path);
-const terminalClockPath = (path: string) => terminalIsoClockPath(path) || terminalDurationPath(path) || path === "/contextStatus/coveredAt";
-function completeEntryRanges(histories: any[]): L1EntryRanges | undefined {
-	return histories.length === 2 && histories.every(v => v?.ok && v.value?.more === false && Array.isArray(v.value.entries))
-		? { pi: histories[0].value.entries.map(({ id, ts }: any) => ({ id, ts })), durable: histories[1].value.entries.map(({ id, ts }: any) => ({ id, ts })) } : undefined;
-}
-function sourceClockContains(entries: L1EntryRanges["pi"], value: unknown): boolean {
-	const clocks = entries.map(e => e.ts);
-	return nonnegative(value) && clocks.length > 0 && clocks.every(nonnegative) && (value as number) >= Math.min(...clocks as number[]) && (value as number) <= Math.max(...clocks as number[]);
-}
-const derivedHashPath = (d: L1Difference) => (d.checkpoint === "rarebit" && d.path === "/fingerprint") || (arcCheckpoint(d.checkpoint) && /^\/chunks\/\d+\/hash$/.test(d.path))
-	|| (d.checkpoint === "arc-built" && ["/chunks/0/label/hash", "/context/rarebitFingerprint"].includes(d.path));
+const derivedHashPath = (d: L1Difference) => d.checkpoint === "rarebit" && d.path === "/fingerprint";
 const absent = (value: unknown) => !!value && typeof value === "object" && Object.keys(value).length === 1 && (value as { absent?: boolean }).absent === true;
 const sessionCheckpoint = (name: string) => ["session", "queued-view", "after-abort"].includes(name);
 // Lead-accepted comparison policy only. Raw and identity-normalized values remain intact for audit.
@@ -382,10 +347,10 @@ const acceptedNormalizationRules: { name: string; status: "accepted"; provisiona
 			(["/live/tools", "/live/compactions"].includes(d.path) && Array.isArray(d.durable))) },
 	{ name: "durable-context-window", status: "accepted", reason: "contextWindow can appear only on durable; this is an accepted additive model limit.",
 		matches: d => d.checkpoint === "overview" && d.path === "/threads/<thread-a>/contextWindow" && absent(d.pi) && typeof d.durable === "number" && d.durable > 0 },
-	{ name: "source-reference", status: "accepted", reason: "Same-host Pi versus durable source identities may differ in Overview, search-hit citations and Arc references. Hit fragments must match the actual native entry IDs.",
+	{ name: "source-reference", status: "accepted", reason: "Same-host Pi versus durable source identities may differ in Overview and search-hit citations. Hit fragments must match the actual native entry IDs.",
 		matches: d => {
 			const hit = hitCheckpoint(d.checkpoint) && /^\/value\/hits\/\d+\/ref$/.test(d.path);
-			const plain = (d.checkpoint === "overview" && /^\/threads\/[^/]+\/ref$/.test(d.path)) || (arcCheckpoint(d.checkpoint) && d.path === "/ref");
+			const plain = (d.checkpoint === "overview" && /^\/threads\/[^/]+\/ref$/.test(d.path));
 			if ((!hit && !plain) || typeof d.pi !== "string" || typeof d.durable !== "string") return false;
 			const pi = /^([^/\s#]+)\/pi:([A-Za-z0-9_-]+)(?:#([A-Za-z0-9_-]+))?$/.exec(d.pi);
 			const durable = /^([^/\s#]+)\/pi-durable:([rt][0-9a-z]+)\.([1-9][0-9]*)(?:#([1-9][0-9]*))?$/.exec(d.durable);
@@ -393,30 +358,26 @@ const acceptedNormalizationRules: { name: string; status: "accepted"; provisiona
 				? !!d.referenceEntries && nativeId(d.referenceEntries.pi) && decimalId(d.referenceEntries.durable) && pi[3] === d.referenceEntries.pi && durable[4] === d.referenceEntries.durable
 				: pi[3] === undefined && durable[4] === undefined);
 		} },
-	{ name: "native-entry-id", status: "accepted", reason: "Pi native IDs versus durable positive decimal entry IDs retain each source's identity format. Terminal Build result IDs must occur in each source's captured complete entry range.",
-		matches: d => nativeId(d.pi) && decimalId(d.durable) && ((d.checkpoint === "arc-built" && terminalEntryPath(d.path)
-			&& !!d.entryRanges && d.entryRanges.pi.some(e => e.id === d.pi) && d.entryRanges.durable.some(e => e.id === d.durable))
-			|| (hitCheckpoint(d.checkpoint) && /^\/value\/hits\/\d+\/entry$/.test(d.path))
-			|| (citationCheckpoint(d.checkpoint) && d.path === "/value/text/id") || (d.checkpoint === "rarebit" && /^\/items\/\d+\/id$/.test(d.path)) || (arcCheckpoint(d.checkpoint) && /^\/chunks\/\d+\/(firstEntryId|lastEntryId|lastOwnerEntryId)$/.test(d.path))) },
-	{ name: "source-version", status: "accepted", reason: "The shared reader/chunker/excerpt prefix must agree; Pi and durable encode different native source tails.",
+	{ name: "native-entry-id", status: "accepted", reason: "Pi native IDs versus durable positive decimal entry IDs retain each source's identity format.",
+		matches: d => nativeId(d.pi) && decimalId(d.durable) && ((hitCheckpoint(d.checkpoint) && /^\/value\/hits\/\d+\/entry$/.test(d.path))
+			|| (citationCheckpoint(d.checkpoint) && d.path === "/value/text/id") || (d.checkpoint === "rarebit" && /^\/items\/\d+\/id$/.test(d.path))) },
+	{ name: "source-version", status: "accepted", reason: "The shared derivation prefix must agree; Pi and durable encode different native source tails.",
 		matches: d => {
 			const path = (hitCheckpoint(d.checkpoint) && /^\/value\/hits\/\d+\/version$/.test(d.path)) || ((d.checkpoint === "find-open" || citationCheckpoint(d.checkpoint)) && d.path === "/value/version")
-				|| ((d.checkpoint === "rarebit" || arcCheckpoint(d.checkpoint)) && d.path === "/source/version");
-			const prefix = "8/ampi-arc-chunker/4/ampi-arc-excerpt/2:";
+				|| (d.checkpoint === "rarebit" && d.path === "/sourceVersion");
+			const prefix = "9:";
 			return path && typeof d.pi === "string" && typeof d.durable === "string" && d.pi.startsWith(prefix) && d.durable.startsWith(prefix)
 				&& /^2:[a-f0-9]{64}:\d+$/.test(d.pi.slice(prefix.length)) && /^1:pi-durable:[^:\s/#]+:[rt][a-z0-9]+\.[1-9][0-9]*:[a-f0-9]{12}:[1-9][0-9]*\.[a-f0-9]{16}$/.test(d.durable.slice(prefix.length));
 		} },
-	{ name: "fixture-clock", status: "accepted", provisional: true, reason: "Provisional fixture clock exception: exact Rarebit/citation/Arc time paths may differ with valid ISO clocks or nonnegative finite numbers. Terminal coveredAt must lie within each source's complete captured message-time window. This does not prove production time semantics.",
+	{ name: "fixture-clock", status: "accepted", provisional: true, reason: "Provisional fixture clock exception: exact Rarebit and citation time paths may differ with valid ISO clocks or nonnegative finite numbers. This does not prove production time semantics.",
 		matches: d => {
-			if (d.checkpoint === "arc-built" && d.path === "/contextStatus/coveredAt") return !!d.entryRanges && sourceClockContains(d.entryRanges.pi, d.pi) && sourceClockContains(d.entryRanges.durable, d.durable);
-			const iso = (d.checkpoint === "rarebit" && /^\/items\/\d+\/t$/.test(d.path)) || (arcCheckpoint(d.checkpoint) && /^\/chunks\/\d+\/(startAt|endAt)$/.test(d.path))
-				|| (d.checkpoint === "arc-built" && terminalIsoClockPath(d.path));
+			const iso = d.checkpoint === "rarebit" && /^\/items\/\d+\/t$/.test(d.path);
 			return iso ? isoClock(d.pi) && isoClock(d.durable) : ((d.checkpoint === "rarebit" && d.path === "/diagnosis/ms")
-				|| (citationCheckpoint(d.checkpoint) && d.path === "/value/text/ts") || (d.checkpoint === "arc-built" && terminalDurationPath(d.path))) && nonnegative(d.pi) && nonnegative(d.durable);
+				|| (citationCheckpoint(d.checkpoint) && d.path === "/value/text/ts")) && nonnegative(d.pi) && nonnegative(d.durable);
 		} },
-	{ name: "durable-system-audit-entry", status: "accepted", reason: "Durable counts may exceed Pi only by the exact pi.system row count in the captured complete reader range. Arc ranges include leading audit rows.",
+	{ name: "durable-system-audit-entry", status: "accepted", reason: "Durable counts may exceed Pi only by the exact pi.system row count in the captured complete reader range.",
 		matches: d => {
-			const path = (d.checkpoint === "find" && d.path === "/value/scanned") || (d.checkpoint === "rarebit" && d.path === "/diagnosis/entries") || (arcCheckpoint(d.checkpoint) && /^\/chunks\/\d+\/entries$/.test(d.path));
+			const path = (d.checkpoint === "find" && d.path === "/value/scanned") || (d.checkpoint === "rarebit" && d.path === "/diagnosis/entries");
 			const range = d.auditRange;
 			return path && Number.isSafeInteger(d.pi) && Number.isSafeInteger(d.durable) && (d.pi as number) >= 0 && !!range && range.rows.length === d.durable
 				&& range.rows.at(-1)?.id === range.upper && range.rows.every(r => Number.isSafeInteger(r.id) && r.id > 0 && r.id <= (range.upper ?? -1) && typeof r.kind === "string") && new Set(range.rows.map(r => r.id)).size === range.rows.length
@@ -424,7 +385,7 @@ const acceptedNormalizationRules: { name: string; status: "accepted"; provisiona
 		} },
 	{ name: "observed-revision", status: "accepted", reason: "Rarebit revisions are local observation counters, not content identity.",
 		matches: d => d.checkpoint === "rarebit" && d.path === "/revision" && Number.isSafeInteger(d.pi) && Number.isSafeInteger(d.durable) && (d.pi as number) >= 0 && (d.durable as number) >= 0 },
-	{ name: "derived-hash", status: "accepted", reason: "Exact fingerprint, chunk and terminal label/context hash paths may differ only when every non-hash input delta in that checkpoint has an accepted rule.",
+	{ name: "derived-hash", status: "accepted", reason: "A Rarebit fingerprint may differ only when every non-hash input delta in that checkpoint has an accepted rule.",
 		matches: d => derivedHashPath(d) && typeof d.pi === "string" && typeof d.durable === "string" && /^[a-f0-9]{64}$/.test(d.pi) && /^[a-f0-9]{64}$/.test(d.durable)
 			&& !!d.inputDeltas && d.inputDeltas.every(input => input.checkpoint === d.checkpoint && !derivedHashPath(input) && !!acceptedRule(input)) },
 	{ name: "pane-location-removal", status: "accepted", reason: "Scope R1 removes the Herdr pane coordinate. Tab and workspace placement still compare.",
@@ -450,19 +411,17 @@ test("durable L1 reader rules retain malformed identities, semantic changes and 
 	const native = delta("find", "/value/hits/0/entry", "a1", "19");
 	assert.equal(acceptedRule(native)?.name, "native-entry-id");
 	for (const value of [undefined, null, "", "0", "-1", "1.2", "19#x", 19]) assert.equal(acceptedRule({ ...native, durable: value }), undefined);
-	for (const [checkpoint, path] of [["session", native.path], ["find", "/value/entry"], ["rarebit", "/stats/id"], ["arc-evidence", "/chunks/0/id"]]) assert.equal(acceptedRule({ ...native, checkpoint, path }), undefined);
+	for (const [checkpoint, path] of [["session", native.path], ["find", "/value/entry"], ["rarebit", "/stats/id"]]) assert.equal(acceptedRule({ ...native, checkpoint, path }), undefined);
 	const cite = { ...delta("find", "/value/hits/0/ref", "devbox/pi:sess-a#a1", "devbox/pi-durable:rabc123.3#19"), referenceEntries: { pi: "a1", durable: "19" } };
 	assert.equal(acceptedRule(cite)?.name, "source-reference");
 	for (const value of [undefined, "other/pi-durable:rabc123.3#19", "devbox/pi-durable:rabc123.3#20", "devbox/pi-durable:rabc123.0#19", "devbox/pi-durable:rabc123.3#a1", "devbox/pi-durable:rabc123.3"]) assert.equal(acceptedRule({ ...cite, durable: value }), undefined);
 	assert.equal(acceptedRule({ ...cite, referenceEntries: undefined }), undefined, "hit fragments need native entry context");
 	assert.equal(acceptedRule({ ...cite, pi: "devbox/pi:sess-a", durable: "devbox/pi-durable:rabc123.3", referenceEntries: { pi: undefined, durable: undefined } }), undefined, "missing entries cannot validate fragment-free hits");
 	assert.equal(acceptedRule({ ...cite, checkpoint: "session" }), undefined);
-	assert.equal(acceptedRule(delta("arc-evidence", "/ref", "devbox/pi:sess-a", "devbox/pi-durable:rabc123.3"))?.name, "source-reference");
-	assert.equal(acceptedRule(delta("arc-evidence", "/ref", cite.pi, cite.durable)), undefined, "Arc source refs have no entry fragment");
-	const prefix = "8/ampi-arc-chunker/4/ampi-arc-excerpt/2:";
+	const prefix = "9:";
 	const version = delta("find-open", "/value/version", `${prefix}2:${"a".repeat(64)}:999`, `${prefix}1:pi-durable:devbox:rabc123.3:${"a".repeat(12)}:20.${"b".repeat(16)}`);
 	assert.equal(acceptedRule(version)?.name, "source-version");
-	for (const value of [undefined, "", "different", (version.durable as string).replace("chunker/4", "chunker/5"), `${prefix}2:bare`, (version.durable as string).replace("rabc123.3", "rabc123.0")]) assert.equal(acceptedRule({ ...version, durable: value }), undefined);
+	for (const value of [undefined, "", "different", (version.durable as string).replace("9:", "10:"), `${prefix}2:bare`, (version.durable as string).replace("rabc123.3", "rabc123.0")]) assert.equal(acceptedRule({ ...version, durable: value }), undefined);
 	assert.equal(acceptedRule({ ...version, path: "/unrelated/version" }), undefined);
 	const clock = delta("rarebit", "/items/0/t", "2026-10-24T00:00:00.000Z", "2026-10-25T00:00:00.000Z");
 	assert.equal(acceptedRule(clock)?.name, "fixture-clock");
@@ -475,15 +434,10 @@ test("durable L1 reader rules retain malformed identities, semantic changes and 
 	assert.equal(acceptedRule(audit)?.name, "durable-system-audit-entry", "two audit rows require exactly two extra entries");
 	for (const bad of [{ ...audit, durable: 3 }, { ...audit, pi: 3 }, { ...audit, auditRange: undefined }, { ...audit, path: "/value/count" },
 		{ ...audit, auditRange: { ...audit.auditRange, upper: 3 } }, { ...audit, auditRange: { ...audit.auditRange, rows: audit.auditRange.rows.map(r => r.id === 3 ? { ...r, kind: "pi.custom" } : r) } }]) assert.equal(acceptedRule(bad), undefined);
-	const range = { upper: 4, records: audit.auditRange.rows };
-	const arcCounts = checkpointDifferences({ chunks: [{ firstEntryId: "u1", lastEntryId: "a1", entries: 2 }] }, { chunks: [{ firstEntryId: "2", lastEntryId: "4", entries: 4 }] }, "arc-evidence", range);
-	assert.equal(acceptedRule(arcCounts.find(d => d.path === "/chunks/0/entries")!)?.name, "durable-system-audit-entry", "the chunk range includes a system row before firstEntryId");
-	const incomplete = checkpointDifferences({ chunks: [{ entries: 2 }] }, { chunks: [{ firstEntryId: "2", lastEntryId: "9", entries: 4 }] }, "arc-evidence", range);
-	assert.equal(acceptedRule(incomplete.find(d => d.path === "/chunks/0/entries")!), undefined, "a missing range endpoint cannot establish an audit count");
 	const revision = delta("rarebit", "/revision", 1, 2);
 	assert.equal(acceptedRule(revision)?.name, "observed-revision");
 	for (const value of [undefined, -1, 1.5, "2", Infinity]) assert.equal(acceptedRule({ ...revision, durable: value }), undefined);
-	assert.equal(acceptedRule({ ...revision, checkpoint: "arc-evidence" }), undefined);
+	assert.equal(acceptedRule({ ...revision, checkpoint: "unrelated" }), undefined);
 	const pi = { fingerprint: "a".repeat(64), items: [{ id: "a1", text: "answer" }], revision: 1 };
 	const durable = { fingerprint: "b".repeat(64), items: [{ id: "19", text: "answer" }], revision: 2 };
 	const compared = checkpointDifferences(pi, durable, "rarebit");
@@ -519,76 +473,6 @@ test("durable L1 reader rules retain malformed identities, semantic changes and 
 	assert.equal(acceptedRule(delta("session", "/value/text/id", "a1", "19")), undefined);
 });
 
-test("durable L1 terminal Arc rules require native ranges, valid clocks and accepted hash inputs", () => {
-	const ms = Date.parse(at), iso = (offset: number) => new Date(ms + offset).toISOString();
-	const entryRanges: L1EntryRanges = {
-		pi: [{ id: "u1", ts: ms }, { id: "a1", ts: ms + 1000 }, { id: "u2", ts: ms + 2000 }],
-		durable: [{ id: "14", ts: ms + 10000 }, { id: "19", ts: ms + 11000 }, { id: "20", ts: ms + 12000 }],
-	};
-	const pi = { builds: [{ afterEntryId: "a1", startedAt: iso(3000), endedAt: iso(4000), ms: { labels: 1, arc: 2 } }],
-		cards: [{ resumeEntryId: "u2" }], chunks: [{ hash: "a".repeat(64), label: { hash: "a".repeat(64) } }],
-		context: { asOfEntryId: "u2", builtAt: iso(4000), rarebitFingerprint: "c".repeat(64) }, contextStatus: { coveredAt: ms + 2000 }, keptAt: iso(4000), synthesis: { builtAt: iso(4000) } };
-	const durable = { builds: [{ afterEntryId: "19", startedAt: iso(13000), endedAt: iso(14000), ms: { labels: 3, arc: 4 } }],
-		cards: [{ resumeEntryId: "20" }], chunks: [{ hash: "b".repeat(64), label: { hash: "b".repeat(64) } }],
-		context: { asOfEntryId: "20", builtAt: iso(14000), rarebitFingerprint: "d".repeat(64) }, contextStatus: { coveredAt: ms + 12000 }, keptAt: iso(14000), synthesis: { builtAt: iso(14000) } };
-	const deltas = checkpointDifferences(pi, durable, "arc-built", undefined, entryRanges);
-	assert.equal(deltas.length, 14);
-	assert.ok(deltas.every(d => acceptedRule(d)), "all exact terminal paths qualify with complete source evidence");
-	for (const d of deltas.filter(d => terminalEntryPath(d.path))) {
-		assert.equal(acceptedRule(d)?.name, "native-entry-id");
-		for (const value of [undefined, null, 19, "0", "999"]) assert.equal(acceptedRule({ ...d, durable: value }), undefined, "durable ID must be a native string in its range");
-		for (const value of [undefined, null, 1, "missing"]) assert.equal(acceptedRule({ ...d, pi: value }), undefined, "Pi ID must belong to its range");
-		assert.equal(acceptedRule({ ...d, entryRanges: undefined }), undefined);
-		assert.equal(acceptedRule({ ...d, checkpoint: "arc-evidence" }), undefined);
-	}
-	for (const d of deltas.filter(d => terminalIsoClockPath(d.path))) {
-		assert.equal(acceptedRule(d)?.name, "fixture-clock");
-		assert.equal(acceptedRule(d)?.provisional, true);
-		for (const value of [undefined, null, -1, NaN, "yesterday", "2026-02-31T00:00:00.000Z"]) {
-			assert.equal(acceptedRule({ ...d, durable: value }), undefined);
-			assert.equal(acceptedRule({ ...d, pi: value }), undefined);
-		}
-	}
-	for (const d of deltas.filter(d => terminalDurationPath(d.path))) {
-		for (const value of [-1, NaN, Infinity, "1", null]) {
-			assert.equal(acceptedRule({ ...d, durable: value }), undefined);
-			assert.equal(acceptedRule({ ...d, pi: value }), undefined);
-		}
-	}
-	const covered = deltas.find(d => d.path === "/contextStatus/coveredAt")!;
-	for (const value of [-1, NaN, Infinity, "yesterday", iso(12000), ms + 9999, ms + 12001, ms + 14000]) assert.equal(acceptedRule({ ...covered, durable: value }), undefined, "coveredAt rejects invalid values, out-of-window values and later Build time");
-	for (const value of [-1, NaN, Infinity, "yesterday", ms - 1, ms + 2001, ms + 4000]) assert.equal(acceptedRule({ ...covered, pi: value }), undefined);
-	assert.equal(acceptedRule({ ...covered, entryRanges: undefined }), undefined);
-	assert.equal(acceptedRule({ ...covered, entryRanges: { ...entryRanges, durable: [] } }), undefined);
-	assert.equal(acceptedRule({ ...covered, entryRanges: { ...entryRanges, durable: [{ id: "19", ts: NaN }] } }), undefined);
-	const histories = [entryRanges.pi, entryRanges.durable].map(entries => ({ ok: true, value: { entries, more: false } }));
-	assert.deepEqual(completeEntryRanges(histories), entryRanges);
-	for (const history of [undefined, { ok: false }, { ok: true, value: { entries: entryRanges.pi, more: true } }, { ok: true, value: { entries: entryRanges.pi } }]) {
-		const incomplete = completeEntryRanges([history, histories[1]]);
-		assert.equal(incomplete, undefined, "only two complete successful histories supply source evidence");
-		assert.ok(checkpointDifferences(pi, durable, "arc-built", undefined, incomplete).filter(derivedHashPath).every(d => !acceptedRule(d)));
-	}
-	for (const hash of deltas.filter(derivedHashPath)) {
-		assert.equal(acceptedRule(hash)?.name, "derived-hash");
-		assert.equal(acceptedRule({ ...hash, durable: "wrong-hash" }), undefined);
-		assert.equal(acceptedRule({ ...hash, inputDeltas: undefined }), undefined);
-		assert.equal(acceptedRule({ ...hash, checkpoint: "session" }), undefined);
-		assert.equal(acceptedRule({ ...hash, inputDeltas: [...hash.inputDeltas!, { checkpoint: "arc-built", path: "/unknown", pi: "original", durable: "changed" }] }), undefined);
-		assert.equal(acceptedRule({ ...hash, inputDeltas: [hash] }), undefined, "hashes cannot justify one another");
-	}
-	const changed = { ...durable, context: { ...durable.context, unexpected: true } };
-	assert.ok(checkpointDifferences(pi, changed, "arc-built", undefined, entryRanges).filter(derivedHashPath).every(d => !acceptedRule(d)), "one unaccepted semantic input keeps all three hashes open");
-	for (const [example, paths] of [
-		[deltas.find(d => terminalEntryPath(d.path))!, ["/builds/1/afterEntryId", "/cards/1/resumeEntryId", "/context/otherId"]],
-		[deltas.find(d => terminalIsoClockPath(d.path))!, ["/builds/1/startedAt", "/context/otherAt"]],
-		[deltas.find(d => terminalDurationPath(d.path))!, ["/builds/1/ms/arc", "/builds/0/ms/arc/detail"]],
-		[covered, ["/contextStatus/otherAt"]],
-		[deltas.find(derivedHashPath)!, ["/chunks/1/label/hash", "/context/otherHash"]],
-	] as [L1Difference, string[]][]) {
-		for (const path of paths) assert.equal(acceptedRule({ ...example, path }), undefined, "unrelated paths do not inherit terminal rules");
-	}
-});
-
 // The paired test emits findings instead of treating capture success as parity.
 test("durable L1 paired capture: shared owner scenario reports control and reader differences", { timeout: 25_000 }, async () => {
 	const started = performance.now();
@@ -604,12 +488,7 @@ test("durable L1 paired capture: shared owner scenario reports control and reade
 	let cleanupPi: (() => Promise<void>) | undefined;
 	try {
 		const home = mkdtempSync(join(tmpdir(), "ampi-l1-node-"));
-		const askCalls = join(home, "ask-calls.jsonl");
-		writeFileSync(askCalls, "");
-		const readArcCalls = () => readFileSync(askCalls, "utf8").trim().split("\n").filter(Boolean).map(s => JSON.parse(s));
-		const offlineArc = `const fs=require('node:fs');let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const p=JSON.parse(s);fs.appendFileSync(${JSON.stringify(askCalls)},JSON.stringify(p)+'\\n');const id=(JSON.stringify(p).match(/\\[([^\\]]+)\\] (?:USER|AGENT):/)||[])[1];console.log(JSON.stringify(p.chunks?{chunks:p.chunks.map(c=>({chunk:c.chunk,topic:'Synthetic files',project:'Fixture',ideas:[]}))}:{headline:'Synthetic file work',projects:[],transitions:[],asks:[],threads:[{label:'Synthetic files',state:'active',progress:[{text:'Synthetic evidence recorded',citations:[id]}],decisions:[],blockers:[]}],unassigned:{progress:[],decisions:[],blockers:[]}}));});`;
-		const askCommand = [process.execPath, "-e", offlineArc];
-		const helperModels = { arcLabels: "fixture/synthetic", arcSynthesis: "fixture/synthetic" };
+		const askCommand = ["/usr/bin/false"];
 		assert.equal(process.env.AMPI_SOCKET, undefined, "test refuses a socket override");
 		const models = createModels();
 		const sim = fauxProvider({ provider: "fixture", api: "l1-sim", models: [{ id: "synthetic" }], tokensPerSecond: 1e9 });
@@ -632,7 +511,7 @@ test("durable L1 paired capture: shared owner scenario reports control and reade
 		} });
 		const daemon = await runDaemon({ home, models, plugins: [teamPlugin()], testProviders: ["fixture"] });
 		const durableFrames: any[] = [];
-		const durableHub = new Hub({ models: helperModels, hosts: [{ id: "devbox", label: "devbox", kind: "local", home, askCommand }] }, { token: "d".repeat(64) });
+		const durableHub = new Hub({ hosts: [{ id: "devbox", label: "devbox", kind: "local", home, askCommand }] }, { token: "d".repeat(64) });
 		let durableBrowser: Browser | undefined;
 		cleanupDurable = async () => { durableBrowser?.ws.terminate(); await durableHub.close(); await daemon.stop(); rmSync(home, { recursive: true, force: true }); };
 		durableBrowser = await attachBrowser(durableHub, durableFrames);
@@ -642,7 +521,7 @@ test("durable L1 paired capture: shared owner scenario reports control and reade
 		await bounded(durableBrowser.req("devbox", "thread.submit", { threadId, content: busyPrompt, requestId: "l1-busy" }), "busy turn");
 		await bounded(busy, "model enters busy barrier");
 		const durable: L1Driver = { backend: "durable", browser: durableBrowser, hub: durableHub, threadId, frames: durableFrames, checkpoints: [],
-			identities: new Map([[home, "<cwd>"], [threadId, "<thread-a>"]]), submissions: new Map(), stop: cleanupDurable, readArcCalls,
+			identities: new Map([[home, "<cwd>"], [threadId, "<thread-a>"]]), submissions: new Map(), stop: cleanupDurable,
 			captureReaderRange: async () => {
 				const reader = createReaderService({ context: BACKGROUND_CONTEXT, epoch: 1, resolve: async (id: string) => (await daemon.runtime.thread(id)).conversation }).connect();
 				const { handle } = await reader.open({ threadId });
@@ -669,7 +548,7 @@ test("durable L1 paired capture: shared owner scenario reports control and reade
 				writeFileSync(join(proof, "durable-team-authority.json"), JSON.stringify(authority, null, 2));
 			},
 			effects: () => ({ modelRequests, modelResults, gaps: durableBrowser!.gaps, configuredProviders: models.getProviders().map(p => p.id),
-				askCalls: durable.arcCalls, allAskCalls: readArcCalls(), helperModels, askCommand, citationRoute: durable.citationRoute }) };
+				askCommand, citationRoute: durable.citationRoute }) };
 		drivers.push(durable);
 
 		const f = fixture();
@@ -698,7 +577,7 @@ test("durable L1 paired capture: shared owner scenario reports control and reade
 		const bin = join(f.dir, "bin"); mkdirSync(bin);
 		writeFileSync(join(bin, "herdr"), "#!/bin/sh\necho 'L1 refuses fallback Herdr' >&2\nexit 1\n", { mode: 0o755 });
 		const piFrames: any[] = [];
-		const piHub = new Hub({ models: helperModels, hosts: [{ id: "devbox", label: "devbox", kind: "pi-local", cacheDir: join(f.dir, "cache"),
+		const piHub = new Hub({ hosts: [{ id: "devbox", label: "devbox", kind: "pi-local", cacheDir: join(f.dir, "cache"),
 			askCommand,
 			agentConfig: { agentDir: f.agentDir, pollMs: 30, discoverMs: 150, teamsMs: 50, ptbObservation: observationModule, controlStatusMs: 100 },
 			env: { HOME: f.dir, PATH: `${bin}:${process.env.PATH ?? ""}`, HERDR_BIN: join(f.dir, "herdr"), FAKE_HERDR_STATE: join(f.dir, "state.json"), FAKE_HERDR_LOG: join(f.dir, "calls.jsonl") },
@@ -707,7 +586,7 @@ test("durable L1 paired capture: shared owner scenario reports control and reade
 		cleanupPi = async () => { piBrowser?.ws.terminate(); await piHub.close(); await new Promise<void>(done => ctl.close().once("close", done)); rmSync(f.dir, { recursive: true, force: true }); };
 		piBrowser = await attachBrowser(piHub, piFrames);
 		const pi: L1Driver = { backend: "pi", browser: piBrowser, hub: piHub, threadId: "pi:sess-a", frames: piFrames, checkpoints: [],
-			identities: new Map([[home, "<cwd>"], [f.sessionA, "<session-a-path>"], ["pi:sess-a", "<thread-a>"]]), submissions: new Map(), stop: cleanupPi, readArcCalls,
+			identities: new Map([[home, "<cwd>"], [f.sessionA, "<session-a-path>"], ["pi:sess-a", "<thread-a>"]]), submissions: new Map(), stop: cleanupPi,
 			prepareTeam: async () => {
 				writeFileSync(f.sessionB, workerSession);
 				const next = f.state; next.agents.push(workerAgent); f.setState(next);
@@ -718,7 +597,7 @@ test("durable L1 paired capture: shared owner scenario reports control and reade
 				}));
 			},
 			effects: () => ({ control: ctl.requests, submissions: ctl.submissions, herdr: f.herdrCalls(), gaps: piBrowser!.gaps,
-				askCalls: pi.arcCalls, allAskCalls: readArcCalls(), helperModels, askCommand, citationRoute: pi.citationRoute }) };
+				askCommand, citationRoute: pi.citationRoute }) };
 		drivers.push(pi);
 		await ownerScenario(pi);
 		await ownerScenario(durable);
@@ -740,13 +619,10 @@ test("durable L1 paired capture: shared owner scenario reports control and reade
 			const changed = structuredClone(teamReference); mutate(changed);
 			assert.ok(differences(teamPanelShape(teamReference), teamPanelShape(changed)).length, "missing tasks, missing fields and wrong types remain visible");
 		}
-		const sourceHistory = [pi, durable].map(d => d.checkpoints.find(c => c.name === "find-open")?.value);
-		const entryRanges = completeEntryRanges(sourceHistory);
 		const compared = left.values.flatMap((checkpoint, index) => checkpointDifferences(checkpoint.name === "team" ? teamPanelShape(checkpoint.value) : checkpoint.value,
-			checkpoint.name === "team" ? teamPanelShape(right.values[index].value) : right.values[index].value, checkpoint.name, durable.readerRange, entryRanges).map(delta => ({
+			checkpoint.name === "team" ? teamPanelShape(right.values[index].value) : right.values[index].value, checkpoint.name, durable.readerRange).map(delta => ({
 			...delta, comparison: checkpoint.name === "team" ? "panel-field-shape" : citationCheckpoint(checkpoint.name) ? "parsed-citation-body" : "value",
-			owner: checkpoint.name === "arc-built" && (terminalEntryPath(delta.path) || terminalClockPath(delta.path) || derivedHashPath(delta)) ? "verifier"
-				: ["citation", "citation-web", "arc-build", "arc-built", "team"].includes(checkpoint.name) || (checkpoint.name === "fleet-search" && delta.path === "/value/hostStatus") ? "node-builder" : checkpoint.name === "after-abort" && delta.path === "/live/run" && pi.readiness?.some(r => r.status === "not-settled") ? "verifier"
+			owner: ["citation", "citation-web", "team"].includes(checkpoint.name) || (checkpoint.name === "fleet-search" && delta.path === "/value/hostStatus") ? "node-builder" : checkpoint.name === "after-abort" && delta.path === "/live/run" && pi.readiness?.some(r => r.status === "not-settled") ? "verifier"
 				: ["overview", "steer", "queue", "abort"].includes(checkpoint.name) || /^\/(live|inbox)(\/|$)/.test(delta.path) ? "node-builder" : "reader-builder",
 			piEvidence: { checkpoints: "pi/checkpoints.json", frames: "pi/frames.jsonl", throughFrame: pi.checkpoints[index].frameEnd },
 			durableEvidence: { checkpoints: "durable/checkpoints.json", frames: "durable/frames.jsonl", throughFrame: durable.checkpoints[index].frameEnd },

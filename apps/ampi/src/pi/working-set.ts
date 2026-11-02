@@ -1,6 +1,7 @@
 // Hub working set: compact materializations plus bounded live/LRU windows. Worker
 // ingestion owns full scans; navigation reads local indexed pages, never full files.
-import { fleetSearch, type FindAsk, type SearchResult } from "./search.ts";
+import { fleetSearch } from "./search.ts";
+import type { FindAsk, SearchResult } from "../shared/search.ts";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -281,11 +282,18 @@ export class WorkingSet {
   const get = this.db.prepare("SELECT t FROM entries WHERE path=? AND id=?");
   return new Map(ids.map((id) => { const t = get.get(path, id)?.t; return [id, typeof t === "number" ? t : null]; }));
  }
- arcEvidence(path: string, ids: string[], version?: string): Map<string, string> {
+ arcSource(path: string, session: string, version: string): import("./views/arc-build.ts").ArcSource {
   return this.snapshot(() => {
-   if (version && this.load(path)?.version !== version) throw new Error("Arc source changed; retry Build");
-   const get = this.db.prepare("SELECT text FROM arc_evidence WHERE path=? AND id=?");
-   return new Map(ids.map((id) => [id, String(get.get(path, id)?.text ?? "")]));
+   const data = this.load(path);
+   if (!data || data.version !== version) throw Object.assign(new Error("Arc source changed; retry Build"), { code: "source" });
+   const items: RarebitItem[] = [], entries: import("./views/arc-build.ts").ArcEntry[] = [];
+   const positive = (n: unknown) => typeof n === "number" && Number.isFinite(n) && n > 0 ? n : 0;
+   for (const row of this.db.prepare("SELECT id, t, rarebit, feature FROM entries WHERE path=? ORDER BY position").iterate(path)) {
+    if (row.rarebit) items.push(JSON.parse(String(row.rarebit)));
+    const e = JSON.parse(String(row.feature)), u = e.kind === "assistant" ? e.usage : undefined;
+    entries.push({ id: String(row.id), at: row.t == null ? "" : new Date(Number(row.t)).toISOString(), tokens: positive(u?.input) + positive(u?.output) + positive(u?.cacheRead) + positive(u?.cacheWrite), cost: positive(typeof u?.cost === "number" ? u.cost : u?.cost?.total) });
+   }
+   return { session, selector: data.rarebit.selector, fingerprint: data.rarebit.fingerprint, items, entries };
   });
  }
  // The full entry is decoded through the shared reader by its exact source offset in the

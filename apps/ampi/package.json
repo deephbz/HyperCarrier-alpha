@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "license": "MIT",
-  "description": "AmPi: a desktop GUI and durable agent server built on pi-durable; replaces Herdr + pi-coding-agent in HyperCarrier.",
+  "description": "AmPi: the cross-platform GUI for humanist, deep and broad agentic engineering, powered by Pi.",
   "type": "module",
   "bin": {
     "ampi": "./bin/ampi.mjs"

@@ -23,7 +23,7 @@ export const THINKING = ["off", "minimal", "low", "medium", "high", "xhigh"];
 type Image = { data: string; mimeType: string; name: string };
 
 /** `follow`: the owner's own send goes to the newest end of the transcript and ends a pending reveal. */
-export type ComposerActions = { panel?: string; openPanel: (name: string) => void; follow: () => void };
+type ComposerActions = { panel?: string; openPanel: (name: string) => void; follow: () => void };
 
 /** `disabled`: listed but not runnable from here. Host commands have no `run`; they use typed ops. */
 type Command = { name: string; args?: string; help: string; disabled?: boolean; run?: (arg: string) => Promise<void> | void };
@@ -150,7 +150,7 @@ function readImage(file: File): Promise<Image> {
 	});
 }
 
-export function ContextMeter({ summary, budget }: { summary?: ThreadSummary; budget?: number }) {
+function ContextMeter({ summary, budget }: { summary?: ThreadSummary; budget?: number }) {
 	if (!summary?.contextTokens || !summary.contextWindow) return null;
 	const limit = budget ?? summary.workingBudget ?? summary.contextWindow;
 	const ratio = summary.contextTokens / limit;
@@ -192,7 +192,7 @@ const subscribeDrafts = (listener: () => void) => {
 };
 
 /** Appends a transcript quote, and an optional note, to a Session's draft, whether or not its composer is mounted. */
-export function quoteDraft(host: string, threadId: string, selection: string, note: string): void {
+function quoteDraft(host: string, threadId: string, selection: string, note: string): void {
 	updateDraft(`${host}/${threadId}`, (text) => appendDraftQuote({ text }, selection, note).text);
 }
 

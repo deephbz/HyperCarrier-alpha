@@ -9,7 +9,7 @@ import type { AuthOperationOptions, Credential, CredentialInfo, CredentialStore 
 
 type AuthFile = Record<string, Credential>;
 
-export function defaultAuthPath(): string {
+function defaultAuthPath(): string {
 	const agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 	return join(agentDir, "auth.json");
 }

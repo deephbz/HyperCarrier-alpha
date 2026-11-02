@@ -4,8 +4,8 @@
 import { native } from "./native.ts";
 import { applyImmutable, type Op } from "@earendil-works/chord/delta";
 import { useEffect, useState, useSyncExternalStore } from "react";
-import type { HostState as HubHostState } from "../../src/hub/hosts.ts";
-import { STALE_VERSION, type ClientOps, type HubOps, type Pin, type Topic, type TopicValue } from "../../src/shared/protocol.ts";
+import type { HostState as HubHostState } from "../../src/shared/hosts.ts";
+import { STALE_VERSION, type BrowserFrame, type ClientOps, type HubOps, type Pin, type Topic, type TopicValue } from "../../src/shared/protocol.ts";
 import { perfMark, perfMarkOnce } from "./perf.ts";
 
 /** A Host source as the web sees it: `link` (`<id>#pi`, `<id>#durable`) names it in routes, requests and subscriptions. */
@@ -54,7 +54,7 @@ type Sub = {
 
 type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void };
 
-export class HubClient {
+class HubClient {
 	#ws?: WebSocket;
 	#id = 1;
 	#pending = new Map<number, Pending>();
@@ -188,7 +188,7 @@ export class HubClient {
 	}
 
 	/** Sends now or not at all: subscriptions are re-sent from the registry on reconnect, requests fail fast. */
-	#send(frame: unknown): boolean {
+	#send(frame: BrowserFrame): boolean {
 		if (this.#ws?.readyState !== WebSocket.OPEN) return false;
 		this.#ws.send(JSON.stringify(frame));
 		return true;
@@ -286,17 +286,19 @@ export function useNow(active: boolean): number {
 	return now;
 }
 
+/** One stable callback: React re-subscribes whenever the subscribe function changes identity. */
+const subscribeHosts = (listener: () => void) => hub.subscribeHosts(listener);
+
 export function useHosts(): { hosts: HostState[]; connected: boolean; listed: boolean } {
-	const subscribe = (listener: () => void) => hub.subscribeHosts(listener);
-	const hosts = useSyncExternalStore(subscribe, () => hub.hosts);
-	const connected = useSyncExternalStore(subscribe, () => hub.connected);
-	const listed = useSyncExternalStore(subscribe, () => hub.hostsListed);
+	const hosts = useSyncExternalStore(subscribeHosts, () => hub.hosts);
+	const connected = useSyncExternalStore(subscribeHosts, () => hub.connected);
+	const listed = useSyncExternalStore(subscribeHosts, () => hub.hostsListed);
 	return { hosts, connected, listed };
 }
 
 /** The hub's pinned Sessions, in pin order. */
 export function usePins(): Pin[] {
-	return useSyncExternalStore((listener: () => void) => hub.subscribeHosts(listener), () => hub.pins);
+	return useSyncExternalStore(subscribeHosts, () => hub.pins);
 }
 
 /**

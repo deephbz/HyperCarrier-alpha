@@ -1,62 +1,36 @@
 // The hub's global config file, its one writer, and the helper models it names. Helper models answer the hub's own
-// isolated calls (Arc Builds and Rarebit side ask); thread models are chosen per Session elsewhere (src/node/models.ts).
+// isolated Rarebit side asks; thread models are chosen per Session elsewhere (src/node/models.ts).
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { ampiHome } from "../shared/home.ts";
 import { dirname, join } from "node:path";
 
 export function hubConfigPath(): string {
-	return process.env.AMPI_HUB_CONFIG ?? join(process.env.AMPI_HOME ?? join(homedir(), ".ampi"), "hub.json");
+	return process.env.AMPI_HUB_CONFIG ?? join(ampiHome(), "hub.json");
 }
 
-/**
- * One hub.json `models` key per helper purpose, the only way to configure it. `arcLabels` covers Arc chunk labels
- * (step 1); `arcSynthesis` covers step 2: the headline, the synthesis and the two-tier context.
- */
-export type ModelPurpose = "arcLabels" | "arcSynthesis" | "rarebitAsk";
+/** Rarebit side asks use the hub's explicit helper model. Arc reads Pi settings separately. */
+export type ModelPurpose = "rarebitAsk";
 export type HelperModels = Partial<Record<ModelPurpose, string>>;
-const PURPOSES: readonly ModelPurpose[] = ["arcLabels", "arcSynthesis", "rarebitAsk"];
-
-let configFile: string | undefined, configModels: unknown, configEvidence: unknown;
-/**
- * The running hub names its config file (`ampi hub --config`). A hub made in code without a file (demo, verify and
- * test hubs) passes its config's `models` block instead. With neither, every key is unset.
- */
-export function useHubConfig(path: string | undefined, models?: unknown, evidence?: unknown): void {
-	configFile = path; configModels = path ? undefined : models; configEvidence = path ? undefined : evidence;
-	// Name settings the hub does not read at start, not only at the first helper call.
-	try { namedModel("arcLabels", undefined, path); } catch { /* the first helper call reports a malformed file */ }
-}
-
-/**
- * What Arc step 2 reads per chunk: `full` (the default) sends the chunk's Rarebit messages; `labels` sends only its
- * owner turns, with the labels and ask candidates, for a cheaper step 2. hub.json `arcEvidence` is read per Build, so
- * an edit applies to the next Build. An invalid value throws with its path.
- */
-export type ArcEvidence = "full" | "labels";
-export function arcEvidence(): ArcEvidence {
-	let value: unknown = configFile ? undefined : configEvidence;
-	if (configFile && existsSync(configFile)) {
-		try { value = (JSON.parse(readFileSync(configFile, "utf8")) as { arcEvidence?: unknown }).arcEvidence; }
-		catch (e) { throw new Error(`${configFile} is not valid JSON: ${(e as Error).message}`); }
-	}
-	if (value === undefined || value === "full" || value === "labels") return value ?? "full";
-	throw new Error(`${configFile ?? "the hub's config"}: arcEvidence must be "full" or "labels"`);
+const PURPOSES: readonly ModelPurpose[] = ["rarebitAsk"];
+let configFile: string | undefined, configModels: unknown;
+export function useHubConfig(path: string | undefined, models?: unknown): void {
+ configFile = path; configModels = path ? undefined : models;
 }
 
 /** Where a helper model name came from, so an error can say where to change it. `unset`: no key names a model. */
-export type ModelSource = { kind: "build" } | { kind: "call" } | { kind: "file" | "unset"; key: string; file: string };
+export type ModelSource = { kind: "call" } | { kind: "file" | "unset"; key: string; file: string };
 type Named = { name: string | null; source: ModelSource; stale: string[] };
 
 /**
- * The configured model name for one helper call: the explicit per-Build or per-call model, else hub.json
+ * The configured model name for one helper call: the explicit per-call model, else hub.json
  * `models.<purpose>`. There is no built-in default: with no key set the name is
  * null. hub.json is read on every call, so an edit applies to the next call without a hub restart. A malformed file
  * or entry throws with its path.
  */
 function namedModel(purpose: ModelPurpose, explicit: unknown, path: string | undefined): Named {
 	const file = path ?? (configModels ? "the hub's config" : "hub.json");
-	if (typeof explicit === "string" && explicit.trim()) return { name: explicit.trim(), source: { kind: purpose.startsWith("arc") ? "build" : "call" }, stale: [] };
+	if (typeof explicit === "string" && explicit.trim()) return { name: explicit.trim(), source: { kind: "call" }, stale: [] };
 	let models: unknown = path ? undefined : configModels;
 	if (path && existsSync(path)) {
 		try { models = (JSON.parse(readFileSync(path, "utf8")) as { models?: unknown }).models; }
@@ -77,15 +51,12 @@ function namedModel(purpose: ModelPurpose, explicit: unknown, path: string | und
 const noModel = (message: string) => Object.assign(new Error(message), { code: "no_model" });
 
 /**
- * Model settings this hub does not read, each as one sentence that names the key to set: hub.json `models.arc`, any
- * other unknown key under `models` (such as a typo), and the AMPI_RAREBIT_ASK_MODEL env
- * variable. An unset key's error repeats them, so an owner who set the old name learns why it has no effect.
+ * Unknown helper settings and the AMPI_RAREBIT_ASK_MODEL environment variable. An unset key's error repeats them, so an owner who set the old name learns why it has no effect.
  */
 function staleNotes(models: unknown, file: string): string[] {
 	const notes: string[] = [];
 	for (const key of models && typeof models === "object" ? Object.keys(models) : []) {
-		if (key === "arc") notes.push("models.arc is no longer read; set models.arcLabels and models.arcSynthesis.");
-		else if (!PURPOSES.includes(key as ModelPurpose)) notes.push(`models.${key} is not a model key; use models.${PURPOSES.join(", models.")}.`);
+		if (!key.startsWith("arc") && !PURPOSES.includes(key as ModelPurpose)) notes.push(`models.${key} is not a model key; use models.${PURPOSES.join(", models.")}.`);
 	}
 	for (const [env, key] of [["AMPI_RAREBIT_ASK_MODEL", "rarebitAsk"]] as const)
 		if (process.env[env]) notes.push(`${env} is ignored; set models.${key} in ${file}.`);
@@ -100,11 +71,10 @@ function warnStale(notes: string[]): void {
 	warned = said;
 }
 
-const PURPOSE_WORDS: Record<ModelPurpose, string> = { arcLabels: "Arc labels", arcSynthesis: "Arc synthesis", rarebitAsk: "Rarebit ask" };
-const purposeWords = (ps: ModelPurpose[]) => ps.length === 2 && ps.every((p) => p.startsWith("arc")) ? "Arc labels and synthesis" : ps.map((p) => PURPOSE_WORDS[p]).join(" and ");
-const SOURCE_WORDS = (s: ModelSource) => s.kind === "build" ? "per-Build model" : s.kind === "call" ? "per-call model" : "hub.json";
-const SOURCE_FIX = (s: ModelSource, keys = [s.kind === "file" || s.kind === "unset" ? s.key : ""]) => s.kind === "build" ? "Change or clear the per-Build model."
-	: s.kind === "call" ? "Change or clear the per-call model." : `${s.kind === "unset" ? "Set" : "Edit"} models.${keys.join(" and models.")} in ${s.file}.`;
+const PURPOSE_WORDS: Record<ModelPurpose, string> = { rarebitAsk: "Rarebit ask" };
+const purposeWords = (ps: ModelPurpose[]) => ps.map((p) => PURPOSE_WORDS[p]).join(" and ");
+const SOURCE_WORDS = (s: ModelSource) => s.kind === "call" ? "per-call model" : "hub.json";
+const SOURCE_FIX = (s: ModelSource, keys = [s.kind === "file" || s.kind === "unset" ? s.key : ""]) => s.kind === "call" ? "Change or clear the per-call model." : `${s.kind === "unset" ? "Set" : "Edit"} models.${keys.join(" and models.")} in ${s.file}.`;
 
 /**
  * One configured name that names no model the carrier lists, or no name at all (`model` null), for `purposes`.
@@ -149,24 +119,6 @@ export class ModelNotFound extends Error {
 		if (available) this.available = available;
 	}
 
-	/**
-	 * One error for two failed lookups. One name from one source that failed both purposes reads as one miss, as do
-	 * two unset keys in one file.
-	 */
-	static merge(a: Error, b: Error): Error {
-		if (!(a instanceof ModelNotFound && b instanceof ModelNotFound)) {
-			if (b.message !== a.message) a.message += ` ${b.message}`;
-			return a;
-		}
-		const misses = [...a.misses];
-		for (const m of b.misses) {
-			const same = misses.findIndex((x) => x.model === m.model && x.source.kind === m.source.kind
-				&& (m.source.kind === "unset" ? (x.source as { file: string }).file === m.source.file : SOURCE_FIX(x.source) === SOURCE_FIX(m.source)));
-			if (same < 0) misses.push(m);
-			else { const x = misses[same]!; misses[same] = { ...x, purposes: [...x.purposes, ...m.purposes], exact: [...new Set([...x.exact, ...m.exact])], stale: [...new Set([...x.stale ?? [], ...m.stale ?? []])] }; }
-		}
-		return new ModelNotFound(misses, a.available ?? b.available);
-	}
 }
 
 /** One model a carrier can use now, such as a row of `pi --list-models`. */

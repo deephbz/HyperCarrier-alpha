@@ -9,7 +9,9 @@
 		"skipLibCheck": true,
 		"allowImportingTsExtensions": true,
 		"lib": ["ES2023", "DOM", "DOM.Iterable"],
-		"types": ["vite/client"]
+		// RarebitValue pulls backend modules into this program; hub/hosts.ts supplied Node types incidentally.
+		// Drop Node types when RarebitValue moves to shared/.
+		"types": ["vite/client", "node"]
 	},
 	"include": ["src"]
 }

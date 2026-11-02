@@ -12,7 +12,7 @@
 
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { homedir } from "node:os";
+import { ampiHome } from "../shared/home.ts";
 import type { ServerResponse } from "node:http";
 import { join } from "node:path";
 import { applyImmutable, diffRevisions } from "@earendil-works/chord/delta";
@@ -22,10 +22,12 @@ import { DurableViews, type DurableReaderNode } from "../durable/reader-side.ts"
 import { ask } from "../pi/ask.ts";
 import { piModelRegistry } from "../pi/model-registry.ts";
 import { PI_VIEWS } from "../pi/views/index.ts";
-import type { PiRecordedMember, PiTeamsFrame, PiTeamTask } from "../pi/views/types.ts";
+import type { PiRecordedMember, PiTeamsFrame } from "../pi/views/types.ts";
+import type { PiTeamTask } from "../shared/team.ts";
 import { resolveHelperModel } from "./helper-models.ts";
 import { type ClientFrame, type NodeFrame, THREAD_FIELDS, type ThreadSummary, type Topic } from "../shared/protocol.ts";
-import { type HostConfig, HostLink, type HostState, linkKey } from "./hosts.ts";
+import { HostLink, linkKey } from "./hosts.ts";
+import type { HostConfig, HostState } from "../shared/hosts.ts";
 
 type Row = ThreadSummary & Record<string, unknown>;
 type ThreadsValue = { threads: Record<string, Row> } & Record<string, unknown>;
@@ -84,7 +86,7 @@ export class DurableHost extends EventEmitter {
 		this.config = config;
 		this.#deadline = options.deadline ?? realDeadline;
 		this.#link = new HostLink(config);
-		const home = config.home ?? process.env.AMPI_HOME ?? join(homedir(), ".ampi");
+		const home = config.home ?? ampiHome();
 		const node = (this.#node = this.#readerNode());
 		this.views = new DurableViews({
 			host: config.id,
@@ -155,6 +157,10 @@ export class DurableHost extends EventEmitter {
 			const sub: Composed = { sid: frame.sid, topic: frame.topic, n: 0 };
 			if (frame.topic.kind === "view") {
 				this.#subs.set(frame.sid, sub);
+				if ("threadId" in frame.topic && frame.topic.threadId) {
+					this.views.opened(frame.topic.threadId, true);
+					if (frame.topic.view === "arc") this.views.panel(frame.topic.threadId, true);
+				}
 				this.#publish(sub);
 				return true;
 			}
@@ -163,6 +169,7 @@ export class DurableHost extends EventEmitter {
 				this.#subs.set(frame.sid, sub);
 				void this.views.track(threadId).catch(() => {});
 				sub.release = this.views.hold(threadId);
+				this.views.opened(threadId, true);
 				// The entries come from the hub copy, so the node sends only the fields the copy lacks. Without a copy
 				// (an ID the reader cannot parse) the node's full value is the thread value.
 				if (this.views.has(threadId)) return this.#link.send({ ...frame, topic: { ...frame.topic, fields: [...THREAD_FIELDS] } });
@@ -306,7 +313,7 @@ export class DurableHost extends EventEmitter {
 		this.#rowsValue = value;
 		this.#rows = value?.threads ?? {};
 		for (const [threadId, row] of Object.entries(this.#rows)) {
-			if (!this.views.threads().includes(threadId)) this.#enqueue(threadId);
+			if (!this.views.has(threadId)) this.#enqueue(threadId);
 			else if (JSON.stringify(row) !== JSON.stringify(before[threadId])) this.#enqueue(threadId);
 		}
 		this.#followTeams();
@@ -328,7 +335,11 @@ export class DurableHost extends EventEmitter {
 
 	/** The Pi-shaped Team frame (views/types.ts PiTeamsFrame) from the node's Team values; none before a lead row. */
 	#teamsFrame(): PiTeamsFrame | undefined {
-		if (!this.#teams.size) return undefined;
+		// One ownership lookup serves every Worker's session check.
+		return this.#teams.size ? this.views.projection(() => this.#teamsFrameNow()) : undefined;
+	}
+
+	#teamsFrameNow(): PiTeamsFrame {
 		const recorded: PiRecordedMember[] = [], tasks: NonNullable<PiTeamsFrame["tasks"]> = {}, messages: NonNullable<PiTeamsFrame["messages"]> = {};
 		for (const [teamId, { value, ended }] of this.#teams) {
 			// An ended Team keeps its lead, the Team ID's thread, and shows its Tasks unavailable: no stale Tasks.
@@ -379,18 +390,21 @@ export class DurableHost extends EventEmitter {
 		}
 		const node = sub.node as ThreadsValue | undefined;
 		if (!node?.threads) return node;
-		const threads: Record<string, Row> = {};
-		for (const [threadId, row] of Object.entries(node.threads)) {
-			const fields = this.views.summaryFields(threadId) as Record<string, unknown> | undefined;
-			const merged: Record<string, unknown> = { ...row };
-			for (const key of READER_FIELDS) if (fields?.[key] !== undefined) merged[key] = fields[key];
-			for (const key of FALLBACK_FIELDS) if (merged[key] === undefined && fields?.[key] !== undefined) merged[key] = fields[key];
-			// Each view's row fields (for example the Arc Build's `arc.asks`), as a Pi Host adds them to its rows.
-			const session = this.views.context.session(threadId);
-			if (session) for (const view of PI_VIEWS) if (view.summarize) Object.assign(merged, view.summarize(this.views.context, session));
-			threads[threadId] = merged as Row;
-		}
-		return { ...node, threads };
+		// One ownership lookup serves every row's summary fields.
+		return this.views.projection(() => {
+			const threads: Record<string, Row> = {};
+			for (const [threadId, row] of Object.entries(node.threads)) {
+				const fields = this.views.summaryFields(threadId) as Record<string, unknown> | undefined;
+				const merged: Record<string, unknown> = { ...row };
+				for (const key of READER_FIELDS) if (fields?.[key] !== undefined) merged[key] = fields[key];
+				for (const key of FALLBACK_FIELDS) if (merged[key] === undefined && fields?.[key] !== undefined) merged[key] = fields[key];
+				// Each view's row fields (for example the Arc receipt head), as a Pi Host adds them to its rows.
+				const session = this.views.context.session(threadId);
+				if (session) for (const view of PI_VIEWS) if (view.summarize) Object.assign(merged, view.summarize(this.views.context, session));
+				threads[threadId] = merged as Row;
+			}
+			return { ...node, threads };
+		});
 	}
 
 	#publish(sub: Composed): void {
@@ -420,6 +434,11 @@ export class DurableHost extends EventEmitter {
 		if (!sub) return;
 		this.#subs.delete(sid);
 		sub.release?.();
+		if ("threadId" in sub.topic && sub.topic.threadId) {
+			const id = sub.topic.threadId, remaining = [...this.#subs.values()];
+			this.views.opened(id, remaining.some(s => "threadId" in s.topic && s.topic.threadId === id));
+			this.views.panel(id, remaining.some(s => s.topic.kind === "view" && s.topic.view === "arc" && s.topic.threadId === id));
+		}
 	}
 
 	/** A connection change ends every subscription and call of the old connection; the hub resubscribes. */

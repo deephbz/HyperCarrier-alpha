@@ -6,11 +6,11 @@ import { join } from "node:path";
 import { test } from "node:test";
 // @ts-ignore: shared reader is plain ESM.
 import { openPiSessionRange } from "../../trace-analytics/src/sources/transcript-range.mjs";
-import { inheritedBefore, visitFindItems, visitIngestItems, type IngestSemantics, type ReaderItem } from "../src/pi/reader-item.ts";
+import { visitFindItems, visitIngestItems, type IngestSemantics, type ReaderItem } from "../src/pi/reader-item.ts";
 
 const T = "2026-10-24T08:00:00.000Z";
 const rows = [
-	{ type: "session", version: 3, id: "sess-bridge", timestamp: T, cwd: "/work/synthetic", parentSession: "/work/parent.jsonl" },
+	{ type: "session", version: 3, id: "sess-bridge", timestamp: "2026-10-24T09:00:00.000Z", cwd: "/work/synthetic", parentSession: "/work/parent.jsonl" },
 	{ type: "message", id: "u1", parentId: null, timestamp: T, message: { role: "user", content: "Check the reader bridge." } },
 	{ type: "message", id: "inj", parentId: "u1", timestamp: T, message: { role: "user", content: "[PiTeams clarification] A coordination notice." } },
 	{ type: "custom_message", id: "cm", parentId: "inj", timestamp: T, customType: "hc-note", content: "An injected notice.", display: true },
@@ -38,22 +38,21 @@ test("reader item: the Pi bridge carries the semantics ingestion derives from, a
 		visitIngestItems(reader, (item) => seen.push(item));
 		assert.deepEqual(seen.map((item) => Object.keys(item).sort()), seen.map(() => ["entry", "position", "semantics"]));
 		const by = new Map(seen.map((item) => [item.entry.id, item.semantics]));
-		// A human turn is a Rarebit item. An injected user message keeps the selector's occurrence but is no item.
-		assert.equal(by.get("u1")!.rarebit.item?.kind, "user");
-		assert.equal(by.get("inj")!.rarebit.occurrence?.outcome, "user");
+		// The shared selector excludes injected turns and preserves owner provenance.
+		assert.equal(by.get("u1")!.rarebit.item?.kind, "user", "a parent entry before the fork header remains selected");
+		assert.equal(by.get("inj")!.rarebit.occurrence, null);
+		assert.equal(by.get("u1")!.rarebit.item?.owner, true);
 		assert.equal(by.get("inj")!.rarebit.item, null);
 		assert.equal(by.get("cm")!.rarebit.occurrence, null);
 		assert.equal(by.get("mc")!.lineage.model, "openai/gpt-5.5");
 		assert.equal(by.get("u1")!.lineage.model, undefined);
 		assert.equal(by.get("a1")!.proseCounts.thinking, "Plan.".length);
 		assert.equal(by.get("a1")!.proseCounts.toolCalls, JSON.stringify({ command: "npm test" }).length + "bash".length);
-		assert.deepEqual(by.get("k")!.rarebit.item, { id: "k", kind: "compaction", t: T, text: "Context restarts here" });
+		assert.deepEqual(by.get("k")!.rarebit.item, { id: "k", kind: "compaction", t: T, text: "Context restarts here", owner: false });
 		assert.equal(by.get("k")!.proseCounts.summary, "## Goal\nKeep going.".length);
-		assert.deepEqual(by.get("a2")!.rarebit.item, { id: "a2", kind: "error", t: T, text: "529 overloaded" });
+		assert.deepEqual(by.get("a2")!.rarebit.item, { id: "a2", kind: "error", t: T, text: "529 overloaded", owner: false });
 		// The lineage record keeps only the fields Rarebit's lineage reader reads.
 		assert.deepEqual(by.get("lin")!.lineage, { id: "lin", type: "custom", customType: "rarebit-fork-lineage", data: { schemaVersion: 1, opening: { seedEntryId: "u1" }, importedEntryIds: ["u1"] } });
-		assert.equal(inheritedBefore(reader.session()), Date.parse(T) - 1000);
-		assert.ok(Number.isNaN(inheritedBefore({ header: { timestamp: T } })));
 		// An incremental visit starts after the given entry.
 		const after: string[] = [];
 		visitIngestItems(reader, (item) => after.push(item.entry.id), { after: "k" });

@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+// @ts-ignore: the perf scripts are plain ESM.
+import { acquireRunLock } from "../scripts/perf/lock.mjs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -9,6 +12,79 @@ import "./bound.ts";
 
 const runner = join(import.meta.dirname, "..", "scripts", "run-tests.cjs");
 const scripts = join(import.meta.dirname, "..", "scripts");
+
+// Use the real runner with a one-file disposable lane; no full suite or live cache is needed.
+for (const mode of ["queued", "inherited", "focused", "SIGTERM", "SIGINT", "SIGHUP", "timeout", "invalid", "negative", "empty", "infinite"]) {
+	test(`gate lock: test lane ${mode}`, async (t) => {
+		const home = mkdtempSync(join(tmpdir(), "ampi-gate-lock-"));
+		// The repository layout: the runner loads its lanes through scripts/lib/line-fragments.cjs.
+		const app = join(home, "apps", "ampi"), perf = join(home, "perf"), lock = join(perf, "gate.lock");
+		mkdirSync(join(app, "scripts", "perf"), { recursive: true });
+		mkdirSync(join(app, "test"));
+		for (const file of ["run-tests.cjs", "gate-lock.cjs", "stdio-sync.cjs", "perf/lock.mjs"])
+			cpSync(join(scripts, file), join(app, "scripts", file));
+		mkdirSync(join(home, "scripts", "lib"), { recursive: true });
+		cpSync(join(scripts, "..", "..", "..", "scripts", "lib", "line-fragments.cjs"), join(home, "scripts", "lib", "line-fragments.cjs"));
+		writeFileSync(join(app, "test-lanes.json"), JSON.stringify({ fast: ["ok.test.cjs"] }));
+		writeFileSync(join(app, "test", "ok.test.cjs"), 'require("node:test")("runs", () => {});');
+		const invalid = ["invalid", "negative", "empty", "infinite"].includes(mode);
+		const timeout = mode === "timeout";
+		const release = await acquireRunLock("synthetic holder", { lock });
+		const child = spawn(process.execPath, [join(app, "scripts", "run-tests.cjs"), "fast", ...(mode === "focused" ? ["ok.test.cjs"] : [])], {
+			env: { ...process.env, HOME: home, AMPI_PERF_HOME: perf, AMPI_PREFLIGHT_DONE: "1", AMPI_GATE_LOCK_HELD: mode === "inherited" ? "1" : "", AMPI_GATE_LOCK_TIMEOUT_MIN: timeout ? "0.01" : invalid ? ({ invalid: "oops", negative: "-1", empty: "", infinite: "Infinity" }[mode]) : "0", AMPI_TEST_FILE_TIMEOUT_MS: "10000" },
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		const exit = once(child, "close");
+		let output = "";
+		child.stdout.on("data", (data) => { output += data; });
+		child.stderr.on("data", (data) => { output += data; });
+		t.after(async () => {
+			if (child.exitCode === null && child.signalCode === null) { child.kill("SIGKILL"); await exit; }
+			release();
+			rmSync(home, { recursive: true, force: true });
+		});
+		if (mode === "queued" || mode.startsWith("SIG")) {
+			const deadline = Date.now() + 15000;
+			// The queue entry can appear before the child's queue line reaches this pipe, so wait for both.
+			while (!existsSync(`${lock}.wait`) || !readdirSync(`${lock}.wait`).length || !/gate lock held by/.test(output)) {
+				assert.ok(Date.now() < deadline && child.exitCode === null, output);
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			}
+			assert.match(output, /gate lock held by synthetic holder/);
+			assert.match(output, /focused file runs \(npm test -- <file>\) do not queue/);
+			assert.doesNotMatch(output, /▸ pass/);
+			if (mode.startsWith("SIG")) child.kill(mode as NodeJS.Signals);
+			else release();
+		}
+		const [code] = await exit;
+		if (timeout || invalid) {
+			assert.notEqual(code, 0, output);
+			assert.doesNotMatch(output, /▸ pass/);
+			assert.deepEqual(existsSync(`${lock}.wait`) ? readdirSync(`${lock}.wait`) : [], []);
+			if (timeout) {
+				const lines = output.split("\n").filter((line) => line.startsWith("gate lock: timeout"));
+				assert.equal(lines.length, 1, output);
+				assert.ok(lines[0].includes("holder pid " + process.pid + "; command: "), lines[0]);
+				const command = execFileSync("ps", ["-o", "command=", "-p", String(process.pid)], { encoding: "utf8" }).trim().replace(/\s+/g, " ");
+				assert.ok(lines[0].includes("command: " + command + ";"), lines[0]);
+				assert.match(lines[0], /lock age: \d+\.\d s; recovery: read .*gate\.lock\/owner\.json, then remove the gate\.lock directory if the holder is dead or pid 0/);
+			} else assert.match(output, /usage error: AMPI_GATE_LOCK_TIMEOUT_MIN must be a finite non-negative number/);
+		} else if (mode.startsWith("SIG")) {
+			assert.notEqual(code, 0);
+			assert.deepEqual(readdirSync(`${lock}.wait`), []);
+		} else {
+			assert.equal(code, 0, output);
+			assert.match(output, /▸ pass ok.test.cjs/);
+		}
+		if (mode === "queued") {
+			assert.match(output, /gate lock: waited/);
+			assert.equal(existsSync(lock), false, "the runner releases its lock on exit");
+		} else {
+			assert.equal(JSON.parse(readFileSync(join(lock, "owner.json"), "utf8")).pid, process.pid);
+			if (!mode.startsWith("SIG") && !timeout && !invalid) assert.doesNotMatch(output, /gate lock/);
+		}
+	});
+}
 
 // At load 232 Node startup plus the 2.5 s slow test passed a 4 s file bound; 10 s leaves the margin.
 // A ci-builder probe run hung for 3 h: `--test-timeout` fails the test body, but an open handle keeps the file alive.

@@ -7,13 +7,9 @@
 // any root cannot read or write it: it gets that root's owner instead.
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { ampiHome } from "../shared/home.ts";
 import { dirname, join } from "node:path";
 import { type HomeLock, lockHome, ownerPid } from "../shared/home-lock.ts";
-
-export function ampiHome(): string {
-	return process.env.AMPI_HOME ?? join(homedir(), ".ampi");
-}
 
 /**
  * The hub that owns a root: its pid, the root, and for a home the port it last recorded (absent before its first

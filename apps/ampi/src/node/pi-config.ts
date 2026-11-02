@@ -4,7 +4,7 @@
 // Pi's own loaders are the authority; test/node-prompt-parity.test.ts compares this module with them.
 
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync, watch } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { assertTestIsolation } from "./test-mode.ts";
@@ -87,7 +87,7 @@ function deepMerge(base: PiSettings, override: PiSettings): PiSettings {
 }
 
 /** Pi's `defaultTools` rule: plain names replace the defaults, then `+name` adds and `-name` removes, in order. */
-export function resolveTools(entries: unknown): string[] {
+function resolveTools(entries: unknown): string[] {
 	if (!Array.isArray(entries)) return [...DEFAULT_TOOLS];
 	const list = entries.filter((entry): entry is string => typeof entry === "string");
 	const plain = list.filter((entry) => !isModifier(entry));
@@ -525,7 +525,10 @@ export function piSettingsFile(options: PiConfigOptions = {}): string {
 	return join(resolve(options.agentDir ?? piAgentDir()), "settings.json");
 }
 
-/** The stamp `piSettingsLayers(cwd)` would carry, from `stat` calls only: a poll compares it without reading JSON. */
+/**
+ * The stamp `piSettingsLayers(cwd)` would carry, without a JSON parse: a poll compares it cheaply. A settled file costs
+ * one `stat`; a file edited within RACY_MS also has its bytes hashed (`fileStamp`).
+ */
 export function piSettingsStamp(cwd: string | undefined, options: PiConfigOptions = {}): string {
 	const agentDir = resolve(options.agentDir ?? piAgentDir());
 	return cwd === undefined ? fileStamp(piSettingsFile({ agentDir })) : stamp(resolve(cwd), agentDir);
@@ -557,4 +560,34 @@ export function piSettingsLayers(cwd: string | undefined, options: PiConfigOptio
 export function piSettings(cwd: string, options: PiConfigOptions = {}): PiSettings {
 	const { global, project } = piSettingsLayers(cwd, options);
 	return deepMerge(global, project);
+}
+
+/** Watch the directory so atomic settings replacement keeps the trigger cache current. */
+export function watchArcSettings(changed: (auto: boolean) => void): () => void {
+ const file = piSettingsFile();
+ const refresh = () => { try { changed(arcSettings(file).auto); } catch { /* the next Build reports invalid settings */ } };
+ refresh();
+ try { const watcher = watch(dirname(file), { persistent: false }, (_event, name) => { if (name === "settings.json") refresh(); }); watcher.on("error", () => {}); return () => watcher.close(); }
+ catch { return () => {}; }
+}
+const arcSettingsCache = new Map<string, { stamp: string; value: Record<string, unknown> }>();
+function strictArcSettings(file: string): Record<string, unknown> {
+ let stamp: string;
+ try { const s = statSync(file); stamp = `${s.ino}:${s.mtimeMs}:${s.ctimeMs}:${s.size}`; }
+ catch (e) { if ((e as NodeJS.ErrnoException).code === "ENOENT") return {}; throw e; }
+ const prior = arcSettingsCache.get(file); if (prior?.stamp === stamp) return prior.value;
+ const value = JSON.parse(readFileSync(file, "utf8"));
+ if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${file}: settings must be an object`);
+ arcSettingsCache.set(file, { stamp, value }); return value;
+}
+export function arcSettings(file = piSettingsFile()): { model: string; auto: boolean; retries: number } {
+ try {
+  const block = strictArcSettings(file).ampi_arc;
+  if (block !== undefined && (!block || typeof block !== "object" || Array.isArray(block))) throw new Error("ampi_arc must be an object");
+  const { model = "anthropic/claude-haiku-5-5", auto = true, retries = 2 } = (block ?? {}) as Record<string, unknown>;
+  if (typeof model !== "string" || !/^[^\s/:]+\/[^\s:]+$/.test(model)) throw new Error("ampi_arc.model must be a full provider/modelId string");
+  if (typeof auto !== "boolean") throw new Error("ampi_arc.auto must be a boolean");
+  if (typeof retries !== "number" || !Number.isInteger(retries) || retries < 0 || retries > 5) throw new Error("ampi_arc.retries must be an integer from 0 to 5");
+  return { model, auto, retries };
+ } catch (e) { throw Object.assign(new Error(`${file}: ampi_arc: ${(e as Error).message}`), { code: "settings" }); }
 }

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createServer, type ViteDevServer } from "vite";
-import type { HostState } from "../src/hub/hosts.ts";
+import type { HostState } from "../src/shared/hosts.ts";
 import type { ThreadSummary } from "../src/shared/protocol.ts";
 
 type Notice = { title: string; body: string; host: string; threadId: string };
@@ -34,15 +34,15 @@ before(async () => {
 	({ notices, notify, needsYouCount } = await vite.ssrLoadModule("/src/attention.ts"));
 	overview = (await vite.ssrLoadModule("/src/components/Overview.tsx")).Overview;
 	notice = (await vite.ssrLoadModule("/src/components/ThreadView.tsx")).NoticeEntry;
-	badges = (await vite.ssrLoadModule("/src/components/Sidebar.tsx")).ThreadBadges;
+	badges = (await vite.ssrLoadModule("/src/components/ThreadStatus.tsx")).ThreadBadges;
 	timelineStream = (await vite.ssrLoadModule("/src/views/cos/Timeline.tsx")).TimelineStream;
 });
 after(async () => { await vite?.close(); });
 
 const host = { id: "devbox", link: "devbox#durable", kind: "durable" } as unknown as HostState;
 const thread = (over: Partial<ThreadSummary> = {}): ThreadSummary => ({ id: "tree-a.7", title: "Worker", updatedAt: 1, activity: "idle", queued: 0, control: true, live: true, ...over }) as ThreadSummary;
-const arc = (asks: NonNullable<ThreadSummary["arc"]>["asks"], stale = false): ThreadSummary["arc"] => ({ builtAt: "2026-10-25T00:00:00Z", stale, newMessages: 0, finished: false, asks });
-const decision = [{ kind: "decision" as const, n: 1, since: 1000 }];
+const arc = (needsYou: number, stale = 0): ThreadSummary["arc"] => ({ needsYou, oldestAt: "2026-10-25T00:00:00Z", stale });
+const decision = 1;
 const step = (from: ThreadSummary, to: ThreadSummary, away = true) =>
 	notices(new Map([[`devbox#durable|${from.id}`, from]]), [{ host, threads: [to], stale: false }] as never, undefined, away);
 
@@ -51,7 +51,7 @@ test("needs you: retired Team and Rarebit sources from old nodes do not ask the 
  assert.deepEqual(util.attentionOf({ ...retired, lastError: "provider failed" }), [{ source: "error", reason: "provider failed" }]);
  assert.equal(util.needsYou(retired), undefined);
  assert.deepEqual(step(thread(), retired), [], "a blocked Task raises no notification");
- assert.equal(util.needsYou({ ...retired, arc: arc(decision) }), "Arc: 1 open decision");
+ assert.equal(util.needsYou({ ...retired, arc: arc(decision) }), "Arc: 1 need you");
  const page = renderToStaticMarkup(createElement(overview as never, { data: [{ host, threads: [retired], stale: false }], onNew() {}, onHostSetup() {}, onHelp() {} }));
  assert.match(page, /Needs you <span class="hint">0<\/span>/);
  assert.equal(needsYouCount([{ host, threads: [retired], stale: false }] as never), 0);
@@ -65,12 +65,12 @@ test("needs you: retired Team and Rarebit sources from old nodes do not ask the 
 });
 
 test("needs you: an open Arc ask is a Needs-you reason, for the Dock count and Overview alike; a closed thread has none", () => {
-	assert.equal(util.needsYou(thread({ arc: arc(decision) })), "Arc: 1 open decision");
-	assert.equal(util.needsYou(thread({ arc: arc([{ kind: "approval", n: 2, since: null }, { kind: "input", n: 1, since: 5 }]) })), "Arc: 2 open approvals, 1 open input request");
-	assert.equal(util.needsYou(thread({ arc: arc([]) })), undefined, "an Arc with no open ask needs nothing");
+	assert.equal(util.needsYou(thread({ arc: arc(decision) })), "Arc: 1 need you");
+	assert.equal(util.needsYou(thread({ arc: arc(3) })), "Arc: 3 need you");
+	assert.equal(util.needsYou(thread({ arc: arc(0) })), undefined, "an Arc with no open ask needs nothing");
 	assert.equal(util.needsYou(thread({ arc: arc(decision), closed: { at: 2, by: "owner" } })), undefined, "a closed thread never needs the owner");
 	assert.equal(util.needsYou(thread({ arc: arc(decision), lastError: "529 overloaded" })), "529 overloaded", "a live signal leads");
-	assert.deepEqual(util.attentionOf(thread({ arc: arc(decision) })), [], "attentionOf stays the live signals; Overview lists asks by kind");
+	assert.deepEqual(util.attentionOf(thread({ arc: arc(decision) })), [], "attentionOf stays the live signals; Overview reads the head count");
 	const row = (t: ThreadSummary) => renderToStaticMarkup(createElement(badges as never, { t, compact: true }));
 	assert.doesNotMatch(row(thread({ arc: arc(decision) })), /Needs you|>!</, "the sidebar has no attention badge");
 	assert.doesNotMatch(row(thread({ arc: arc(decision), closed: { at: 2, by: "owner" } })), /Needs you/);
@@ -90,8 +90,8 @@ test("needs you: away, an agent that asks raises exactly one Needs-you notificat
 	const asked = thread({ preview: "Decision needed: A or B?", arc: arc(decision) });
 	const raised = step(settled, asked);
 	assert.deepEqual(raised.map(({ title, host, threadId }) => ({ title, host, threadId })), [{ title: "Needs you: Worker", host: "devbox#durable", threadId: "tree-a.7" }]);
-	assert.match(raised[0]!.body, / · Arc: 1 open decision$/);
-	assert.deepEqual(step(asked, thread({ ...asked, arc: arc(decision, true) })), [], "a stale head with the same asks is no new transition");
+	assert.match(raised[0]!.body, / · Arc: 1 need you$/);
+	assert.deepEqual(step(asked, thread({ ...asked, arc: arc(decision, 4) })), [], "a stale head with the same asks is no new transition");
 	assert.deepEqual(step(thread({ activity: "streaming" }), asked).map((n) => n.title), ["Needs you: Worker"], "a run that ends with its ask published raises Needs you, never Finished as well");
 });
 
@@ -114,13 +114,13 @@ test("notice row: an older node's custom entry without a message renders through
 	assert.match(generic, /<span class="notice-first">First line<\/span>/);
 });
 
-test("needs you: away, resolving one of two asks stays silent; a grown count or a new ask kind raises Needs you", () => {
-	const two = thread({ arc: arc([{ kind: "decision", n: 2, since: 1000 }]) });
-	const one = thread({ arc: arc([{ kind: "decision", n: 1, since: 1000 }]) });
+test("needs you: away, resolving one of two asks stays silent; only a grown head count raises Needs you", () => {
+	const two = thread({ arc: arc(2) });
+	const one = thread({ arc: arc(1) });
 	assert.deepEqual(step(two, one), [], "a shrink resolves an ask; it never pings");
-	assert.deepEqual(step(one, two).map((n) => n.body.split(" · ").at(-1)), ["Arc: 2 open decisions"]);
-	const approval = thread({ arc: arc([{ kind: "decision", n: 1, since: 1000 }, { kind: "approval", n: 1, since: 2000 }]) });
-	assert.deepEqual(step(two, approval).map((n) => n.title), ["Needs you: Worker"], "a new kind is a new ask, even while the total stays 2");
+	assert.deepEqual(step(one, two).map((n) => n.body.split(" · ").at(-1)), ["Arc: 2 need you"]);
+	const approval = thread({ arc: arc(2) });
+	assert.deepEqual(step(two, approval), [], "an unchanged count is not a new notification signal");
 	assert.deepEqual(step(thread({ arc: arc(decision), lastError: "529 overloaded" }), thread({ arc: arc(decision) })), [], "a cleared error leaves the same ask, already notified");
 });
 
@@ -128,10 +128,10 @@ test("needs you: Overview groups only the asks of threads that need the owner; a
 	const data = (threads: ThreadSummary[]) => [{ host: { id: "devbox", label: "devbox", kind: "pi-local", status: "connected", attempts: 0, link: "devbox#pi" }, threads, stale: false }];
 	const page = (threads: ThreadSummary[]) => renderToStaticMarkup(createElement(overview as never, { data: data(threads), onNew() {}, onHostSetup() {}, onHelp() {} }));
 	const open = page([thread({ arc: arc(decision) })]);
-	assert.match(open, /data-kind="decision"/);
+	assert.match(open, /Arc: 1 need you/);
 	assert.match(open, /Needs you <span class="hint">1<\/span>/);
 	const closed = page([thread({ arc: arc(decision), closed: { at: 2, by: "owner" } })]);
-	assert.doesNotMatch(closed, /data-kind="decision"/, "Overview agrees with the Dock count");
+	assert.doesNotMatch(closed, /Arc: 1 need you/, "Overview agrees with the Dock count");
 	assert.match(closed, /Needs you <span class="hint">0<\/span>/);
 });
 
@@ -140,7 +140,7 @@ test("needs you: the macOS shell gets the thread tag, so a later Needs you repla
 	Object.assign(globalThis, { webkit: { messageHandlers: { ampi: { postMessage: (m: unknown) => posted.push(m) } } } });
 	try {
 		notify("Finished: Worker", "devbox · Done.", "devbox#durable", "tree-a.7");
-		notify("Needs you: Worker", "devbox · Arc: 1 open decision", "devbox#durable", "tree-a.7");
+		notify("Needs you: Worker", "devbox · Arc: 1 need you", "devbox#durable", "tree-a.7");
 	} finally {
 		delete (globalThis as { webkit?: unknown }).webkit;
 	}

@@ -74,7 +74,7 @@ function fixtureSocket(ws, recipe, audit, clock) {
     const respond = value => ws.send(JSON.stringify({ t: 'res', id: f.id, ok: true, value }));
     const reject = () => ws.send(JSON.stringify({ t: 'res', id: f.id, ok: false, error: { code: 'synthetic_failure', message: 'Synthetic demo failure. No Host action was sent.' } }));
     if (recipe.reject && !['models.list', 'prompts.list', 'thread.history', 'compact.records', 'fs.dirs'].includes(f.op)) return reject();
-    if (recipe.pending && ['accounts.list', 'view.rarebit.ask', 'view.cos.arc.build'].includes(f.op)) return;
+    if (recipe.pending && ['accounts.list', 'view.rarebit.ask', 'view.arc.build'].includes(f.op)) return;
     switch (f.op) {
       case 'models.list': return respond([]);
       case 'accounts.list': return respond(providers);
@@ -139,15 +139,9 @@ function fixtureSocket(ws, recipe, audit, clock) {
         if (v === 'no-team') value.teams = [];
         if (v === 'large-team') value.teams.forEach(t => { t.tasks = Array.from({ length: 105 }, (_, i) => ({ id: `U${i}`, title: `Synthetic coverage Task ${i}`, status: 'ready', ready: true, owner: 'reader', deps: [] })); });
       }
-      if (topic.view === 'cos.arc' && topic.threadId) {
-        if (v === 'missing') value = { missing: true, notice: 'Synthetic Session copy unavailable. Reconnect the Host.' };
-        if (v === 'empty-view') { value.chunks = []; value.cards = []; }
-        if (['labelled', 'stale-labels'].includes(v)) {
-          value.synthesis = { headline: 'Synthetic summary: reader → GUI → verification', model: 'synthetic/offline', builtAt: new Date(now()).toISOString() };
-          value.coverage.synthesisCurrent = v !== 'stale-labels';
-          value.coverage.labelledChunks = value.chunks.length;
-          value.chunks.forEach(c => { c.label = { topic: 'Synthetic chunk label', project: 'Demo project' }; c.labelCurrent = v !== 'stale-labels'; });
-        }
+      if (topic.view === 'arc' && topic.threadId) {
+        if (v === 'missing') value = { stale: 0, branchChanged: false, status: { state: 'failed', error: { code: 'source', message: 'Synthetic Session copy unavailable. Reconnect the Host.' } } };
+        if (v === 'empty-view') delete value.receipt;
       }
     }
     snap(f.sid, pinHubClock(topic.kind, value, clock));

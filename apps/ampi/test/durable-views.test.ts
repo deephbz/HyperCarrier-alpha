@@ -49,7 +49,7 @@ test("an old Summary row remains stored but does not enter the Rarebit panel or 
  assert.equal(after.error, undefined);
  assert.deepEqual(after.items, before.items);
  assert.doesNotMatch(JSON.stringify(after), /LEGACY_SUMMARY_ONLY/);
- assert.doesNotMatch(JSON.stringify(views.context.session(s.threads.root)!.data.arc), /LEGACY_SUMMARY_ONLY/);
+ assert.doesNotMatch(JSON.stringify(views.context.session(s.threads.root)!.arcSource()), /LEGACY_SUMMARY_ONLY/);
  const history = await s.root.entries({}, 20, undefined, context);
  assert.ok(history.items.some((item: any) => item.id === entry.id && item.data.summary === "LEGACY_SUMMARY_ONLY"));
 });
@@ -102,11 +102,13 @@ test("durable views: thread value, summary, Find, search, history, entry, Rarebi
  assert.equal(JSON.parse(entry.text).id, history.entries.at(-1).id);
  assert.ok(views.cost(s.threads.root)!.copyBytes < 64 * 1024, "the oversized record is not copied whole");
 
- // Rarebit and Arc read the working set; a fork's inherited span is excluded from its Arc evidence.
+ // Rarebit and Arc read the whole fork-aware history from the same working set.
  const rarebit = views.value({ kind: "view", view: "rarebit", threadId: s.threads.root } as never) as any;
  assert.ok(!rarebit.error, JSON.stringify(rarebit.error));
- const forkData = views.context.session(s.threads.fork)!.data;
- assert.ok(forkData.arc.excludedEntries > 0, "inherited entries are excluded");
+ const fork = views.context.session(s.threads.fork)!;
+ const forkRarebit = views.value({ kind: "view", view: "rarebit", threadId: s.threads.fork } as never) as any;
+ assert.deepEqual(fork.arcSource().items, forkRarebit.items, "Arc preserves the selector history, including inherited entries");
+ assert.ok(fork.arcSource().items.some(i => i.text === "use echo please"), "the fork keeps its parent owner turn");
 
  // Team: ownership names the lead and its Worker until the node serves a Team frame.
  const team = views.value({ kind: "view", view: "team", threadId: s.threads.worker } as never) as any;
@@ -122,6 +124,25 @@ test("durable views: thread value, summary, Find, search, history, entry, Rarebi
  await grew; await views.sync(s.threads.root);
  assert.ok(views.threadValue(s.threads.root)!.entries.length > before);
  release();
+});
+
+test("durable Arc source includes evidence beyond a Rarebit page", async t => {
+ const s = await synthetic(t);
+ await s.root.commit(async (tx: any) => {
+  for (let i = 0; i < 450; i++) await tx.appendEntry(s.root.id, { kind: "pi.user", model: [{ role: "user", content: `Synthetic branch evidence ${i}.`, timestamp: 1_800_000_000_000 + i }] });
+ }, context);
+ const views = s.open();
+ await views.track(s.threads.root);
+ const session = views.context.session(s.threads.root)!;
+ const page = views.value({ kind: "view", view: "rarebit", threadId: s.threads.root } as never) as any;
+ assert.equal(page.more, true);
+ assert.equal(page.items.length, 400);
+ const source = session.arcSource();
+ assert.ok(source.items.length > 450);
+ assert.equal(source.items.length, session.data.rarebit.count);
+ assert.equal(source.entries.length, session.data.count);
+ for (const text of ["use echo please", "Synthetic branch evidence 0.", "Synthetic branch evidence 449."])
+  assert.ok(source.items.some(i => i.text === text), text);
 });
 
 test("durable views: a restart reuses the copy, and a deleted copy rebuilds from the node", async (t) => {
@@ -176,9 +197,9 @@ function normalized(views: DurableViews, threads: Record<string, string>) {
  };
  return Object.fromEntries(Object.entries(threads).map(([label, id]) => {
   const session = views.context.session(id)!;
-  const { timeline, rarebit, arc, version, bytes, asOf, session: _, ...summary } = session.data;
+  const { timeline, rarebit, version, bytes, asOf, session: _, ...summary } = session.data;
   return [label, scrub({ thread: views.threadValue(id), summary: { ...summary, ...views.summaryFields(id) },
-   rarebit: rarebit.stats, arc: { chunks: arc.chunks.length, excludedEntries: arc.excludedEntries }, marks: timeline.marks.map((m) => m[2]) })];
+   rarebit: rarebit.stats, marks: timeline.marks.map((m) => m[2]) })];
  }));
 }
 

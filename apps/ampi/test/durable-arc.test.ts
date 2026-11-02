@@ -5,48 +5,69 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { runDaemon } from "../src/node/daemon.ts";
 import { Hub } from "../src/hub/hub.ts";
+import { piSettingsFile } from "../src/node/pi-config.ts";
 import { Browser, tempHome } from "./helpers.ts";
 
 const SIM = { provider: "ampi-sim", modelId: "sim-1" };
 const TOKEN = "f".repeat(64);
 
-/**
- * An offline helper model on stdin/stdout: labels every chunk, and answers synthesis with one thread and one ask per
- * ask candidate. Each call appends its request to `calls`.
- */
-function offlineModel(calls: string): string {
-	return `const fs=require('node:fs');let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const p=JSON.parse(s);fs.appendFileSync(${JSON.stringify(calls)},JSON.stringify(p)+'\\n');const all=JSON.stringify(p);const id=(all.match(/\\[([^\\]]+)\\] (?:USER|AGENT):/)||[])[1];const qs=[...new Set(all.match(/\\bq[0-9]+\\b/g)||[])];console.log(JSON.stringify(p.chunks?{chunks:p.chunks.map(c=>({chunk:c.chunk,topic:'Cache change',project:'Fixture',ideas:[]}))}:{headline:'Cache change',projects:[],transitions:[],asks:qs.map(q=>({candidates:[q],text:'Decide whether to ship the cache change',kind:'decision',answeredBy:null})),threads:[{label:'Cache change',state:'waiting',progress:[{text:'The agent asked to ship',citations:[id]}],decisions:[],blockers:[]}],unassigned:{progress:[],decisions:[],blockers:[]}}));});`;
-}
-
-test("durable arc: a stopped open thread starts the automatic Arc Build through the hub's helper models, and its row carries arc.asks", async (t) => {
-	const home = tempHome();
-	const calls = join(home, "ask-calls.jsonl");
-	writeFileSync(calls, "");
-	const daemon = await runDaemon({ home });
-	const hub = new Hub({ models: { arcLabels: "fixture/synthetic", arcSynthesis: "fixture/synthetic" },
-		hosts: [{ id: "devbox", label: "devbox", kind: "local", home, askCommand: [process.execPath, "-e", offlineModel(calls)] }] }, { token: TOKEN });
-	const port = await hub.listen(0);
-	const b = await Browser.open(port, undefined, `ampi_k_${port}=${TOKEN}`);
-	t.after(async () => { b.ws.terminate(); await hub.close(); await daemon.stop(); });
-	await b.when(() => b.hosts.some((h) => h.id === "devbox" && h.status === "connected"), 5000, "durable host");
-
-	const threads = b.sub("devbox", { kind: "threads" });
-	const { threadId } = await b.req("devbox", "thread.create", { requestId: "arc", cwd: home, model: SIM, prompt: "Decision needed: ship the cache change today.", place: { workspace: "new", label: "main" } });
-	await b.until<any>(threads, (v) => v.threads[threadId]?.activity === "idle");
-	await b.req("devbox", "thread.submit", { threadId, content: "Check the build first. Decision needed: ship after that." });
-	// The fourth Rarebit message passes the floor; the stop after it starts the Build with no owner action.
-	const arc = b.sub("devbox", { kind: "view", view: "cos.arc", threadId });
-	const built = await b.until<any>(arc, (v) => v.builds?.some((r: any) => r.state === "done" || r.state === "error"), 10_000);
-	const run = built.builds.find((r: any) => r.state === "done" || r.state === "error");
-	assert.equal(run.state, "done", JSON.stringify(run));
-	assert.equal(run.trigger, "auto");
-	assert.deepEqual(run.models, { labels: "fixture/synthetic", synthesis: "fixture/synthetic" });
-	assert.ok(run.calls >= 2, `label and synthesis calls: ${run.calls}`);
-	const asked = readFileSync(calls, "utf8").trim().split("\n").filter(Boolean);
-	assert.equal(asked.length, run.calls, "every call went through the hub's ask command");
-
-	const row = await b.until<any>(threads, (v) => v.threads[threadId]?.arc?.asks?.length > 0, 5000);
-	assert.equal(row.threads[threadId].live, true);
-	assert.deepEqual(row.threads[threadId].arc.asks.map((a: any) => a.kind), ["decision"]);
-	assert.deepEqual(b.gaps, []);
+test("durable Arc v2: native evidence, scheduling, cited receipt, head and restart through the hub", { timeout: 30_000 }, async t => {
+ const home = tempHome(), calls = join(home, "ask-calls.jsonl");
+ const settings = piSettingsFile();
+ writeFileSync(settings, JSON.stringify({ ampi_arc: { model: "fixture/synthetic", auto: true } }));
+ writeFileSync(calls, "");
+ const model = readFileSync(new URL("./fixtures/arc-model.cjs", import.meta.url), "utf8")
+  .replace('const first = p.rarebits[0]', `require('node:fs').appendFileSync(${JSON.stringify(calls)}, JSON.stringify(p)+'\\n'); const first = p.rarebits[0]`)
+  .replace('waits: "agent"', 'waits: "owner"');
+ const daemon = await runDaemon({ home });
+ const config = { hosts: [{ id: "devbox", label: "devbox", kind: "local" as const, home, askCommand: [process.execPath, "-e", model] }] };
+ let hub = new Hub(config, { token: TOKEN });
+ let port = await hub.listen(0), b = await Browser.open(port, undefined, `ampi_k_${port}=${TOKEN}`);
+ t.after(async () => { b.ws.terminate(); await hub.close(); await daemon.stop(); });
+ await b.when(() => b.hosts.some(h => h.id === "devbox" && h.status === "connected"), 5000, "durable host");
+ const rows = b.sub("devbox#durable", { kind: "threads" });
+ const { threadId } = await b.req("devbox#durable", "thread.create", { requestId: "arc", cwd: home, model: SIM, prompt: "Choose the release scope.", place: { workspace: "new", label: "main" } });
+ const thread = b.sub("devbox#durable", { kind: "thread", threadId });
+ await b.until<any>(thread, v => v.entries?.some((e: any) => e.kind === "assistant" && e.stop === "stop"));
+ const long = "Inspect the complete source. " + "Synthetic evidence stays available. ".repeat(100);
+ await b.req("devbox#durable", "thread.submit", { threadId, content: long });
+ const rarebit = b.sub("devbox#durable", { kind: "view", view: "rarebit", threadId });
+ const evidence = await b.until<any>(rarebit, v => v.items?.filter((i: any) => i.kind === "stop").length >= 2);
+ const arc = b.sub("devbox#durable", { kind: "view", view: "arc", threadId });
+ const queued = await b.until<any>(arc, v => v.status?.state === "queued");
+ assert.ok(queued.status.nextAt, "durable stop schedules the shared debounce");
+ await b.req("devbox#durable", "view.arc.build", { threadId });
+ const built = await b.until<any>(arc, v => v.receipt || v.status?.state === "failed");
+ assert.equal(built.status.state, "idle", JSON.stringify(built.status));
+ const receipt = built.receipt;
+ assert.equal(receipt.session, `devbox/${threadId}`);
+ assert.equal(receipt.tier, "b");
+ assert.equal(built.sourceCount, evidence.items.length, "durable coverage counts the same tier-b evidence");
+ assert.equal(receipt.builds.at(-1).trigger, "manual");
+ assert.equal(receipt.builds.at(-1).model, "fixture/synthetic");
+ const prompts = readFileSync(calls, "utf8").trim().split("\n").map(s => JSON.parse(s));
+ assert.equal(prompts.length, receipt.builds.at(-1).calls);
+ const supplied = prompts.flatMap(p => p.rarebits);
+ assert.ok(supplied.some(i => i.text === long), "Arc reads whole Rarebits, not clipped transcript cards");
+ assert.deepEqual([...new Set(supplied.map(i => i.id))], evidence.items.map((i: any) => i.id));
+ assert.ok(supplied.filter(i => i.kind === "user").every(i => i.owner === true));
+ assert.ok(receipt.chapters[0].summary.scope.cites.every((c: any) => supplied.some(i => i.id === c.id && i.text.includes(c.quote))));
+ const row = await b.until<any>(rows, v => v.threads[threadId]?.arc?.needsYou === 1);
+ assert.equal(row.threads[threadId].arc.stale, 0);
+ assert.equal(built.stale, 0);
+ assert.equal(built.branchChanged, false);
+ const native = await b.req("devbox#durable", "thread.entry", { threadId, entry: receipt.chapters[0].firstId });
+ assert.equal(JSON.parse(native.text).id, receipt.chapters[0].firstId);
+ b.ws.terminate(); await hub.close();
+ hub = new Hub(config, { token: TOKEN }); port = await hub.listen(0);
+ b = await Browser.open(port, undefined, `ampi_k_${port}=${TOKEN}`);
+ await b.when(() => b.hosts.some(h => h.id === "devbox" && h.status === "connected"), 5000, "reconnected durable host");
+ const restoredRows = b.sub("devbox#durable", { kind: "threads" });
+ await b.until<any>(restoredRows, v => v.threads[threadId]?.arc?.needsYou === 1);
+ const restoredArc = b.sub("devbox#durable", { kind: "view", view: "arc", threadId });
+ const restored = await b.until<any>(restoredArc, v => v.receipt);
+ assert.deepEqual(restored.receipt, receipt, "restart loads the existing receipt without a model call");
+ assert.equal(restored.sourceCount, built.sourceCount, "durable coverage survives the hub restart");
+ assert.equal(readFileSync(calls, "utf8").trim().split("\n").length, prompts.length);
+ assert.deepEqual(b.gaps, []);
 });

@@ -131,6 +131,7 @@ test("all manifest argv arrays work from linked roots and the selected Alpha lay
   skip: !existsSync(exportManifest) && "source-only export manifest is absent from the Alpha projection",
 }, (t) => {
   const f = fixture(t);
+  // The shared manifest on purpose: these rows are on both lines, so its durable line fragment cannot hold them.
   const manifest = JSON.parse(readFileSync(exportManifest, "utf8"));
   const entries = manifest.entries;
   assert.ok(Array.isArray(entries), "export selection must expose files");

@@ -6,6 +6,8 @@ import { test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { CommandsDoc } from "../src/node/commands.ts";
 import { runDaemon } from "../src/node/daemon.ts";
+import { rarebitPlugin } from "../src/plugins/rarebit.ts";
+import { commandPorts } from "../src/plugins/rarebit-port.ts";
 import { TestClient, tempHome } from "./helpers.ts";
 
 const SIM = { provider: "ampi-sim", modelId: "sim-1" };
@@ -33,6 +35,13 @@ test("commands: the list, typed built-ins, skill and template expansion, refusal
 
 		const list = await client.req("thread.commands", { threadId });
 		const by = (name: string) => list.commands.find((c: any) => c.name === name);
+		// Built-ins first, in their fixed order, then the pane-only names; the thread's prompt templates and skills follow.
+		assert.deepEqual(list.commands.slice(0, 30).map((c: any) => [c.name, c.source, c.supported]), [
+			...["model", "thinking", "name", "compact", "auto-compact", "rarebit", "retry", "cache", "ptb", "export-system-prompt"].map((n) => [n, "builtin", true]),
+			...["settings", "tree", "scoped-models", "export", "import", "share", "bug", "copy", "session", "changelog", "hotkeys", "fork", "clone", "trust",
+				"login", "logout", "new", "resume", "reload", "quit"].map((n) => [n, "builtin", false]),
+		]);
+		assert.deepEqual(list.commands.slice(30).map((c: any) => [c.name, c.source, c.supported]), [["review", "prompt", true], ["skill:probe", "skill", true]]);
 		assert.deepEqual(["model", "thinking", "name", "compact"].map((n) => [by(n).source, by(n).supported]), Array(4).fill(["builtin", true]));
 		assert.deepEqual([by("reload").supported, by("review").source, by("skill:probe").source], [false, "prompt", "skill"]);
 		assert.equal(list.model, "ampi-sim/sim-1");
@@ -83,5 +92,31 @@ test("commands: the list, typed built-ins, skill and template expansion, refusal
 		await daemon.stop();
 		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previous;
+	}
+});
+
+test("commands: /rarebit reaches the attached Rarebit plugin, and a node without it refuses", async () => {
+	assert.deepEqual([CommandsDoc.definition.kind, CommandsDoc.definition.version], ["ampi.commands", 1]);
+	for (const plugins of [[], [rarebitPlugin()]]) {
+		const home = tempHome();
+		const daemon = await runDaemon({ home, simTokensPerSecond: 200, plugins });
+		try {
+			const client = await TestClient.connect(daemon.socket);
+			const { threadId } = await client.req("thread.create", { requestId: "rb-a", cwd: home, model: SIM, place: { workspace: "new", label: "Work" } });
+			// The plugin's attach fills the port that commands.ts reads: one WeakMap.
+			assert.equal(commandPorts.has((await daemon.runtime.thread(threadId)).store), plugins.length > 0);
+			if (!plugins.length) {
+				await assert.rejects(client.req("thread.command", { threadId, name: "rarebit", args: "status" }),
+					(error: any) => error.code === "unavailable" && error.message === "Rarebit is unavailable on this node.");
+			} else {
+				const help = await client.req("thread.command", { threadId, name: "rarebit", args: "help" });
+				assert.deepEqual([help.via, help.disposition, help.notice], ["node", "handled", "Rarebit commands"]);
+				const status = await client.req("thread.command", { threadId, name: "rarebit", args: "status" });
+				assert.deepEqual([status.disposition, status.notice, status.body], ["handled", "Rarebit status", "Rarebit status\nTitle: none yet"]);
+			}
+			client.close();
+		} finally {
+			await daemon.stop();
+		}
 	}
 });

@@ -1,4 +1,4 @@
-import type { HostState } from "../../src/hub/hosts.ts";
+import type { HostState } from "../../src/shared/hosts.ts";
 import { hostLabel } from "./components/host-label.ts";
 
 // What the Overview may say about Host Session lists that are empty or incomplete (ThreadsState flags).

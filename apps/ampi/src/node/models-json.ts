@@ -1,7 +1,8 @@
 // Pi's models.json layer for the node: custom providers and overrides of built-in providers, composed as Pi 1.4's
 // provider-composer.js composes them without its extension layer. Values use Pi's config-value forms: a literal,
 // `$NAME` / `${NAME}` environment references, or `!command` (stdout, cached for the process).
-// Gap: per-model `headers` resolve when models are listed, and `!command` model headers are not run.
+// Per-model `headers` resolve when models are listed: a `!command` header value runs then, through the same process-wide
+// command cache as other values.
 // A node home may add its own models.json in the same format (layerModelsJson). It changes this node's requests only;
 // Pi's file stays the shared source.
 
@@ -37,7 +38,7 @@ function streamsFor(api: string): ProviderStreams | undefined {
 	return streams.get(api);
 }
 
-export type ModelsJson = { providers: Record<string, Json>; error?: string; path: string };
+type ModelsJson = { providers: Record<string, Json>; error?: string; path: string };
 
 export function readModelsJson(agentDir: string): ModelsJson {
 	const path = join(agentDir, "models.json");

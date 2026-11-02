@@ -2,38 +2,14 @@
 // provider's own pi-ai login (API key or OAuth); the node runs it, the GUI answers its prompts and shows its links and
 // device codes. Credentials land in pi's auth.json on this host (0600), shared with pi, and never travel back out.
 
+import type { ProviderStatus, PromptView, LoginState } from "../shared/accounts.ts";
 import { randomUUID } from "node:crypto";
 import type { JsonValue } from "@earendil-works/chord";
 import type { AuthEvent, AuthPrompt, AuthType, Credential, MutableModels } from "@earendil-works/pi-ai";
 import { credentialsOf } from "./models.ts";
-import { NodeError } from "./runtime.ts";
+import { NodeError } from "./errors.ts";
 import type { TopicSource } from "./server.ts";
 import { SIM_PROVIDER } from "./sim.ts";
-
-export type ProviderStatus = {
-	id: string;
-	name: string;
-	signedIn: boolean;
-	/** Where the working credential comes from (stored key, OAuth, an environment variable), when signed in. */
-	source?: string;
-	authType?: "api_key" | "oauth";
-	methods: { type: AuthType; label: string; subscription?: boolean }[];
-	models: number;
-};
-
-type PromptView = { id: string; type: AuthPrompt["type"]; message: string; placeholder?: string; options?: { id: string; label: string; description?: string }[] };
-
-export type LoginState = {
-	id: string;
-	providerId: string;
-	type: AuthType;
-	status: "running" | "done" | "error" | "cancelled";
-	events: AuthEvent[];
-	prompt?: PromptView;
-	error?: string;
-	/** Set when the credential was saved but the provider could not be reached to confirm it. */
-	warning?: string;
-};
 
 // Only a definite credential rejection counts. A 403 can mean a model outside the plan or a region block, which says
 // nothing about the credential, so it is reported as unconfirmed rather than undone.
@@ -45,7 +21,7 @@ function sameCredential(a: Credential | undefined, b: Credential): boolean {
 }
 
 /** One summarized error message: providers often return a JSON body. */
-export function shortError(text: string): string {
+function shortError(text: string): string {
 	const message = /"message"\s*:\s*"([^"]+)"/.exec(text)?.[1];
 	const status = /\b(4\d\d|5\d\d)\b/.exec(text)?.[1];
 	return `${message ?? text.split("\n")[0]!.slice(0, 160)}${status && message ? ` (${status})` : ""}`;
@@ -55,7 +31,7 @@ export function shortError(text: string): string {
  * Confirm a provider's credential with the smallest request its cheapest model accepts. `ok: false` when the
  * provider rejects the credential; `ok: undefined` when it cannot be reached (offline, timeout), which proves nothing.
  */
-export async function verifyProvider(models: MutableModels, providerId: string): Promise<{ ok: boolean | undefined; reason?: string }> {
+async function verifyProvider(models: MutableModels, providerId: string): Promise<{ ok: boolean | undefined; reason?: string }> {
 	const provider = models.getProviders().find((p) => p.id === providerId);
 	const candidates = [...(provider?.getModels() ?? [])].sort((a, b) => (a.cost?.input ?? 0) - (b.cost?.input ?? 0));
 	const model = candidates[0];

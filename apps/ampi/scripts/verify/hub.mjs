@@ -40,7 +40,7 @@ function guardRunDir(run) {
   return real;
 }
 
-export function proofDirFor(runId) {
+function proofDirFor(runId) {
   return resolve(process.env.AMPI_VERIFY_PROOF ?? join(checkout, 'output/verify-ampi', runId));
 }
 
@@ -100,8 +100,7 @@ export async function launch({ runId = `run-${new Date().toISOString().replace(/
     writeFileSync(join(run, 'hub.key'), match[2], { mode: 0o600 });
     const state = { schema: 'ampi-verify-hub/1', runId, run, proof, pid: child.pid, port, origin: `http://127.0.0.1:${port}`, home, demo, log, revision: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: app, encoding: 'utf8' }).trim(), startedAt: new Date().toISOString() };
     writeFileSync(join(run, 'hub.json'), JSON.stringify(state, null, 2) + '\n');
-    // The hub prints its URL before the demo Host connects and lists the fixture Herdr; launch owns that wait, the
-    // doctor stays one-shot.
+    // Confirm fixture Herdr presence after receipt seeding; the doctor stays one-shot.
     const hostWait = Date.now();
     while (Date.now() - hostWait < 20_000 && !(await hostConnected(state))) await sleep(100);
     while (Date.now() - hostWait < 30_000 && !(await fixtureLeadLive(state))) await sleep(250);
@@ -168,7 +167,7 @@ export async function doctor(state) {
   return { ok: checks.every(c => c.ok), checks };
 }
 
-/** The keyed /api/health body: Host states and the `derive`, `builds` and `roleWaits` job counters. */
+/** The keyed /api/health body: Host states and the `derive` and `builds` job counters. */
 export async function health(state) {
   return (await fetch(`${state.origin}/api/health`, { headers: { authorization: `Bearer ${keyOf(state)}` }, signal: AbortSignal.timeout(2000) })).json();
 }
@@ -177,9 +176,8 @@ export async function health(state) {
 export const buildsStarted = async state => { const b = (await health(state)).builds ?? { pending: 0, done: 0 }; return b.pending + b.done; };
 
 /**
- * Waits until the hub's background jobs (/api/health `derive`, `builds` and `roleWaits`) are drained and their counts
- * hold for `stableMs`. Hub-start Builds call the model, so a step that counts model calls must start after them. A role
- * wait can still start a Build, so both modes wait on it. `builds` = true waits for running Builds and role waits only.
+ * Waits until the hub's background jobs (`derive` and `builds`) drain and their counts hold for `stableMs`.
+ * A step that counts model calls starts after these jobs. `builds` = true waits only for Builds.
  * A hub from before a counter reports none for it.
  */
 export async function settled(state, { stableMs = 1500, timeout = 60_000, builds = false } = {}) {
@@ -188,13 +186,13 @@ export async function settled(state, { stableMs = 1500, timeout = 60_000, builds
   for (;;) {
     try {
       const h = await health(state);
-      const none = { pending: 0, done: 0 }, b = h.builds ?? none, d = h.derive ?? none, w = h.roleWaits ?? none;
-      seen = `derive pending ${d.pending} done ${d.done}; builds pending ${b.pending} done ${b.done}; role waits pending ${w.pending}`;
-      if (builds) { if (!b.pending && !w.pending) return seen; }
+      const none = { pending: 0, done: 0 }, b = h.builds ?? none, d = h.derive ?? none;
+      seen = `derive pending ${d.pending} done ${d.done}; builds pending ${b.pending} done ${b.done}`;
+      if (builds) { if (!b.pending) return seen; }
       else {
-        const now = `${d.pending}/${d.done}/${b.pending}/${b.done}/${w.pending}/${w.done}`;
+        const now = `${d.pending}/${d.done}/${b.pending}/${b.done}`;
         if (now !== last) { last = now; since = Date.now(); }
-        if (!d.pending && !b.pending && !w.pending && Date.now() - since >= stableMs) return seen;
+        if (!d.pending && !b.pending && Date.now() - since >= stableMs) return seen;
       }
     } catch (error) { seen = `health failed: ${error.message}`; }
     if (Date.now() > until) throw new Error(`Hub background jobs did not settle within ${timeout / 1000} s (${seen}).`);

@@ -7,7 +7,7 @@ import { openPiSessionRange } from "../../../trace-analytics/src/sources/transcr
 import { openDurableCopy } from "../../../trace-analytics/src/sources/durable-copy.mjs";
 import { indexFile, type Source } from "./working-set-types.ts";
 
-export type CopyReader = any;
+type CopyReader = any;
 
 export function openCopyReader(source: Source): CopyReader {
  if (source.harness !== "pi-durable") return openPiSessionRange(source.file, { host: source.host, indexPath: indexFile(source) });

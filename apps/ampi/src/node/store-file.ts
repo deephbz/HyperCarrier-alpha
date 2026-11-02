@@ -12,21 +12,22 @@ import { CURRENT_SQLITE_SCHEMA_VERSION } from "@earendil-works/pi-durable/storag
 import { createSession } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { MetaDoc } from "./meta-doc.ts";
 
 /** The installed pi-durable version: `store.json` records it, so a version change is seen before the next open. */
 export const PI_DURABLE_VERSION: string = createRequire(import.meta.url)("@earendil-works/pi-durable/package.json").version;
 
 /** The node opens every store with pi-durable's default table prefix. */
-export const STORE_PREFIX = "";
+const STORE_PREFIX = "";
 
 /** `threads/<storeId>/store.json`. */
-export type StoreFile = { piDurable: string; openedAt: number };
+type StoreFile = { piDurable: string; openedAt: number };
 /** `backups/<storeId>/<name>.sqlite.json`: what a backup holds, written after the copy is checked. */
-export type BackupFile = { storeId: string; piDurable?: string; schemaVersion: number; prefix: string; reason: string; at: number };
+type BackupFile = { storeId: string; piDurable?: string; schemaVersion: number; prefix: string; reason: string; at: number };
 
 const STORE_ID = /^[rt][0-9a-z]+$/;
 
-export function storeDir(home: string, storeId: string): string {
+function storeDir(home: string, storeId: string): string {
 	if (!STORE_ID.test(storeId)) throw new Error(`Not a store ID: ${JSON.stringify(storeId)}`);
 	return join(home, "threads", storeId);
 }
@@ -144,8 +145,7 @@ export async function restoreStore(home: string, storeId: string, backupPath: st
 		writeFileSync(temp, readFileSync(backupPath), { mode: 0o600 });
 		const session = createSession(await openNodeSqliteStorage(temp));
 		try {
-			// Use the node's one document definition, without constructing a NodeRuntime or starting tasks.
-			const { MetaDoc } = await import("./runtime.ts");
+			// Use the node's one document definition.
 			const identity = (await session.snapshot(MetaDoc, BACKGROUND_CONTEXT))?.store;
 			if (identity !== storeId) throw new Error(`Backup identity ${JSON.stringify(identity ?? "missing")} does not match store ${storeId}`);
 		} finally { await session.close(BACKGROUND_CONTEXT); }
@@ -163,7 +163,7 @@ export async function restoreStore(home: string, storeId: string, backupPath: st
 }
 
 /** What `ampi node inventory` reports for one store: read only, without pi-durable, so no migration can run. */
-export type StoreInventory = {
+type StoreInventory = {
 	storeId: string;
 	piDurable?: string;
 	schemaVersion: number;

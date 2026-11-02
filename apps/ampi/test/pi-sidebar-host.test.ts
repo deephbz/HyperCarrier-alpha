@@ -137,7 +137,7 @@ test("connected Host after an upgrade: a status note counts the Sessions still u
 	const connected = away({ status: "connected", since: undefined, hint: undefined, error: undefined });
 	const row = { id: "pi:synthetic-session-3", title: "proj3 · 00000000", cwd: "/synthetic/proj3", createdAt: NOW, updatedAt: NOW, kind: "thread", activity: "idle", queued: 0, costUsd: 0, updating: true, live: false, control: false };
 	assert.match(render({ ...connected, upgrade: { updated: 3, total: 50 } } as never), /class="host-note" role="status" data-upgrade="devbox">Updating 47 Sessions after upgrade</);
-	const { ThreadBadges } = await vite.ssrLoadModule("/src/components/Sidebar.tsx");
+	const { ThreadBadges } = await vite.ssrLoadModule("/src/components/ThreadStatus.tsx");
 	for (const compact of [true, false]) assert.match(renderToStaticMarkup(createElement(ThreadBadges, { t: row, compact })), />updating</);
 	assert.match(render({ ...connected, upgrade: { updated: 49, total: 50 } } as never), />Updating 1 Session after upgrade</);
 	assert.doesNotMatch(render(connected as never), /data-upgrade/);

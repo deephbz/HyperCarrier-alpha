@@ -157,7 +157,7 @@ try {
       if (!['loading', 'error'].includes(s.variant)) await p.waitForFunction(() => document.querySelectorAll('.side-scroll [data-thread]').length > 0 || /No Sessions yet\.|No timestamped/.test(document.body.textContent));
       if (s.route.includes('/t/') && !['loading', 'error'].includes(s.variant)) await p.locator('.composer').waitFor();
       if (s.family === 'Timeline' && !['loading', 'error', 'empty'].includes(s.variant)) await p.locator('.cos-band-label').first().waitFor();
-      if (s.family === 'Arc' && !['loading-view', 'missing'].includes(s.variant)) await p.locator('.cos-toolbar button').waitFor();
+      if (s.family === 'Arc' && s.variant !== 'loading-view') await p.locator('[data-panel="arc"] .arc-status').waitFor();
       if (daySession) for (const until = Date.now() + 20_000; ;) {
         const day = (await threadsSnapshot({ port: state.port, host: 'devbox', auth: { bearer: keyOf(state) } })).filter(t => t.id.startsWith('pi:sess-verify-day-')).length;
         if (day === s.sessions) { await p.reload({ waitUntil: 'commit' }); await p.locator('.cos-band-label').first().waitFor({ timeout: 30_000 }); stimulus = { addedSessions: day, laneLabels: await p.locator('.cos-band-label').count() }; break; }

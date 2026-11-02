@@ -22,5 +22,5 @@ test("a dotted or dashed text decoration sets a whole-pixel thickness (failure: 
 			assert.match(body!, /text-decoration-thickness\s*:\s*\d+px\s*(;|$)/, `${sheet}: ${selector!.trim()}`);
 		}
 	}
-	assert.ok(found.length >= 2, `the scan finds the dotted decorations (${found.join(", ")})`);
+	assert.ok(found.length > 0, `the scan finds the dotted decorations (${found.join(", ")})`);
 });

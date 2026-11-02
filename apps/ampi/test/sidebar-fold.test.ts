@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { loadBudget, PAGE_LOAD_MS } from "./page-load.ts";
 import { build } from "vite";
 import react from "@vitejs/plugin-react";
 // @ts-ignore: browser discovery is shared ESM.
@@ -34,10 +35,11 @@ test("sidebar fold: only team/count fold, titles navigate, keys and Worker contr
   for (const kind of ["pi-local", "local"]) {
    const page = await browser.newPage();
    page.setDefaultTimeout(2000);
+   loadBudget(page);
    await page.route("**/*", route => route.fulfill({contentType:"text/html",body:`<style>${readFileSync(join(web,"src/styles.css"),"utf8")}</style><div id="root"></div><script>${script}</script>`}));
    await page.routeWebSocket("**/ws", () => {});
    await page.goto(`http://localhost/?kind=${kind}`);
-   await page.locator('[data-sidebar-toggle="unplaced"]').click();
+   await page.locator('[data-sidebar-toggle="unplaced"]').click({timeout:PAGE_LOAD_MS});
    const lead = page.locator('.row[data-thread="lead"]');
    const title = lead.locator('a.title');
    const workers = page.locator('.row[data-thread="worker"]');

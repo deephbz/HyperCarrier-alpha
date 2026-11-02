@@ -6,11 +6,11 @@
  */
 import type { Target } from "./focus.ts";
 import { native } from "./native.ts";
-import { canonicalRoute, parseRoute } from "./util.ts";
+import { canonicalRoute, parseRoute } from "./route.ts";
 
 /** `nav`: depth from the first AmPi entry; null when unknown (an entry written before this code). */
 /** `revealed`: the entry's linked entry (`?e=`) was revealed; a return to the entry keeps its place instead. */
-export type EntryState = { id?: string; nav?: number | null; focus?: Target; place?: unknown; revealed?: boolean };
+type EntryState = { id?: string; nav?: number | null; focus?: Target; place?: unknown; revealed?: boolean };
 
 /** Fired after `navigate` changes the route; pushState and replaceState fire no hashchange. */
 export const ROUTE_EVENT = "ampi:route";
@@ -110,7 +110,7 @@ export function noteFocus(target: Target) {
  * (the transcript, the Rarebit panel) reveals each request once. A request serves the reader only until their next
  * move in its Session (`end`).
  */
-export type RevealRequest = { entry: string; thread?: string; seq: number };
+type RevealRequest = { entry: string; thread?: string; seq: number };
 let reveal: RevealRequest | undefined;
 let revealSeq = 0;
 const revealListeners = new Set<() => void>();

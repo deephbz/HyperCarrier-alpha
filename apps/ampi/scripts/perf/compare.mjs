@@ -68,7 +68,7 @@ export function renderGroup(label, summaries, aggregate) {
 }
 
 /** A group directory (group.json + rNN/summary.json) or one run directory → its summaries. */
-export function loadSummaries(dir) {
+function loadSummaries(dir) {
 	if (existsSync(join(dir, "group.json"))) {
 		const group = JSON.parse(readFileSync(join(dir, "group.json"), "utf8"));
 		return group.runs.map((r) => join(dir, r, "summary.json")).filter(existsSync).map((f) => JSON.parse(readFileSync(f, "utf8")));

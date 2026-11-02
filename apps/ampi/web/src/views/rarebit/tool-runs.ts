@@ -14,7 +14,7 @@ export type ToolRun = {
 	/** The collapsed line: counts per kind, in order of first appearance. */
 	label: string;
 };
-export type LensPart = { kind: "entry"; entry: PiEntry; key: string } | ToolRun;
+type LensPart = { kind: "entry"; entry: PiEntry; key: string } | ToolRun;
 
 /** Custom entry kinds the run label names; any other kind is named by its entryKind prefix. */
 const STEP_NAMES: [RegExp, string, string][] = [

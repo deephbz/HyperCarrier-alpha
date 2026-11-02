@@ -98,7 +98,7 @@ export const STEPS = {
   'task-detail': p => p.locator('.ptb-task summary').first().click(),
   graph: p => button(p, 'Graph').click(),
   'graph-task': async p => { await button(p, 'Graph').click(); await p.locator('.ptb-node button').first().click(); },
-  build: async (p, r) => { await button(p, 'Build arc').click(); await p.locator(r.reject ? '.cos-error' : '.cos-toolbar button:disabled').waitFor(); },
+  build: async (p, r) => { await button(p, 'Build').click(); await p.locator('[data-panel="arc"]').getByText(r.reject ? /failed|rejected|error/i : /Building|Waiting/).first().waitFor(); },
   'new-agent': newDialog,
   'new-workspace': async p => { await newDialog(p); await button(p, 'New workspace').click(); },
   'new-error': async p => { await newDialog(p); await p.getByLabel('Working directory', { exact: true }).fill('/work/demo'); await p.getByRole('dialog').getByRole('button', { name: /^Start/ }).click(); await p.getByRole('alert').waitFor(); },

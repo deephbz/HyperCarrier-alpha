@@ -2,6 +2,7 @@
 // reader's entry plus the published semantics the hub derives from. Hub consumers read only ReaderItem, so a
 // durable source supplies the same shape from its own bridge, and no consumer parses native Pi payloads.
 import { selectRarebits, measureRarebits } from "@hypercarrier/rarebit/core";
+import { selectTierB, OWNER_SELECTOR_VERSION } from "./rarebit-selection.ts";
 // @ts-ignore shared native extraction is plain ESM
 import { mirrorEntryText } from "../../../trace-analytics/src/sources/transcript.mjs";
 import type { PiReaderEntry } from "./views/types.ts";
@@ -24,13 +25,13 @@ export type LineageRecord = {
 };
 
 export type IngestSemantics = {
- /** occurrence is the selector's first occurrence before the human-turn filter; item is the Rarebit view's mark. */
+ /** occurrence is the selected prose; item adds owner provenance and exceptional entries. */
  rarebit: { occurrence: RarebitOccurrence | null; item: RarebitItem | null; totalMessageProseChars: number; rarebitChars: number };
  proseCounts: Kinds;
  lineage: LineageRecord;
 };
 
-export type FindSemantics = { findText: string };
+type FindSemantics = { findText: string };
 
 export const emptyKinds = (): Kinds => ({ user: 0, continuation: 0, stop: 0, toolCalls: 0, toolResults: 0, thinking: 0, summary: 0, other: 0 });
 
@@ -38,14 +39,9 @@ type PiRow = { native: any; entry: PiReaderEntry; position: number; source?: { d
 type PiRange = { visit(fn: (row: PiRow) => void, options?: { after?: string | null }): void };
 
 function ingest({ native, entry: e }: PiRow): IngestSemantics {
- const selection = selectRarebits([native]);
- const occurrence = selection.occurrences[0];
- if (occurrence?.outcome === "user" && e.kind !== "human") selection.occurrences = [];
- const chosen = selection.occurrences[0];
+ const { selection, item } = selectTierB(native, e);
+ const occurrence = selection.occurrences[0], chosen = occurrence;
  const measurement = measureRarebits([native], selection) as { totalMessageProseChars: number; rarebitChars: number };
- let item: RarebitItem | null = chosen?.sourceEntryId ? { id: chosen.sourceEntryId, kind: chosen.outcome, t: chosen.timestamp, text: chosen.text } as RarebitItem : null;
- if (e.kind === "compaction" || e.kind === "reset") item = { id: e.id, kind: "compaction", t: native.timestamp ?? null, text: "Context restarts here" };
- if (e.role === "assistant" && e.stop === "error") item = { id: e.id, kind: "error", t: native.timestamp ?? null, text: e.error || "The agent reported a terminal error." };
  const chars = emptyKinds();
  if (native.type === "compaction") chars.summary += String(native.summary ?? "").length;
  const m = native.message;
@@ -77,11 +73,4 @@ export function visitFindItems(reader: PiRange, visit: (item: ReaderItem<FindSem
 }
 
 /** The published selector decides occurrence semantics; this probe supplies its version. */
-export const rarebitSelectorVersion = () => String(selectRarebits([]).manifest.selectorVersion);
-
-/** A Pi fork copies its parent's entries; those written before the fork's header are inherited. NaN when not a fork. */
-/** A durable copy names the bound itself (durable-copy.mjs session().inheritedBefore). */
-export function inheritedBefore(session: { header?: { parentSession?: string; timestamp?: string } | null; inheritedBefore?: number }): number {
- if (typeof session.inheritedBefore === "number") return session.inheritedBefore;
- return session.header?.parentSession ? Date.parse(session.header.timestamp ?? "") - 1000 : NaN;
-}
+export const rarebitSelectorVersion = () => `${selectRarebits([]).manifest.selectorVersion}/${OWNER_SELECTOR_VERSION}`;

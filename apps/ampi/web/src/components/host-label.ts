@@ -1,4 +1,4 @@
-import type { HostState } from "../../../src/hub/hosts.ts";
+import type { HostState } from "../../../src/shared/hosts.ts";
 import { threadSource } from "../../../src/shared/protocol.ts";
 
 export function isPiHost(host: Pick<HostState, "kind"> | undefined): boolean {
@@ -6,7 +6,16 @@ export function isPiHost(host: Pick<HostState, "kind"> | undefined): boolean {
 }
 
 /**
- * The label of a Host wherever the owner sees it: dialogs, the sidebar header, Overview, Find, Arcs, panels and
+ * The Host source serves the Pi-shaped HostOps and reader views: Find, search, Rarebit, Arc, Timeline and history pages.
+ * A Pi Host serves them itself; the hub serves them for a durable node from its reader copy (node-design.md, step 8).
+ * Herdr-only behavior (new agent in Herdr, Resume, Close pane, a read-only composer) stays behind `isPiHost`.
+ */
+export function servesHostOps(host: HostState | undefined): boolean {
+	return host?.kind === "pi-local" || host?.kind === "pi-ssh" || host?.kind === "local" || host?.kind === "ssh";
+}
+
+/**
+ * The label of a Host wherever the owner sees it: dialogs, the sidebar header, Overview, Find, panels and
  * notifications. When two Host sources share one Host ID (Pi and a durable node on one machine), each label names its
  * source; otherwise the label is the Host's own. `hosts` is every Host the hub serves, not only the ones on screen.
  */

@@ -107,3 +107,18 @@ test("host lists render: a route key resolves to its Host label; the link key ne
 	assert.equal(labels.hostLabelFor("devbox#pi", [pi, durable]), "devbox · Pi in Herdr");
 	assert.equal(labels.hostLabelFor("gone#durable", [pi]), "gone", "an unlisted key shows its Host ID");
 });
+
+test("host lists render: Overview counts each Host's in-scope and running Sessions by link", () => {
+	const session = (id: string, over: object = {}) => ({ id, ref: `devbox/${id}`, title: id, cwd: "/work", createdAt: 0, updatedAt: 0, kind: "thread", activity: "idle", queued: 0, costUsd: 0, live: true, control: false, ...over });
+	const host = (id: string, link: string) => ({ id, link, label: id, kind: "pi-local", status: "connected", attempts: 0 });
+	// Archived rows are out of scope; workers count; two Hosts that share a link show the same counts.
+	const data = [
+		{ host: host("alpha", "a"), stale: false, threads: [session("pi:a1", { activity: "running" }), session("pi:a2", { kind: "worker", activity: "waiting" }), session("pi:a3", { archived: true, activity: "running" }), session("pi:a4")] },
+		{ host: host("beta", "b"), stale: false, threads: [session("pi:b1", { archived: true })] },
+		{ host: host("gamma", "a"), stale: false, threads: [session("pi:g1", { activity: "running" })] },
+	];
+	const page = text(renderToStaticMarkup(createElement(overview as never, { data, onNew() {}, onHostSetup() {}, onHelp() {} })));
+	assert.match(page, /alpha 3 running · 4 Sessions in scope/);
+	assert.match(page, /beta 0 running · 0 Sessions in scope/);
+	assert.match(page, /gamma 3 running · 4 Sessions in scope/);
+});

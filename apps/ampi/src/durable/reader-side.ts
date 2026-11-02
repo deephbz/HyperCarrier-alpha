@@ -12,7 +12,7 @@
 // the node's values.
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { mkdirSync, statSync } from "node:fs";
+import { mkdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 // @ts-ignore: shared reader is plain ESM.
 import { openDurableSession, parseThread, sessionIdOf } from "../../../trace-analytics/src/sources/durable.mjs";
@@ -22,8 +22,9 @@ import { durableCopyCheckpoint, durableCopyFiles, removeDurableCopy, writeDurabl
 import { durableSpend } from "../../../trace-analytics/src/sources/spend.mjs";
 import { historySpend, spendLabel, type Spend } from "../shared/spend.ts";
 import type { FleetSearchResult, OpHandlers, PiThreadView, ThreadSummary, Topic, UsageBucket, ViewOps } from "../shared/protocol.ts";
-import type { SearchResult } from "../pi/search.ts";
+import type { SearchResult } from "../shared/search.ts";
 import { PI_VIEWS, viewOps } from "../pi/views/index.ts";
+import { arcOpened, arcPanel, closeArcs, startArcs } from "../pi/views/arc.ts";
 import type { HostedView, PiRecordedMember, PiTeamsFrame, PiViewContext, PiViewSession } from "../pi/views/types.ts";
 import type { Derived, Source } from "../pi/working-set-types.ts";
 import { WorkingSet } from "../pi/working-set.ts";
@@ -53,9 +54,9 @@ function currentModel(copy: { docs: Record<string, any>; data?: { model?: string
 /** One connection of the node's reader service (trace-analytics durable-wire.mjs). */
 export type DurableReaderNode = Record<"open" | "entries" | "fence" | "raw" | "cancel" | "watch" | "close", (...args: any[]) => Promise<any>>;
 /** The summary fields this side derives; DurableHost adds identity, liveness, layout and control from the node. */
-export type DurableSummaryFields = Pick<ThreadSummary, "costUsd" | "spend" | "spendLabel" | "contextTokens" | "cacheHit" | "preview" | "model" | "ref"> & { cwd?: string; createdAt?: number; updatedAt?: number; team?: ThreadSummary["team"] };
-export type DurableThreadValue = Omit<PiThreadView, "live" | "inbox">;
-export type DurableViewsConfig = {
+type DurableSummaryFields = Pick<ThreadSummary, "costUsd" | "spend" | "spendLabel" | "contextTokens" | "cacheHit" | "preview" | "model" | "ref"> & { cwd?: string; createdAt?: number; updatedAt?: number; team?: ThreadSummary["team"] };
+type DurableThreadValue = Omit<PiThreadView, "live" | "inbox">;
+type DurableViewsConfig = {
  host: string;
  cacheDir: string;
  /** A reader connection to the node. A transport loss gives a new connection; reads then reopen their handles. */
@@ -80,14 +81,14 @@ type Copy = {
  reader?: any; data?: Derived; readError?: string;
  conversation?: { parent?: unknown; owner?: { conversationId: number | string; taskId?: string } } | null;
  docs: Record<string, any>;
- revision: number; leases: number; syncing?: Promise<void>; again?: boolean;
- /** Hold leases: while any is out, the reader keeps its node handle and watch; otherwise each sync closes it. */
+ revision: number; syncing?: Promise<void>; again?: boolean;
+ /** Open holds (`hold`): while any is out, the reader keeps its node handle and watch; otherwise each sync closes it. */
  holds: number;
 };
 
 const digest = (s: string) => createHash("sha256").update(s).digest("hex");
 /** The node thread key in a durable Session ID (`pi-durable:<threadKey>`). */
-export const threadKeyOf = (sessionId: string) => sessionId.slice(sessionId.indexOf(":") + 1);
+const threadKeyOf = (sessionId: string) => sessionId.slice(sessionId.indexOf(":") + 1);
 
 export class DurableViews extends EventEmitter {
  readonly host: string;
@@ -114,10 +115,12 @@ export class DurableViews extends EventEmitter {
   this.context = {
    host: config.host,
    stateDir: (view) => { const dir = join(this.cacheDir, "views", view); mkdirSync(dir, { recursive: true, mode: 0o700 }); return dir; },
-   sessions: () => [...this.#copies.values()].map((c) => this.#viewSession(c)).filter((s): s is PiViewSession => Boolean(s)),
+   sessions: () => this.projection(() => [...this.#copies.values()].map((c) => this.#viewSession(c)).filter((s): s is PiViewSession => Boolean(s))),
    session: (threadId) => { const c = this.#copies.get(threadId); return c ? this.#viewSession(c) : undefined; },
    snapshot: (read) => this.#store.snapshot(read),
-   lease: (threadId) => { const c = this.#copies.get(threadId); if (!c) return () => {}; c.leases++; return () => { c.leases--; }; },
+   // A no-op port: durable copies have no retention pass to defer, and untrack and forget do not wait for a lease.
+   // Holds (`hold`) keep the node handle open.
+   lease: () => () => {},
    teams: () => [],
    teamsFrame: () => config.teamsFrame ? config.teamsFrame() : this.#ownershipTeams(),
    rolesKnown: () => true,
@@ -126,6 +129,8 @@ export class DurableViews extends EventEmitter {
    model: config.model ?? unavailable,
    invalidate: (view) => this.emit("changed", { view }),
   };
+  rmSync(join(this.cacheDir, "views", "cos.arc"), { recursive: true, force: true });
+  startArcs(this.context);
   this.ops = { ...this.#readOps(), ...viewOps(this.context) };
  }
 
@@ -135,7 +140,7 @@ export class DurableViews extends EventEmitter {
   let copy = this.#copies.get(threadId);
   if (!copy) {
    parseThread(threadId);
-   copy = { threadId, sessionId: sessionIdOf(threadId), file: join(this.cacheDir, `${digest(threadId).slice(0, 32)}.jsonl`), docs: {}, revision: 0, leases: 0, holds: 0 };
+   copy = { threadId, sessionId: sessionIdOf(threadId), file: join(this.cacheDir, `${digest(threadId).slice(0, 32)}.jsonl`), docs: {}, revision: 0, holds: 0 };
    // A derived head from an earlier run serves views at once; the first sync validates it against the node.
    copy.data = this.#store.load(copy.sessionId);
    this.#copies.set(threadId, copy);
@@ -144,8 +149,8 @@ export class DurableViews extends EventEmitter {
  }
 
  /**
-  * Keep `threadId`'s node handle and watch open until the lease is released, so the copy follows the node live.
-  * Leases count: each holder releases once. An unheld thread syncs only when asked, and closes its handle after
+  * Keep `threadId`'s node handle and watch open until the hold is released, so the copy follows the node live.
+  * Holds count: each holder releases once. An unheld thread syncs only when asked, and closes its handle after
   * each sync, because a pi-durable 1.4.0 handle keeps the whole conversation in node memory.
   */
  hold(threadId: string): () => void {
@@ -282,7 +287,8 @@ export class DurableViews extends EventEmitter {
   // entries are the figure: an unpriced history reads "no price reported", never a priced $0.
   const recorded = usage && (usage.tokens > 0 || usage.usd !== null);
   const spend: Spend = recorded ? { usd: usage.usd, covers: usage.covers } : historySpend(data.priced === false ? null : data.cost);
-  const member = this.#ownershipTeams().recorded?.find((m) => m.session === copy.sessionId);
+  // Inside a projection, the shared lookup; outside, one early-exit scan. Both give the first record (#ownershipMembers).
+  const member = this.#members ? this.#members.get(copy.sessionId) : this.#ownershipTeams().recorded?.find((m) => m.session === copy.sessionId);
   return {
    costUsd: spend.usd ?? 0, spend, spendLabel: spendLabel(spend), ref: data.session.ref,
    ...(currentModel(copy) ? { model: currentModel(copy) } : {}),
@@ -305,7 +311,21 @@ export class DurableViews extends EventEmitter {
   return { copyBytes: size(files.data), indexBytes: size(files.index) + size(files.meta), entries: copy.data?.count ?? 0 };
  }
 
+ opened(threadId: string, open: boolean): void { arcOpened(this.context, threadId, open); }
+ panel(threadId: string, open: boolean): void { arcPanel(this.context, threadId, open); }
  threads(): string[] { return [...this.#copies.keys()]; }
+
+ #members?: ReadonlyMap<string, PiRecordedMember>;
+ /**
+  * Run `read` with one ownership-member lookup for every summary it projects, instead of one per summary. The lookup
+  * lives only for the call. Contract: `read` is synchronous and must not track, untrack, or commit a sync, because
+  * those change ownership. A nested call reuses the outer lookup. A summary read outside any projection scans once for itself.
+  */
+ projection<T>(read: () => T): T {
+  if (this.#members) return read();
+  this.#members = this.#ownershipMembers();
+  try { return read(); } finally { this.#members = undefined; }
+ }
  /** Whether a copy of `threadId` exists: track() registers it before its first sync. */
  has(threadId: string): boolean { return this.#copies.has(threadId); }
 
@@ -313,6 +333,7 @@ export class DurableViews extends EventEmitter {
  close(): Promise<void> { return (this.#closing ??= this.#close()); }
  async #close(): Promise<void> {
   this.#stopped = true;
+  closeArcs(this.context);
   for (const copy of this.#copies.values()) copy.reader?.close();
   await Promise.allSettled([...this.#copies.values()].map((c) => c.syncing));
   await this.#store.close();
@@ -344,7 +365,7 @@ export class DurableViews extends EventEmitter {
    window: () => this.#store.tail(this.#source(copy), data, false).entries,
    rarebits: (before, fullText, around) => this.#store.rarebits(copy.sessionId, copy.revision, before, fullText, around),
    rarebitSnapshot: (maxChars) => this.#store.rarebitSnapshot(copy.sessionId, maxChars),
-   arcEvidence: (ids) => this.#store.arcEvidence(copy.sessionId, ids, data.version),
+   arcSource: () => this.#store.arcSource(copy.sessionId, `${this.host}/${copy.threadId}`, data.version),
    nearest: (at) => this.#store.nearest(copy.sessionId, at),
    entryTimes: (ids) => this.#store.entryTimes(copy.sessionId, ids),
   };
@@ -368,8 +389,15 @@ export class DurableViews extends EventEmitter {
   return { t: "teams", status: "available", recorded, tasks: {} };
  }
 
+ /** Each Session's first ownership record: a Worker record comes before the same thread's lead record. */
+ #ownershipMembers(): Map<string, PiRecordedMember> {
+  const members = new Map<string, PiRecordedMember>();
+  for (const m of this.#ownershipTeams().recorded ?? []) if (m.session !== undefined && !members.has(m.session)) members.set(m.session, m);
+  return members;
+ }
+
  #notify(copies: Copy[]): void {
-  const sessions = copies.map((c) => this.#viewSession(c)).filter((s): s is PiViewSession => Boolean(s));
+  const sessions = this.projection(() => copies.map((c) => this.#viewSession(c)).filter((s): s is PiViewSession => Boolean(s)));
   for (const view of this.#views.values()) {
    try { view.changed?.(this.context, sessions); } catch (error) { console.error(`durable views ${this.host}: view ${view.name} failed:`, error); }
   }

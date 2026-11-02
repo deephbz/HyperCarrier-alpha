@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import type { RarebitSide } from "../../../../src/pi/views/rarebit.ts";
+import type { RarebitSide } from "../../../../src/shared/rarebit.ts";
 
 type State = { lens: boolean; hide: boolean; diagnosis: boolean; window: number; side?: RarebitSide; pending?: string; draft: string; model: string; error?: string };
 const stores = new Map<string, { value: State; listeners: Set<() => void> }>();

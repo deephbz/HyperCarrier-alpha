@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createServer, type ViteDevServer } from "vite";
-import type { HostState } from "../src/hub/hosts.ts";
+import type { HostState } from "../src/shared/hosts.ts";
 import type { ThreadSummary } from "../src/shared/protocol.ts";
 
 type Notice = { title: string; body: string; host: string; threadId: string };
@@ -25,7 +25,7 @@ before(async () => {
 	Object.assign(globalThis, { location: { protocol: "http:", host: "127.0.0.1:1", hash: "" }, WebSocket: class { send() {} close() {} }, window: globalThis, localStorage: { getItem: () => null, setItem() {}, removeItem() {} } });
 	vite = await createServer({ configFile: `${web}vite.config.ts`, root: web, logLevel: "silent", server: { middlewareMode: true, hmr: false } });
 	util = (await vite.ssrLoadModule("/src/util.ts")) as typeof util;
-	badges = (await vite.ssrLoadModule("/src/components/Sidebar.tsx")).ThreadBadges;
+	badges = (await vite.ssrLoadModule("/src/components/ThreadStatus.tsx")).ThreadBadges;
 	notices = (await vite.ssrLoadModule("/src/attention.ts")).notices;
 	// The Composer itself uses client-only stores; Composer.tsx renders this note for a closed durable thread.
 	feedback = (await vite.ssrLoadModule("/src/components/Composer.tsx")).ClosedFeedback;

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { loadBudget, PAGE_LOAD_MS } from "./page-load.ts";
 import { build } from "vite";
 import react from "@vitejs/plugin-react";
 // @ts-ignore: shared browser discovery is plain ESM.
@@ -53,7 +54,7 @@ after(async()=>{await(await chrome)?.close();});
 for(const kind of ['pi-local','local']) test('companion '+kind+': whole-branch jump, idle cache, place hold and stale-reply fence',async t=>{
  const script=await(bundle??=componentScript());
  const browser=await(chrome??=chromium.launch({headless:true,executablePath:findChrome()}));
- const page=await browser.newPage({viewport:{width:1000,height:700}});t.after(()=>page.context().close());page.setDefaultTimeout(3000);
+ const page=await browser.newPage({viewport:{width:1000,height:700}});t.after(()=>page.context().close());page.setDefaultTimeout(3000);loadBudget(page);
  await page.route('**/*',route=>route.fulfill({contentType:'text/html',body:'<style>'+readFileSync(join(web,'src/styles.css'),'utf8')+'</style><div id="root"></div><script>'+script+'</script>'}));
  let publish!:(n:number)=>void, late!:()=>void;
  let requests=0, count=400;
@@ -74,7 +75,7 @@ for(const kind of ['pi-local','local']) test('companion '+kind+': whole-branch j
  });
  await page.goto('http://localhost/');
  const marks=page.locator('[data-user-mark]');
- await page.locator('[data-outline-version="v400"]').waitFor();
+ await page.locator('[data-outline-version="v400"]').waitFor({timeout:PAGE_LOAD_MS});
  assert.equal(await marks.count(),200);
  assert.equal(await page.locator('[data-entry="e0"]').count(),0);
  // The rail stacks one dash per prompt in prompt order, with no track; prompts beyond its room are sampled, not piled.
