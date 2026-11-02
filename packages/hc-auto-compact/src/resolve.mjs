@@ -43,6 +43,13 @@ export function mergeAutoCompactSettings(
   };
 }
 
+export const STRATEGY_KEYS = ["preservation", "method", "execution"];
+const STRATEGY_VALUES = {
+  preservation: ["artifact-handoff", "none"],
+  method: ["native", "summary", "keepset"],
+  execution: ["foreground", "background"],
+};
+
 export function resolveAutoCompactSettings(
   globalSettings = {},
   projectSettings = {},
@@ -111,11 +118,7 @@ export function resolveAutoCompactSettings(
       errors.push("auto_compact.pre_compact_prompt must be a non-empty string");
   }
 
-  for (const [key, values] of Object.entries({
-    preservation: ["artifact-handoff", "none"],
-    method: ["native", "summary", "keepset"],
-    execution: ["foreground", "background"],
-  })) {
+  for (const [key, values] of Object.entries(STRATEGY_VALUES)) {
     if (configured[key] === undefined) continue;
     if (values.includes(configured[key])) settings[key] = configured[key];
     else errors.push(`auto_compact.${key} must be ${values.join(" or ")}`);
@@ -145,13 +148,6 @@ export function resolveAutoCompactSettings(
   return { settings, errors, compaction, strategyConfigured: Object.fromEntries(
     STRATEGY_KEYS.map((key) => [key, configured[key]])), };
 }
-
-export const STRATEGY_KEYS = ["preservation", "method", "execution"];
-const STRATEGY_VALUES = {
-  preservation: ["artifact-handoff", "none"],
-  method: ["native", "summary", "keepset"],
-  execution: ["foreground", "background"],
-};
 
 // Resolve next-run intent independently from the active lifecycle snapshot.
 export function resolveSessionStrategy(base = {}, overrides = {}) {

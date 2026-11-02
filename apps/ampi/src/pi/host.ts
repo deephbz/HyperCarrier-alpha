@@ -7,20 +7,24 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat } from "node:fs/promises";
 import { setImmediate as yieldLoop } from "node:timers/promises";
 import { repairReplicaTail } from "./replica-file.ts";
+import { indexEntry, indexText, readIndex, replaceFile } from "./copy-index-file.ts";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { diffRevisions } from "@earendil-works/chord/delta";
-import { type HostBase, type HostState, type LinkStatus, negotiating, withStatus } from "../hub/hosts.ts";
-import type { ActionAck, ClientFrame, CommandAck, SlashCommands, ControlSubmission, Every, HostOps, PiQueuedItem, OpHandlers, OpName, OpRequest, OpResult, Ops, Placement, PiHostFrame, PiThreadView, PiTopicValue, SubmittedPrompt, ThreadCreated, ThreadResumed, ThreadsState, ThreadSummary, Topic } from "../shared/protocol.ts";
+import { negotiating, withStatus } from "../hub/hosts.ts";
+import type { HostBase, HostState, LinkStatus } from "../shared/hosts.ts";
+import type { ClientFrame, ControlSubmission, Every, HostOps, PiQueuedItem, OpHandlers, OpName, OpResult, Ops, Placement, PiHostFrame, PiThreadView, PiTopicValue, ThreadCreated, ThreadResumed, ThreadsState, ThreadSummary, Topic } from "../shared/protocol.ts";
 import { INDEXING, NOT_FOUND, STALE_VERSION, type ImageLimits } from "../shared/protocol.ts";
 import { admitImages, rejectionLine } from "../shared/image-admission.ts";
+import { ackResult, type AgentAck, commandFrame, commandResult, controlSubmissions, defined, isOpRequest, submitArgs, threadOf, UUID } from "./host-wire.ts";
 // @ts-ignore: pi-hc-control is plain ESM.
 import { IMAGE_LIMITS as CONTROL_IMAGE_LIMITS } from "@hypercarrier/pi-hc-control/control";
 import { historySpend, spendLabel, unreadSpend } from "../shared/spend.ts";
 import { SESSION_SCOPE_MS } from "../shared/session-scope.ts";
+import { reconnectDelay, sshOptions } from "../shared/host-transport.ts";
 import { agentModules } from "./agent-modules.ts";
 import { ask } from "./ask.ts";
 import { resolveHelperModel } from "../hub/helper-models.ts";
@@ -28,7 +32,8 @@ import { piModelRegistry } from "./model-registry.ts";
 import { complete, instant, nowUs, span, spanAsync, tracing } from "../trace.ts";
 import { watched } from "../loop-watch.ts";
 import { PI_VIEWS, viewOps } from "./views/index.ts";
-import type { HostedView, PiTeamMember, PiTeamsFrame, PiViewContext, PiViewSession } from "./views/types.ts";
+import { arcOpened, arcPanel, closeArcs, startArcs } from "./views/arc.ts";
+import type { HostedView, PiRecordedMember, PiTeamMember, PiTeamsFrame, PiViewContext, PiViewSession } from "./views/types.ts";
 import type { WorkingSet } from "./working-set.ts";
 import type { Derived, SessionIdentity, Source as CopySource } from "./working-set-types.ts";
 import { identityOf } from "./session-identity.ts";
@@ -59,7 +64,6 @@ export type PiHostConfig = {
 	askCommand?: string[];
 };
 
-export { projectEntry } from "./projection.ts";
 type RemoteAgent = {
 	session: string;
 	sessionId?: string;
@@ -94,14 +98,8 @@ type RemotePane = { pane: string; workspace?: string; tab?: string; name?: strin
 type Starting = { threadId: string; sessionId: string; name: string; cwd: string; pane: string; createdAt: number; seen: boolean };
 type Layout = { workspaces: { id: string; label?: string; tabs: { id: string; label?: string; panes: string[] }[] }[] };
 type TeamMember = PiTeamMember;
-/** A command's acknowledgement from the remote agent; `ok: false` carries the refusal. */
-type AgentAck = {
-	t: "ack"; id: number; ok: boolean; error?: string | { code?: string; message?: string; matches?: unknown[] }; pane?: string; name?: string;
-	via?: string; evidence?: string; entryId?: string; submission?: string; submissions?: unknown[]; submitted?: SubmittedPrompt; warning?: string;
-	watermark?: { size: number; mtimeMs: number };
-	/** Slash commands: the `commands` list, or one command's outcome. */
-	value?: SlashCommands; disposition?: CommandAck["disposition"]; notice?: string; effect?: CommandAck["effect"];
-};
+/** The host-level lookups #hostInputs reads for every copy. */
+type HostIndex = { recorded: Map<string, PiRecordedMember[]>; workspaces: Map<string | undefined, Layout["workspaces"][number]> };
 /** Frames from the remote agent (pi-backend.md §2), one JSON object per stdout line. */
 type AgentMessage =
 	| { t: "hello"; host?: string; pid?: number; controlOps?: string[] }
@@ -112,9 +110,6 @@ type AgentMessage =
 	| PiTeamsFrame
 	| { t: "limits"; windows?: Record<string, number>; budget?: ModelLimits["budget"] }
 	| AgentAck;
-/** Old browser tabs request these names; each maps to its registry op. */
-const LEGACY_OPS: Partial<Record<string, OpName>> = { "view.cos-arc.build": "view.cos.arc.build" };
-
 /** Copy metadata and compact derived values. Transcript bodies never stay here. */
 type Copy = {
  path: string; file: string; offset: number; session?: SessionIdentity; closedAt?: number;
@@ -134,8 +129,6 @@ type Copy = {
 	/** Liveness last given to the working set's transcript window. */ windowLive?: boolean;
 };
 
-export const THREAD_WINDOW = 400;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const AGENT_SCRIPT = fileURLToPath(new URL("./remote-agent.cjs", import.meta.url));
 /** What a Pi control with `images: 1` takes in one message (pi-hc-control owns the values). */
 const IMAGE_LIMITS: ImageLimits = CONTROL_IMAGE_LIMITS;
@@ -154,49 +147,8 @@ export function agentLaunch(config: PiHostConfig): { command: string; args: stri
 	const bootstrap = `eval(Buffer.from('${BOOTSTRAP}','base64').toString())`;
 	if (config.kind === "pi-local") return { command: config.remoteNode ?? process.execPath, args: ["-e", bootstrap] };
 	const remoteCmd = `exec ${config.remoteNode ?? "node"} -e "${bootstrap}"`;
-	const options = ["-T", "-C", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"];
+	const options = sshOptions(true);
 	return { command: "ssh", args: [...options, ...(config.sshArgs ?? []), "--", config.target ?? config.id, `sh -lc ${JSON.stringify(remoteCmd)}`] };
-}
-
-/** Replicated values are JSON: chord's diff cannot carry `undefined`, so drop such keys. */
-function defined<T extends Record<string, unknown>>(value: T): T {
-	for (const key of Object.keys(value)) if (value[key] === undefined) delete value[key];
-	return value;
-}
-
-/**
- * The one reader of a control's submission record (pi-hc-control status and abort, relayed by the remote agent). The
- * status, submit and abort paths all read records through it, so each field reaches the hub on every path.
- */
-function controlSubmission(raw: unknown): ControlSubmission | undefined {
-	const r = raw as Record<string, unknown> | null;
-	if (typeof r?.submission !== "string") return undefined;
-	const record: Every<ControlSubmission> = {
-		submission: r.submission,
-		deliverAs: r.deliverAs === "steer" ? "steer" : "followUp",
-		state: r.state as ControlSubmission["state"],
-		at: Number(r.at),
-		entryId: typeof r.entryId === "string" ? r.entryId : undefined,
-		text: typeof r.text === "string" ? r.text : undefined,
-		truncated: r.truncated === true || undefined,
-		images: typeof r.images === "number" && r.images > 0 ? r.images : undefined,
-	};
-	return defined(record) as ControlSubmission;
-}
-const controlSubmissions = (raw: unknown[]): ControlSubmission[] => raw.map(controlSubmission).filter((r) => r !== undefined);
-
-/**
- * An action's reply: how it was delivered, its evidence, the Session entry it made when the Host names one, the
- * queued submission it made, and, for abort, what became of each queued submission.
- */
-function ackResult(ack: AgentAck): ActionAck {
-	return defined({
-		via: ack.via,
-		evidence: ack.evidence,
-		entryId: typeof ack.entryId === "string" ? ack.entryId : undefined,
-		submission: typeof ack.submission === "string" ? ack.submission : undefined,
-		submissions: Array.isArray(ack.submissions) ? controlSubmissions(ack.submissions) : undefined,
-	});
 }
 
 /** A copy of `layout` with `pane` in its tab (added when missing). */
@@ -270,6 +222,8 @@ export class PiHost extends EventEmitter {
 	#teams = new Map<string, TeamMember>();
 	/** The latest teams frame as the remote agent sent it (status, codes, and whatever Pi Team Bright read it carries). */
 	#teamsFrame?: PiTeamsFrame;
+	/** #hostIndex's last build and the frames it read. */
+	#hostIndexOf?: { frame?: PiTeamsFrame; layout: Layout; index: HostIndex };
 	#limits?: ModelLimits;
 	#child?: ChildProcess;
 	#stopped = true;
@@ -360,6 +314,7 @@ export class PiHost extends EventEmitter {
 		this.config = config;
 		this.#viewContext.host = config.id;
 		this.cacheDir = join(config.cacheDir, digest(config.id).slice(0, 16));
+		rmSync(join(this.cacheDir, "views", "cos.arc"), { recursive: true, force: true });
 		this.state = {
 			id: config.id,
 			label: config.label,
@@ -384,6 +339,7 @@ export class PiHost extends EventEmitter {
 			const { WorkingSet } = await spanAsync("import-working-set", "startup", () => import("./working-set.ts"));
 			await mkdir(this.cacheDir, { recursive: true, mode: 0o700 });
 			this.#store = new WorkingSet(this.config.id, this.cacheDir);
+			startArcs(this.#viewContext);
 			// The index loads from saved heads while the derive Worker starts. The threads and node snapshots need only
 			// the index; every other step waits for both.
 			ready = spanAsync("working-set-ready", "startup", () => this.#store.ready);
@@ -454,6 +410,7 @@ export class PiHost extends EventEmitter {
 	}
 
 	stop(): Promise<void> {
+		closeArcs(this.#viewContext);
 		if (this.#stopping) return this.#stopping;
 		this.#stopped = true;
 		clearInterval(this.#sweep);
@@ -501,7 +458,7 @@ export class PiHost extends EventEmitter {
 				void this.#evictExpired();
 				return true;
 			case "req":
-				void this.#request(frame.id, { op: LEGACY_OPS[frame.op] ?? frame.op, args: frame.args ?? {} });
+				void this.#request(frame.id, { op: frame.op, args: frame.args ?? {} });
 				return true;
 		}
 		return false;
@@ -526,8 +483,7 @@ export class PiHost extends EventEmitter {
 	}
 
 	async #loadIndex(): Promise<void> {
-  let index: Record<string, { file: string; offset: number; closedAt?: number; lastKnownLive?: boolean }> = {};
-  try { index = JSON.parse(await readFile(this.#indexFile(), "utf8")); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  const index = await readIndex(this.#indexFile());
   // Each copy's file reads overlap with others (LOAD_READS at a time); the copies register in index order.
   const readCopy = async (path: string, file: string) => {
    let end: number, copiedAt: number;
@@ -579,18 +535,12 @@ export class PiHost extends EventEmitter {
 	#writeIndex(): Promise<void> {
 		clearTimeout(this.#saveTimer);
 		this.#saveTimer = undefined;
-		const index = [...this.#copies].map(([path, c]) => [path, { file: basename(c.file), offset: c.offset, lastKnownLive: c.lastKnownLive, ...(c.closedAt ? { closedAt: c.closedAt } : {}) }] as const);
+		const index = [...this.#copies].map(([path, c]) => [path, indexEntry(c)] as const);
 		const starting = JSON.stringify([...this.#starting.values()]);
 		const write = this.#writes.catch(() => {}).then(async () => {
-			const parts: string[] = [];
-			let since = performance.now();
-			for (const [path, meta] of index) {
-				parts.push(JSON.stringify(path) + ":" + JSON.stringify(meta));
-				if (performance.now() - since >= 10) { await yieldLoop(); since = performance.now(); }
-			}
-			for (const [file, data] of [[this.#indexFile(), "{" + parts.join(",") + "}"], [this.#startingFile(), starting]]) {
-				await writeFile(file + ".tmp", data, { mode: 0o600 });
-				await rename(file + ".tmp", file);
+			const text = await indexText(index);
+			for (const [file, data] of [[this.#indexFile(), text], [this.#startingFile(), starting]]) {
+				await replaceFile(file, data);
 			}
 		}).then(
 			() => { if (this.state.indexError) this.#set({ indexError: undefined }); },
@@ -734,7 +684,8 @@ export class PiHost extends EventEmitter {
  #addSub(sid: number, sub: { topic: Topic; previous: PiTopicValue | undefined; n: number; pending?: string }): void {
   const id = this.#openThread(sub.topic), copy = id ? this.#byThread.get(id) : undefined, held = copy && this.#held(copy);
   this.#subs.set(sid, sub);
-  if (id) this.#openCount.set(id, (this.#openCount.get(id) ?? 0) + 1);
+  if (id && sub.topic.kind === "view" && sub.topic.view === "arc") arcPanel(this.#viewContext, id, true);
+  if (id) { this.#openCount.set(id, (this.#openCount.get(id) ?? 0) + 1); arcOpened(this.#viewContext, id, true); }
   // Opening an updating Session moves its re-derive ahead of the cold backlog.
   if (copy?.updating) this.#promote(copy);
   if (copy && this.#held(copy) !== held) { this.#dirty.add(copy.path); this.#schedulePublish(); }
@@ -747,9 +698,10 @@ export class PiHost extends EventEmitter {
   const id = this.#openThread(sub.topic), copy = id ? this.#byThread.get(id) : undefined, held = copy && this.#held(copy);
   this.#subs.delete(sid);
   if (!id) return;
+  if (sub.topic.kind === "view" && sub.topic.view === "arc") arcPanel(this.#viewContext, id, [...this.#subs.values()].some(s => s.topic.kind === "view" && s.topic.view === "arc" && s.topic.threadId === id));
   const left = (this.#openCount.get(id) ?? 1) - 1;
   if (left > 0) this.#openCount.set(id, left);
-  else this.#openCount.delete(id);
+  else { this.#openCount.delete(id); arcOpened(this.#viewContext, id, false); }
   if (!copy) return;
   if (!left) copy.lastOpenAt = Date.now();
   if (this.#held(copy) !== held) { this.#dirty.add(copy.path); this.#schedulePublish(); }
@@ -917,7 +869,7 @@ export class PiHost extends EventEmitter {
 	#closed(child: ChildProcess, reason: string, hint: string): void {
 		if (child !== this.#child) return;
 		this.#child = undefined;
-		const delay = Math.min(30_000, 500 * 2 ** Math.min(this.#attempts, 6));
+		const delay = reconnectDelay(this.#attempts);
 		const now = Date.now();
 		this.#set({}, { status: "disconnected", since: now, error: reason, errorClass: "reachability", hint, ...(this.#stopped ? {} : { retryAt: now + delay }) });
 		for (const pending of this.#pending.values()) {
@@ -1149,15 +1101,16 @@ export class PiHost extends EventEmitter {
 	 * through this, so equal inputs give equal Session values (views/types.ts PiViewSession).
 	 */
 	#hostInputs(copy: Copy) {
+		const index = this.#hostIndex();
 		const agent = this.#agentFor(copy.path);
 		const control = agent?.control?.live ? agent.control : undefined;
 		const live = agent?.pane ? this.#teams.get(agent.pane) : undefined;
 		// Team membership outlives the pane: a closed member keeps its recorded Membership, as on a durable Host
 		// (src/durable/reader-side.ts). A Session recorded in more than one Team stays unlabeled.
-		const recorded = this.#teamsFrame?.recorded?.filter((m) => m.session === copy.path) ?? [];
+		const recorded = index.recorded.get(copy.path) ?? [];
 		const member = live && live.session === copy.path ? live : new Set(recorded.map((m) => m.team)).size === 1
 			? recorded.find((m) => m.role === "lead" || m.role === "leader") ?? recorded[0] : undefined;
-		const workspace = this.#layout.workspaces.find((w) => w.id === agent?.workspace);
+		const workspace = index.workspaces.get(agent?.workspace);
 		const tab = workspace?.tabs.find((t) => t.id === agent?.tab);
 		const threadId = copy.session?.id;
 		return {
@@ -1172,6 +1125,26 @@ export class PiHost extends EventEmitter {
 			queued: threadId ? this.#queuedItems(threadId) : [],
 			open: this.#held(copy),
 		};
+	}
+
+	/**
+	 * Recorded members by Session path in frame order, and the first workspace of each ID, as filter and find read them.
+	 * Built once per teams frame and layout: both are replaced on each frame, never edited in place.
+	 */
+	#hostIndex(): HostIndex {
+		const cached = this.#hostIndexOf;
+		if (cached && cached.frame === this.#teamsFrame && cached.layout === this.#layout) return cached.index;
+		const recorded = new Map<string, PiRecordedMember[]>();
+		for (const m of this.#teamsFrame?.recorded ?? []) {
+			if (m.session === undefined) continue;
+			const list = recorded.get(m.session);
+			if (list) list.push(m);
+			else recorded.set(m.session, [m]);
+		}
+		const workspaces: HostIndex["workspaces"] = new Map();
+		for (const w of this.#layout.workspaces) if (!workspaces.has(w.id)) workspaces.set(w.id, w);
+		this.#hostIndexOf = { frame: this.#teamsFrame, layout: this.#layout, index: { recorded, workspaces } };
+		return this.#hostIndexOf.index;
 	}
 
 	#threadId(copy: Copy): string | undefined {
@@ -1193,7 +1166,7 @@ export class PiHost extends EventEmitter {
     return value.around?.found === "missing" && (copy.refreshing || copy.refreshAgain) ? { ...value, around: { ...value.around, found: "indexing" } } : value;
    },
    rarebitSnapshot: (maxChars) => this.#store.rarebitSnapshot(copy.path, maxChars),
-   arcEvidence: (ids) => this.#store.arcEvidence(copy.path, ids, data.version),
+   arcSource: () => this.#store.arcSource(copy.path, `${this.config.id}/${id}`, data.version),
    nearest: (at) => this.#store.nearest(copy.path, at),
    entryTimes: (ids) => this.#store.entryTimes(copy.path, ids),
   };
@@ -1601,15 +1574,7 @@ export class PiHost extends EventEmitter {
 	#hostOps(): OpHandlers<keyof HostOps> {
 		return {
 			"thread.submit": async (args) => {
-				const images = Array.isArray(args.images) ? args.images.map((i: { data?: unknown; mimeType?: unknown }) => ({ data: String(i?.data ?? ""), mimeType: String(i?.mimeType ?? "") })) : [];
-				const text = String(args.content ?? "");
-				if (!text.trim() && !images.length) throw Object.assign(new Error("Empty message"), { code: "invalid" });
-				// Pi runs plain slash text as a command. A page built before `asText` sends a command it could not type
-				// this way, so slash text goes as a message only when the owner chose it, before any route is chosen.
-				// `unsupported`: the code older pages already show as a final refusal (composer-outcomes FINAL_REFUSAL).
-				if (!images.length && text.trim().startsWith("/") && args.asText !== true)
-					throw Object.assign(new Error("This page is older than the hub. Reload it."), { code: "unsupported" });
-				const deliverAs = args.whenBusy === "steer" ? "steer" : "followUp";
+				const { images, text, deliverAs } = submitArgs(args);
 				// A live control socket proves delivery; prefer it over typing into a pane this hub made.
 				const filed = this.#copyByThread(String(args.threadId)) || this.#controlAgent(String(args.threadId));
 				const starting = filed ? undefined : this.#starting.get(String(args.threadId));
@@ -1634,29 +1599,10 @@ export class PiHost extends EventEmitter {
 				return ack.value;
 			},
 			"thread.command": async (args) => {
-				// The composer decides a draft is a command; the Host routes it by name and never sends it as a message.
-				const name = String(args.name ?? "");
-				const deliverAs = args.whenBusy === "steer" ? "steer" : undefined;
-				const cmd = defined({
-					t: "command",
-					name,
-					args: typeof args.args === "string" ? args.args : undefined,
-					key: typeof args.key === "string" ? args.key : undefined,
-					abort: args.abort === true ? true : undefined,
-					deliverAs,
-				});
+				const { name, deliverAs, cmd } = commandFrame(args);
 				// 130 s: a skill or template waits on compaction and delivery holds as submit does.
 				const ack = await this.#slash(String(args.threadId), cmd, 130_000);
-				if (!ack.disposition) throw Object.assign(new Error("The control sent no disposition; the outcome is unknown"), { code: "control_unconfirmed" });
-				const result: CommandAck = defined({
-					via: ack.via,
-					disposition: ack.disposition,
-					notice: typeof ack.notice === "string" ? ack.notice : undefined,
-					effect: ack.effect && typeof ack.effect === "object" ? ack.effect : undefined,
-					evidence: ack.evidence,
-					entryId: typeof ack.entryId === "string" ? ack.entryId : undefined,
-					submission: typeof ack.submission === "string" ? ack.submission : undefined,
-				});
+				const result = commandResult(ack);
 				if (result.submission && !this.#queued.has(result.submission)) {
 					const text = `/${name}${typeof args.args === "string" && args.args ? ` ${args.args}` : ""}`;
 					this.#queued.set(result.submission, { threadId: String(args.threadId), submission: result.submission, deliverAs: deliverAs ?? "followUp", state: "queued", at: Date.now(), text });
@@ -1909,14 +1855,4 @@ export class PiHost extends EventEmitter {
 		if (!agent || (!agent.pane && !agent.control?.live)) throw Object.assign(new Error("This Session is not running in a pane on its Host"), { code: "not_running" });
 		return { path: copy?.path ?? agent.session, copy, agent };
 	}
-}
-
-/** The `threadId` a request names, if any. */
-function threadOf(args: unknown): string | undefined {
-	return typeof args === "object" && args !== null && "threadId" in args && typeof args.threadId === "string" ? args.threadId : undefined;
-}
-
-/** Narrows a wire request to an op the table serves. Its arguments stay the sender's JSON. */
-function isOpRequest(ops: OpHandlers, request: { op: string; args: unknown }): request is OpRequest {
-	return Object.hasOwn(ops, request.op);
 }

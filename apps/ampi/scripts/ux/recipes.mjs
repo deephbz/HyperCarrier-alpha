@@ -2,7 +2,7 @@
 // Only synthetic WebSocket projections are used for node-only and failure states.
 export const thread = (name = 'lead', panel = '') => `#/h/devbox/t/pi%3Asess-${name}${panel ? `?p=${panel}` : ''}`;
 export const timeline = '#/v/timeline';
-export const arc = '#/v/arcs/devbox/pi%3Asess-big';
+export const arc = thread('big', 'arc');
 const recipes = [];
 // `read`: the entry ID the reader reads. The scene opens the Session at it through AmPi's own link (`?e=`), so the place
 // is a message, never a pixel offset: it holds however much of the transcript has painted, and through live arrivals.
@@ -68,17 +68,12 @@ add('S05.j', 'Team · view error', 'Team', thread('lead', 'team'), { variant: 'e
 add('S05.k', 'Team · partial observation', 'Team', thread('lead', 'team'), { variant: 'partial' });
 add('S05.l', 'Team · no membership', 'Team', thread('lead', 'team'), { variant: 'no-team' });
 add('S05.m', 'Team · pagination', 'Team', thread('lead', 'team'), { variant: 'large-team' });
-add('S06.a', 'Arcs · Session inventory', 'Arcs', '#/v/arcs');
-add('S06.b', 'Arcs · empty inventory', 'Arcs', '#/v/arcs', { variant: 'empty' });
-add('S06.c', 'Arcs · reader error', 'Arcs', '#/v/arcs', { variant: 'error' });
-add('S06.d', 'Arc · deterministic chunks', 'Arc', arc);
-add('S06.e', 'Arc · building labels', 'Arc', arc, { setup: 'build', pending: true });
+add('S06.d', 'Arc · Session receipt', 'Arc', arc);
+add('S06.e', 'Arc · building', 'Arc', arc, { setup: 'build', pending: true });
 add('S06.f', 'Arc · build error', 'Arc', arc, { setup: 'build', reject: true });
-add('S06.g', 'Arc · labelled synthesis', 'Arc', arc, { variant: 'labelled' });
 add('S06.h', 'Arc · loading', 'Arc', arc, { variant: 'loading-view' });
 add('S06.i', 'Arc · missing Session', 'Arc', arc, { variant: 'missing' });
 add('S06.j', 'Arc · empty branch', 'Arc', arc, { variant: 'empty-view' });
-add('S06.k', 'Arc · stale labels', 'Arc', arc, { variant: 'stale-labels' });
 add('S07.a', 'New agent · beside Session', 'Agent dialogs', thread(), { setup: 'new-agent' });
 add('S07.b', 'New agent · new workspace', 'Agent dialogs', thread(), { setup: 'new-workspace' });
 add('S07.c', 'New agent · creation failure', 'Agent dialogs', thread(), { setup: 'new-error', reject: true });

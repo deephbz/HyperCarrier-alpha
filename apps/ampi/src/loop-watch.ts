@@ -6,7 +6,7 @@
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 
 /** The last whole minute of event-loop delay, as /api/health reports it. */
-export type LoopWindow = { endedAt: string; seconds: number; maxMs: number; p99Ms: number; over50: number; over250: number };
+type LoopWindow = { endedAt: string; seconds: number; maxMs: number; p99Ms: number; over50: number; over250: number };
 
 const TICK_MS = 50, BLOCK_MS = 250, SECTION_MS = 20, WINDOW_MS = 60_000, LINES_PER_WINDOW = 10, SUMMARY_MS = 100;
 /**

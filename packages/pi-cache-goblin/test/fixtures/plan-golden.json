@@ -1,0 +1,2268 @@
+[
+  {
+    "name": "regressions.test.mjs: all request-head fields invalidate held pins, including new provider fields (initial pin)",
+    "input": {
+      "model": "claude-example",
+      "max_tokens": 100,
+      "stream": true,
+      "system": [
+        {
+          "type": "text",
+          "text": "global\n<cwd>\n/project\n</cwd>"
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "held"
+            }
+          ]
+        }
+      ]
+    },
+    "plan": {
+      "sessionTtl": "5m",
+      "pins": [
+        {
+          "name": "held"
+        }
+      ]
+    },
+    "boundaries": {
+      "global\n<cwd>\n/project\n</cwd>": 7
+    },
+    "payload": "{\"model\":\"claude-example\",\"max_tokens\":100,\"stream\":true,\"system\":[{\"type\":\"text\",\"text\":\"global\\n\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}},{\"type\":\"text\",\"text\":\"<cwd>\\n/project\\n</cwd>\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"held\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]}]}",
+    "head": "{\"model\":\"claude-example\",\"system\":[{\"type\":\"text\",\"text\":\"global\\n<cwd>\\n/project\\n</cwd>\"}]}",
+    "markers": "[{\"layer\":\"global\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":1},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":0,\"blockIndex\":0}]",
+    "pins": "[{\"name\":\"held\",\"at\":{\"messageIndex\":0,\"blockIndex\":0,\"hash\":\"e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556\"},\"status\":\"placed\"}]",
+    "hashes": [
+      "e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556"
+    ]
+  },
+  {
+    "name": "regressions.test.mjs: all request-head fields invalidate held pins, including new provider fields (model)",
+    "input": {
+      "model": "claude-other",
+      "max_tokens": 100,
+      "stream": true,
+      "system": [
+        {
+          "type": "text",
+          "text": "global\n<cwd>\n/project\n</cwd>"
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "held"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "tail"
+            }
+          ]
+        }
+      ]
+    },
+    "plan": {
+      "sessionTtl": "5m",
+      "pins": [
+        {
+          "name": "held",
+          "at": {
+            "messageIndex": 0,
+            "blockIndex": 0,
+            "hash": "e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556"
+          },
+          "status": "placed"
+        }
+      ]
+    },
+    "boundaries": {
+      "global\n<cwd>\n/project\n</cwd>": 7
+    },
+    "payload": "{\"model\":\"claude-other\",\"max_tokens\":100,\"stream\":true,\"system\":[{\"type\":\"text\",\"text\":\"global\\n\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}},{\"type\":\"text\",\"text\":\"<cwd>\\n/project\\n</cwd>\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"held\"}]},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"tail\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]}]}",
+    "head": "{\"model\":\"claude-other\",\"system\":[{\"type\":\"text\",\"text\":\"global\\n<cwd>\\n/project\\n</cwd>\"}]}",
+    "markers": "[{\"layer\":\"global\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":1},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":1,\"blockIndex\":0}]",
+    "pins": "[{\"name\":\"held\",\"at\":{\"messageIndex\":0,\"blockIndex\":0,\"hash\":\"e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556\"},\"status\":\"stale\"}]",
+    "hashes": [
+      "1e3d6664f12b57fbef07509a061d6fcfb33bbf03b140f8c4b25f151572237fcc",
+      "51da9d86623cb8efa17018e1e3ae3363ff366485866adaa6c52491daa2030d6f"
+    ]
+  },
+  {
+    "name": "regressions.test.mjs: all request-head fields invalidate held pins, including new provider fields (tools)",
+    "input": {
+      "model": "claude-example",
+      "max_tokens": 100,
+      "stream": true,
+      "system": [
+        {
+          "type": "text",
+          "text": "global\n<cwd>\n/project\n</cwd>"
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "held"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "tail"
+            }
+          ]
+        }
+      ],
+      "tools": [
+        {
+          "name": "new",
+          "input_schema": {}
+        }
+      ]
+    },
+    "plan": {
+      "sessionTtl": "5m",
+      "pins": [
+        {
+          "name": "held",
+          "at": {
+            "messageIndex": 0,
+            "blockIndex": 0,
+            "hash": "e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556"
+          },
+          "status": "placed"
+        }
+      ]
+    },
+    "boundaries": {
+      "global\n<cwd>\n/project\n</cwd>": 7
+    },
+    "payload": "{\"model\":\"claude-example\",\"max_tokens\":100,\"stream\":true,\"system\":[{\"type\":\"text\",\"text\":\"global\\n\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}},{\"type\":\"text\",\"text\":\"<cwd>\\n/project\\n</cwd>\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"held\"}]},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"tail\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]}],\"tools\":[{\"name\":\"new\",\"input_schema\":{}}]}",
+    "head": "{\"model\":\"claude-example\",\"system\":[{\"type\":\"text\",\"text\":\"global\\n<cwd>\\n/project\\n</cwd>\"}],\"tools\":[{\"name\":\"new\",\"input_schema\":{}}]}",
+    "markers": "[{\"layer\":\"global\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":1},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":1,\"blockIndex\":0}]",
+    "pins": "[{\"name\":\"held\",\"at\":{\"messageIndex\":0,\"blockIndex\":0,\"hash\":\"e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556\"},\"status\":\"stale\"}]",
+    "hashes": [
+      "94b229a81b24462f1cd4b53d21b48b59a1924e931125829d3cbe8d40cbe74506",
+      "bf6a7f01902098bbc149120f9ae0efaf035f5fee8ec6c0818f12fee71f2e584e"
+    ]
+  },
+  {
+    "name": "regressions.test.mjs: all request-head fields invalidate held pins, including new provider fields (thinking)",
+    "input": {
+      "model": "claude-example",
+      "max_tokens": 100,
+      "stream": true,
+      "system": [
+        {
+          "type": "text",
+          "text": "global\n<cwd>\n/project\n</cwd>"
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "held"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "tail"
+            }
+          ]
+        }
+      ],
+      "thinking": {
+        "type": "disabled"
+      }
+    },
+    "plan": {
+      "sessionTtl": "5m",
+      "pins": [
+        {
+          "name": "held",
+          "at": {
+            "messageIndex": 0,
+            "blockIndex": 0,
+            "hash": "e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556"
+          },
+          "status": "placed"
+        }
+      ]
+    },
+    "boundaries": {
+      "global\n<cwd>\n/project\n</cwd>": 7
+    },
+    "payload": "{\"model\":\"claude-example\",\"max_tokens\":100,\"stream\":true,\"system\":[{\"type\":\"text\",\"text\":\"global\\n\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}},{\"type\":\"text\",\"text\":\"<cwd>\\n/project\\n</cwd>\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"held\"}]},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"tail\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]}],\"thinking\":{\"type\":\"disabled\"}}",
+    "head": "{\"model\":\"claude-example\",\"system\":[{\"type\":\"text\",\"text\":\"global\\n<cwd>\\n/project\\n</cwd>\"}],\"thinking\":{\"type\":\"disabled\"}}",
+    "markers": "[{\"layer\":\"global\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":1},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":1,\"blockIndex\":0}]",
+    "pins": "[{\"name\":\"held\",\"at\":{\"messageIndex\":0,\"blockIndex\":0,\"hash\":\"e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556\"},\"status\":\"stale\"}]",
+    "hashes": [
+      "91757f6733c02e14cf12bea5921fddf07e7ca9ad83a820541dc43de932f03e52",
+      "eabc863e7cc2732476f5912c9aa0763b98088106f0f3845030a6796713355886"
+    ]
+  },
+  {
+    "name": "regressions.test.mjs: all request-head fields invalidate held pins, including new provider fields (tool_choice)",
+    "input": {
+      "model": "claude-example",
+      "max_tokens": 100,
+      "stream": true,
+      "system": [
+        {
+          "type": "text",
+          "text": "global\n<cwd>\n/project\n</cwd>"
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "held"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "tail"
+            }
+          ]
+        }
+      ],
+      "tool_choice": {
+        "type": "auto"
+      }
+    },
+    "plan": {
+      "sessionTtl": "5m",
+      "pins": [
+        {
+          "name": "held",
+          "at": {
+            "messageIndex": 0,
+            "blockIndex": 0,
+            "hash": "e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556"
+          },
+          "status": "placed"
+        }
+      ]
+    },
+    "boundaries": {
+      "global\n<cwd>\n/project\n</cwd>": 7
+    },
+    "payload": "{\"model\":\"claude-example\",\"max_tokens\":100,\"stream\":true,\"system\":[{\"type\":\"text\",\"text\":\"global\\n\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}},{\"type\":\"text\",\"text\":\"<cwd>\\n/project\\n</cwd>\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"held\"}]},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"tail\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]}],\"tool_choice\":{\"type\":\"auto\"}}",
+    "head": "{\"model\":\"claude-example\",\"system\":[{\"type\":\"text\",\"text\":\"global\\n<cwd>\\n/project\\n</cwd>\"}],\"tool_choice\":{\"type\":\"auto\"}}",
+    "markers": "[{\"layer\":\"global\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":1},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":1,\"blockIndex\":0}]",
+    "pins": "[{\"name\":\"held\",\"at\":{\"messageIndex\":0,\"blockIndex\":0,\"hash\":\"e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556\"},\"status\":\"stale\"}]",
+    "hashes": [
+      "1d56582aa4225d83309965acc3e5041e60fa4291d71a79f58f1d04ae58da0aab",
+      "f89c31134fc5c738190282ee8cdba43d7b881ffa780d1b7aa50e7e3e8330807a"
+    ]
+  },
+  {
+    "name": "regressions.test.mjs: all request-head fields invalidate held pins, including new provider fields (output_config)",
+    "input": {
+      "model": "claude-example",
+      "max_tokens": 100,
+      "stream": true,
+      "system": [
+        {
+          "type": "text",
+          "text": "global\n<cwd>\n/project\n</cwd>"
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "held"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "tail"
+            }
+          ]
+        }
+      ],
+      "output_config": {
+        "effort": "high"
+      }
+    },
+    "plan": {
+      "sessionTtl": "5m",
+      "pins": [
+        {
+          "name": "held",
+          "at": {
+            "messageIndex": 0,
+            "blockIndex": 0,
+            "hash": "e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556"
+          },
+          "status": "placed"
+        }
+      ]
+    },
+    "boundaries": {
+      "global\n<cwd>\n/project\n</cwd>": 7
+    },
+    "payload": "{\"model\":\"claude-example\",\"max_tokens\":100,\"stream\":true,\"system\":[{\"type\":\"text\",\"text\":\"global\\n\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}},{\"type\":\"text\",\"text\":\"<cwd>\\n/project\\n</cwd>\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"held\"}]},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"tail\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]}],\"output_config\":{\"effort\":\"high\"}}",
+    "head": "{\"model\":\"claude-example\",\"system\":[{\"type\":\"text\",\"text\":\"global\\n<cwd>\\n/project\\n</cwd>\"}],\"output_config\":{\"effort\":\"high\"}}",
+    "markers": "[{\"layer\":\"global\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":1},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":1,\"blockIndex\":0}]",
+    "pins": "[{\"name\":\"held\",\"at\":{\"messageIndex\":0,\"blockIndex\":0,\"hash\":\"e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556\"},\"status\":\"stale\"}]",
+    "hashes": [
+      "04d4ad000262317c4315a5bdf0d407194bf90c563a07866ba8bc49bf25a48c50",
+      "c783e86723df5ae5e30388a2c82dfc7974960fabf35e505891bb44b98b4d1da8"
+    ]
+  },
+  {
+    "name": "regressions.test.mjs: all request-head fields invalidate held pins, including new provider fields (metadata)",
+    "input": {
+      "model": "claude-example",
+      "max_tokens": 100,
+      "stream": true,
+      "system": [
+        {
+          "type": "text",
+          "text": "global\n<cwd>\n/project\n</cwd>"
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "held"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "tail"
+            }
+          ]
+        }
+      ],
+      "metadata": {
+        "user_id": "synthetic-user"
+      }
+    },
+    "plan": {
+      "sessionTtl": "5m",
+      "pins": [
+        {
+          "name": "held",
+          "at": {
+            "messageIndex": 0,
+            "blockIndex": 0,
+            "hash": "e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556"
+          },
+          "status": "placed"
+        }
+      ]
+    },
+    "boundaries": {
+      "global\n<cwd>\n/project\n</cwd>": 7
+    },
+    "payload": "{\"model\":\"claude-example\",\"max_tokens\":100,\"stream\":true,\"system\":[{\"type\":\"text\",\"text\":\"global\\n\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}},{\"type\":\"text\",\"text\":\"<cwd>\\n/project\\n</cwd>\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"held\"}]},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"tail\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]}],\"metadata\":{\"user_id\":\"synthetic-user\"}}",
+    "head": "{\"model\":\"claude-example\",\"system\":[{\"type\":\"text\",\"text\":\"global\\n<cwd>\\n/project\\n</cwd>\"}],\"metadata\":{\"user_id\":\"synthetic-user\"}}",
+    "markers": "[{\"layer\":\"global\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":1},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":1,\"blockIndex\":0}]",
+    "pins": "[{\"name\":\"held\",\"at\":{\"messageIndex\":0,\"blockIndex\":0,\"hash\":\"e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556\"},\"status\":\"stale\"}]",
+    "hashes": [
+      "4056b69ec1ea6c3031c4c65c03fbf64d8fba96237244aa87c2c7019362ffa570",
+      "b9efb395f9c18359f2955781dc6f0c0a169072edceb1077e0e71dddc4454ab5c"
+    ]
+  },
+  {
+    "name": "regressions.test.mjs: all request-head fields invalidate held pins, including new provider fields (future_cache_key)",
+    "input": {
+      "model": "claude-example",
+      "max_tokens": 100,
+      "stream": true,
+      "system": [
+        {
+          "type": "text",
+          "text": "global\n<cwd>\n/project\n</cwd>"
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "held"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "tail"
+            }
+          ]
+        }
+      ],
+      "future_cache_key": "new"
+    },
+    "plan": {
+      "sessionTtl": "5m",
+      "pins": [
+        {
+          "name": "held",
+          "at": {
+            "messageIndex": 0,
+            "blockIndex": 0,
+            "hash": "e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556"
+          },
+          "status": "placed"
+        }
+      ]
+    },
+    "boundaries": {
+      "global\n<cwd>\n/project\n</cwd>": 7
+    },
+    "payload": "{\"model\":\"claude-example\",\"max_tokens\":100,\"stream\":true,\"system\":[{\"type\":\"text\",\"text\":\"global\\n\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}},{\"type\":\"text\",\"text\":\"<cwd>\\n/project\\n</cwd>\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"held\"}]},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"tail\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]}],\"future_cache_key\":\"new\"}",
+    "head": "{\"model\":\"claude-example\",\"system\":[{\"type\":\"text\",\"text\":\"global\\n<cwd>\\n/project\\n</cwd>\"}],\"future_cache_key\":\"new\"}",
+    "markers": "[{\"layer\":\"global\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":1},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":1,\"blockIndex\":0}]",
+    "pins": "[{\"name\":\"held\",\"at\":{\"messageIndex\":0,\"blockIndex\":0,\"hash\":\"e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556\"},\"status\":\"stale\"}]",
+    "hashes": [
+      "7b38122d5cf418e2ef1c4330dd8c0cd1fb8afecea02b65bed8ed2b5a6dbb45f9",
+      "2f51747693fc420fd03ed80d6ea66357fd2bd26773da5d5cf3260213817db6de"
+    ]
+  },
+  {
+    "name": "regressions.test.mjs: system splitting does not invalidate a pin on replay of a transformed payload (initial pin)",
+    "input": {
+      "model": "claude-example",
+      "max_tokens": 100,
+      "stream": true,
+      "system": [
+        {
+          "type": "text",
+          "text": "global\n<cwd>\n/project\n</cwd>"
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "held"
+            }
+          ]
+        }
+      ]
+    },
+    "plan": {
+      "sessionTtl": "5m",
+      "pins": [
+        {
+          "name": "held"
+        }
+      ]
+    },
+    "boundaries": {
+      "global\n<cwd>\n/project\n</cwd>": 7
+    },
+    "payload": "{\"model\":\"claude-example\",\"max_tokens\":100,\"stream\":true,\"system\":[{\"type\":\"text\",\"text\":\"global\\n\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}},{\"type\":\"text\",\"text\":\"<cwd>\\n/project\\n</cwd>\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"held\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]}]}",
+    "head": "{\"model\":\"claude-example\",\"system\":[{\"type\":\"text\",\"text\":\"global\\n<cwd>\\n/project\\n</cwd>\"}]}",
+    "markers": "[{\"layer\":\"global\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":1},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":0,\"blockIndex\":0}]",
+    "pins": "[{\"name\":\"held\",\"at\":{\"messageIndex\":0,\"blockIndex\":0,\"hash\":\"e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556\"},\"status\":\"placed\"}]",
+    "hashes": [
+      "e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556"
+    ]
+  },
+  {
+    "name": "regressions.test.mjs: system splitting does not invalidate a pin on replay of a transformed payload (transformed payload replay)",
+    "input": {
+      "model": "claude-example",
+      "max_tokens": 100,
+      "stream": true,
+      "system": [
+        {
+          "type": "text",
+          "text": "global\n",
+          "cache_control": {
+            "type": "ephemeral",
+            "ttl": "1h"
+          }
+        },
+        {
+          "type": "text",
+          "text": "<cwd>\n/project\n</cwd>",
+          "cache_control": {
+            "type": "ephemeral",
+            "ttl": "1h"
+          }
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "held",
+              "cache_control": {
+                "type": "ephemeral",
+                "ttl": "5m"
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "tail"
+            }
+          ]
+        }
+      ]
+    },
+    "plan": {
+      "sessionTtl": "5m",
+      "pins": [
+        {
+          "name": "held",
+          "at": {
+            "messageIndex": 0,
+            "blockIndex": 0,
+            "hash": "e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556"
+          },
+          "status": "placed"
+        }
+      ]
+    },
+    "boundaries": {
+      "global\n": -1,
+      "<cwd>\n/project\n</cwd>": 0
+    },
+    "payload": "{\"model\":\"claude-example\",\"max_tokens\":100,\"stream\":true,\"system\":[{\"type\":\"text\",\"text\":\"global\\n\"},{\"type\":\"text\",\"text\":\"<cwd>\\n/project\\n</cwd>\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"held\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"tail\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]}]}",
+    "head": "{\"model\":\"claude-example\",\"system\":[{\"type\":\"text\",\"text\":\"global\\n<cwd>\\n/project\\n</cwd>\"}]}",
+    "markers": "[{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":1},{\"layer\":\"pin\",\"ttl\":\"5m\",\"name\":\"held\",\"messageIndex\":0,\"blockIndex\":0},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":1,\"blockIndex\":0}]",
+    "pins": "[{\"name\":\"held\",\"at\":{\"messageIndex\":0,\"blockIndex\":0,\"hash\":\"e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556\"},\"status\":\"placed\"}]",
+    "hashes": [
+      "e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556",
+      "f1602a89df2e282eb49c6b00ca8ffc801489a51f538356767d7afdeab913b2ad"
+    ]
+  },
+  {
+    "name": "regressions.test.mjs: malformed pin coordinates cannot throw or bind to a different block (valid coordinate capture)",
+    "input": {
+      "model": "claude-example",
+      "max_tokens": 100,
+      "stream": true,
+      "system": [
+        {
+          "type": "text",
+          "text": "global\n<cwd>\n/project\n</cwd>"
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "held"
+            }
+          ]
+        }
+      ]
+    },
+    "plan": {
+      "sessionTtl": "5m",
+      "pins": [
+        {
+          "name": "held"
+        }
+      ]
+    },
+    "boundaries": {
+      "global\n<cwd>\n/project\n</cwd>": 7
+    },
+    "payload": "{\"model\":\"claude-example\",\"max_tokens\":100,\"stream\":true,\"system\":[{\"type\":\"text\",\"text\":\"global\\n\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}},{\"type\":\"text\",\"text\":\"<cwd>\\n/project\\n</cwd>\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"held\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]}]}",
+    "head": "{\"model\":\"claude-example\",\"system\":[{\"type\":\"text\",\"text\":\"global\\n<cwd>\\n/project\\n</cwd>\"}]}",
+    "markers": "[{\"layer\":\"global\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":1},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":0,\"blockIndex\":0}]",
+    "pins": "[{\"name\":\"held\",\"at\":{\"messageIndex\":0,\"blockIndex\":0,\"hash\":\"e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556\"},\"status\":\"placed\"}]",
+    "hashes": [
+      "e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556"
+    ]
+  },
+  {
+    "name": "regressions.test.mjs: malformed pin coordinates cannot throw or bind to a different block (null)",
+    "input": {
+      "model": "claude-example",
+      "max_tokens": 100,
+      "stream": true,
+      "system": [
+        {
+          "type": "text",
+          "text": "global\n<cwd>\n/project\n</cwd>"
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "held"
+            }
+          ]
+        }
+      ]
+    },
+    "plan": {
+      "sessionTtl": "5m",
+      "pins": [
+        {
+          "name": "held",
+          "at": null
+        }
+      ]
+    },
+    "boundaries": {
+      "global\n<cwd>\n/project\n</cwd>": 7
+    },
+    "payload": "{\"model\":\"claude-example\",\"max_tokens\":100,\"stream\":true,\"system\":[{\"type\":\"text\",\"text\":\"global\\n\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}},{\"type\":\"text\",\"text\":\"<cwd>\\n/project\\n</cwd>\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"held\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]}]}",
+    "head": "{\"model\":\"claude-example\",\"system\":[{\"type\":\"text\",\"text\":\"global\\n<cwd>\\n/project\\n</cwd>\"}]}",
+    "markers": "[{\"layer\":\"global\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":1},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":0,\"blockIndex\":0}]",
+    "pins": "[{\"name\":\"held\",\"status\":\"stale\"}]",
+    "hashes": [
+      "e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556"
+    ]
+  },
+  {
+    "name": "regressions.test.mjs: malformed pin coordinates cannot throw or bind to a different block (empty object)",
+    "input": {
+      "model": "claude-example",
+      "max_tokens": 100,
+      "stream": true,
+      "system": [
+        {
+          "type": "text",
+          "text": "global\n<cwd>\n/project\n</cwd>"
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "held"
+            }
+          ]
+        }
+      ]
+    },
+    "plan": {
+      "sessionTtl": "5m",
+      "pins": [
+        {
+          "name": "held",
+          "at": {}
+        }
+      ]
+    },
+    "boundaries": {
+      "global\n<cwd>\n/project\n</cwd>": 7
+    },
+    "payload": "{\"model\":\"claude-example\",\"max_tokens\":100,\"stream\":true,\"system\":[{\"type\":\"text\",\"text\":\"global\\n\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}},{\"type\":\"text\",\"text\":\"<cwd>\\n/project\\n</cwd>\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"held\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]}]}",
+    "head": "{\"model\":\"claude-example\",\"system\":[{\"type\":\"text\",\"text\":\"global\\n<cwd>\\n/project\\n</cwd>\"}]}",
+    "markers": "[{\"layer\":\"global\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":1},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":0,\"blockIndex\":0}]",
+    "pins": "[{\"name\":\"held\",\"status\":\"stale\"}]",
+    "hashes": [
+      "e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556"
+    ]
+  },
+  {
+    "name": "regressions.test.mjs: malformed pin coordinates cannot throw or bind to a different block (negative messageIndex)",
+    "input": {
+      "model": "claude-example",
+      "max_tokens": 100,
+      "stream": true,
+      "system": [
+        {
+          "type": "text",
+          "text": "global\n<cwd>\n/project\n</cwd>"
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "held"
+            }
+          ]
+        }
+      ]
+    },
+    "plan": {
+      "sessionTtl": "5m",
+      "pins": [
+        {
+          "name": "held",
+          "at": {
+            "messageIndex": -1,
+            "blockIndex": 0,
+            "hash": "e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556"
+          }
+        }
+      ]
+    },
+    "boundaries": {
+      "global\n<cwd>\n/project\n</cwd>": 7
+    },
+    "payload": "{\"model\":\"claude-example\",\"max_tokens\":100,\"stream\":true,\"system\":[{\"type\":\"text\",\"text\":\"global\\n\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}},{\"type\":\"text\",\"text\":\"<cwd>\\n/project\\n</cwd>\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"held\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]}]}",
+    "head": "{\"model\":\"claude-example\",\"system\":[{\"type\":\"text\",\"text\":\"global\\n<cwd>\\n/project\\n</cwd>\"}]}",
+    "markers": "[{\"layer\":\"global\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":1},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":0,\"blockIndex\":0}]",
+    "pins": "[{\"name\":\"held\",\"status\":\"stale\"}]",
+    "hashes": [
+      "e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556"
+    ]
+  },
+  {
+    "name": "regressions.test.mjs: malformed pin coordinates cannot throw or bind to a different block (fractional messageIndex)",
+    "input": {
+      "model": "claude-example",
+      "max_tokens": 100,
+      "stream": true,
+      "system": [
+        {
+          "type": "text",
+          "text": "global\n<cwd>\n/project\n</cwd>"
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "held"
+            }
+          ]
+        }
+      ]
+    },
+    "plan": {
+      "sessionTtl": "5m",
+      "pins": [
+        {
+          "name": "held",
+          "at": {
+            "messageIndex": 0.1,
+            "blockIndex": 0,
+            "hash": "e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556"
+          }
+        }
+      ]
+    },
+    "boundaries": {
+      "global\n<cwd>\n/project\n</cwd>": 7
+    },
+    "payload": "{\"model\":\"claude-example\",\"max_tokens\":100,\"stream\":true,\"system\":[{\"type\":\"text\",\"text\":\"global\\n\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}},{\"type\":\"text\",\"text\":\"<cwd>\\n/project\\n</cwd>\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"held\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]}]}",
+    "head": "{\"model\":\"claude-example\",\"system\":[{\"type\":\"text\",\"text\":\"global\\n<cwd>\\n/project\\n</cwd>\"}]}",
+    "markers": "[{\"layer\":\"global\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":1},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":0,\"blockIndex\":0}]",
+    "pins": "[{\"name\":\"held\",\"status\":\"stale\"}]",
+    "hashes": [
+      "e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556"
+    ]
+  },
+  {
+    "name": "regressions.test.mjs: malformed pin coordinates cannot throw or bind to a different block (string blockIndex)",
+    "input": {
+      "model": "claude-example",
+      "max_tokens": 100,
+      "stream": true,
+      "system": [
+        {
+          "type": "text",
+          "text": "global\n<cwd>\n/project\n</cwd>"
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "held"
+            }
+          ]
+        }
+      ]
+    },
+    "plan": {
+      "sessionTtl": "5m",
+      "pins": [
+        {
+          "name": "held",
+          "at": {
+            "messageIndex": 0,
+            "blockIndex": "0",
+            "hash": "e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556"
+          }
+        }
+      ]
+    },
+    "boundaries": {
+      "global\n<cwd>\n/project\n</cwd>": 7
+    },
+    "payload": "{\"model\":\"claude-example\",\"max_tokens\":100,\"stream\":true,\"system\":[{\"type\":\"text\",\"text\":\"global\\n\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}},{\"type\":\"text\",\"text\":\"<cwd>\\n/project\\n</cwd>\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"held\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]}]}",
+    "head": "{\"model\":\"claude-example\",\"system\":[{\"type\":\"text\",\"text\":\"global\\n<cwd>\\n/project\\n</cwd>\"}]}",
+    "markers": "[{\"layer\":\"global\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":1},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":0,\"blockIndex\":0}]",
+    "pins": "[{\"name\":\"held\",\"status\":\"stale\"}]",
+    "hashes": [
+      "e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556"
+    ]
+  },
+  {
+    "name": "regressions.test.mjs: malformed pin coordinates cannot throw or bind to a different block (invalid hash)",
+    "input": {
+      "model": "claude-example",
+      "max_tokens": 100,
+      "stream": true,
+      "system": [
+        {
+          "type": "text",
+          "text": "global\n<cwd>\n/project\n</cwd>"
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "held"
+            }
+          ]
+        }
+      ]
+    },
+    "plan": {
+      "sessionTtl": "5m",
+      "pins": [
+        {
+          "name": "held",
+          "at": {
+            "messageIndex": 0,
+            "blockIndex": 0,
+            "hash": "invalid"
+          }
+        }
+      ]
+    },
+    "boundaries": {
+      "global\n<cwd>\n/project\n</cwd>": 7
+    },
+    "payload": "{\"model\":\"claude-example\",\"max_tokens\":100,\"stream\":true,\"system\":[{\"type\":\"text\",\"text\":\"global\\n\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}},{\"type\":\"text\",\"text\":\"<cwd>\\n/project\\n</cwd>\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"held\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]}]}",
+    "head": "{\"model\":\"claude-example\",\"system\":[{\"type\":\"text\",\"text\":\"global\\n<cwd>\\n/project\\n</cwd>\"}]}",
+    "markers": "[{\"layer\":\"global\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":1},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":0,\"blockIndex\":0}]",
+    "pins": "[{\"name\":\"held\",\"status\":\"stale\"}]",
+    "hashes": [
+      "e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556"
+    ]
+  },
+  {
+    "name": "regressions.test.mjs: malformed pin coordinates cannot throw or bind to a different block (out-of-range messageIndex)",
+    "input": {
+      "model": "claude-example",
+      "max_tokens": 100,
+      "stream": true,
+      "system": [
+        {
+          "type": "text",
+          "text": "global\n<cwd>\n/project\n</cwd>"
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "held"
+            }
+          ]
+        }
+      ]
+    },
+    "plan": {
+      "sessionTtl": "5m",
+      "pins": [
+        {
+          "name": "held",
+          "at": {
+            "messageIndex": 999,
+            "blockIndex": 0,
+            "hash": "e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556"
+          }
+        }
+      ]
+    },
+    "boundaries": {
+      "global\n<cwd>\n/project\n</cwd>": 7
+    },
+    "payload": "{\"model\":\"claude-example\",\"max_tokens\":100,\"stream\":true,\"system\":[{\"type\":\"text\",\"text\":\"global\\n\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}},{\"type\":\"text\",\"text\":\"<cwd>\\n/project\\n</cwd>\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"held\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]}]}",
+    "head": "{\"model\":\"claude-example\",\"system\":[{\"type\":\"text\",\"text\":\"global\\n<cwd>\\n/project\\n</cwd>\"}]}",
+    "markers": "[{\"layer\":\"global\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":1},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":0,\"blockIndex\":0}]",
+    "pins": "[{\"name\":\"held\",\"at\":{\"messageIndex\":999,\"blockIndex\":0,\"hash\":\"e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556\"},\"status\":\"stale\"}]",
+    "hashes": [
+      "e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556"
+    ]
+  },
+  {
+    "name": "regressions.test.mjs: planner retains only the latest held pin even when all pending pins share the tail",
+    "input": {
+      "model": "claude-example",
+      "max_tokens": 100,
+      "stream": true,
+      "system": [
+        {
+          "type": "text",
+          "text": "global\n<cwd>\n/project\n</cwd>"
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "held"
+            }
+          ]
+        }
+      ]
+    },
+    "plan": {
+      "sessionTtl": "5m",
+      "pins": [
+        {
+          "name": "a"
+        },
+        {
+          "name": "b"
+        },
+        {
+          "name": "c"
+        }
+      ]
+    },
+    "boundaries": {
+      "global\n<cwd>\n/project\n</cwd>": 7
+    },
+    "payload": "{\"model\":\"claude-example\",\"max_tokens\":100,\"stream\":true,\"system\":[{\"type\":\"text\",\"text\":\"global\\n\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}},{\"type\":\"text\",\"text\":\"<cwd>\\n/project\\n</cwd>\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"held\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]}]}",
+    "head": "{\"model\":\"claude-example\",\"system\":[{\"type\":\"text\",\"text\":\"global\\n<cwd>\\n/project\\n</cwd>\"}]}",
+    "markers": "[{\"layer\":\"global\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":1},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":0,\"blockIndex\":0}]",
+    "pins": "[{\"name\":\"a\",\"at\":{\"messageIndex\":0,\"blockIndex\":0,\"hash\":\"e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556\"},\"status\":\"dropped\"},{\"name\":\"b\",\"at\":{\"messageIndex\":0,\"blockIndex\":0,\"hash\":\"e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556\"},\"status\":\"dropped\"},{\"name\":\"c\",\"at\":{\"messageIndex\":0,\"blockIndex\":0,\"hash\":\"e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556\"},\"status\":\"placed\"}]",
+    "hashes": [
+      "e797ace42ab81101f1bbd68b8f5099826c3f81c20bbf366fb78114d8cbc94556"
+    ]
+  },
+  {
+    "name": "regressions.test.mjs: raw multimodal blocks and message metadata remain unchanged apart from markers",
+    "input": {
+      "model": "claude-example",
+      "max_tokens": 100,
+      "stream": true,
+      "system": [
+        {
+          "type": "text",
+          "text": "global\n<cwd>\n/project\n</cwd>"
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "metadata": {
+            "synthetic": true
+          },
+          "content": [
+            {
+              "type": "image",
+              "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": "synthetic-bytes"
+              }
+            },
+            {
+              "type": "tool_result",
+              "tool_use_id": "synthetic-tool",
+              "content": "verbatim\n  whitespace"
+            }
+          ]
+        }
+      ]
+    },
+    "plan": {
+      "sessionTtl": "5m"
+    },
+    "boundaries": {
+      "global\n<cwd>\n/project\n</cwd>": 7
+    },
+    "payload": "{\"model\":\"claude-example\",\"max_tokens\":100,\"stream\":true,\"system\":[{\"type\":\"text\",\"text\":\"global\\n\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}},{\"type\":\"text\",\"text\":\"<cwd>\\n/project\\n</cwd>\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"messages\":[{\"role\":\"user\",\"metadata\":{\"synthetic\":true},\"content\":[{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\"image/png\",\"data\":\"synthetic-bytes\"}},{\"type\":\"tool_result\",\"tool_use_id\":\"synthetic-tool\",\"content\":\"verbatim\\n  whitespace\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]}]}",
+    "head": "{\"model\":\"claude-example\",\"system\":[{\"type\":\"text\",\"text\":\"global\\n<cwd>\\n/project\\n</cwd>\"}]}",
+    "markers": "[{\"layer\":\"global\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":1},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":0,\"blockIndex\":1}]",
+    "pins": "[]",
+    "hashes": [
+      "3115dd6ac1aebed7252a5f03ba550a4993ed88e71660dca97663cb053984cdcf",
+      "a55189087aca61f5041b88d10d1aef6c98f9f6c6dd15306b927f5a70f6db43f2"
+    ]
+  },
+  {
+    "name": "plan.test.mjs: system splits into global and project blocks, both 1h; tools lose pi's marker",
+    "input": {
+      "model": "claude-haiku-5-5",
+      "max_tokens": 1000,
+      "stream": true,
+      "tools": [
+        {
+          "name": "read",
+          "input_schema": {},
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "system": [
+        {
+          "type": "text",
+          "text": "You are an expert coding assistant operating inside pi.\n\n<tools>\n- read: Read\n</tools>\n\n<rules>\n- Be concise\n</rules>\n\n<project_context>\nProject-specific instructions and guidelines:\n\n<project_instructions path=\"/global/AGENTS.md\">\ng\n</project_instructions>\n\n<project_instructions path=\"/work/a/AGENTS.md\">\np\n</project_instructions>\n</project_context>\n\n<skills>\n- s\n</skills>\n\n<cwd>\n/work/a\n</cwd>",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "hi"
+            }
+          ]
+        },
+        {
+          "role": "system",
+          "content": [],
+          "output_config": {
+            "effort": "high"
+          }
+        }
+      ]
+    },
+    "plan": {
+      "sessionTtl": "5m"
+    },
+    "boundaries": {
+      "You are an expert coding assistant operating inside pi.\n\n<tools>\n- read: Read\n</tools>\n\n<rules>\n- Be concise\n</rules>\n\n<project_context>\nProject-specific instructions and guidelines:\n\n<project_instructions path=\"/global/AGENTS.md\">\ng\n</project_instructions>\n\n<project_instructions path=\"/work/a/AGENTS.md\">\np\n</project_instructions>\n</project_context>\n\n<skills>\n- s\n</skills>\n\n<cwd>\n/work/a\n</cwd>": 257
+    },
+    "payload": "{\"model\":\"claude-haiku-5-5\",\"max_tokens\":1000,\"stream\":true,\"tools\":[{\"name\":\"read\",\"input_schema\":{}}],\"system\":[{\"type\":\"text\",\"text\":\"You are an expert coding assistant operating inside pi.\\n\\n<tools>\\n- read: Read\\n</tools>\\n\\n<rules>\\n- Be concise\\n</rules>\\n\\n<project_context>\\nProject-specific instructions and guidelines:\\n\\n<project_instructions path=\\\"/global/AGENTS.md\\\">\\ng\\n</project_instructions>\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}},{\"type\":\"text\",\"text\":\"\\n\\n<project_instructions path=\\\"/work/a/AGENTS.md\\\">\\np\\n</project_instructions>\\n</project_context>\\n\\n<skills>\\n- s\\n</skills>\\n\\n<cwd>\\n/work/a\\n</cwd>\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"hi\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]},{\"role\":\"system\",\"content\":[],\"output_config\":{\"effort\":\"high\"}}]}",
+    "head": "{\"model\":\"claude-haiku-5-5\",\"tools\":[{\"name\":\"read\",\"input_schema\":{}}],\"system\":[{\"type\":\"text\",\"text\":\"You are an expert coding assistant operating inside pi.\\n\\n<tools>\\n- read: Read\\n</tools>\\n\\n<rules>\\n- Be concise\\n</rules>\\n\\n<project_context>\\nProject-specific instructions and guidelines:\\n\\n<project_instructions path=\\\"/global/AGENTS.md\\\">\\ng\\n</project_instructions>\\n\\n<project_instructions path=\\\"/work/a/AGENTS.md\\\">\\np\\n</project_instructions>\\n</project_context>\\n\\n<skills>\\n- s\\n</skills>\\n\\n<cwd>\\n/work/a\\n</cwd>\"}]}",
+    "markers": "[{\"layer\":\"global\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":1},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":0,\"blockIndex\":0}]",
+    "pins": "[]",
+    "hashes": [
+      "a662eb328ff04b0bcb2011a97e445740639677ec2aeb2da38904f8b1ebf4a391"
+    ]
+  },
+  {
+    "name": "plan.test.mjs: tail marker skips pi's trailing effort message and uses the session TTL",
+    "input": {
+      "model": "claude-haiku-5-5",
+      "max_tokens": 1000,
+      "stream": true,
+      "tools": [
+        {
+          "name": "read",
+          "input_schema": {},
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "system": [
+        {
+          "type": "text",
+          "text": "x",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "a"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "b"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "c"
+            }
+          ]
+        },
+        {
+          "role": "system",
+          "content": [],
+          "output_config": {
+            "effort": "high"
+          }
+        }
+      ]
+    },
+    "plan": {
+      "sessionTtl": "1h"
+    },
+    "payload": "{\"model\":\"claude-haiku-5-5\",\"max_tokens\":1000,\"stream\":true,\"tools\":[{\"name\":\"read\",\"input_schema\":{}}],\"system\":[{\"type\":\"text\",\"text\":\"x\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"a\"}]},{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"b\"}]},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"c\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}]},{\"role\":\"system\",\"content\":[],\"output_config\":{\"effort\":\"high\"}}]}",
+    "head": "{\"model\":\"claude-haiku-5-5\",\"tools\":[{\"name\":\"read\",\"input_schema\":{}}],\"system\":[{\"type\":\"text\",\"text\":\"x\"}]}",
+    "markers": "[{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"tail\",\"ttl\":\"1h\",\"messageIndex\":2,\"blockIndex\":0}]",
+    "pins": "[]",
+    "hashes": [
+      "ba8940d4905b04e961397eb54c6561a96cf2f781284685e913dfe4232f0abd33",
+      "47819741a61bf5eabacb1d72e236ca92e3675e3ac16249d94bbbbd1fbb41a9f4",
+      "026590c28fa32e03980bd99eccd2c79b0bbb192da58ea546dc7ad9c9c8569298"
+    ]
+  },
+  {
+    "name": "plan.test.mjs: input payload is not mutated",
+    "input": {
+      "model": "claude-haiku-5-5",
+      "max_tokens": 1000,
+      "stream": true,
+      "tools": [
+        {
+          "name": "read",
+          "input_schema": {},
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "system": [
+        {
+          "type": "text",
+          "text": "x",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "a"
+            }
+          ]
+        }
+      ]
+    },
+    "plan": {
+      "sessionTtl": "5m"
+    },
+    "payload": "{\"model\":\"claude-haiku-5-5\",\"max_tokens\":1000,\"stream\":true,\"tools\":[{\"name\":\"read\",\"input_schema\":{}}],\"system\":[{\"type\":\"text\",\"text\":\"x\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"a\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]}]}",
+    "head": "{\"model\":\"claude-haiku-5-5\",\"tools\":[{\"name\":\"read\",\"input_schema\":{}}],\"system\":[{\"type\":\"text\",\"text\":\"x\"}]}",
+    "markers": "[{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":0,\"blockIndex\":0}]",
+    "pins": "[]",
+    "hashes": [
+      "ba8940d4905b04e961397eb54c6561a96cf2f781284685e913dfe4232f0abd33"
+    ]
+  },
+  {
+    "name": "plan.test.mjs: a pending pin resolves to this request's tail and is held on later requests (initial request)",
+    "input": {
+      "model": "claude-haiku-5-5",
+      "max_tokens": 1000,
+      "stream": true,
+      "tools": [
+        {
+          "name": "read",
+          "input_schema": {},
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "system": [
+        {
+          "type": "text",
+          "text": "x",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "a"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "b"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "A"
+            }
+          ]
+        },
+        {
+          "role": "system",
+          "content": [],
+          "output_config": {
+            "effort": "high"
+          }
+        }
+      ]
+    },
+    "plan": {
+      "sessionTtl": "5m",
+      "pins": [
+        {
+          "name": "fork"
+        }
+      ]
+    },
+    "payload": "{\"model\":\"claude-haiku-5-5\",\"max_tokens\":1000,\"stream\":true,\"tools\":[{\"name\":\"read\",\"input_schema\":{}}],\"system\":[{\"type\":\"text\",\"text\":\"x\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"a\"}]},{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"b\"}]},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"A\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]},{\"role\":\"system\",\"content\":[],\"output_config\":{\"effort\":\"high\"}}]}",
+    "head": "{\"model\":\"claude-haiku-5-5\",\"tools\":[{\"name\":\"read\",\"input_schema\":{}}],\"system\":[{\"type\":\"text\",\"text\":\"x\"}]}",
+    "markers": "[{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":2,\"blockIndex\":0}]",
+    "pins": "[{\"name\":\"fork\",\"at\":{\"messageIndex\":2,\"blockIndex\":0,\"hash\":\"b5390b3ecb0ae4fdb8110470cf20ddba309bf1a39891757b223e14767ac02e79\"},\"status\":\"placed\"}]",
+    "hashes": [
+      "ba8940d4905b04e961397eb54c6561a96cf2f781284685e913dfe4232f0abd33",
+      "47819741a61bf5eabacb1d72e236ca92e3675e3ac16249d94bbbbd1fbb41a9f4",
+      "b5390b3ecb0ae4fdb8110470cf20ddba309bf1a39891757b223e14767ac02e79"
+    ]
+  },
+  {
+    "name": "plan.test.mjs: a pending pin resolves to this request's tail and is held on later requests (later request)",
+    "input": {
+      "model": "claude-haiku-5-5",
+      "max_tokens": 1000,
+      "stream": true,
+      "tools": [
+        {
+          "name": "read",
+          "input_schema": {},
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "system": [
+        {
+          "type": "text",
+          "text": "x",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "a"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "b"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "A"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "c"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "d"
+            }
+          ]
+        },
+        {
+          "role": "system",
+          "content": [],
+          "output_config": {
+            "effort": "high"
+          }
+        }
+      ]
+    },
+    "plan": {
+      "sessionTtl": "5m",
+      "pins": [
+        {
+          "name": "fork",
+          "at": {
+            "messageIndex": 2,
+            "blockIndex": 0,
+            "hash": "b5390b3ecb0ae4fdb8110470cf20ddba309bf1a39891757b223e14767ac02e79"
+          }
+        }
+      ]
+    },
+    "payload": "{\"model\":\"claude-haiku-5-5\",\"max_tokens\":1000,\"stream\":true,\"tools\":[{\"name\":\"read\",\"input_schema\":{}}],\"system\":[{\"type\":\"text\",\"text\":\"x\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"a\"}]},{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"b\"}]},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"A\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]},{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"c\"}]},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"d\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]},{\"role\":\"system\",\"content\":[],\"output_config\":{\"effort\":\"high\"}}]}",
+    "head": "{\"model\":\"claude-haiku-5-5\",\"tools\":[{\"name\":\"read\",\"input_schema\":{}}],\"system\":[{\"type\":\"text\",\"text\":\"x\"}]}",
+    "markers": "[{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"pin\",\"ttl\":\"5m\",\"name\":\"fork\",\"messageIndex\":2,\"blockIndex\":0},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":4,\"blockIndex\":0}]",
+    "pins": "[{\"name\":\"fork\",\"at\":{\"messageIndex\":2,\"blockIndex\":0,\"hash\":\"b5390b3ecb0ae4fdb8110470cf20ddba309bf1a39891757b223e14767ac02e79\"},\"status\":\"placed\"}]",
+    "hashes": [
+      "ba8940d4905b04e961397eb54c6561a96cf2f781284685e913dfe4232f0abd33",
+      "47819741a61bf5eabacb1d72e236ca92e3675e3ac16249d94bbbbd1fbb41a9f4",
+      "b5390b3ecb0ae4fdb8110470cf20ddba309bf1a39891757b223e14767ac02e79",
+      "00744fc1ab10fdc5a11d41eca5466e55f96721ef4b589b9f85d42d18eeab2508",
+      "fbec023d50ead23190bfe4b479955a5433647ebc1b1020a51e47a095c45c9c51"
+    ]
+  },
+  {
+    "name": "plan.test.mjs: a pin goes stale when the prefix before it changed (e.g. after compaction)",
+    "input": {
+      "model": "claude-haiku-5-5",
+      "max_tokens": 1000,
+      "stream": true,
+      "tools": [
+        {
+          "name": "read",
+          "input_schema": {},
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "system": [
+        {
+          "type": "text",
+          "text": "x",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "SUMMARY"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "b"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "A"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "c"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "d"
+            }
+          ]
+        }
+      ]
+    },
+    "plan": {
+      "sessionTtl": "5m",
+      "pins": [
+        {
+          "name": "fork",
+          "at": {
+            "messageIndex": 2,
+            "blockIndex": 0,
+            "hash": "b5390b3ecb0ae4fdb8110470cf20ddba309bf1a39891757b223e14767ac02e79"
+          }
+        }
+      ]
+    },
+    "payload": "{\"model\":\"claude-haiku-5-5\",\"max_tokens\":1000,\"stream\":true,\"tools\":[{\"name\":\"read\",\"input_schema\":{}}],\"system\":[{\"type\":\"text\",\"text\":\"x\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"SUMMARY\"}]},{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"b\"}]},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"A\"}]},{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"c\"}]},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"d\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]}]}",
+    "head": "{\"model\":\"claude-haiku-5-5\",\"tools\":[{\"name\":\"read\",\"input_schema\":{}}],\"system\":[{\"type\":\"text\",\"text\":\"x\"}]}",
+    "markers": "[{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":4,\"blockIndex\":0}]",
+    "pins": "[{\"name\":\"fork\",\"at\":{\"messageIndex\":2,\"blockIndex\":0,\"hash\":\"b5390b3ecb0ae4fdb8110470cf20ddba309bf1a39891757b223e14767ac02e79\"},\"status\":\"stale\"}]",
+    "hashes": [
+      "0a743b8f2b3766db3f4802462b26020e5f0171633fd0071c56717fc4ea9a2ca1",
+      "c513489b2c6589abd18ab321190f0587276f24e36f26f931cfb1cd54a2146061",
+      "51a8fb4252de07c31e646d1ff4e44c05e3f3282fed65543783caddf1ab6fc430",
+      "89fefaf274736b4191136c23aa78bbad3f049a19bb028774a6d6f40630cc3685",
+      "394f60ddd379e01800c10f9329a956c13af058c11fa0541951e5586c031ea929"
+    ]
+  },
+  {
+    "name": "plan.test.mjs: a pin goes stale when the system prompt or thinking changed, even with the same messages (initial pin)",
+    "input": {
+      "model": "claude-haiku-5-5",
+      "max_tokens": 1000,
+      "stream": true,
+      "tools": [
+        {
+          "name": "read",
+          "input_schema": {},
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "system": [
+        {
+          "type": "text",
+          "text": "x",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "a"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "b"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "A"
+            }
+          ]
+        }
+      ]
+    },
+    "plan": {
+      "sessionTtl": "5m",
+      "pins": [
+        {
+          "name": "fork"
+        }
+      ]
+    },
+    "payload": "{\"model\":\"claude-haiku-5-5\",\"max_tokens\":1000,\"stream\":true,\"tools\":[{\"name\":\"read\",\"input_schema\":{}}],\"system\":[{\"type\":\"text\",\"text\":\"x\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"a\"}]},{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"b\"}]},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"A\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]}]}",
+    "head": "{\"model\":\"claude-haiku-5-5\",\"tools\":[{\"name\":\"read\",\"input_schema\":{}}],\"system\":[{\"type\":\"text\",\"text\":\"x\"}]}",
+    "markers": "[{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":2,\"blockIndex\":0}]",
+    "pins": "[{\"name\":\"fork\",\"at\":{\"messageIndex\":2,\"blockIndex\":0,\"hash\":\"b5390b3ecb0ae4fdb8110470cf20ddba309bf1a39891757b223e14767ac02e79\"},\"status\":\"placed\"}]",
+    "hashes": [
+      "ba8940d4905b04e961397eb54c6561a96cf2f781284685e913dfe4232f0abd33",
+      "47819741a61bf5eabacb1d72e236ca92e3675e3ac16249d94bbbbd1fbb41a9f4",
+      "b5390b3ecb0ae4fdb8110470cf20ddba309bf1a39891757b223e14767ac02e79"
+    ]
+  },
+  {
+    "name": "plan.test.mjs: a pin goes stale when the system prompt or thinking changed, even with the same messages (system prompt changed)",
+    "input": {
+      "model": "claude-haiku-5-5",
+      "max_tokens": 1000,
+      "stream": true,
+      "tools": [
+        {
+          "name": "read",
+          "input_schema": {},
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "system": [
+        {
+          "type": "text",
+          "text": "y",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "a"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "b"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "A"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "c"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "d"
+            }
+          ]
+        }
+      ]
+    },
+    "plan": {
+      "sessionTtl": "5m",
+      "pins": [
+        {
+          "name": "fork",
+          "at": {
+            "messageIndex": 2,
+            "blockIndex": 0,
+            "hash": "b5390b3ecb0ae4fdb8110470cf20ddba309bf1a39891757b223e14767ac02e79"
+          }
+        }
+      ]
+    },
+    "payload": "{\"model\":\"claude-haiku-5-5\",\"max_tokens\":1000,\"stream\":true,\"tools\":[{\"name\":\"read\",\"input_schema\":{}}],\"system\":[{\"type\":\"text\",\"text\":\"y\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"a\"}]},{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"b\"}]},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"A\"}]},{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"c\"}]},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"d\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]}]}",
+    "head": "{\"model\":\"claude-haiku-5-5\",\"tools\":[{\"name\":\"read\",\"input_schema\":{}}],\"system\":[{\"type\":\"text\",\"text\":\"y\"}]}",
+    "markers": "[{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":4,\"blockIndex\":0}]",
+    "pins": "[{\"name\":\"fork\",\"at\":{\"messageIndex\":2,\"blockIndex\":0,\"hash\":\"b5390b3ecb0ae4fdb8110470cf20ddba309bf1a39891757b223e14767ac02e79\"},\"status\":\"stale\"}]",
+    "hashes": [
+      "a04a4ad4419413191b347e4565becc639e6a270899a8d9eda0b776996441b361",
+      "c1a2294ba62e8460094e5e400f18910da681615a4d39578a736cffe2e5f33b5d",
+      "1fb94a4b4766343a1ce3f7c7cbb61af3b07cb37aca0d546dd91d790d791b102c",
+      "b41f46d3a655363af81f7744b1eddbc16d9dec836c5c64ee29d05fa7746eeae8",
+      "f792ed866af816b6080c696afa771b3f56e1f90c146da66b3875c52138df966b"
+    ]
+  },
+  {
+    "name": "plan.test.mjs: a pin goes stale when the system prompt or thinking changed, even with the same messages (thinking changed)",
+    "input": {
+      "model": "claude-haiku-5-5",
+      "max_tokens": 1000,
+      "stream": true,
+      "tools": [
+        {
+          "name": "read",
+          "input_schema": {},
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "system": [
+        {
+          "type": "text",
+          "text": "x",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "a"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "b"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "A"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "c"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "d"
+            }
+          ]
+        }
+      ],
+      "thinking": {
+        "type": "disabled"
+      }
+    },
+    "plan": {
+      "sessionTtl": "5m",
+      "pins": [
+        {
+          "name": "fork",
+          "at": {
+            "messageIndex": 2,
+            "blockIndex": 0,
+            "hash": "b5390b3ecb0ae4fdb8110470cf20ddba309bf1a39891757b223e14767ac02e79"
+          }
+        }
+      ]
+    },
+    "payload": "{\"model\":\"claude-haiku-5-5\",\"max_tokens\":1000,\"stream\":true,\"tools\":[{\"name\":\"read\",\"input_schema\":{}}],\"system\":[{\"type\":\"text\",\"text\":\"x\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"a\"}]},{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"b\"}]},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"A\"}]},{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"c\"}]},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"d\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]}],\"thinking\":{\"type\":\"disabled\"}}",
+    "head": "{\"model\":\"claude-haiku-5-5\",\"tools\":[{\"name\":\"read\",\"input_schema\":{}}],\"system\":[{\"type\":\"text\",\"text\":\"x\"}],\"thinking\":{\"type\":\"disabled\"}}",
+    "markers": "[{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":4,\"blockIndex\":0}]",
+    "pins": "[{\"name\":\"fork\",\"at\":{\"messageIndex\":2,\"blockIndex\":0,\"hash\":\"b5390b3ecb0ae4fdb8110470cf20ddba309bf1a39891757b223e14767ac02e79\"},\"status\":\"stale\"}]",
+    "hashes": [
+      "87ebb69a06f1d68aeff98b7b0b11bd3bb0a180a61d4c736a2418b29bbee0fc89",
+      "ac1f9c30327cd157e13da6fcc92a7cb4aedfaa692b5f55f8f6de99aa9db27a7e",
+      "ac64461e582722c1eaeff6d9144b910e4675520ed9315adeeaabd2a7ab3da6f0",
+      "1edafb7800b2475a53b493797031caa69ea130ee4fec570b3730809e9aaad3ae",
+      "f9b23662533049acf9196f7fc942df701ef567da2fd6f68529664469053785f4"
+    ]
+  },
+  {
+    "name": "plan.test.mjs: over budget, the oldest pin is dropped and the total stays at 4 (old and new held pins)",
+    "input": {
+      "model": "claude-haiku-5-5",
+      "max_tokens": 1000,
+      "stream": true,
+      "tools": [
+        {
+          "name": "read",
+          "input_schema": {},
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "system": [
+        {
+          "type": "text",
+          "text": "You are an expert coding assistant operating inside pi.\n\n<tools>\n- read: Read\n</tools>\n\n<rules>\n- Be concise\n</rules>\n\n<project_context>\nProject-specific instructions and guidelines:\n\n<project_instructions path=\"/global/AGENTS.md\">\ng\n</project_instructions>\n\n<project_instructions path=\"/work/a/AGENTS.md\">\np\n</project_instructions>\n</project_context>\n\n<skills>\n- s\n</skills>\n\n<cwd>\n/work/a\n</cwd>",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "p1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "x"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "p2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "y"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "tail"
+            }
+          ]
+        }
+      ]
+    },
+    "plan": {
+      "sessionTtl": "5m",
+      "pins": [
+        {
+          "name": "old",
+          "at": {
+            "messageIndex": 0,
+            "blockIndex": 0,
+            "hash": "4480856a147d5b90fb6caedb7e6051a65709d79b44c01be7ddf7c64b3b87459b"
+          }
+        },
+        {
+          "name": "new",
+          "at": {
+            "messageIndex": 2,
+            "blockIndex": 0,
+            "hash": "dac21ab83353ce5701ee1d43f3237a0b61572b29cd6e12c034253ce3cf143114"
+          }
+        }
+      ]
+    },
+    "boundaries": {
+      "You are an expert coding assistant operating inside pi.\n\n<tools>\n- read: Read\n</tools>\n\n<rules>\n- Be concise\n</rules>\n\n<project_context>\nProject-specific instructions and guidelines:\n\n<project_instructions path=\"/global/AGENTS.md\">\ng\n</project_instructions>\n\n<project_instructions path=\"/work/a/AGENTS.md\">\np\n</project_instructions>\n</project_context>\n\n<skills>\n- s\n</skills>\n\n<cwd>\n/work/a\n</cwd>": 257
+    },
+    "payload": "{\"model\":\"claude-haiku-5-5\",\"max_tokens\":1000,\"stream\":true,\"tools\":[{\"name\":\"read\",\"input_schema\":{}}],\"system\":[{\"type\":\"text\",\"text\":\"You are an expert coding assistant operating inside pi.\\n\\n<tools>\\n- read: Read\\n</tools>\\n\\n<rules>\\n- Be concise\\n</rules>\\n\\n<project_context>\\nProject-specific instructions and guidelines:\\n\\n<project_instructions path=\\\"/global/AGENTS.md\\\">\\ng\\n</project_instructions>\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}},{\"type\":\"text\",\"text\":\"\\n\\n<project_instructions path=\\\"/work/a/AGENTS.md\\\">\\np\\n</project_instructions>\\n</project_context>\\n\\n<skills>\\n- s\\n</skills>\\n\\n<cwd>\\n/work/a\\n</cwd>\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"p1\"}]},{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"x\"}]},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"p2\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]},{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"y\"}]},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"tail\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]}]}",
+    "head": "{\"model\":\"claude-haiku-5-5\",\"tools\":[{\"name\":\"read\",\"input_schema\":{}}],\"system\":[{\"type\":\"text\",\"text\":\"You are an expert coding assistant operating inside pi.\\n\\n<tools>\\n- read: Read\\n</tools>\\n\\n<rules>\\n- Be concise\\n</rules>\\n\\n<project_context>\\nProject-specific instructions and guidelines:\\n\\n<project_instructions path=\\\"/global/AGENTS.md\\\">\\ng\\n</project_instructions>\\n\\n<project_instructions path=\\\"/work/a/AGENTS.md\\\">\\np\\n</project_instructions>\\n</project_context>\\n\\n<skills>\\n- s\\n</skills>\\n\\n<cwd>\\n/work/a\\n</cwd>\"}]}",
+    "markers": "[{\"layer\":\"global\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":1},{\"layer\":\"pin\",\"ttl\":\"5m\",\"name\":\"new\",\"messageIndex\":2,\"blockIndex\":0},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":4,\"blockIndex\":0}]",
+    "pins": "[{\"name\":\"old\",\"at\":{\"messageIndex\":0,\"blockIndex\":0,\"hash\":\"4480856a147d5b90fb6caedb7e6051a65709d79b44c01be7ddf7c64b3b87459b\"},\"status\":\"dropped\"},{\"name\":\"new\",\"at\":{\"messageIndex\":2,\"blockIndex\":0,\"hash\":\"dac21ab83353ce5701ee1d43f3237a0b61572b29cd6e12c034253ce3cf143114\"},\"status\":\"placed\"}]",
+    "hashes": [
+      "4480856a147d5b90fb6caedb7e6051a65709d79b44c01be7ddf7c64b3b87459b",
+      "1277f9e1e78290e6fb2bfe8718eda3b577141f0034add239e7a0ecdd52bf1687",
+      "dac21ab83353ce5701ee1d43f3237a0b61572b29cd6e12c034253ce3cf143114",
+      "ed2fe6636375e5bf264a8ed15ca1536812709baad609ef430ac7885b28d0488f",
+      "5f471b6c98698dadc9fd8b35c8f715e03a9896dd0567f92e7da8e44b5297b2ff"
+    ]
+  },
+  {
+    "name": "plan.test.mjs: string content is normalized to one text block so its prefix bytes stay stable",
+    "input": {
+      "model": "claude-haiku-5-5",
+      "max_tokens": 1000,
+      "stream": true,
+      "tools": [
+        {
+          "name": "read",
+          "input_schema": {},
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "system": [
+        {
+          "type": "text",
+          "text": "x",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": "hello"
+        }
+      ]
+    },
+    "plan": {
+      "sessionTtl": "5m"
+    },
+    "payload": "{\"model\":\"claude-haiku-5-5\",\"max_tokens\":1000,\"stream\":true,\"tools\":[{\"name\":\"read\",\"input_schema\":{}}],\"system\":[{\"type\":\"text\",\"text\":\"x\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"hello\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]}]}",
+    "head": "{\"model\":\"claude-haiku-5-5\",\"tools\":[{\"name\":\"read\",\"input_schema\":{}}],\"system\":[{\"type\":\"text\",\"text\":\"x\"}]}",
+    "markers": "[{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":0,\"blockIndex\":0}]",
+    "pins": "[]",
+    "hashes": [
+      "e8d9920fe2ca1239b878e0898a4489e16dcb2d9057110ea8a7b9fa725b16c05b"
+    ]
+  },
+  {
+    "name": "three held pins, two system layers, distinct tail",
+    "input": {
+      "future_cache_key": {
+        "b": 2,
+        "a": 1
+      },
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "one"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "two"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "three"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "tail"
+            }
+          ]
+        }
+      ],
+      "cache_control": {
+        "type": "ephemeral"
+      },
+      "model": "claude-example",
+      "system": [
+        {
+          "type": "text",
+          "text": "global\n"
+        },
+        {
+          "type": "text",
+          "text": "project"
+        }
+      ],
+      "max_tokens": 100,
+      "stream": true,
+      "tools": [
+        {
+          "name": "read",
+          "cache_control": {
+            "type": "ephemeral"
+          },
+          "input_schema": {}
+        }
+      ]
+    },
+    "plan": {
+      "sessionTtl": "5m",
+      "pins": [
+        {
+          "name": "pin-0",
+          "at": {
+            "messageIndex": 0,
+            "blockIndex": 0,
+            "hash": "83f61d640ecdd2a7b9e76f6c32151f2c8b96f760d2d0f49212a94e6218617546"
+          }
+        },
+        {
+          "name": "pin-1",
+          "at": {
+            "messageIndex": 1,
+            "blockIndex": 0,
+            "hash": "861439a01c99c1658cfab842b7d4908135991c319ec16776c09ff93ee55b4271"
+          }
+        },
+        {
+          "name": "pin-2",
+          "at": {
+            "messageIndex": 2,
+            "blockIndex": 0,
+            "hash": "a46920dbf12a647a184cd873b284275a57be85adb98f168970690c49a7e1a11a"
+          }
+        }
+      ]
+    },
+    "boundaries": {
+      "global\n": 7,
+      "project": -1
+    },
+    "payload": "{\"future_cache_key\":{\"b\":2,\"a\":1},\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"one\"}]},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"two\"}]},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"three\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"tail\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]}],\"model\":\"claude-example\",\"system\":[{\"type\":\"text\",\"text\":\"global\\n\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}},{\"type\":\"text\",\"text\":\"project\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"max_tokens\":100,\"stream\":true,\"tools\":[{\"name\":\"read\",\"input_schema\":{}}]}",
+    "head": "{\"future_cache_key\":{\"b\":2,\"a\":1},\"model\":\"claude-example\",\"system\":[{\"type\":\"text\",\"text\":\"global\\nproject\"}],\"tools\":[{\"name\":\"read\",\"input_schema\":{}}]}",
+    "markers": "[{\"layer\":\"global\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":1},{\"layer\":\"pin\",\"ttl\":\"5m\",\"name\":\"pin-2\",\"messageIndex\":2,\"blockIndex\":0},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":3,\"blockIndex\":0}]",
+    "pins": "[{\"name\":\"pin-0\",\"at\":{\"messageIndex\":0,\"blockIndex\":0,\"hash\":\"83f61d640ecdd2a7b9e76f6c32151f2c8b96f760d2d0f49212a94e6218617546\"},\"status\":\"dropped\"},{\"name\":\"pin-1\",\"at\":{\"messageIndex\":1,\"blockIndex\":0,\"hash\":\"861439a01c99c1658cfab842b7d4908135991c319ec16776c09ff93ee55b4271\"},\"status\":\"dropped\"},{\"name\":\"pin-2\",\"at\":{\"messageIndex\":2,\"blockIndex\":0,\"hash\":\"a46920dbf12a647a184cd873b284275a57be85adb98f168970690c49a7e1a11a\"},\"status\":\"placed\"}]",
+    "hashes": [
+      "83f61d640ecdd2a7b9e76f6c32151f2c8b96f760d2d0f49212a94e6218617546",
+      "861439a01c99c1658cfab842b7d4908135991c319ec16776c09ff93ee55b4271",
+      "a46920dbf12a647a184cd873b284275a57be85adb98f168970690c49a7e1a11a",
+      "5a9c79310f4173f7495e93c47d2afdbe0508e0e0091d106cdab95269e53f175c"
+    ]
+  },
+  {
+    "name": "head order, top-level marker, adjacent text metadata",
+    "input": {
+      "future_cache_key": {
+        "b": 2,
+        "a": 1
+      },
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "one"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "two"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "three"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "tail"
+            }
+          ]
+        }
+      ],
+      "cache_control": {
+        "type": "ephemeral"
+      },
+      "model": "claude-example",
+      "system": [
+        {
+          "type": "text",
+          "text": "a",
+          "cache_control": {
+            "type": "ephemeral"
+          }
+        },
+        {
+          "type": "text",
+          "text": "b"
+        },
+        {
+          "type": "text",
+          "text": "c",
+          "citations": []
+        },
+        {
+          "type": "text",
+          "text": "d",
+          "citations": []
+        }
+      ],
+      "max_tokens": 100,
+      "stream": true,
+      "tools": [
+        {
+          "name": "read",
+          "cache_control": {
+            "type": "ephemeral"
+          },
+          "input_schema": {}
+        }
+      ]
+    },
+    "plan": {
+      "sessionTtl": "1h"
+    },
+    "payload": "{\"future_cache_key\":{\"b\":2,\"a\":1},\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"one\"}]},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"two\"}]},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"three\"}]},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"tail\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}]}],\"model\":\"claude-example\",\"system\":[{\"type\":\"text\",\"text\":\"a\"},{\"type\":\"text\",\"text\":\"b\"},{\"type\":\"text\",\"text\":\"c\",\"citations\":[]},{\"type\":\"text\",\"text\":\"d\",\"citations\":[],\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"max_tokens\":100,\"stream\":true,\"tools\":[{\"name\":\"read\",\"input_schema\":{}}]}",
+    "head": "{\"future_cache_key\":{\"b\":2,\"a\":1},\"model\":\"claude-example\",\"system\":[{\"type\":\"text\",\"text\":\"ab\"},{\"type\":\"text\",\"text\":\"cd\",\"citations\":[]}],\"tools\":[{\"name\":\"read\",\"input_schema\":{}}]}",
+    "markers": "[{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":3},{\"layer\":\"tail\",\"ttl\":\"1h\",\"messageIndex\":3,\"blockIndex\":0}]",
+    "pins": "[]",
+    "hashes": [
+      "e433b4c8c319f82767642b4c68f3ac12e599ca1ec1cf98e18a14202bc2c9b018",
+      "d1dc0641c3165c4c4f398076e7eb29ac1347884ddff8d85defb5580a49fc2ace",
+      "a35190b8af77c49b064be47348ac7f25d7d16b5543d8be2ae33e2c168ee9492e",
+      "905aa1f83c251e94f3faf56d80f62081bd1c4c926566c7601562a2b48ec8416f"
+    ]
+  },
+  {
+    "name": "string system and content, unresolved replay",
+    "input": {
+      "future_cache_key": {
+        "b": 2,
+        "a": 1
+      },
+      "messages": [
+        {
+          "role": "user",
+          "content": "hello"
+        }
+      ],
+      "cache_control": {
+        "type": "ephemeral"
+      },
+      "model": "claude-example",
+      "system": "system",
+      "max_tokens": 100,
+      "stream": true,
+      "tools": [
+        {
+          "name": "read",
+          "cache_control": {
+            "type": "ephemeral"
+          },
+          "input_schema": {}
+        }
+      ]
+    },
+    "plan": {
+      "sessionTtl": "5m",
+      "capturePending": false,
+      "pins": [
+        {
+          "name": "pending"
+        }
+      ]
+    },
+    "payload": "{\"future_cache_key\":{\"b\":2,\"a\":1},\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"hello\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"5m\"}}]}],\"model\":\"claude-example\",\"system\":[{\"type\":\"text\",\"text\":\"system\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"max_tokens\":100,\"stream\":true,\"tools\":[{\"name\":\"read\",\"input_schema\":{}}]}",
+    "head": "{\"future_cache_key\":{\"b\":2,\"a\":1},\"model\":\"claude-example\",\"system\":[{\"type\":\"text\",\"text\":\"system\"}],\"tools\":[{\"name\":\"read\",\"input_schema\":{}}]}",
+    "markers": "[{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":0},{\"layer\":\"tail\",\"ttl\":\"5m\",\"messageIndex\":0,\"blockIndex\":0}]",
+    "pins": "[{\"name\":\"pending\",\"status\":\"unresolved\"}]",
+    "hashes": [
+      "7e6b451223ce4e0ce5951f8ec4c2aeef3fa75067e9cf63b3915f57ff8ae0d537"
+    ]
+  },
+  {
+    "name": "assistant tail, pending and invalid pin names",
+    "input": {
+      "future_cache_key": {
+        "b": 2,
+        "a": 1
+      },
+      "messages": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "done"
+            }
+          ]
+        }
+      ],
+      "cache_control": {
+        "type": "ephemeral"
+      },
+      "model": "claude-example",
+      "system": [
+        {
+          "type": "text",
+          "text": "global\n"
+        },
+        {
+          "type": "text",
+          "text": "project"
+        }
+      ],
+      "max_tokens": 100,
+      "stream": true,
+      "tools": [
+        {
+          "name": "read",
+          "cache_control": {
+            "type": "ephemeral"
+          },
+          "input_schema": {}
+        }
+      ]
+    },
+    "plan": {
+      "sessionTtl": "5m",
+      "pins": [
+        null,
+        {
+          "name": ""
+        },
+        {
+          "name": "pending"
+        }
+      ]
+    },
+    "payload": "{\"future_cache_key\":{\"b\":2,\"a\":1},\"messages\":[{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}],\"model\":\"claude-example\",\"system\":[{\"type\":\"text\",\"text\":\"global\\n\"},{\"type\":\"text\",\"text\":\"project\",\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}],\"max_tokens\":100,\"stream\":true,\"tools\":[{\"name\":\"read\",\"input_schema\":{}}]}",
+    "head": "{\"future_cache_key\":{\"b\":2,\"a\":1},\"model\":\"claude-example\",\"system\":[{\"type\":\"text\",\"text\":\"global\\nproject\"}],\"tools\":[{\"name\":\"read\",\"input_schema\":{}}]}",
+    "markers": "[{\"layer\":\"project\",\"ttl\":\"1h\",\"system\":1}]",
+    "pins": "[{\"name\":\"pending\",\"status\":\"unresolved\"}]",
+    "hashes": [
+      "fbcd85267fb91aca80740f331ebd16f72d2f1f7ec0ac7acac05784c58474279a"
+    ]
+  }
+]

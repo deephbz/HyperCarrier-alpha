@@ -82,7 +82,7 @@ async function probe(page: Page) {
 	return list;
 }
 
-/** The fields of each surface a phone owner opens: the Session, Find, ⌘K, the command palette, New Session, Rarebit. */
+/** The fields of each surface a phone owner opens: the Session, Find, ⌘K, the command palette, New Session, Arc, Rarebit. */
 async function surfaces(page: Page): Promise<Map<string, Field>> {
 	const seen = new Map<string, Field>();
 	const take = async (where: string, expect: string[]) => {
@@ -104,6 +104,9 @@ async function surfaces(page: Page): Promise<Map<string, Field>> {
 		await page.keyboard.press("Escape");
 		await page.getByLabel(expect[0], { exact: true }).waitFor({ state: "detached" }).catch(() => {});
 	}
+	await page.evaluate(route => { location.hash = route; }, `${SESSION}?p=arc`);
+	await page.getByLabel("Key point scope").waitFor();
+	await take("Arc", ["Key point scope"]);
 	await page.evaluate(route => { location.hash = route; }, `${SESSION}?p=rarebit`);
 	await page.getByRole("button", { name: "Models", exact: true }).click();
 	await page.getByLabel("Side ask model").waitFor();

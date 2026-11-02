@@ -2,9 +2,9 @@
 // Session's place, its usage and its full model ID. The transcript header beside the card already names the Session.
 import type { ThreadSummary } from "../../src/shared/protocol.ts";
 
-export type HudTone = "dim" | undefined;
-export type HudSpan = { text: string; tone?: HudTone };
-export type HudView = { lines: HudSpan[][]; modelId?: string };
+type HudTone = "dim" | undefined;
+type HudSpan = { text: string; tone?: HudTone };
+type HudView = { lines: HudSpan[][]; modelId?: string };
 
 export const SEPARATOR = " · ";
 const ABSENT = "—";

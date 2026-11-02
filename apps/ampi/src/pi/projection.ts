@@ -1,6 +1,7 @@
 import type { JsonValue } from "../node/durable-types.ts";
 import { injectedMessage, toolArgsPreview } from "../shared/entry-shapes.ts";
 import type { PiBlock, PiEntry } from "../shared/protocol.ts";
+import { TOOL_TEXT_LIMIT } from "../shared/tool-text-limit.ts";
 type ReaderEntry = {
 	ref: string;
 	id: string;
@@ -20,7 +21,6 @@ type ReaderEntry = {
 	error?: string;
 };
 
-const TOOL_TEXT_LIMIT = 48_000;
 const clip = (text: string, limit: number) => (text.length <= limit ? { text, truncated: false } : { text: text.slice(0, limit), truncated: true });
 
 /**

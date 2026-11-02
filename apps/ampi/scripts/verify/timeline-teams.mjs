@@ -16,7 +16,7 @@ const HOUR = 3600_000;
  * Team "atlas", all closed (recorded Memberships whose panes are gone), and one closed solo Session, with start times
  * interleaved: worker-1 at -5 h, solo at -4 h, lead at -3 h, worker-2 at -1 h.
  */
-export function addClosedTeam(state) {
+function addClosedTeam(state) {
   const now = Date.now(), dir = join(state.demo, 'agent/sessions/--work-atlas--');
   mkdirSync(dir, { recursive: true });
   const session = (name, startAgo) => {

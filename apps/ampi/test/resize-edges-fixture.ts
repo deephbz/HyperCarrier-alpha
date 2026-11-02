@@ -89,10 +89,11 @@ export const ENGINES: [string, BrowserType, () => string | undefined][] = [
 /**
  * A mobile WebKit document starts at a 980 px layout viewport and takes the phone's width only when its meta viewport
  * applies; a slow machine can draw the transcript first. Until then the page is a desktop page, and App shows the
- * desktop's saved sidebar. So each navigation of a phone page returns only once the page has the phone's width.
+ * desktop's saved sidebar. App then handles the resize and draws again, which a busy page delays further. So each
+ * navigation of a phone page returns only once the page has the phone's width and App has drawn the drawer layout.
  */
 function phoneWidth(page: Page) {
-	const settled = () => page.waitForFunction((width) => innerWidth === width, page.viewportSize()!.width);
+	const settled = () => page.waitForFunction((width) => innerWidth === width && (document.querySelector(".app")?.classList.contains("side-overlay") ?? true), page.viewportSize()!.width).catch(layoutMiss(page, "the phone page has the phone's width and the drawer layout"));
 	for (const name of ["goto", "reload"] as const) {
 		const navigate = page[name].bind(page) as (...args: unknown[]) => Promise<unknown>;
 		(page as unknown as Record<string, unknown>)[name] = async (...args: unknown[]) => { const response = await navigate(...args); await settled(); return response; };
@@ -151,10 +152,33 @@ export async function read(page: Page, side: Side) {
 	}, [side, EDGES[side].css, EDGES[side].key] as const);
 }
 
-/** Waits until the sides match the width: a phone width closes the sidebar drawer itself (App.tsx oneSide). */
+/**
+ * Waits until App has drawn the width's layout: `.app` carries `side-overlay` exactly when the narrow rule applies, and
+ * a phone width closes the sidebar drawer itself (App.tsx oneSide).
+ */
 export async function sidesSettled(page: Page) {
-	await page.waitForFunction(() => getComputedStyle(document.documentElement).getPropertyValue("--side-overlay").trim() !== "1" || document.querySelector(".app")!.classList.contains("sidebar-hidden"));
+	await page.waitForFunction(() => {
+		const phone = getComputedStyle(document.documentElement).getPropertyValue("--side-overlay").trim() === "1";
+		const app = document.querySelector(".app")!;
+		return app.classList.contains("side-overlay") === phone && (!phone || app.classList.contains("sidebar-hidden"));
+	}).catch(layoutMiss(page, "App draws the width's layout"));
 }
+
+/** The facts a layout wait reads: the widths, the CSS narrow rule, App's classes and the saved desktop choice. */
+export function layoutState(page: Page) {
+	return page.evaluate(() => ({
+		innerWidth,
+		clientWidth: document.documentElement.clientWidth,
+		sideOverlay: getComputedStyle(document.documentElement).getPropertyValue("--side-overlay").trim(),
+		app: document.querySelector(".app")?.className.replace(/\s+/g, " ").trim() ?? null,
+		saved: localStorage.getItem("ampi.sidebar.hidden"),
+	})).catch((error: unknown) => `unreadable: ${error}`);
+}
+
+/** A catch for a layout wait: its timeout names what it waited for and the layout state then. */
+export const layoutMiss = (page: Page, what: string) => async (error: unknown): Promise<never> => {
+	throw new Error(`${what}; layout ${JSON.stringify(await layoutState(page))}`, { cause: error });
+};
 
 export async function eventually(check: () => Promise<boolean>, what: string) {
 	for (let i = 0; i < 40; i++) { if (await check()) return; await new Promise((r) => setTimeout(r, 50)); }

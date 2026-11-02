@@ -1021,7 +1021,7 @@ function report(status, codes = []) {
 // providers are not visible. Sent only when the files change.
 // The Auto Compact budget is hc-auto-compact's own resolution (resolve.mjs), which the hub sends as a data: module
 // (cfg.autoCompactResolve; apps/ampi/src/pi/agent-modules.ts). Each file's stamp is `mtime:size`, or `-` when it is
-// absent, as AmPi's fileStamp (src/node/pi-config.ts).
+// absent.
 let limitsKey = '', limitsSent = '', resolveAutoCompact = null;
 function readLimits() {
   const files = ['models-store.json', 'models.json', 'settings.json'].map((f) => path.join(agentDir, f));

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { after, test, type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium, webkit, type Browser, type Page } from "playwright";
+import { loadBudget, PAGE_LOAD_MS } from "./page-load.ts";
 import { build } from "vite";
 import react from "@vitejs/plugin-react";
 // @ts-ignore: shared browser discovery is plain ESM.
@@ -78,6 +79,7 @@ async function open(t: TestContext, engine: Engine, pane: "thread" | "rarebit" |
 	const page = await browser.newPage({ viewport: { width: 1000, height: 700 } });
 	t.after(() => page.context().close());
 	page.setDefaultTimeout(3000);
+	loadBudget(page);
 	const css = readFileSync(join(web, "src/styles.css"), "utf8");
 	await page.route("**/*", (route) => {
 		const url = new URL(route.request().url());
@@ -98,8 +100,8 @@ async function open(t: TestContext, engine: Engine, pane: "thread" | "rarebit" |
 		});
 	});
 	await page.goto(`${ORIGIN}/`);
-	if (pane === "thread") await page.locator('[data-entry="e0"]').waitFor();
-	if (pane === "rarebit") await page.locator("[data-rarebit=r39]").waitFor();
+	if (pane === "thread") await page.locator('[data-entry="e0"]').waitFor({ timeout: PAGE_LOAD_MS });
+	if (pane === "rarebit") await page.locator("[data-rarebit=r39]").waitFor({ timeout: PAGE_LOAD_MS });
 	if (display) await page.evaluate(([display, region]) => {
 		document.documentElement.style.zoom = String(display.overall);
 		if (display.region) document.querySelector<HTMLElement>(`[data-region="${region}"]`)!.style.zoom = String(display.region);

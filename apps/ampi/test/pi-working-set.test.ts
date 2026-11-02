@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { WorkingSet } from "../src/pi/working-set.ts";
-import type { FindAsk } from "../src/pi/search.ts";
+import type { FindAsk } from "../src/shared/search.ts";
 import { openWorkingSet, readWorkingSet } from "../src/pi/working-set-db.ts";
 import { type Source, TOOL_ARGS_CHARS } from "../src/pi/working-set-types.ts";
 import { selectRarebits, measureRarebits } from "@hypercarrier/rarebit/core";
@@ -44,7 +44,7 @@ test("working set: tail limits cannot truncate full-branch statistics, Rarebit s
  assert.equal(data.rarebit.stats.user + data.rarebit.stats.stop, 650);
  const snapshot = store.rarebitSnapshot(source.path, 100_000);
  assert.equal(snapshot.count, 650); assert.ok(snapshot.omittedChars > 0); assert.equal(snapshot.context.length, 100_000);
- assert.ok(data.arc.chunks.some((c) => c.firstEntryId === "e0"));
+ assert.ok(store.arcSource(source.path, "test/pi:long", data.version).items.some(i => i.id === "e0"));
 });
 
 test("working set: an around page always holds its target, and the Rarebit page of a linked entry holds its item", async (t) => {

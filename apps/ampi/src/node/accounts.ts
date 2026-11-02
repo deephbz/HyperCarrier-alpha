@@ -45,7 +45,7 @@ function sameCredential(a: Credential | undefined, b: Credential): boolean {
 }
 
 /** One summarized error message: providers often return a JSON body. */
-export function shortError(text: string): string {
+function shortError(text: string): string {
 	const message = /"message"\s*:\s*"([^"]+)"/.exec(text)?.[1];
 	const status = /\b(4\d\d|5\d\d)\b/.exec(text)?.[1];
 	return `${message ?? text.split("\n")[0]!.slice(0, 160)}${status && message ? ` (${status})` : ""}`;
@@ -55,7 +55,7 @@ export function shortError(text: string): string {
  * Confirm a provider's credential with the smallest request its cheapest model accepts. `ok: false` when the
  * provider rejects the credential; `ok: undefined` when it cannot be reached (offline, timeout), which proves nothing.
  */
-export async function verifyProvider(models: MutableModels, providerId: string): Promise<{ ok: boolean | undefined; reason?: string }> {
+async function verifyProvider(models: MutableModels, providerId: string): Promise<{ ok: boolean | undefined; reason?: string }> {
 	const provider = models.getProviders().find((p) => p.id === providerId);
 	const candidates = [...(provider?.getModels() ?? [])].sort((a, b) => (a.cost?.input ?? 0) - (b.cost?.input ?? 0));
 	const model = candidates[0];

@@ -1,5 +1,6 @@
 // Search owns extraction, tokenizer policy, and scope labels. The hub retains no
 // text corpus. Fleet reads FTS; in-Session find scans one native entry at a time.
+import type { SearchHit, SearchResult, FindWindow, FindAsk } from "../shared/search.ts";
 import type { DatabaseSync } from "node:sqlite";
 // @ts-ignore shared reader is plain ESM
 import { openPiSessionRange } from "../../../trace-analytics/src/sources/transcript-range.mjs";
@@ -9,15 +10,12 @@ import { derivedVersion, indexFile, type Source } from "./working-set-types.ts";
 import type { PiReaderEntry } from "./views/types.ts";
 
 export const PROSE_KINDS = ["human", "assistant", "compaction"] as const;
-export const FLEET_SCOPE = "Indexed active branches retained by this hub (96 h by default, plus live/open Sessions). Unindexed copies and invalid records are not searched. Searches human turns, agent replies and compaction summaries. Excludes thinking, tools, injected messages, branch summaries and uncopied history. Word matching; indexed CJK bigrams. Use K5 tools for older history; K5 search is not full-transcript search.";
-export const FIND_SCOPE = "This Session’s copied active branch. Case-insensitive substring search covers user text, replies, thinking, tool calls/results, bash command/output, custom messages and summaries. Excludes images, non-text metadata, inactive branches and uncopied bytes.";
-/** Session Find adds `prose` (the match is in user or agent text), `at` (scan position) and `prompt` (the user entry it answers). */
-export type SearchHit = { entry: string; ref: string; threadId: string; snippet: string; kind?: string; title?: string; version: string; prose?: boolean; at?: number; prompt?: string };
-export type SearchResult = { hits: SearchHit[]; more: boolean; scope: string; asOf: number | null; total?: number; proseTotal?: number; windows?: { all: FindWindow; prose: FindWindow }; anchored?: boolean; scanned?: number; invalidLines?: number; coverage?: { indexed: number; notIndexed: number; stale: number; invalidLines: number; updating?: number } };
+const FLEET_SCOPE = "Indexed active branches retained by this hub (96 h by default, plus live/open Sessions). Unindexed copies and invalid records are not searched. Searches human turns, agent replies and compaction summaries. Excludes thinking, tools, injected messages, branch summaries and uncopied history. Word matching; indexed CJK bigrams. Use K5 tools for older history; K5 search is not full-transcript search.";
+const FIND_SCOPE = "This Session’s copied active branch. Case-insensitive substring search covers user text, replies, thinking, tool calls/results, bash command/output, custom messages and summaries. Excludes images, non-text metadata, inactive branches and uncopied bytes.";
 const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+/gu;
 const encoded = (a: string, b: string) => `u${a.codePointAt(0)!.toString(16)}u${b.codePointAt(0)!.toString(16)}`;
 function grams(run: string) { const c = Array.from(run); return c.slice(1).map((b, i) => encoded(c[i]!, b)); }
-export function cjkBigrams(text: string): string { return [...text.matchAll(CJK)].flatMap(([run]) => grams(run)).join(" "); }
+function cjkBigrams(text: string): string { return [...text.matchAll(CJK)].flatMap(([run]) => grams(run)).join(" "); }
 export function queryText(query: string): string {
  const q = query.trim();
  if (!q || q.length > 500) throw new Error("Enter 1–500 search characters.");
@@ -77,7 +75,7 @@ export function forgetSearchBatch(db: DatabaseSync, path: string, limit: number)
  return Number(db.prepare(`DELETE FROM prose_path WHERE rowid IN (${batch})`).run(path, limit).changes);
 }
 /** User and agent text, and compaction summaries: the prose that fleet search indexes and Session Find scopes to by default. */
-export function proseText(e: PiReaderEntry): string {
+function proseText(e: PiReaderEntry): string {
  if (!(PROSE_KINDS as readonly string[]).includes(e.kind)) return "";
  return e.kind === "compaction" ? e.summary ?? "" : (e.blocks ?? []).filter((b) => b.type === "text").map((b) => b.text ?? "").join("\n");
 }
@@ -126,17 +124,6 @@ export function fleetSearch(db: DatabaseSync, query: string): SearchResult {
 }
 /** A Find window holds at most this many hits of one scope; at most half of them lie behind `from` when enough lie after. */
 const FIND_WINDOW = 200;
-/**
- * One scope's Find window: its hits' scan positions (`first`..`last`), the matches before it (`skipped`), its length
- * (`size`) and the index of its first match at or after `from` (`start`; equal to `size` when none lies after).
- * Match k of the window is match `skipped + k` of the scope.
- */
-export type FindWindow = { first: number; last: number; skipped: number; start: number; size: number };
-/**
- * Where a Find window lies: around the entry `from`, at the branch's end (`tail`), or at its start (neither). The hub
- * owns the branch's end; a client never guesses it.
- */
-export type FindAsk = { from?: string; tail?: boolean };
 /** Keeps one scope's window in one pass. */
 function findWindow(ask: FindAsk) {
  const head: SearchHit[] = [], behind: SearchHit[] = [], after: SearchHit[] = [];

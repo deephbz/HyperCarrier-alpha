@@ -22,7 +22,6 @@ const SESSION = "#/h/devbox/t/pi%3Asess-lead";
 const PAGES: [string, string, string][] = [
 	["Overview", "#/v/overview", '.main .topbar b:text-is("Overview")'],
 	["Timeline", "#/v/timeline", ".cos-axis time"],
-	["Arcs", "#/v/arcs", "main.cos-page"],
 	["Session", SESSION, ".transcript [data-entry]"],
 ];
 const WIDE = `<table><thead><tr>${"<th>column</th>".repeat(10)}</tr></thead><tbody><tr>${"<td>wordwordword</td>".repeat(10)}</tr></tbody></table>`
@@ -228,20 +227,28 @@ for (const [engine, type, path] of ENGINES) {
 		const page = await open(t, engine, type, path(), { route: SESSION, context: phone(390) });
 		await go(page, "#/v/timeline", ".cos-stream-row");
 		await page.waitForFunction(() => document.querySelector<HTMLElement>(".cos-scroll > div[style]")!.offsetHeight >= 40 * 56, undefined, { timeout: 30_000 });
-		const view = await page.evaluate(async () => {
+		// Put lane 26 under the stuck axis; the screen then shows lanes past the first window's 28.
+		const at = await page.evaluate(() => {
+			const main = document.querySelector<HTMLElement>("main.cos-page")!;
+			main.scrollTop += document.querySelector(".cos-axis")!.getBoundingClientRect().top - main.getBoundingClientRect().top + 26 * 56;
+			return main.scrollTop;
+		});
+		// The scroll event sets the window's offset and React commits it in a later task, which a loaded runner delays
+		// past any fixed number of frames. The test waits for that render: the window no longer starts at lane 0.
+		await page.waitForFunction(() => {
+			const top = document.querySelector(".cos-scroll > div[style]")!.getBoundingClientRect().top;
+			const row = document.querySelector(".cos-stream-row");
+			return row !== null && Math.round((row.getBoundingClientRect().top - top) / 56) > 0;
+		});
+		const view = await page.evaluate((at) => {
 			const main = document.querySelector<HTMLElement>("main.cos-page")!;
 			const lanes = document.querySelector<HTMLElement>(".cos-scroll > div[style]")!;
-			const frame = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-			// Put lane 26 under the stuck axis; the screen then shows lanes past the first window's 28.
-			main.scrollTop += document.querySelector(".cos-axis")!.getBoundingClientRect().top - main.getBoundingClientRect().top + 26 * 56;
-			const at = main.scrollTop;
-			await frame();
 			const axis = document.querySelector(".cos-axis")!.getBoundingClientRect(), screen = main.getBoundingClientRect();
 			const top = lanes.getBoundingClientRect().top;
 			const lanesInView = [...document.querySelectorAll(".cos-stream-row")].map((row) => row.getBoundingClientRect())
 				.filter((r) => r.bottom > axis.bottom && r.top < screen.bottom).map((r) => Math.round((r.top - top) / 56)).sort((a, b) => a - b);
 			return { held: main.scrollTop === at, lanesInView, want: Math.min(Math.ceil((screen.bottom - axis.bottom) / 56), Math.round(lanes.offsetHeight / 56) - 26) };
-		});
+		}, at);
 		assert.ok(view.held, "the re-render keeps the page's scroll place");
 		assert.equal(view.lanesInView[0], 26, "the lane under the axis is lane 26");
 		// Every lane between the axis and the screen bottom renders: no blank band.

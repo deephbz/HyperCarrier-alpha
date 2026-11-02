@@ -1,22 +1,12 @@
 // Model access for one node: pi-ai's built-in providers with credentials shared with pi (auth.json and the usual
 // environment variables), plus the offline ampi-sim provider.
 
+import type { ModelChoice } from "../shared/models.ts";
 import type { CredentialStore } from "@earendil-works/pi-ai";
 import { createModels, type MutableModels } from "@earendil-works/pi-ai/models";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { FileCredentialStore } from "./credentials.ts";
 import { SIM_MODEL, SIM_PROVIDER, simProvider } from "./sim.ts";
-
-export type ModelChoice = {
-	provider: string;
-	id: string;
-	name: string;
-	reasoning: boolean;
-	contextWindow: number;
-	available: boolean;
-	/** The model new threads on this host start with. */
-	default?: true;
-};
 
 const stores = new WeakMap<MutableModels, CredentialStore>();
 

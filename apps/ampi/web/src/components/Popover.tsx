@@ -40,7 +40,7 @@ const SCALE_PROBE = 4096;
 /** The space between a popover and the viewport's edge, in viewport px. */
 const EDGE = 12;
 
-export type PopoverProps = {
+type PopoverProps = {
 	/** Where the popover opens, read at each placement: an element's rect or a pointer, in viewport px only. */
 	anchor: () => Box | undefined;
 	/** The side of the anchor the popover opens on. `left` aligns the tops; `below` and `above` align `align` edges. */

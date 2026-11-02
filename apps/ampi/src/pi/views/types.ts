@@ -2,6 +2,8 @@
 // full scans through the shared Session reader and published Rarebit selector.
 // Window and range reads are explicit; a window never stands in for a full branch.
 
+import type { PiTeamTask } from "../../shared/team.ts";
+import type { SourceStatus } from "../../shared/source-status.ts";
 import type { OpSpec, PiTopicValue, ThreadSummary, ViewName, ViewTopic, ViewTopics } from "../../shared/protocol.ts";
 import type { PiEntry } from "../../shared/protocol.ts";
 import type { Derived } from "../working-set-types.ts";
@@ -15,8 +17,6 @@ export type PiReaderEntry = {
 	id: string;
 	parent: string | null;
 	t: number | null;
-	/** Original prose length for chunk boundaries after text is bounded. */
-	bodyChars?: number;
 	kind: string;
 	name?: string;
 	role?: string;
@@ -58,19 +58,16 @@ export type PiViewSession = {
 	/** One page of Rarebit items before `before`; texts cut at 8 KiB unless `fullText`. */
 	rarebits(before?: string, fullText?: boolean, around?: string): RarebitValue;
 	rarebitSnapshot(maxChars: number): { context: string; evidenceHash: string; count: number; included: number; omittedChars: number; entry?: string };
-	arcEvidence(ids: string[]): Map<string, string>;
+	arcSource(): import("./arc-build.ts").ArcSource;
 	nearest(at: number): string | undefined;
 	/** Entry timestamps (ms) by ID; null when the entry has none or is unknown. */
 	entryTimes(ids: string[]): Map<string, number | null>;
 };
-
-export type SourceStatus = { version: string; asOf: number; state: "ready" | "stale" | "unavailable" };
 export function sourceStatus(s: PiViewSession): SourceStatus {
  return { version: s.sourceVersion, asOf: s.data.asOf, state: s.readError || s.data.invalidLines ? "unavailable" : s.bytes === s.data.bytes && (s.sourceBytes === undefined || s.bytes >= s.sourceBytes) ? "ready" : "stale" };
 }
 
 export type PiTeamMember = { pane: string; session: string; team: string; member: string; role: string };
-export type PiTeamTask = { id: string; title: string; status: string; owner?: string; deps: string[]; ready: boolean; updatedAt?: string };
 /** A member as Pi Team Bright recorded it, with or without a live pane. */
 export type PiRecordedMember = { team: string; member: string; role: string; session?: string; pane?: string };
 /**
@@ -108,10 +105,10 @@ export type PiViewContext = {
 	command(cmd: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown>>;
 	/**
 	 * One isolated model call on the hub (`src/pi/ask.ts`): no Session, tools, or extensions; the hub's Pi credentials.
-	 * Only on an explicit owner action (D16). `purpose` picks the hub's helper model; `model` is only an owner override.
+	 * D16 permits Arc sidecar triggers. `purpose` picks the hub helper model; Arc supplies its resolved Pi setting.
 	 * The answer names the model that answered. Rejects with `code`: no_model, no_result, model_error, timeout, busy.
 	 */
-	ask(req: AskRequest & { purpose: ModelPurpose }): Promise<AskResult>;
+	ask(req: AskRequest): Promise<AskResult>;
 	/** The exact `provider/id` that `ask` would use for `purpose` and `override`; rejects like `ask` with `no_model`. A
 	 * Build checks its models with it before its first call, so a missing model costs nothing. */
 	model(purpose: ModelPurpose, override?: string): Promise<string>;

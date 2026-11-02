@@ -121,7 +121,7 @@ test("a pin goes stale when the system prompt or thinking changed, even with the
   assert.equal(r3.pins[0].status, "stale");
 });
 
-test("over budget, the oldest pin is dropped and the total stays at 4", () => {
+test("newest pin wins and total markers stay within MAX_MARKERS", () => {
   const text = piPrompt([[GLOBAL, "g"], ["/work/a/AGENTS.md", "p"]]);
   const msgs = [user("p1"), assistant("x"), user("p2"), assistant("y"), user("tail")];
   const head = headOf(payload(text, msgs));

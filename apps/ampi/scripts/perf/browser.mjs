@@ -20,7 +20,7 @@ import { join } from "node:path";
 import WebSocket from "ws";
 
 // The element a timed switch clicks in a sidebar row. A Team leader row's own click opens or closes its Team group
-// (web/src/components/Sidebar.tsx, ThreadRow); its title link navigates like every other row's.
+// (web/src/components/SidebarRows.tsx, ThreadRow); its title link navigates like every other row's.
 export const SWITCH_TARGET = "a.title";
 
 const CATEGORIES = [

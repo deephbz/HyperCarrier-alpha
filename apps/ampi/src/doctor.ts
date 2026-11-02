@@ -7,8 +7,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { hubConfigPath, hubProof, loadHubConfig } from "./hub/hub.ts";
-import { ampiHome, hubOwner, readHubToken } from "./hub/home.ts";
-import type { HostConfig } from "./hub/hosts.ts";
+import { hubOwner, readHubToken } from "./hub/home.ts";
+import { ampiHome } from "./shared/home.ts";
+import type { HostConfig } from "./shared/hosts.ts";
 import { connectSocket, socketPath } from "./node/daemon.ts";
 import { buildId } from "./shared/build.ts";
 

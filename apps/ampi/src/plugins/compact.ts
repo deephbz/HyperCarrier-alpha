@@ -12,7 +12,7 @@ import { MetaDoc, NodeError, type NodePlugin } from "../node/runtime.ts";
 import { ops } from "../node/server.ts";
 import { history, storeById } from "./rarebit.ts";
 
-export type CompactState = {
+type CompactState = {
 	records: CompactRecord[];
 	/** Budget crossings the node decided to compact, by the assistant entry that crossed W; `taskId` once admitted. */
 	budget?: { entryId: string; tokens: number; workingBudget: number; at: number; taskId?: string };

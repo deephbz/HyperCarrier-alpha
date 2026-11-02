@@ -14,7 +14,7 @@ export function openAccounts(host: string): void {
 }
 
 /** Tell model pickers that a host's available models changed. */
-export function modelsChanged(host: string): void {
+function modelsChanged(host: string): void {
 	window.dispatchEvent(new CustomEvent("ampi:models-changed", { detail: host }));
 }
 

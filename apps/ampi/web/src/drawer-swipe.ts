@@ -6,9 +6,9 @@ import { onAxisLock, touchStart } from "./touch-axis.ts";
  * through the same commands as ☰ and ⌘L (`commit`); a cancel commits nothing. It needs installTouchAxis(). During the drag it writes no storage,
  * hash or focus. The commit moves focus into the drawer, which blurs a field: the iOS keyboard closes after the settle.
  */
-export type DrawerSide = "sidebar" | "panel";
+type DrawerSide = "sidebar" | "panel";
 
-export type DrawerView = { oneSide: boolean; session: boolean; sidebarHidden: boolean; panelShown: boolean; modal: boolean };
+type DrawerView = { oneSide: boolean; session: boolean; sidebarHidden: boolean; panelShown: boolean; modal: boolean };
 
 /** A flick faster than this, in px/ms toward a side, settles there whatever the position. */
 const FLICK = 0.4;

@@ -6,7 +6,7 @@ import type { ThreadSummary } from "../../src/shared/protocol.ts";
 import type { HostThreads } from "./components/Sidebar.tsx";
 import { native } from "./native.ts";
 import { navigate } from "./nav.ts";
-import { attentionOf, go, href, isAttentionEligible, isBusy, needsYou, openAsks } from "./util.ts";
+import { attentionOf, go, href, isAttentionEligible, isBusy, needsYou, arcNeedsCount } from "./util.ts";
 
 
 export function notify(title: string, body: string, host: string, threadId: string): void {
@@ -71,7 +71,7 @@ export function notices(before: Map<string, ThreadSummary>, data: HostThreads[],
 			const viewing = !away && current?.host === host.link && current?.thread === t.id;
 			if (viewing) continue;
 			const reason = needsYou(t);
-			if (reason && (newSignal(was, t) || asksGrew(was, t))) out.push({ title: `Needs you: ${t.title}`, body: `${host.label} · ${reason}${t.lastError ? ` — ${t.lastError}` : ""}`, host: host.link, threadId: t.id });
+			if (reason && (newSignal(was, t) || arcNeedsCount(t) > arcNeedsCount(was))) out.push({ title: `Needs you: ${t.title}`, body: `${host.label} · ${reason}${t.lastError ? ` — ${t.lastError}` : ""}`, host: host.link, threadId: t.id });
 			else if (away && isBusy(was) && !isBusy(t) && t.kind !== "worker" && !reason)
 				out.push({ title: `Finished: ${t.title}`, body: `${host.label} · ${t.preview ?? "the agent settled"}`, host: host.link, threadId: t.id });
 		}
@@ -83,10 +83,4 @@ function newSignal(was: ThreadSummary, t: ThreadSummary): boolean {
 	const key = (a: { source: string; reason: string }) => `${a.source}\u0000${a.reason}`;
 	const before = new Set(attentionOf(was).map(key));
 	return attentionOf(t).some((a) => !before.has(key(a)));
-}
-
-/** An Arc ask count grew or a new ask kind appeared. A shrink resolves an ask and stays silent. */
-function asksGrew(was: ThreadSummary, t: ThreadSummary): boolean {
-	const before = new Map(openAsks(was).map((a) => [a.kind, a.n]));
-	return openAsks(t).some((a) => a.n > (before.get(a.kind) ?? 0));
 }

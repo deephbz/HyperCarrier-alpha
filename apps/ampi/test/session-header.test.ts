@@ -92,7 +92,7 @@ for (const [engine, type, path] of ENGINES) for (const zoom of [0.8, 1, 1.3]) {
 				await more.click();
 				const menu = page.locator(".t-more-menu");
 				const shows = (l: ReturnType<Page["locator"]>) => l.waitFor({ timeout: 2000 }).then(() => true, () => false);
-				for (const name of ["Timeline", "Arc"]) if (!await shows(menu.getByRole("button", { name, exact: true }))) failures.push(`${at}: More lacks ${name}`);
+				for (const name of ["Arc", "Timeline"]) if (!await shows(menu.getByRole("button", { name, exact: true }))) failures.push(`${at}: More lacks ${name}`);
 				if (!await shows(menu.getByRole("group", { name: "Transcript mode" }))) failures.push(`${at}: More lacks the mode control`);
 				await more.click();
 				await menu.waitFor({ state: "detached" });
@@ -102,6 +102,24 @@ for (const [engine, type, path] of ENGINES) for (const zoom of [0.8, 1, 1.3]) {
 		assert.equal(seen[1280], false, "a 1280 px header stays unfolded");
 		assert.equal(seen[390], true, "a 390 px header folds");
 		assert.deepEqual(failures, []);
+	});
+}
+
+for (const [engine, type, path] of ENGINES) {
+	test(`session header ${engine}: the bar's Arc button opens and closes the Arc panel`, { skip: engineSkip(engine) }, async (t) => {
+		const page = await open(t, engine, type, path(), { route: ROUTE });
+		page.setDefaultTimeout(4000);
+		const closePanel = page.getByTitle("Close panel", { exact: true });
+		if (await closePanel.isVisible()) await closePanel.click();
+		await size(page, 1280);
+		const arc = page.locator(".thread-bar .rb-controls").getByRole("button", { name: "Arc", exact: true });
+		assert.equal(await arc.getAttribute("aria-pressed"), "false");
+		await arc.click();
+		await page.locator('[data-panel="arc"], .arc-panel').first().waitFor();
+		assert.equal(await arc.getAttribute("aria-pressed"), "true");
+		await arc.click();
+		await page.locator('[data-panel="arc"], .arc-panel').first().waitFor({ state: "detached" });
+		assert.equal(await arc.getAttribute("aria-pressed"), "false");
 	});
 }
 
@@ -181,10 +199,10 @@ for (const [engine, type, path] of ENGINES) {
 
 	test(`session header ${engine}: no text or control of any page sits under ☰: a 375 and a 390 px phone with a drawer closed or open, and a desktop`, { skip: engineSkip(engine), timeout: 120_000 }, async (t) => {
 		const page = await open(t, engine, type, path(), { route: ROUTE, context: { ...devices["iPhone 13"], viewport: { width: 375, height: 667 } } });
-		// Every page in the registry, the Overview, a Session, its Rarebit panel, and a terminal (an unknown id still draws its bar).
+		// Every page in the registry, the Overview, a Session, its Arc and Rarebit panels, and a terminal (an unknown id still draws its bar).
 		const pages = [...readFileSync(new URL("../web/src/views/registry.ts", import.meta.url), "utf8").matchAll(/\{ name: "(\w+)", label: "[^"]*", section:/g)].map((m) => `#/v/${m[1]}`);
-		assert.ok(pages.length >= 2, `pages from the registry: ${pages}`);
-		const routes = [ROUTE, `${ROUTE}?p=rarebit`, "#/v/overview", ...pages, "#/h/devbox/x/demo-term"];
+		assert.ok(pages.length > 0, `pages from the registry: ${pages}`);
+		const routes = [ROUTE, `${ROUTE}?p=arc`, `${ROUTE}?p=rarebit`, "#/v/overview", ...pages, "#/h/devbox/x/demo-term"];
 		/** Visible text and controls whose box meets ☰'s closed box, in the page or, while the drawer covers ☰, the main column. */
 		const under = (page: Page, closed?: DOMRect) => page.evaluate((closed) => {
 			const button = document.querySelector(".sidebar-reveal"), live = button?.getBoundingClientRect();

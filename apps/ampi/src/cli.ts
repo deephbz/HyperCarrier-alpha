@@ -7,7 +7,8 @@ import { join } from "node:path";
 import { format } from "node:util";
 import { spawn } from "node:child_process";
 import { hubConfigPath, Hub, hubProof, loadHubConfig } from "./hub/hub.ts";
-import { ampiHome, HubHome, newHubToken, readHubToken, RootOwned } from "./hub/home.ts";
+import { HubHome, newHubToken, readHubToken, RootOwned } from "./hub/home.ts";
+import { ampiHome } from "./shared/home.ts";
 import { doctor, hubPort, versionLine } from "./doctor.ts";
 
 const USAGE = `usage: ampi [command]
@@ -126,7 +127,7 @@ switch (command) {
 		break;
 	}
 	case "open": {
-		// The link to a running hub, with the access key; --launch opens it in the default browser.
+		// The link to a running hub, with the access key; --open (or its alias --launch) opens it in the default browser.
 		const port = hubPort(flag("port"));
 		const token = readHubToken() ?? "";
 		let proof = "";

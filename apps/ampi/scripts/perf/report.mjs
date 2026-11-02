@@ -51,7 +51,7 @@ export function profileThread(name) {
 }
 
 /** Source location without machine paths: the repo-relative or package-relative tail only. */
-export function shortUrl(url) {
+function shortUrl(url) {
 	if (!url) return "";
 	const clean = url.replace(/^file:\/\//, "");
 	for (const anchor of ["/node_modules/", "/apps/ampi/", "/apps/", "/packages/"]) {
@@ -118,7 +118,7 @@ export function spanTable(events) {
 }
 
 /** Async spans (b/e pairs) as intervals. */
-export function asyncSpans(events) {
+function asyncSpans(events) {
 	const open = new Map();
 	const out = [];
 	for (const e of events) {
@@ -134,7 +134,7 @@ export function asyncSpans(events) {
 }
 
 /** CPU profile samples with durations: sample i lasts until sample i+1; the last one gets the median interval. */
-export function profileSamples(profile) {
+function profileSamples(profile) {
 	const parent = new Map();
 	const byId = new Map();
 	for (const node of profile.nodes) {
@@ -221,7 +221,7 @@ export function profileToEvents(profile, { pid, tid, shiftUs, maxDepth = 32 }) {
 // ---- run directory ----
 
 /** Reads every trace and profile in a run directory. */
-export function loadRun(runDir) {
+function loadRun(runDir) {
 	const files = readdirSync(runDir);
 	const events = [];
 	for (const name of files) {
@@ -239,7 +239,7 @@ export function loadRun(runDir) {
 }
 
 /** Thread labels from M events: "hub/main", "hub/derive-worker", "remote-agent:x/main". */
-export function threadNames(events) {
+function threadNames(events) {
 	const processes = new Map(), threads = new Map();
 	for (const e of events) {
 		if (e.ph !== "M") continue;

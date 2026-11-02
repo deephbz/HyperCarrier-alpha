@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { resolveBudget, budgetUtilization, summaryCapsFor } from "./budget.mjs";
 
 import { Type } from "typebox";
 import { createMethodEngine } from "./method-engine.mjs";
@@ -81,38 +82,7 @@ function contextUsage(ctx) {
   }
 }
 
-export function utilizationAtOrAboveThreshold(usage, threshold) {
-  if (!usage || typeof usage.contextWindow !== "number")
-    return { known: false, crossed: false };
-  if (typeof usage.percent === "number" && Number.isFinite(usage.percent))
-    return {
-      known: true,
-      crossed: usage.percent >= threshold,
-      percent: usage.percent,
-      tokens: usage.tokens,
-      contextWindow: usage.contextWindow,
-    };
-  if (
-    typeof usage.tokens === "number" &&
-    Number.isFinite(usage.tokens) &&
-    usage.contextWindow > 0
-  ) {
-    const percent = (usage.tokens / usage.contextWindow) * 100;
-    return {
-      known: true,
-      crossed: percent >= threshold,
-      percent,
-      tokens: usage.tokens,
-      contextWindow: usage.contextWindow,
-    };
-  }
-  return {
-    known: false,
-    crossed: false,
-    tokens: usage.tokens,
-    contextWindow: usage.contextWindow,
-  };
-}
+export { utilizationAtOrAboveThreshold } from "./budget.mjs";
 
 export function createAutoCompactController(pi, options = {}) {
   if (!pi?.on || !pi?.registerTool || !pi?.registerCommand)
@@ -292,48 +262,13 @@ export function createAutoCompactController(pi, options = {}) {
   const budgetFor = (ctx, effective = settingsSnapshot) => {
     const modelWindow =
       ctx?.model?.contextWindow ?? contextUsage(ctx)?.contextWindow;
-    const modelBudget =
-      effective.settings.modelOverrides?.[
-        `${ctx?.model?.provider}/${ctx?.model?.id}`
-      ]?.budget_tokens;
-    const configured =
-      sessionBudgetOverride ??
-      modelBudget ??
-      effective.settings.budget_tokens ??
-      modelWindow;
-    const window = Math.min(configured, modelWindow);
-    return {
-      configured,
-      window,
-      modelWindow,
-      source:
-        sessionBudgetOverride !== undefined
-          ? "Session override"
-          : modelBudget !== undefined
-            ? `model override ${ctx.model.provider}/${ctx.model.id}`
-            : effective.settings.budget_tokens !== undefined
-              ? "budget_tokens"
-              : "model.contextWindow",
-      clamped: configured > modelWindow,
-    };
+    return resolveBudget(effective.settings, sessionBudgetOverride, ctx?.model, modelWindow);
   };
 
   const utilizationFor = (ctx, effective) => {
     const usage = contextUsage(ctx);
     const budget = budgetFor(ctx, effective);
-    return utilizationAtOrAboveThreshold(
-      usage
-        ? {
-            ...usage,
-            contextWindow: budget.window,
-            ...(typeof usage.tokens === "number" ||
-            budget.window !== usage.contextWindow
-              ? { percent: undefined }
-              : {}),
-          }
-        : usage,
-      effective.settings.threshold,
-    );
+    return budgetUtilization(usage, budget, effective.settings.threshold);
   };
 
   let composerPresent = false;
@@ -478,20 +413,7 @@ export function createAutoCompactController(pi, options = {}) {
     }
   };
 
-  const summaryCaps = (ctx) => {
-    const config = settingsSnapshot.compaction ?? {};
-    const reserve =
-      config.modelOverrides?.[`${ctx?.model?.provider}/${ctx?.model?.id}`]
-        ?.reserveTokens ??
-      config.reserveTokens ??
-      16384;
-    const max = ctx?.model?.maxTokens ?? Infinity;
-    return {
-      reserve,
-      history: Math.min(Math.floor(0.8 * reserve), max),
-      prefix: Math.min(Math.floor(0.5 * reserve), max),
-    };
-  };
+  const summaryCaps = (ctx) => summaryCapsFor(settingsSnapshot.compaction, ctx?.model);
 
   const timers = options.timers ?? globalThis;
   const emitHold = (active) =>

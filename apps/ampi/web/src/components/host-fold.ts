@@ -1,13 +1,13 @@
-import type { HostState } from "../../../src/hub/hosts.ts";
+import type { HostState } from "../../../src/shared/hosts.ts";
 import { ago } from "../util.ts";
 
 /**
  * One Host's saved sidebar fold. Folding only collapses the Host group and its error; it never acknowledges an away
  * Host, so the dot, the header and Overview read the same folded or not.
  */
-export type HostFold = { collapsed: boolean };
+type HostFold = { collapsed: boolean };
 
-export const hostFoldKey = (id: string) => `ampi.sidebar.hostCollapsed.${id}`;
+const hostFoldKey = (id: string) => `ampi.sidebar.hostCollapsed.${id}`;
 
 export function readHostFold(id: string): HostFold {
 	try {

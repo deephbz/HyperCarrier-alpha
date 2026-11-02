@@ -78,10 +78,10 @@ test("hub: replicas stay exact through compaction, a repeated sub never doubles 
 	}
 });
 
-test("hub helper models: the per-call model, else hub.json models.<purpose>, else none; no env var or default; a bad entry names the file; unread keys and env vars are named; loading keeps models (failure: a built-in default or AMPI_RAREBIT_*_MODEL chose the model)", () => {
+test("hub helper models: the per-call model, else hub.json models.<purpose>, else none; no env var or default; a bad entry names the file; unread keys and env vars are named; loading keeps models (failure: a built-in default or AMPI_RAREBIT_ASK_MODEL chose the model)", () => {
 	const dir = mkdtempSync(join(tmpdir(), "ampi-models-")), file = join(dir, "hub.json"), none = join(dir, "missing.json");
 	const write = (body: unknown) => writeFileSync(file, typeof body === "string" ? body : JSON.stringify(body));
-	const saved = [process.env.AMPI_RAREBIT_RECAP_MODEL, process.env.AMPI_RAREBIT_ASK_MODEL], warn = console.warn, warned: string[] = [];
+	const saved = process.env.AMPI_RAREBIT_ASK_MODEL, warn = console.warn, warned: string[] = [];
 	console.warn = (m: string) => { warned.push(m); };
 	try {
 		write({ hosts: [], models: { rarebitAsk: "p/hub" } });
@@ -93,21 +93,15 @@ test("hub helper models: the per-call model, else hub.json models.<purpose>, els
 		helperModel("rarebitAsk", undefined, none);
 		assert.equal(warned.length, 2, "a note is logged once until the notes change");
 		delete process.env.AMPI_RAREBIT_ASK_MODEL;
-		assert.deepEqual((["arcLabels", "arcSynthesis", "rarebitAsk"] as const).map((p) => helperModel(p, undefined, none)), [null, null, null], "no built-in default");
+		assert.equal(helperModel("rarebitAsk", undefined, none), null);
 		assert.deepEqual(loadHubConfig(file).models, { rarebitAsk: "p/hub" });
-		// models.arc and a typo are not read, and each is named once.
-		write({ hosts: [], models: { arc: "p/arc", arcLabel: "p/typo", arcSynthesis: "p/synth" } });
-		warned.length = 0;
-		assert.deepEqual([helperModel("arcLabels", undefined, file), helperModel("arcSynthesis", undefined, file)], [null, "p/synth"]);
-		assert.deepEqual(warned, ["ampi hub: models.arc is no longer read; set models.arcLabels and models.arcSynthesis.",
-			"ampi hub: models.arcLabel is not a model key; use models.arcLabels, models.arcSynthesis, models.rarebitAsk."]);
-		write({ hosts: [], models: { arcLabels: 5 } });
-		assert.throws(() => helperModel("arcLabels", undefined, file), (e: Error & { code?: string }) => e.code === "no_model" && e.message === `${file}: models.arcLabels must be a provider/model-id string from pi --list-models`);
+		write({ hosts: [], models: { rarebitAsk: 5 } });
+		assert.throws(() => helperModel("rarebitAsk", undefined, file), /models.rarebitAsk/);
 		write("{");
-		assert.throws(() => helperModel("arcSynthesis", undefined, file), (e: Error) => e.message.includes(file));
+		assert.throws(() => helperModel("rarebitAsk", undefined, file), (e: Error) => e.message.includes(file));
 	} finally {
 		console.warn = warn;
-		for (const [i, k] of (["AMPI_RAREBIT_RECAP_MODEL", "AMPI_RAREBIT_ASK_MODEL"] as const).entries()) if (saved[i] === undefined) delete process.env[k]; else process.env[k] = saved[i];
+		if (saved === undefined) delete process.env.AMPI_RAREBIT_ASK_MODEL; else process.env.AMPI_RAREBIT_ASK_MODEL = saved;
 	}
 });
 
@@ -122,39 +116,33 @@ test("hub helper model resolution: only an exact provider/id row resolves; a mis
 	const reads: boolean[] = [];
 	let rows: CarrierModel[] = PI_ROWS.slice(0, 2);
 	const registry = { list: async (fresh: boolean) => { reads.push(fresh); return rows; } };
-	const miss = (purpose: "arcLabels" | "arcSynthesis", name: string | undefined) => resolveHelperModel(purpose, name, registry).then(() => assert.fail(name), (e: ModelNotFound) => e);
-	assert.equal(await resolveHelperModel("arcLabels", "anthropic/claude-haiku-5-5", registry), "anthropic/claude-haiku-5-5");
+	const miss = (purpose: "rarebitAsk", name: string | undefined) => resolveHelperModel(purpose, name, registry).then(() => assert.fail(name), (e: ModelNotFound) => e);
+	assert.equal(await resolveHelperModel("rarebitAsk", "anthropic/claude-haiku-5-5", registry), "anthropic/claude-haiku-5-5");
 	assert.deepEqual(reads, [false]);
 	// An unset key: the error names the key and the file, and Pi is not asked.
 	reads.length = 0;
-	const unset = await miss("arcLabels", undefined);
+	const unset = await miss("rarebitAsk", undefined);
 	assert.deepEqual(reads, [], "an unset key reads no registry");
 	assert.equal(unset.model, null);
-	assert.equal(unset.message, "No model set for Arc labels. Set models.arcLabels in hub.json. Use a provider/model-id from pi --list-models on the hub.");
+	assert.equal(unset.message, "No model set for Rarebit ask. Set models.rarebitAsk in hub.json. Use a provider/model-id from pi --list-models on the hub.");
 	// A wrong name: one re-read, then Try rows for the same id and every row, sorted, as Available.
-	const wrong = await miss("arcSynthesis", "magpie/claude/claude-sonnet-5-5");
-	assert.ok(wrong.code === "model_not_found" && wrong.purpose === "arcSynthesis" && wrong.model === "magpie/claude/claude-sonnet-5-5");
-	assert.equal(wrong.message, "No model named magpie/claude/claude-sonnet-5-5 (per-Build model, Arc synthesis). Change or clear the per-Build model. Try: anthropic/claude-sonnet-5-5. Available: anthropic/claude-haiku-5-5, anthropic/claude-sonnet-5-5.");
+	const wrong = await miss("rarebitAsk", "magpie/claude/claude-sonnet-5-5");
+	assert.ok(wrong.code === "model_not_found" && wrong.purpose === "rarebitAsk" && wrong.model === "magpie/claude/claude-sonnet-5-5");
+	assert.equal(wrong.message, "No model named magpie/claude/claude-sonnet-5-5 (per-call model, Rarebit ask). Change or clear the per-call model. Try: anthropic/claude-sonnet-5-5. Available: anthropic/claude-haiku-5-5, anthropic/claude-sonnet-5-5.");
 	assert.deepEqual(reads, [false, true]);
 	rows = PI_ROWS;
-	assert.equal(await resolveHelperModel("arcSynthesis", "magpie/claude/claude-sonnet-5-5", registry), "magpie/claude/claude-sonnet-5-5", "a sign-in shows on the re-read");
-	assert.equal(await resolveHelperModel("arcSynthesis", "anything"), "anything", "without a registry the name is used as written");
+	assert.equal(await resolveHelperModel("rarebitAsk", "magpie/claude/claude-sonnet-5-5", registry), "magpie/claude/claude-sonnet-5-5", "a sign-in shows on the re-read");
+	assert.equal(await resolveHelperModel("rarebitAsk", "anything"), "anything", "without a registry the name is used as written");
 	// A bare id, a thinking suffix, a near name and a last-segment match never resolve.
-	for (const name of ["claude-haiku-5-5", "claude-sonnet-5-5:high", "claude/claude-opus-5-5", "claude-opus-5-5"]) assert.ok((await miss("arcLabels", name)) instanceof ModelNotFound, name);
-	assert.deepEqual((await miss("arcLabels", "claude-haiku-5-5")).misses[0]!.exact, ["anthropic/claude-haiku-5-5", "magpie/anthropic/claude-haiku-5-5", "magpie/claude/claude-haiku-5-5", "openrouter/anthropic/claude-haiku-5-5"], "Try rows carry the same id");
-	assert.deepEqual((await miss("arcLabels", "anthropic/claude-nope-9")).misses[0]!.exact, [], "no near names");
+	for (const name of ["claude-haiku-5-5", "claude-sonnet-5-5:high", "claude/claude-opus-5-5", "claude-opus-5-5"]) assert.ok((await miss("rarebitAsk", name)) instanceof ModelNotFound, name);
+	assert.deepEqual((await miss("rarebitAsk", "claude-haiku-5-5")).misses[0]!.exact, ["anthropic/claude-haiku-5-5", "magpie/anthropic/claude-haiku-5-5", "magpie/claude/claude-haiku-5-5", "openrouter/anthropic/claude-haiku-5-5"], "Try rows carry the same id");
+	assert.deepEqual((await miss("rarebitAsk", "anthropic/claude-nope-9")).misses[0]!.exact, [], "no near names");
 	// Available lists 12 rows, then +N more; `available` keeps all.
 	rows = Array.from({ length: 15 }, (_, i) => ({ provider: "p", id: `m-${String(i).padStart(2, "0")}` }));
-	const many = await miss("arcLabels", "p/x");
+	const many = await miss("rarebitAsk", "p/x");
 	assert.equal(many.available!.length, 15);
 	assert.ok(many.hint.endsWith("Available: p/m-00, p/m-01, p/m-02, p/m-03, p/m-04, p/m-05, p/m-06, p/m-07, p/m-08, p/m-09, p/m-10, p/m-11, +3 more."), many.hint);
-	// One per-Build name that fails both Arc purposes reads as one miss; two names read as two, with one Available.
-	rows = PI_ROWS.slice(0, 2);
-	const both = ModelNotFound.merge(await miss("arcLabels", "anthropic/claude-nope-9"), await miss("arcSynthesis", "anthropic/claude-nope-9"));
-	assert.equal(both.message, "No model named anthropic/claude-nope-9 (per-Build model, Arc labels and synthesis). Change or clear the per-Build model. Available: anthropic/claude-haiku-5-5, anthropic/claude-sonnet-5-5.");
-	const two = ModelNotFound.merge(await miss("arcLabels", "x-1"), await miss("arcSynthesis", "y-1")) as ModelNotFound;
-	assert.equal(two.summary, "No model named x-1 (per-Build model, Arc labels). No model named y-1 (per-Build model, Arc synthesis).");
-	assert.equal(two.hint, "Change or clear the per-Build model. Available: anthropic/claude-haiku-5-5, anthropic/claude-sonnet-5-5.");
+
 });
 
 test("hub Pi model registry: the --list-models table parses, an unreadable list fails with registry_unreadable, and neither a failed read nor an empty table is cached (failure: one bad read hid every model until restart)", async () => {
@@ -195,7 +183,7 @@ test("hub Pi model registry: the --list-models table parses, an unreadable list 
 test("hub.json: a Host remove re-reads the file and changes only hosts, so an owner's models edit survives; a malformed file fails the change with its path and is never rewritten (failure: hosts.add saved the startup snapshot)", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "ampi-hubjson-")), file = join(dir, "hub.json");
 	const hosts = [{ id: "gone.invalid", label: "gone", kind: "pi-ssh" }, { id: "kept.invalid", label: "kept", kind: "pi-ssh" }];
-	const startup = { hosts, models: { arcLabels: "p/a" } };
+	const startup = { hosts, models: { rarebitAsk: "p/a" } };
 	writeFileSync(file, JSON.stringify({ ...startup, note: "owner key" }));
 	const home = ownHome(dir);
 	const hub = new Hub(structuredClone(startup) as never, { configPath: file, token: TOKEN, home });
@@ -211,11 +199,11 @@ test("hub.json: a Host remove re-reads the file and changes only hosts, so an ow
 		const disk = () => JSON.parse(readFileSync(file, "utf8"));
 		const edit = (change: (config: any) => void) => { const config = disk(); change(config); writeFileSync(file, JSON.stringify(config)); };
 		// The owner edits models while the hub runs; the next Host change must keep the edit.
-		edit((c) => { c.models.arcLabels = "p/b"; });
+		edit((c) => { c.models.rarebitAsk = "p/b"; });
 		const removed = await hubOp("hosts.remove", { id: "gone.invalid" });
 		assert.equal(removed.ok, true, JSON.stringify(removed));
-		assert.deepEqual(disk(), { hosts: [hosts[1]], models: { arcLabels: "p/b" }, note: "owner key" }, "hosts.remove kept every other key");
-		assert.equal(helperModel("arcLabels", undefined, file), "p/b");
+		assert.deepEqual(disk(), { hosts: [hosts[1]], models: { rarebitAsk: "p/b" }, note: "owner key" }, "hosts.remove kept every other key");
+		assert.equal(helperModel("rarebitAsk", undefined, file), "p/b");
 		// The window adds no Host: setup is an agent prompt that edits hub.json.
 		const added = await hubOp("hosts.add", { target: "new.invalid" });
 		assert.equal(added.ok, false);

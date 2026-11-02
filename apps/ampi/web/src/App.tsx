@@ -9,20 +9,20 @@ import { NewAgentDialog } from "./components/PiDialogs.tsx";
 import { PiPanel, piPanels } from "./views/PiPanel.tsx";
 import { PAGES } from "./views/registry.ts";
 import { Panel } from "./components/Panel.tsx";
-import { type HostThreads, Sidebar, SidebarIcon, isPiHost } from "./components/Sidebar.tsx";
+import { type HostThreads, Sidebar, SidebarIcon } from "./components/Sidebar.tsx";
 import { SessionUnresolved } from "./components/SessionUnresolved.tsx";
 import { type ModelChoice, ThreadView } from "./components/ThreadView.tsx";
 // xterm is most of the bundle; it loads the first time a terminal is shown.
 const TerminalView = lazy(() => import("./components/TerminalView.tsx").then((m) => ({ default: m.TerminalView })));
 import { openTerminal } from "./components/Sidebar.tsx";
-import { hostLabelFor } from "./components/host-label.ts";
+import { hostLabelFor, isPiHost } from "./components/host-label.ts";
 import { hashRoute, href, MOD, type Route } from "./util.ts";
 import { FeedsContext, FocusIntentContext } from "./context.ts";
 import { requestNotificationPermission, useAttention } from "./attention.ts";
 import { perfMarkPainted } from "./perf.ts";
 import { focusRegion, handleRegionScrollKey, installKeymapDispatcher, openOverlay, useKeyAction } from "./keymap.ts";
 import { remember, transition, type KeyIntent, type Region, type SessionRegion, type Target, type View } from "./focus.ts";
-import { PANEL_DEFAULT_KEY, panelClosed } from "./views/cos/arc-reopen.ts";
+import { PANEL_DEFAULT_KEY } from "./views/panel-preference.ts";
 import { arriveEntry, goBack, goForward, installNavLinks, navigate, noteFocus, ROUTE_EVENT } from "./nav.ts";
 
 import { applyDisplay, type DisplaySettings, scaleOf } from "./display.ts";
@@ -38,7 +38,11 @@ function savedWidth(key: string, fallback: number, min: number, max: number) {
 const MAIN_MIN = 480;
 /** The layout viewport in CSS px: the unit of the grid widths. `innerWidth` is in viewport px, which display zoom scales. */
 const viewWidth = () => document.documentElement.clientWidth;
-/** The side panels overlay the main (a phone). styles.css owns the width: its narrow rule sets --side-overlay. */
+/**
+ * The side panels overlay the main (a phone). styles.css owns the width: its narrow rule sets --side-overlay. App reads
+ * it at first render and on resize, and marks `.app` with `side-overlay` once it draws that layout.
+ * The mark is an observation for tests: nothing styles or branches on it.
+ */
 const sideOverlay = () => getComputedStyle(document.documentElement).getPropertyValue("--side-overlay").trim() === "1";
 
 type Drag = { app: HTMLElement; pointer: number; x: number; scale: number; start: number; width: number };
@@ -157,7 +161,7 @@ export function App() {
 	const { route, resolved } = linkRoute(hashRoute(), hosts);
 	const [feeds, setFeeds] = useState<Record<string, HostThreads>>({});
 	const [dialog, setDialog] = useState<"new" | "host" | "palette" | "commands" | "display" | "help" | undefined>();
-	const [panel, setPanel] = useState<string | undefined>(() => localStorage.getItem("ampi.panel") ?? undefined);
+	const [panel, setPanel] = useState<string | undefined>(() => sideOverlay() ? undefined : localStorage.getItem("ampi.panel") ?? undefined);
 	const [sidebarHidden, setSidebarHidden] = useState(() => localStorage.getItem("ampi.sidebar.hidden") === "1");
 	const [sidebarPeek, setSidebarPeek] = useState(false);
 	// On a phone the sidebar is a drawer: it starts closed on every load and is never saved, so ampi.sidebar.hidden
@@ -410,7 +414,7 @@ export function App() {
 	// Pi Sessions get the registered panel views (views/registry.ts); node threads keep the node's panels.
 	const panelAvailable = (name: string) => !piHere || piPanels(summary).some((p) => p.name === name);
 	const showPanel = Boolean(resolved && route.thread && panel && panelAvailable(panel));
-	// Every panel writer (✕, tabs, ⌘J, links, the Arc toggle) reports a view change; focus moves only if it was lost (R11).
+	// Every panel writer (✕, tabs, ⌘J, links) reports a view change; focus moves only if it was lost (R11).
 	const setPanelTracked = useCallback((next?: string) => { setPanel(next); focusIntent("panel.set", undefined, { panelShown: Boolean(next && availableRef.current(next)) }); }, []);
 	availableRef.current = (name) => Boolean(route.thread) && panelAvailable(name);
 	const defaultPanel = () => {
@@ -421,7 +425,6 @@ export function App() {
 		// The one sidebar writer: the phone's drawer, the squeezed sidebar's peek, or the saved desktop choice.
 		sidebar: (show) => (oneSideRef.current ? setDrawer(show) : squeezedRef.current ? setSidebarPeek(show) : setSidebarHidden(!show)),
 		panel: (open) => {
-			if (!open && panel) panelClosed(panel);
 			setPanel(open ? defaultPanel() : undefined);
 			const r = hashRoute();
 			if (!open && r.panel && r.host && r.thread) navigate(href.thread(r.host, r.thread, r.entry ? { entry: r.entry } : {}), "replace", { reveal: false });
@@ -457,7 +460,7 @@ export function App() {
 	return (
 		<FeedsContext.Provider value={feeds}>
 		<FocusIntentContext.Provider value={focusIntent}>
-		<div ref={appRef} className={`app ${sideHidden ? "sidebar-hidden" : ""} ${showPanel ? "has-panel" : ""} ${overlayPanel ? "panel-overlay" : ""}`} style={{ "--side-w": `${sidebarWidth}px`, "--side-visible": sideHidden ? "0px" : "var(--side-w)", "--panel-w": `${panelWidth}px` } as CSSProperties}>
+		<div ref={appRef} className={`app ${sideHidden ? "sidebar-hidden" : ""} ${showPanel ? "has-panel" : ""} ${overlayPanel ? "panel-overlay" : ""} ${oneSide ? "side-overlay" : ""}`} style={{ "--side-w": `${sidebarWidth}px`, "--side-visible": sideHidden ? "0px" : "var(--side-w)", "--panel-w": `${panelWidth}px` } as CSSProperties}>
 			{zoomToast && <div className="toast" role="status" aria-live="polite">{zoomToast}</div>}
 			{hosts.map((host) => (
 				<HostFeed key={host.link} host={host} onData={onData} />

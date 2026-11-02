@@ -1,7 +1,8 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { findCollector, type FindAsk, type SearchResult } from "../src/pi/search.ts";
+import { findCollector } from "../src/pi/search.ts";
+import type { FindAsk, SearchResult } from "../src/shared/search.ts";
 import type { FindReply } from "../src/shared/protocol.ts";
 import { FindSession } from "../web/src/components/find-session.ts";
 

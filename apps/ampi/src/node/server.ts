@@ -26,7 +26,7 @@ export type TopicSource = {
 	dispose?(): void;
 };
 
-export type OpHandler = (args: Record<string, unknown>, runtime: NodeRuntime) => Promise<unknown>;
+type OpHandler = (args: Record<string, unknown>, runtime: NodeRuntime) => Promise<unknown>;
 export type TopicHandler = (topic: Topic, runtime: NodeRuntime) => Promise<TopicSource>;
 
 /** Registries plugins extend. */

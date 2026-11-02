@@ -1,5 +1,5 @@
 import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { TimelineSession, TimelineValue } from "../../../../src/pi/views/cos-timeline.ts";
+import type { TimelineSession, TimelineValue } from "../../../../src/shared/timeline.ts";
 import { isSessionInScope, SESSION_SCOPE_MS } from "../../../../src/shared/session-scope.ts";
 import { navigate } from "../../nav.ts";
 import { href, isAttentionEligible, money, needsYou, tokens, type Route } from "../../util.ts";
@@ -102,7 +102,6 @@ export const TimelineStream = memo(function TimelineStream({ band, label, from, 
 			band.members.some((s) => s.source && s.source.state !== "ready") && "last indexed copy",
 			band.members.some((s) => s.live) && <span className="cos-live">live</span>,
 			flagged && <a className={needing.length ? "cos-wait-label" : "cos-new-label"} href={href.thread(flagged.host, flagged.threadId, { panel: "rarebit" })} title={`Open ${flagged.title} with its Rarebit panel`} aria-label={`${needing.length ? "Needs you" : "New answer"}: ${flagged.title}`}>{needing.length ? "needs you" : "new answer"}</a>,
-			<a href={href.page("arcs", [band.target.host, band.target.threadId])}>Arc</a>,
 		].filter(Boolean).map((part, i) => <Fragment key={i}>{i ? " · " : ""}{part}</Fragment>)}</span></div>
 		<svg viewBox={`0 0 ${X} 56`} preserveAspectRatio="none" aria-label={`${band.title}, spend over time`}>
 			{band.end >= from && band.start <= to && <line x1={Math.max(0, x(band.start))} x2={Math.min(X, x(band.end))} y1="28" y2="28" className="cos-duration" />}
@@ -240,7 +239,7 @@ function TimelineView({ route, selected }: { route: Route; selected?: PanelSelec
 	const first = Math.max(0, Math.min(bands.length - 1, Math.floor(scroll / ROW) - 3)), visible = bands.slice(first, first + 28);
 	return <main className={`main cos-page${selected ? " cos-panel" : ""}`}>
 		{readers}
-		<header className="cos-header"><h1>Timeline</h1><span className="cos-meta">{sessions.length} Sessions · {bands.length} streams · {unit === 2 ? spendLabel(laneSpend(sessions, rangeTotal)) : amount(unit, rangeTotal)} in range</span>{selected ? <a href={href.page("timeline", [], { focus: `${selected.host}/${selected.threadId}` })}>Open Timeline page ↗</a> : <a href={href.page("arcs")}>Arcs</a>}</header>
+		<header className="cos-header"><h1>Timeline</h1><span className="cos-meta">{sessions.length} Sessions · {bands.length} streams · {unit === 2 ? spendLabel(laneSpend(sessions, rangeTotal)) : amount(unit, rangeTotal)} in range</span>{selected ? <a href={href.page("timeline", [], { focus: `${selected.host}/${selected.threadId}` })}>Open Timeline page ↗</a> : null}</header>
 		<nav className="cos-toolbar" aria-label="Timeline controls">
 			<span>Width</span>
 			{selected ? <>
@@ -256,7 +255,7 @@ function TimelineView({ route, selected }: { route: Route; selected?: PanelSelec
 			<button aria-label={`Time window: ${typeof window === "number" ? `${window} h` : window}`} title={`Show ${nextTimelineWindow(window, Boolean(selected))}${typeof nextTimelineWindow(window, Boolean(selected)) === "number" ? " h" : ""}`} onClick={cycleWindow}>{typeof window === "number" ? `${window} h` : window}</button>
 		</nav>
 		<FeedStatus feeds={feeds} connected={connected} />
-		<p className="cos-caption">Time → · thickness = {unit === 2 ? `reported dollars${spendSuffix(historySpend(0))}` : "tokens (input + output + cache)"} / 15 min · lane number = its total in range · same scale: {unit === 2 ? money(peak) : tokens(peak)} max · needs you = a current live signal or an open Arc ask · new answer = an answer since you last opened the Session.</p>
+		<p className="cos-caption">Time → · thickness = {unit === 2 ? `reported dollars${spendSuffix(historySpend(0))}` : "tokens (input + output + cache)"} / 15 min · lane number = its total in range · same scale: {unit === 2 ? money(peak) : tokens(peak)} max · needs you = a current live signal or an Arc Needs-you count · new answer = an answer since you last opened the Session.</p>
 		{unreadable.length > 0 && <p className="cos-caption">{unreadable.length === 1 ? "1 Session could not be read and is left out: " : `${unreadable.length} Sessions could not be read and are left out: `}{unreadable.slice(0, 3).map((u, i) => <Fragment key={u.ref}>{i ? ", " : ""}<a href={href.ref(u.ref)} title={u.message}>{u.title}</a></Fragment>)}{unreadable.length > 3 ? ", …" : ""}. The Session reader rejected {unreadable.length === 1 ? "its file" : "their files"} ({unreadable[0]!.message}); the copy refreshes when the Host sends new bytes.</p>}
 		{waitingOutside > 0 && <p className="cos-caption">{waitingOutside} Sessions that need you are outside this time range.</p>}
 		<div className="cos-axis"><span>Session / Team</span><div>{[0, 1, 2, 3, 4].map((i) => { const t = from + (to - from) * i / 4; const live = i === 4 && Math.abs(to - now) < 120_000; return <time key={i} dateTime={new Date(t).toISOString()}><span className="cos-tick-full">{live ? "Now · " : ""}{dateTime(t)}</span><span className="cos-tick-short">{live ? "Now" : shortTick(t, from, to)}</span></time>; })}</div></div>

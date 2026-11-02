@@ -132,7 +132,7 @@ function rarebitView(entries: readonly EntryRecord[], state: RarebitState | unde
 /** The runtime that owns each store (several runtimes can share a process, as tests do). */
 const owners = new WeakMap<Store, NodeRuntime>();
 const runtimes = new Set<NodeRuntime>();
-export function runtimeOf(store: Store): NodeRuntime {
+function runtimeOf(store: Store): NodeRuntime {
 	const runtime = owners.get(store);
 	if (!runtime) throw new Error(`storage ${store.id} is not attached`);
 	return runtime;

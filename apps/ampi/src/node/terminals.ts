@@ -31,7 +31,7 @@ function loadPty(): Promise<PtyModule | undefined> {
 	return ptyModule;
 }
 
-export type TerminalInfo = { id: string; title: string; cwd: string; createdAt: number; exited?: number; pid: number };
+type TerminalInfo = { id: string; title: string; cwd: string; createdAt: number; exited?: number; pid: number };
 
 class Terminal {
 	readonly info: TerminalInfo;

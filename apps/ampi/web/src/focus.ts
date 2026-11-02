@@ -26,11 +26,11 @@ export type KeyIntent =
 	| "history.move" // Back or Forward arrived on an entry: return to the target it held
 	// View changes without a focus key. They move focus only when it would drop to body (R11, I20 no focus steal).
 	| "sidebar.show" // ☰: it removes itself, so on a desktop focus returns as from a layout change
-	| "panel.set" // panel ✕ or tab, ⌘J shell, hash panel, Arc toggle; the View already holds the new panel state
+	| "panel.set" // panel ✕ or tab, ⌘J shell, hash panel; the View already holds the new panel state
 	| "layout.change"; // resize, squeeze, auto-collapse, any other removal of the focused element
 
 export type View = {
-	/** A Session is open; pages (Overview, Timeline, Arcs, terminal) have only the sidebar. */
+	/** A Session is open; pages (Overview, Timeline, terminal) have only the sidebar. */
 	session: boolean;
 	/** Derived visibility: hidden, or squeezed without peek. */
 	sidebarHidden: boolean;
@@ -51,7 +51,7 @@ export type Focus = {
 	entry?: Target;
 };
 
-export type ViewChange = { sidebar?: "show" | "hide"; panel?: "open" | "close" };
+type ViewChange = { sidebar?: "show" | "hide"; panel?: "open" | "close" };
 
 export type Next =
 	| { kind: "unavailable" }

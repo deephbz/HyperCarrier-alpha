@@ -23,7 +23,7 @@
 // AMPI_TEST_QUIET=1 prints a passing file as its one status line. Failures stay visible: there are no retries.
 // Timeouts are their own class in the totals, beside the load average, because load is their usual cause.
 require("./stdio-sync.cjs");
-const { spawn, spawnSync } = require("node:child_process");
+const { execFile, spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -59,7 +59,8 @@ for (const option of options) {
 const args = process.argv.slice(2).filter((arg) => !arg.startsWith("--"));
 if (args.length > 1 && LANES.has(args[0])) args.shift();
 const lane = args.length === 0 ? "fast" : args.length === 1 && LANES.has(args[0]) ? args[0] : undefined;
-const manifest = JSON.parse(fs.readFileSync(path.join(root, "test-lanes.json"), "utf8"));
+// test-lanes.json plus its line fragment, when the checkout has one (scripts/lib/line-fragments.cjs).
+const manifest = require("../../../scripts/lib/line-fragments.cjs").loadTestLanes(path.join(root, "test-lanes.json")).lanes;
 const name = (file) => (file.startsWith(testDir + path.sep) ? path.relative(testDir, file) : file);
 const cost = (file) => manifest.costs?.[name(file)] ?? 1;
 let files;
@@ -117,8 +118,62 @@ delete env.NODE_TEST_CONTEXT;
 env.AMPI_TEST_FILE_TIMEOUT_MS = String(fileTimeout + 5000);
 const running = new Set();
 const killGroup = (child, signal) => { try { process.kill(-child.pid, signal); } catch {} };
-for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => {
-	for (const child of running) killGroup(child, "SIGKILL");
+// A detached spawn leaves the file's process group, so the group kill misses it: connectOrStart's autostarted
+// `ampi node` outlived every full run (OF-27, 73 piled up). AMPI_TEST_FILE_TOKEN is an ownership mark that every
+// process of a file inherits. Its value is the file's runner home, which is unique per file; no test reads it as a path.
+// A spawn that replaces the whole environment drops the mark, and the scan cannot see that process.
+const MARKER = "AMPI_TEST_FILE_TOKEN";
+// A zombie or an exiting process has already ended; only a live one is a stray. Linux: state Z or X. macOS: state Z or flag E.
+const ended = (state) => /^[ZXx]/.test(state) || (process.platform === "darwin" && state.includes("E"));
+const strayOf = (child) => (proc) => proc.pid !== process.pid && proc.pgid !== child.pid && !ended(proc.state);
+function procStrays(child) {
+	const token = `${MARKER}=${child.home}`, found = [];
+	for (const entry of fs.readdirSync("/proc")) {
+		if (!/^\d+$/.test(entry)) continue;
+		try {
+			if (!fs.readFileSync(`/proc/${entry}/environ`, "utf8").split("\0").includes(token)) continue;
+			const [state, , pgid] = fs.readFileSync(`/proc/${entry}/stat`, "utf8").replace(/^.*\) /s, "").split(" ");
+			found.push({ pid: Number(entry), pgid: Number(pgid), state, command: fs.readFileSync(`/proc/${entry}/cmdline`, "utf8").split("\0").join(" ").trim() });
+		} catch {}
+	}
+	return found.filter(strayOf(child));
+}
+// Elsewhere `ps e` appends the environment of this user's processes to the command, in one call for all processes.
+// A second call gets the plain command, only for the matched pids, so a STRAY line never prints the environment.
+const PS_ENV = ["e", "-A", "-ww", "-o", "pid=,pgid=,stat=,command="];
+const psCommands = (found) => ["-ww", "-o", "pid=,command=", "-p", found.map((proc) => proc.pid).join(",")];
+const PS_OPTIONS = { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 };
+function psHolders(child, text) {
+	const token = `${MARKER}=${child.home}`;
+	return text.split("\n").map((line) => /^\s*(\d+)\s+(\d+)\s+(\S+)\s(.*)$/.exec(line))
+		.filter((row) => row?.[4].split(" ").includes(token))
+		.map(([, pid, pgid, state]) => ({ pid: Number(pid), pgid: Number(pgid), state }))
+		.filter(strayOf(child));
+}
+function named(found, text) {
+	const commands = new Map(text.split("\n").map((line) => /^\s*(\d+)\s(.*)$/.exec(line)).filter(Boolean).map(([, pid, command]) => [Number(pid), command.trim()]));
+	// A pid missing from the second call ended between the calls.
+	return found.filter((proc) => commands.has(proc.pid)).map((proc) => ({ ...proc, command: commands.get(proc.pid) }));
+}
+// Synchronous scan, for the signal path: the runner exits right after it.
+function straysNow(child) {
+	if (process.platform === "linux") return procStrays(child);
+	const ps = (args) => spawnSync("ps", args, PS_OPTIONS).stdout ?? "";
+	const found = psHolders(child, ps(PS_ENV));
+	return found.length ? named(found, ps(psCommands(found))) : found;
+}
+// The scan at each file end. On a Mac at load 15-31 with about 770 processes, one `ps e` call took 0.05-0.4 s. The call
+// runs off the event loop, so other files' output and close events do not wait for it. The second call runs only after
+// a match. The Linux /proc scan stays synchronous; its cost is not measured.
+async function strays(child) {
+	if (process.platform === "linux") return procStrays(child);
+	const ps = (args) => new Promise((resolve) => execFile("ps", args, PS_OPTIONS, (_error, stdout) => resolve(stdout ?? "")));
+	const found = psHolders(child, await ps(PS_ENV));
+	return found.length ? named(found, await ps(psCommands(found))) : found;
+}
+const endAll = (found) => { for (const proc of found) try { process.kill(proc.pid, "SIGKILL"); } catch {} return found; };
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => {
+	for (const child of running) { killGroup(child, "SIGKILL"); endAll(straysNow(child)); }
 	fs.rmSync(isolatedHome, { recursive: true, force: true });
 	process.exit(130);
 });
@@ -139,7 +194,8 @@ function runFile(file) {
 		// detached: the file and every process it spawns share one process group, which a timeout ends together.
 		// Isolation none: this process already is the file's process. Under Node 22 the default isolation also puts
 		// --test-timeout on the whole file, so a file whose tests together outlast one test bound failed in CI.
-		const child = spawn(process.execPath, ["--test", "--experimental-test-isolation=none", `--test-timeout=${testTimeout}`, "--test-reporter=spec", file], { cwd: root, env: { ...env, HOME: home, PI_CODING_AGENT_DIR: agentDir }, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+		const child = spawn(process.execPath, ["--test", "--experimental-test-isolation=none", `--test-timeout=${testTimeout}`, "--test-reporter=spec", file], { cwd: root, env: { ...env, HOME: home, PI_CODING_AGENT_DIR: agentDir, [MARKER]: home }, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+		child.home = home;
 		running.add(child);
 		let output = "", timeout;
 		child.stdout.on("data", (chunk) => { output += chunk; });
@@ -149,10 +205,12 @@ function runFile(file) {
 			killGroup(child, "SIGTERM");
 			setTimeout(() => killGroup(child, "SIGKILL"), 2000).unref();
 		}, fileTimeout);
-		child.on("close", (code, signal) => {
+		child.on("close", async (code, signal) => {
 			clearTimeout(timer);
-			running.delete(child);
 			killGroup(child, "SIGKILL");
+			// The file stays in `running` until its scan ends, so a signal during the scan still ends its strays.
+			const left = endAll(await strays(child));
+			running.delete(child);
 			const ms = Date.now() - fileStarted;
 			const slow = output.match(new RegExp(`test timed out after ${testTimeout}ms`, "g"))?.length ?? 0;
 			testTimeouts += slow;
@@ -164,9 +222,12 @@ function runFile(file) {
 			} else {
 				for (const key of COUNTS) total[key] += Number(output.match(new RegExp(`^ℹ ${key} (\\d+)$`, "m"))?.[1] ?? 0);
 				if (code !== 0) failed.push(`${name(file)} (${slow ? `${slow} test timeout${slow > 1 ? "s" : ""} at load ${load()}` : `exit ${code ?? signal}`})`);
+				else if (left.length) failed.push(`${name(file)} (left ${left.length} process${left.length > 1 ? "es" : ""} running)`);
 				else times[name(file)] = Math.round(times[name(file)] ? (times[name(file)] + ms) / 2 : ms);
 			}
-			console.log(`▸ ${timeout ? "timeout" : code === 0 ? "pass" : "fail"} ${name(file)} ${(ms / 1000).toFixed(1)} s`);
+			for (const proc of left)
+				console.log(`STRAY ${name(file)}: pid ${proc.pid} had not ended when the file did, outside its process group; the runner ended it. Usual causes: a test started a detached process and did not stop it, or did not await its exit.${/ampi\.mjs node(\s|$)/.test(proc.command) ? ' A Hub with a `kind: "local"` Host and no running node autostarts one.' : ""} Command: ${proc.command}`);
+			console.log(`▸ ${timeout ? "timeout" : code === 0 && !left.length ? "pass" : "fail"} ${name(file)} ${(ms / 1000).toFixed(1)} s`);
 			done();
 		});
 	});
@@ -179,8 +240,14 @@ function pump() {
 		runFile(queue.shift()).then(() => { active--; if (active || queue.length) pump(); else finish(); });
 	}
 }
-pooling = true;
-pump();
+(async () => {
+	if (lane && process.env.AMPI_GATE_LOCK_HELD !== "1") {
+		await require("./gate-lock.cjs").acquireGateLock(`tests ${lane}`);
+		env.AMPI_GATE_LOCK_HELD = "1";
+	}
+	pooling = true;
+	pump();
+})();
 
 function finish() {
 	fs.rmSync(isolatedHome, { recursive: true, force: true });

@@ -1,7 +1,9 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { CLOSED_CHUNKS_HEADER } from "../../src/pi/views/cos-arc-prompts.ts";
 import type { DemoContext } from "./index.ts";
+import WebSocket from "ws";
+import { applyImmutable } from "@earendil-works/chord/delta";
+import type { ArcValue } from "../../src/shared/protocol.ts";
 
 /** DEMO_STRESS=200 adds real synthetic Session files, through the real reader and hub. */
 export function cosDemo({ dir, agentDir, now, sessions }: DemoContext) {
@@ -22,10 +24,7 @@ export function cosDemo({ dir, agentDir, now, sessions }: DemoContext) {
 		}
 		writeFileSync(join(root, `${id}.jsonl`), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
 	}
-	// One long Session whose agent stops ask the owner in the phrasings the Needs-you rule finds: a restated ask, a
-	// for-you list, and an ask the owner answers. The owner stops writing after step 80, so the blocker and the restated
-	// ask stay open; the asks at steps 40 and 60 are answered or overtaken by later owner turns. It spans more than
-	// 20 hours, so the Arcs list shows it.
+	// One long synthetic Session contains questions, owner replies and an unresolved blocker.
 	const asksRoot = join(agentDir, "sessions", "--work-asks--");
 	mkdirSync(asksRoot, { recursive: true });
 	const asks: Record<number, string> = {
@@ -45,8 +44,7 @@ export function cosDemo({ dir, agentDir, now, sessions }: DemoContext) {
 		parent = a;
 	}
 	writeFileSync(join(asksRoot, "sess-asks.jsonl"), asksLines.map((l) => JSON.stringify(l)).join("\n") + "\n");
-	// The big Session is live and idle, so it builds automatically at hub start. Its last stops ask one open ask of each
-	// kind (the demo model rotates kinds by candidate order), so its automatic Arc head fills Needs you.
+	// Add synthetic owner-facing questions to the long Session.
 	const big = sessions?.big?.file;
 	if (big) {
 		const last = JSON.parse(readFileSync(big, "utf8").trimEnd().split("\n").at(-1)!);
@@ -66,43 +64,40 @@ export function cosDemo({ dir, agentDir, now, sessions }: DemoContext) {
 		});
 		appendFileSync(big, out);
 	}
-	// Real ctx.ask transport, offline answer. Touch <DEMO_DIR>/cos-no-model to exercise a missing model, and
-	// <DEMO_DIR>/cos-empty-tree for a step-2 answer whose tier-2 tree has nothing in it.
-	writeFileSync(join(dir, "cos-model.cjs"), `const fs = require('node:fs');
-if (fs.existsSync(${JSON.stringify(join(dir, "cos-no-model"))})) { console.error('No model available in this synthetic demo. Remove cos-no-model to enable the offline model.'); process.exit(2); }
-let input = ''; process.stdin.on('data', d => input += d).on('end', () => {
-  // A retry appends its note to the message; the demo answers the data before it.
-  input = input.split('\\n\\nYour previous reply was invalid')[0];
-  fs.appendFileSync(${JSON.stringify(join(dir, "ask-calls.jsonl"))}, JSON.stringify({ kind: input.includes('Write the re-entry recap.') ? 'recap' : 'other' }) + '\\n');
-  let p; try { p = JSON.parse(input); } catch { setTimeout(() => { if (/Question: "fail/i.test(input)) process.exit(3); console.log(input.includes('Write the re-entry recap.') ? 'The reader work has progressed; review the reported tests and decide the next step.' : 'The agent reports tests passing and changes to reader.ts. This is selected prose, not independent verification.'); }, 600); return; }
-  // Step 2 sends the closed chunks in the system text (AMPI_ASK_SYSTEM_FILE); the message holds the open chunk.
-  const sys = process.env.AMPI_ASK_SYSTEM_FILE && fs.existsSync(process.env.AMPI_ASK_SYSTEM_FILE) ? fs.readFileSync(process.env.AMPI_ASK_SYSTEM_FILE, 'utf8') : '';
-  const closedAt = sys.indexOf(${JSON.stringify(CLOSED_CHUNKS_HEADER)});
-  if (p && p.arcs && closedAt >= 0) p.arcs = [...JSON.parse(sys.slice(closedAt + ${JSON.stringify(CLOSED_CHUNKS_HEADER)}.length)), ...p.arcs];
-  const names = ['Session reader', 'One GUI', 'Verification'];
-  // Step 2 answers tier 1 from the chunk labels and tier 2 from the evidence, in one object.
-  const project = (c) => c.label?.project ?? 'Unlabelled';
-  const tier1 = p.arcs && { headline: 'Synthetic demo: reader → GUI → verification', projects: [...new Set(p.arcs.map(project))].map(name => ({ name, summary: 'Synthetic fixture, not a real model assessment.', status: 'paused' })), transitions: p.arcs.filter((c,i,a) => i && project(c) !== project(a[i-1])).map(c => ({ chunk: c.chunk, kind: 'new_project', from: 'Previous stage', to: project(c), why: 'Synthetic demonstration transition.' })) };
-  if (p.arcs && fs.existsSync(${JSON.stringify(join(dir, "cos-empty-tree"))})) { console.log(JSON.stringify({ ...tier1, asks: [], threads: [], unassigned: {} })); return; }
-  if (p.arcs) {
-    // Tier 2: cite real entry IDs from the supplied evidence and quote their first words. Every candidate becomes an
-    // ask of a rotating kind; an ask whose next owner turn starts with "Yes" is answered by it. Enough leaves to fold.
-    const text = p.arcs.map(a => a.rarebitEvidence).join('\\n'), said = new Map(), ids = (role) => [...text.matchAll(new RegExp('^\\\\[([^\\\\]]+)\\\\] ' + role + ': (.*)$', 'gm'))].map(m => (said.set(m[1], m[2]), m[1]));
-    const u = ids('USER'), a = ids('AGENT'), at = (list, i) => list[(i % list.length + list.length) % list.length];
-    const leaf = (t, list, i) => { const id = at(list, i); return { text: t, citations: [id], quote: (said.get(id) || '').replace(/…$/, '').split(' ').slice(0, 6).join(' ') }; };
-    const kinds = ['decision', 'approval', 'input', 'blocker'], answered = (p.askCandidates || []).find(c => /^Yes/.test(said.get(c.ownerTurnsAfter[0]) || ''));
-    const thread = (label, state, n) => ({ label, state, progress: [leaf(label + ': step ' + n + ' landed and tests pass', a, n), leaf(label + ': review notes applied', a, n + 1)], decisions: [leaf('Keep ' + label + ' behind the existing Host boundary', a, n + 2)], blockers: [] });
-    console.log(JSON.stringify({ ...tier1,
-      asks: (p.askCandidates || []).map((c, i) => ({ candidates: [c.id], text: c.text.replace(/[*?]/g, '').slice(0, 90), kind: kinds[i % 4], answeredBy: c === answered ? c.ownerTurnsAfter[0] : null })),
-      threads: [
-        { label: 'Session reader', state: 'active', progress: [leaf('Host-qualified records land in the reader', a, 3)], decisions: [leaf('Persist the Rarebit fingerprint in the receipt', u, 2)], blockers: [] },
-        thread('One GUI', 'paused', 6), thread('Verification', 'active', 9), thread('Release notes', 'done', 12), thread('Telemetry', 'paused', 15), thread('Docs', 'done', 18)],
-      unassigned: { progress: [leaf('Profiling of the derive worker started', a, 20)], decisions: [], blockers: [] },
-    }));
-    return;
-  }
-  console.log(JSON.stringify({ chunks: p.chunks.map(c => ({ chunk: c.chunk, project: names[Math.floor(Number(c.chunk.slice(1)) / 2) % 3], topic: 'Synthetic stage ' + (Number(c.chunk.slice(1)) + 1) + ': ' + names[Math.floor(Number(c.chunk.slice(1)) / 2) % 3] })) }));
-});`);
-	if (process.env.DEMO_ARC_NO_MODEL === "1") writeFileSync(join(dir, "cos-no-model"), "");
-	return "";
+ // Offline side-ask and Arc answers use the same subprocess transport.
+ writeFileSync(join(dir, "cos-model.cjs"), `let input = ""; process.stdin.on("data", d => input += d).on("end", () => {
+  require("node:fs").appendFileSync(${JSON.stringify(join(dir, "ask-calls.jsonl"))}, JSON.stringify({kind:"other"}) + "\\n");
+  let p; try { p = JSON.parse(input.split("\\nAnswer rejected:")[0]); } catch { console.log("Synthetic selected evidence answer."); return; }
+  const items = p.rarebits || [], first = items[0], last = items.at(-1);
+  if (!first) { console.log("{}"); return; }
+  const claim = (i, text) => ({text, cites:[{id:i.id, quote:i.text.slice(0,120)}]});
+  const open = p.previous?.chapters.find(c => c.closed === false);
+  console.log(JSON.stringify({goal:claim(first,"Continue the agreed work."),now:claim(last,"The agent reports progress."),chapters:[{firstId:open?.firstId || first.id,label:"Reviewing the reported progress",closed:false,summary:{scope:claim(first,"Review the current work."),bullets:[claim(last,"The agent reported new evidence.")]}}],points:[]}));
+ });`);
+ return "";
+}
+
+/** Seed through the public Build path. The demo disables automatic triggers; arc-v2-triggers owns their proof. */
+export async function seedDemoArcs(port: number, token: string, ids: string[]) {
+ for (const threadId of ids) await new Promise<void>((resolve, reject) => {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { authorization: `Bearer ${token}` } });
+  let value: ArcValue | undefined, requested = false, ended = false;
+  const finish = (error?: Error) => { if (ended) return; ended = true; clearTimeout(timer); ws.close(); error ? reject(error) : resolve(); };
+  const timer = setTimeout(() => finish(new Error(`Demo Arc did not build: ${threadId}`)), 20_000);
+  ws.on("error", finish);
+  ws.on("open", () => ws.send(JSON.stringify({ t: "sub", sid: 1, host: "devbox", topic: { kind: "view", view: "arc", threadId } })));
+  ws.on("message", data => {
+   const frame = JSON.parse(String(data));
+   if (frame.t === "res" && !frame.ok) { finish(new Error(frame.error.message)); return; }
+   if (frame.sid !== 1) return;
+   if (frame.t === "snap") value = frame.value;
+   else if (frame.t === "ops" && value) value = applyImmutable(value, frame.ops);
+   if (value?.receipt) { finish(); return; }
+   if (value?.status?.state === "failed") { finish(new Error(value.status.error?.message ?? "Demo Arc failed")); return; }
+   if (!requested && value?.series?.end) {
+    requested = true;
+    ws.send(JSON.stringify({ t: "req", id: 1, host: "devbox", op: "view.arc.build", args: { threadId } }));
+   }
+  });
+ });
 }

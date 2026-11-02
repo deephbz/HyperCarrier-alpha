@@ -7,7 +7,7 @@ import { plural } from "../plural.ts";
  * belongs to its call, so it adds nothing. An assistant entry with no text, thinking or tool block still says
  * something to the reader (an error, a stop), so it counts as one message.
  */
-export type NewBelow = { messages: number; steps: number };
+type NewBelow = { messages: number; steps: number };
 
 export function countNew(entries: readonly PiEntry[]): NewBelow {
 	const out = { messages: 0, steps: 0 };

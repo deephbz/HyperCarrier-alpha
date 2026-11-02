@@ -1,4 +1,4 @@
-import type { SearchResult } from "../../../src/pi/search.ts";
+import type { SearchResult } from "../../../src/shared/search.ts";
 
 /** One Host's answer to `sessions.search`: its hits, or why it was not searched. */
 export type HostProse = { host: { link: string; label: string; status?: string }; value?: SearchResult; error?: string };

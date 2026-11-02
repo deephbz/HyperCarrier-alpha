@@ -63,7 +63,7 @@ const SKIP = new Set(['node_modules', 'dist', 'build', 'test', '.git']);
 const IMPORT = /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|new URL\(\s*)["'`](\.\.?\/[^"'`$]*)/g;
 
 /** Every submodule path in the checkout's .gitmodules. */
-export function submodulePaths(root) {
+function submodulePaths(root) {
   if (!existsSync(join(root, '.gitmodules'))) return [];
   let out = '';
   try { out = git(root, ['config', '-f', '.gitmodules', '--get-regexp', 'path']); } catch { return []; }

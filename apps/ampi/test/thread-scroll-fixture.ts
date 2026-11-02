@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { after, type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium, webkit, type Browser, type Page } from "playwright";
+import { loadBudget, PAGE_LOAD_MS } from "./page-load.ts";
 import { build } from "vite";
 import react from "@vitejs/plugin-react";
 // @ts-ignore: shared browser discovery is plain ESM.
@@ -86,6 +87,7 @@ export async function open(t: TestContext, count: number, backend: keyof typeof 
 	const page = await browser.newPage({ viewport: { width: Math.round(size.width * zoom), height: Math.round(size.height * zoom) } });
 	t.after(() => page.context().close());
 	page.setDefaultTimeout(3000);
+	loadBudget(page);
 	const css = readFileSync(join(web, "src/styles.css"), "utf8");
 	await page.route("**/*", (route) => {
 		const url = new URL(route.request().url());
@@ -111,7 +113,7 @@ export async function open(t: TestContext, count: number, backend: keyof typeof 
 	});
 	await page.goto(`${ORIGIN}/`);
 	// The paint window grows from its first paint to WINDOW entries right after open.
-	await page.locator(`[data-entry="e${count - 120}"]`).waitFor({ state: "attached" });
+	await page.locator(`[data-entry="e${count - 120}"]`).waitFor({ state: "attached", timeout: PAGE_LOAD_MS });
 	return {
 		page,
 		// A reader at the end paints the newest entry; a frozen window away from the end shows the count instead.

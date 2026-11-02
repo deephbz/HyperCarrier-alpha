@@ -8,11 +8,10 @@ import { TeamPanel } from "./team/TeamPanel.tsx";
 import { RarebitView } from "./rarebit/View.tsx";
 import { RarebitBand } from "./rarebit/Lens.tsx";
 import { Timeline, TimelinePanel } from "./cos/Timeline.tsx";
-import { Arcs } from "./cos/Arcs.tsx";
-import { ArcPanel } from "./cos/ArcPanel.tsx";
+import { ArcPanel } from "./arc/ArcPanel.tsx";
 
 /** A side panel beside a Pi Session's transcript (Rarebit, Team, Arc). */
-export type PanelView = {
+type PanelView = {
 	name: string;
 	label: string;
 	/** Shown in the panel's tabs only when this returns true for the open Session. */
@@ -21,7 +20,7 @@ export type PanelView = {
 };
 
 /** A top-level page with its own address, `#/v/<name>/…` (Chief of Staff pages). */
-export type PageView = {
+type PageView = {
 	name: string;
 	label: string;
 	/** Groups pages in the sidebar's navigation, e.g. "Chief of Staff". */
@@ -36,4 +35,4 @@ export const PI_PANELS: PanelView[] = [
 	{ name: "arc", label: "Arc", component: ArcPanel },
 ];
 export const PI_BANDS = [RarebitBand];
-export const PAGES: PageView[] = [{ name: "timeline", label: "Timeline", section: "Chief of Staff", component: Timeline }, { name: "arcs", label: "Arcs", section: "Chief of Staff", component: Arcs }];
+export const PAGES: PageView[] = [{ name: "timeline", label: "Timeline", section: "Chief of Staff", component: Timeline }];

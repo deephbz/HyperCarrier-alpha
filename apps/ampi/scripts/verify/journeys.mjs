@@ -5,17 +5,15 @@
 // map gets updated.
 import assert from 'node:assert/strict';
 import { appendFileSync, existsSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
-import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { thread, timeline, arc } from '../ux/recipes.mjs';
 import { threadsSnapshot, topicSnapshot, paneCoverage, agentWatch } from './live-rows.mjs';
-import { app, checkout } from './hub.mjs';
+import { app, checkout, settled as settleHub } from './hub.mjs';
 import { timelineTeams } from './timeline-teams.mjs';
 import { navAnchors } from './nav-anchors.mjs';
-import { arcFloor } from '../../src/pi/views/cos-arc-rules.ts';
 
 const num = text => Number(String(text).replace(/[^\d]/g, ''));
 const sideScroll = p => p.locator('.side-scroll');
@@ -51,41 +49,23 @@ const LIVE_MS = 60_000, STALL_MS = 15_000;
 /** The demo hub's threads topic, read with the bearer key like a tool would. */
 const threadsOf = state => threadsSnapshot({ port: state.port, host: 'devbox', auth: { bearer: readFileSync(join(state.run, 'hub.key'), 'utf8').trim() } });
 
-/**
- * Startup automatic Builds settled (D16): every Session autoBuild may build at hub start (live, idle, stopped: a
- * cos.timeline row that is waiting, not blocked, at or above the Arc floor, and no Worker) has a current Arc head in the threads topic. Steps that assert
- * no model call wait for it, so the startup Builds' calls never fall inside them. One promise per run.
- */
+/** Wait for startup and fixture-triggered work before measuring read-only side effects. */
 const settled = new WeakMap();
 function autoBuildsSettled(state, ms = 30_000) {
   if (!settled.has(state)) settled.set(state, buildsCaughtUp(state, [], ms));
   return settled.get(state);
 }
-
-/** Waits until the hub lists every thread in `listed` and no Session waits for an automatic Build. */
 async function buildsCaughtUp(state, listed, ms = 30_000) {
-  const auth = { bearer: readFileSync(join(state.run, 'hub.key'), 'utf8').trim() }, deadline = Date.now() + ms;
+  const deadline = Date.now() + ms;
   for (;;) {
-    const timeline = await topicSnapshot({ port: state.port, host: 'devbox', auth, topic: { kind: 'view', view: 'cos.timeline' } });
-    const threads = await threadsOf(state), arcs = new Map(threads.map(t => [t.id, t.arc])), derived = new Set(timeline.sessions.map(s => s.threadId));
-    // A Pi Team Bright Worker Session never builds automatically, so it waits for no Build.
-    const workers = new Set(threads.filter(t => t.team?.role === 'worker').map(t => t.id));
-    // A live idle Session not derived yet may still become eligible; it is pending too.
-    const pending = [...listed.filter(id => !arcs.has(id)),
-      ...threads.filter(t => t.live && t.activity === 'idle' && !derived.has(t.id) && !workers.has(t.id)).map(t => t.id),
-      ...timeline.sessions.filter(s => s.waiting && !s.blocked && !arcFloor(s.messages) && !workers.has(s.threadId)).map(s => s.threadId).filter(id => !arcs.get(id) || arcs.get(id).stale)];
-    if (!pending.length) return;
-    if (Date.now() > deadline) assert.fail(`automatic Builds did not settle within ${ms / 1000} s: ${pending.join(', ')}`);
-    await new Promise(r => setTimeout(r, 250));
+    const ids = new Set((await threadsOf(state)).map(t => t.id));
+    if (listed.every(id => ids.has(id))) break;
+    if (Date.now() > deadline) assert.fail("Fixture Sessions did not enter the index");
+    await new Promise(r => setTimeout(r, 100));
   }
+  await settleHub(state, { timeout: Math.max(1, deadline - Date.now()) });
 }
-
-/**
- * Adds fixture Sessions under the side-effect gate (run.mjs `j.fixture`). A live idle stopped Session gets an
- * automatic Build (D16) and every new Session a derive; both call the model, so the gate opens only after the hub
- * lists `ids(result)` and those jobs finish. Sessions without a pane or control socket are not live and never build;
- * their helpers (addPreviewSession and the like) skip this gate.
- */
+/** Fixture Sessions derive and can schedule automatic Builds without a live pane. */
 const addFixture = (j, add, ids) => j.fixture(async () => { const r = await add(); await buildsCaughtUp(j.state, ids(r)); return r; });
 
 /** Pi agents in the fake Herdr: what `herdr agent list` returns on the demo Host. */
@@ -474,36 +454,6 @@ function jsonParts(value, keys = new Set(), strings = []) {
 }
 
 /**
- * An Arc stored by an older chunker for unchanged Session input: `sess-big` copied under a new Session ID, with the
- * receipt of big's last Build copied in front of it and stamped as `ampi-arc-chunker/2` wrote it: no chunker or
- * excerpt version, and a label version and chunk hashes that differ from the current build's, and every old topic starts with OLD_CHUNKER_TOPIC. The
- * receipt is written first, so the hub reads it on the Session's first Arc access. Only inside the disposable demo dir.
- */
-const OLD_CHUNKER_TOPIC = 'A-chunker2-topic';
-function addOldChunkerArc(state) {
-  const id = 'sess-verify-chunker2', threadId = `pi:${id}`, sha = s => createHash('sha256').update(s).digest('hex');
-  // The Host keeps its view state under a per-Host directory inside the demo cache.
-  const cache = join(state.demo, 'cache'), big = `${sha('pi:sess-big')}.json`;
-  const found = readdirSync(cache, { recursive: true }).map(String).find(f => f.endsWith(`cos.arc/${big}`));
-  assert(found, `no stored Arc for sess-big under ${cache}`);
-  const views = join(cache, found.slice(0, -big.length - 1));
-  const receipt = JSON.parse(readFileSync(join(views, big), 'utf8'));
-  // Receipts before ampi-arc-chunker/4 carry no chunk or excerpt rule version.
-  delete receipt.chunkerVersion; delete receipt.excerptVersion;
-  receipt.labelVersion = `chunker2-${receipt.labelVersion}`;
-  for (const label of Object.values(receipt.labels)) { label.hash = `chunker2-${label.hash}`; label.topic = `${OLD_CHUNKER_TOPIC} ${label.topic}`; }
-  writeFileSync(join(views, `${sha(threadId)}.json`), JSON.stringify(receipt));
-  const sessions = join(state.demo, 'agent/sessions');
-  const file = readdirSync(sessions, { recursive: true }).map(f => join(sessions, String(f))).find(f => f.endsWith('.jsonl') && readFileSync(f, 'utf8').slice(0, 400).includes('"id":"sess-big"'));
-  assert(file, 'no sess-big Session file in the demo');
-  const [header, ...rest] = readFileSync(file, 'utf8').split('\n');
-  const dir = join(sessions, '--work-verify-chunker2--');
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'verify-chunker2.jsonl'), [JSON.stringify({ ...JSON.parse(header), id }), ...rest].join('\n'));
-  return threadId;
-}
-
-/**
  * A21: two Sessions, written only inside the disposable demo dir. The running Session has a working Herdr pane and a
  * bash call without a result at its tail. The ended Session has no pane: one call followed by stop=aborted, and one
  * call followed by a later turn, neither with a result.
@@ -623,21 +573,6 @@ async function addCommandSession(state, { id = 'sess-verify-a27', pane = 'w1:p27
 }
 
 export const journeys = [
-  {
-    // Opt-in: spends real model calls, so it runs only on request (--only R1) and never in the gate.
-    id: 'R1', feature: 't3a-arcs.md', title: 'Build one Arc with the real default model', optIn: true, budgetMs: 300_000,
-    async run(j) {
-      await j.step('real-build', 'On a separate hub with the real model, Build arc over a small fixed Session', () => new Promise((done, fail) => {
-        // The script comes from this harness; the Hub it starts comes from the app under test.
-        execFile(process.execPath, ['--no-warnings', join(dirname(fileURLToPath(import.meta.url)), 'real-arc-build.mjs'), app], { cwd: app, timeout: 330_000 }, (error, stdout) => {
-          let verdict;
-          try { verdict = JSON.parse(stdout.trim().split('\n').at(-1)); } catch { return fail(new Error(`no verdict: ${error?.message ?? 'empty output'}`)); }
-          if (!verdict.ok) return fail(new Error(`${verdict.reason} · ${JSON.stringify({ state: verdict.state, model: verdict.model, labelled: verdict.labelled, chunks: verdict.chunks, cost: verdict.cost })}`));
-          done(verdict);
-        });
-      }));
-    },
-  },
   {
     id: 'H', feature: 'h-live-sessions.md', title: 'Smoke: every live Herdr Pi agent is a live Session',
     async run(j) {
@@ -814,25 +749,6 @@ export const journeys = [
         await solo.waitFor();
         return { count: num(await card.locator('h2 .hint').innerText()), solo: await solo.getAttribute('title') };
       });
-      // Tier-2 asks come from Arc heads only (D16); the demo's automatic Builds fill them after hub start.
-      // Wait outside the step: the step's model-call delta must not cover those Builds.
-      await p.locator('[data-card="needs"] .ov-needs-kind[data-kind="decision"]').waitFor({ timeout: 30_000 });
-      await j.step('needs-you-asks', 'Read the open Arc asks in Needs you, then choose the first Decision', async () => {
-        const card = p.locator('[data-card="needs"]');
-        const decision = card.locator('.ov-needs-kind[data-kind="decision"]');
-        const kinds = await card.locator('.ov-needs-kind').evaluateAll(es => es.map(e => e.dataset.kind));
-        const order = ['decision', 'approval', 'input', 'blocker'].filter(k => kinds.includes(k));
-        assert.deepEqual(kinds, order, `kinds out of order: ${kinds}`);
-        const row = decision.locator('.row[data-thread]').first();
-        const reason = await row.getAttribute('title');
-        assert.match(reason, /\d+ open · (asked .+ ago|ask time unknown)/);
-        await row.click();
-        await p.waitForURL(/#\/v\/arcs\/devbox(?:%23pi)?\//);
-        await p.getByRole('region', { name: 'Evergreen context' }).getByRole('heading', { level: 2, name: /^Needs you/ }).waitFor();
-        await j.goto('#/v/overview');
-        await card.waitFor();
-        return { kinds, reason: reason.split('\n').pop() };
-      }, { expectSide: s => assert.equal(s.askCalls, 0, 'Needs you called the model') });
       await j.gap('I26', 'malformed-session-warning', 'Look for a reader-health warning about the malformed demo Session', async () => {
         const text = await p.locator('.overview').innerText();
         assert.match(text, /could not be read|malformed|unreadable/i, 'Overview shows no reader-health warning');
@@ -1652,214 +1568,6 @@ export const journeys = [
     },
   },
   {
-    id: 'T3a', feature: 't3a-arcs.md', title: 'Read the Arcs',
-    async run(j) {
-      const p = j.page;
-      await autoBuildsSettled(j.state);
-      await j.step('inventory', 'Choose Arcs', async () => {
-        const row = p.locator('.cos-list-row').first();
-        await j.goto('#/v/arcs', row);
-        const meta = await p.locator('.cos-header .cos-meta').innerText();
-        assert.match(meta, /^\d+ long-running Sessions?/);
-        // The demo's stopped Sessions build automatically at hub start (D16 option A); wait for that head here,
-        // so later steps measure only their own model calls.
-        const big = p.locator('.cos-list-row').filter({ has: p.locator('.cos-session-name a[href*="pi%3Asess-big"]') }).locator('.cos-arc-head');
-        await big.waitFor({ timeout: 30_000 });
-        const context = await big.innerText();
-        assert.match(context, /Needs you/, 'Arcs list Context column shows no open asks for the big Session');
-        return { meta, rows: await p.locator('.cos-list-row').count(), context };
-      });
-      let estimateCalls;
-      await j.step('open-arc', 'Open the big Session Arc from the inventory', async () => {
-        await p.locator('.cos-session-name a[href*="pi%3Asess-big"]').click();
-        await p.waitForURL(/arcs\/devbox(?:%23pi)?\/pi%3Asess-big/);
-        await p.getByRole('heading', { level: 1, name: /^Arc · / }).waitFor();
-        const toolbar = await p.locator('.cos-toolbar span').first().innerText();
-        assert.match(toolbar, /^devbox · (\d+) chunks · [1-9]\d* labelled$/);
-        const builds = await p.locator('.cos-builds summary').innerText();
-        assert.match(builds, /Arc updated automatically · \d+ calls?/);
-        const caption = await p.locator('.cos-caption').first().innerText();
-        estimateCalls = num(/· ([\d,]+) calls/.exec(caption)[1]);
-        // The estimate names its main cost: synthesis rereads the whole Session on every Build.
-        assert.match(caption, /calls · synthesis rereads the whole Session/, `estimate: ${caption}`);
-        // The automatic Build's price sits beside the estimate.
-        assert.match(caption, / · last Build: (?:[\d,]+ input tokens, )?(?:\$[\d.,]+|price unavailable)\.$/, `estimate: ${caption}`);
-        const chunksRegion = p.getByRole('region', { name: 'Chunks over time' });
-        await chunksRegion.waitFor();
-        // The legend states the live chunk rule; harness wakes and directory moves never cut a chunk.
-        const rule = await chunksRegion.locator('.cos-meta').first().innerText();
-        assert.match(rule, /^A chunk starts at an owner turn after 12 owner turns, 40k Rarebit characters, or more than 2 h without owner-driven activity\. Compactions, harness wakes and directory moves stay inside a chunk\./, `legend: ${rule}`);
-        return { toolbar, builds, estimateCalls };
-      }, { expectSide: s => assert.equal(s.askCalls, 0, 'opening an Arc called the model') });
-      await j.step('tier-two-context', 'Read Needs you and the Work tree', async () => {
-        const tree = p.getByRole('region', { name: 'Evergreen context' });
-        const first = await tree.getByRole('heading', { level: 2 }).first().innerText();
-        assert.match(first, /^Needs you \d+/, `first branch is ${first}`);
-        const kinds = await tree.getByRole('heading', { level: 3 }).allInnerTexts();
-        for (const kind of ['Decision', 'Approval', 'Input', 'Blocker']) assert(kinds.includes(kind), `no ${kind} branch`);
-        await tree.getByRole('heading', { level: 2, name: /^Work tree/ }).waitFor();
-        // Citations are Session-qualified: each one opens an entry in this Session.
-        const cites = await tree.getByRole('link', { name: /^\[#/ }).evaluateAll(as => as.map(a => a.getAttribute('href')));
-        assert(cites.length >= 4, `only ${cites.length} citations`);
-        for (const h of cites) assert.match(h, /\/t\/pi%3Asess-big\?e=/, `citation ${h} leaves the Session`);
-        return { first, kinds: kinds.slice(0, 6), citations: cites.length };
-      }, { expectSide: s => assert.equal(s.askCalls, 0, 'reading the tree called the model') });
-      await j.step('build-arc', 'Choose Build arc', async () => {
-        const button = p.getByRole('button', { name: /^(Build arc|Building arc…)$/ });
-        await button.click();
-        await p.getByRole('button', { name: 'Build arc', exact: true }).waitFor({ timeout: 30_000 });
-        // Lane 4: a Build makes exactly the estimated calls; the Build log records them.
-        let last;
-        await assertEventually(async () => /^Builds · last: Arc built on request/.test(last = await p.locator('.cos-builds summary').innerText()), 'no manual Build in the Build log', 10_000).catch(() => {});
-        assert.match(last, /^Builds · last: Arc built on request · (\d+) calls?/, `Build log: ${last}`);
-        const calls = num(/on request · (\d+) call/.exec(last)[1]);
-        assert.equal(calls, estimateCalls, `Build made ${calls} calls; estimate said ${estimateCalls}`);
-        const projects = await p.getByRole('region', { name: 'Projects' }).locator('.cos-project').count();
-        assert(projects >= 1, 'no project cards');
-        // One currency rule: a finished Build with no newer Rarebit message reads current, with no rebuild prompt.
-        const headline = await p.locator('.cos-headline .cos-meta').innerText();
-        assert.match(headline, / · current$/, `headline meta: ${headline}`);
-        return { last, calls, estimateCalls, projects, headline };
-      }, { expectSide: s => assert(s.askCalls >= 1, 'Build arc made no model call'), startsBuild: true });
-      // A28 and M2: the demo hub's config names Haiku for Arc labels and Sonnet for synthesis. The newest Build row names both.
-      await j.step('build-model', 'Open the Build log; the newest Build names claude-haiku-5-5 and claude-sonnet-5-5', async () => {
-        const log = p.locator('.cos-builds');
-        if (!(await log.evaluate(d => d.open))) await log.locator('summary').click();
-        const row = log.locator('li').first();
-        await row.waitFor({ timeout: 5000 });
-        const seen = { text: await row.innerText(), title: (await row.getAttribute('title')) ?? '' };
-        assert.match(seen.text, /claude-haiku-5-5 \+ claude-sonnet-5-5/, `newest Build row: ${JSON.stringify(seen)}`);
-        return seen;
-      });
-      // Arc chunk invalidation: labels from an older chunker never show as labels; the page says a relabel is pending.
-      // Owner decision: a cut ask title keeps its start, shows a mark that more text exists, and opens the full text on
-      // one click. The mark is ink left of the title inside its row, as for every disclosure row (T3d).
-      await j.gap('arc-titles-2', 'cut-ask-title', 'In the Arc tree, read a cut ask before and after one click', async () => {
-        const leaf = p.locator('details.cos-leaf').filter({ has: p.locator(':scope > p') }).filter({ has: p.locator('.cos-badge') }).first();
-        await leaf.waitFor({ timeout: 10_000 });
-        await leaf.scrollIntoViewIfNeeded();
-        const before = await leaf.evaluate(d => {
-          const s = d.querySelector(':scope > summary'), t = s.querySelector('.cos-leaf-title');
-          const sr = s.getBoundingClientRect(), tr = t.getBoundingClientRect();
-          return { open: d.open, title: t.textContent, full: d.querySelector(':scope > p').textContent, fullVisible: d.querySelector(':scope > p').checkVisibility(),
-            region: { x: Math.round(sr.left), y: Math.round(sr.top), width: Math.floor(tr.left - sr.left), height: Math.round(sr.height) } };
-        });
-        const problems = [];
-        const start = before.title.replace(/…$/, '').trim();
-        if (!before.title.endsWith('…')) problems.push(`the cut title has no ellipsis: "${before.title}"`);
-        if (!before.full.replace(/\s+/g, ' ').startsWith(start)) problems.push(`the cut title is not the start of the ask: "${before.title}" vs "${before.full.slice(0, 80)}"`);
-        if (before.open || before.fullVisible) problems.push('the full text shows before any click');
-        let ink = 0;
-        if (before.region.width >= 2) {
-          const png = (await p.screenshot()).toString('base64');
-          ink = await p.evaluate(async ({ png, region }) => {
-            const img = new Image(); img.src = `data:image/png;base64,${png}`; await img.decode();
-            const c = document.createElement('canvas'); c.width = region.width; c.height = region.height;
-            const g = c.getContext('2d'); g.drawImage(img, region.x, region.y, region.width, region.height, 0, 0, region.width, region.height);
-            const d = g.getImageData(0, 0, c.width, c.height).data, bg = [d[0], d[1], d[2]];
-            let n = 0; for (let i = 0; i < d.length; i += 4) if (Math.max(Math.abs(d[i] - bg[0]), Math.abs(d[i + 1] - bg[1]), Math.abs(d[i + 2] - bg[2])) > 48) n++;
-            return n;
-          }, { png, region: before.region });
-        }
-        if (ink < 4) problems.push(`no disclosure mark left of the cut title (${before.region.width} px, ${ink} inked px)`);
-        await leaf.locator(':scope > summary').click();
-        const after = await leaf.evaluate(d => ({ open: d.open, fullVisible: d.querySelector(':scope > p').checkVisibility() }));
-        if (!after.open || !after.fullVisible) problems.push('one click did not show the full ask');
-        await leaf.locator(':scope > summary').click();
-        assert.equal(problems.length, 0, problems.join('; '));
-        return { title: before.title, ink };
-      });
-      await j.step('old-chunker-arc', 'Open an Arc stored under ampi-arc-chunker/2 for unchanged Session input', async () => {
-        // Opening an outdated Arc starts an upgrade Build. Block the demo model while the page is read, so the Build
-        // can neither relabel before the read nor spend model calls inside the next step.
-        const block = join(j.state.demo, 'cos-no-model');
-        writeFileSync(block, '');
-        try {
-          const threadId = addOldChunkerArc(j.state);
-          await assertEventually(async () => (await threadsOf(j.state)).some(t => t.id === threadId), `the hub does not list ${threadId}`, 20_000);
-          await j.goto(`#/v/arcs/devbox/${encodeURIComponent(threadId)}`);
-          await p.getByRole('heading', { level: 1, name: /^Arc · / }).waitFor();
-          await p.locator('.cos-chunk').first().waitFor({ timeout: 20_000 });
-          const text = await p.locator('main, .app').first().innerText();
-          const rows = await p.locator('.cos-chunk').evaluateAll(cs => cs.map(c => c.dataset.state));
-          const problems = [];
-          if (text.includes(OLD_CHUNKER_TOPIC)) problems.push(`${text.split(OLD_CHUNKER_TOPIC).length - 1} old-chunker topics show`);
-          // The legend names every state; only chunk rows and their dividers may not read "stale label".
-          const stale = await p.locator('.cos-chunk[data-state="stale"], .cos-chunk-divider[data-state="stale"]').count();
-          const staleText = await p.locator('.cos-chunk, .cos-chunk-divider').filter({ hasText: /stale label/i }).count();
-          if (stale || staleText) problems.push(`${stale} stale chunk rows or dividers, ${staleText} reading "stale label"`);
-          // Each row's state colour pairs with one legend key; the relabel key carries the copy.
-          const pending = rows.filter(state => state === 'relabel').length;
-          if (pending !== rows.length) problems.push(`${pending} of ${rows.length} chunk rows are in state relabel`);
-          const key = await p.locator('.cos-chunk-legend [data-state="relabel"]').allInnerTexts();
-          if (!key.some(k => /relabel pending/i.test(k))) problems.push('the legend has no "relabel pending" key');
-          const toolbar = await p.locator('.cos-toolbar span').first().innerText();
-          assert.equal(problems.length, 0, `${problems.join('; ')} · toolbar: ${toolbar}`);
-          // Let the blocked upgrade Build fail before the model returns.
-          await assertEventually(async () => /failed/i.test(await p.locator('.cos-builds summary').innerText().catch(() => '')), '', 15_000).catch(() => {});
-          return { toolbar, rows: rows.length, pending };
-        } finally {
-          rmSync(block, { force: true });
-        }
-      });
-      await j.step('arc-panel', 'Open the Session, then choose Arc in its toolbar', async () => {
-        await j.goto(thread('big'));
-        await p.locator('.composer').waitFor();
-        const toggle = p.locator('.rb-controls').getByRole('button', { name: 'Arc', exact: true });
-        await toggle.click();
-        const panel = p.locator('[data-panel="arc"]');
-        await panel.getByRole('link', { name: 'Full Arc page' }).waitFor();
-        await panel.getByRole('heading', { level: 2, name: /^Needs you/ }).waitFor();
-        assert.equal(await toggle.getAttribute('aria-pressed'), 'true');
-        const lastBuild = await panel.locator('.cos-arc-last-build').innerText({ timeout: 5_000 }).catch(() => '');
-        assert.match(lastBuild, /^Last Build · Arc built on request · .* · claude-haiku-5-5 \+ claude-sonnet-5-5$/, `panel last Build: ${lastBuild}`);
-        // Short titles: an ask carries its kind and a thread its state as badges; titles keep their limits.
-        const titles = await panel.evaluate(el => ({
-          asks: [...el.querySelectorAll('.cos-leaf-title')].filter(t => t.parentElement.querySelector('.cos-badge')).map(t => t.textContent),
-          leaves: [...el.querySelectorAll('.cos-leaf-title')].map(t => t.textContent),
-          threads: [...el.querySelectorAll('.cos-context-thread > h3')].filter(h => h.textContent !== 'Unassigned').map(h => ({ label: h.firstChild.textContent.trim(), badge: h.querySelector('.cos-badge')?.textContent ?? null })),
-        }));
-        assert(titles.asks.length >= 1, 'no ask shows a kind badge');
-        assert(titles.threads.length >= 1 && titles.threads.every(t => /^(active|paused|done|unclear)$/.test(t.badge ?? '')), `thread state badges: ${JSON.stringify(titles.threads)}`);
-        for (const t of titles.asks) assert(t.length <= 60, `ask title over 60: ${t}`);
-        const stated = /^[[(]?(active|paused|done|unclear)[\])]?\s*[:|·–—-]|[|·:([–—-]\s*(active|paused|done|unclear)[\])]?$/i;
-        for (const t of titles.threads) assert(t.label.length <= 40 && !stated.test(t.label), `thread label: ${t.label}`);
-        for (const t of titles.leaves) assert(t.length <= 90, `leaf title over 90: ${t}`);
-        await toggle.click();
-        await panel.waitFor({ state: 'detached' });
-        return { pressed: true, lastBuild, asks: titles.asks.slice(0, 3), threads: titles.threads.slice(0, 3), leaves: titles.leaves.length };
-      }, { expectSide: s => assert.equal(s.askCalls, 0, 'the Arc panel called the model') });
-      await j.step('cite-jump-lands', 'From another Session, follow a citation to one of the last asks in a long Session', async () => {
-        // The target Session was read before, so its cached view arrives at once; the jump must stay in view while
-        // the deferred paint window adds rows above it.
-        await j.goto(thread('asks'));
-        await p.locator('.composer').waitFor();
-        const landed = {};
-        for (const want of ['asks-a80', 'asks-a100']) {
-          await j.goto(thread('big'));
-          await p.locator('.composer').waitFor();
-          await j.goto(`${thread('asks')}?e=${want}`);
-          // Under host load the first paint can take seconds; sample only once the entry exists.
-          await p.locator(`[data-entry="${want}"]`).first().waitFor({ state: 'attached', timeout: 10_000 });
-          const tops = [];
-          for (let i = 0; i < 3; i++) {
-            await p.waitForTimeout(250);
-            const at = await p.evaluate(id => {
-              const box = document.querySelector('.scroll')?.getBoundingClientRect();
-              const el = document.querySelector(`[data-entry="${CSS.escape(id)}"]`)?.getBoundingClientRect();
-              return box && el ? { top: Math.round(el.top - box.top), bottom: Math.round(el.bottom - box.top), height: Math.round(box.height) } : undefined;
-            }, want);
-            assert(at, `${want} is not rendered`);
-            assert(at.bottom > 0 && at.top < at.height, `${want} left the view: top ${at.top}, bottom ${at.bottom}, view ${at.height}`);
-            tops.push(at.top);
-          }
-          landed[want] = tops;
-        }
-        return landed;
-      }, { expectSide: s => assert.equal(s.askCalls, 0, 'a citation jump called the model') });
-    },
-  },
-  {
     id: 'F1', feature: 'f1-find.md', title: 'Find text across Sessions and in one Session',
     async run(j) {
       const p = j.page;
@@ -1907,7 +1615,7 @@ export const journeys = [
       await j.step('retired-derivations', 'Read Rarebits and open Models; Summary and Recap have no controls', async () => {
         assert.equal(await p.getByRole('button', { name: /^(Recap|Summary)$/ }).count(), 0);
         await p.locator('.rb-controls').getByRole('button', { name: 'Timeline', exact: true }).waitFor();
-        await p.locator('.rb-controls').getByRole('button', { name: 'Arc', exact: true }).waitFor();
+        await p.locator('[data-region="panel"]').getByRole('button', { name: 'Arc', exact: true }).waitFor();
         await p.getByRole('button', { name: 'Models', exact: true }).click();
         await p.getByLabel('Side ask model', { exact: true }).waitFor();
         assert.equal(await p.getByLabel('Recap model', { exact: true }).count(), 0);
@@ -2661,23 +2369,6 @@ export const journeys = [
         // R17: the star fills at once.
         await assertEventually(async () => (await star.innerText()).trim() === '★', `the ${name} star did not fill after a click`, 10_000);
         await closePanel();
-        // R16: the topbar Arc button shows Arc now and never writes the ⌘L default.
-        const arcButton = p.locator('.rb-controls > button', { hasText: /^Arc$/ });
-        await arcButton.click();
-        await assertEventually(async () => (await panelCount()) === 1, 'the Arc button did not show the panel', 10_000);
-        await arcButton.click();
-        await assertEventually(async () => (await panelCount()) === 0, 'the Arc button did not hide the panel', 10_000);
-        // R20: the panel ✕ on Arc counts as the Arc button off, so a wide Session does not reopen Arc.
-        await arcButton.click();
-        await assertEventually(async () => (await panelCount()) === 1, 'the Arc button did not show the panel', 10_000);
-        await p.locator('[data-region="panel"]').getByTitle('Close panel').click();
-        await assertEventually(async () => (await panelCount()) === 0, 'the panel ✕ did not close Arc', 10_000);
-        assert.equal(await p.evaluate(() => localStorage.getItem('ampi.arc.reopen')), '0', 'the panel ✕ on Arc left Arc set to reopen');
-        // R21: ⌘L hide is an explicit close too.
-        await arcButton.click();
-        await assertEventually(async () => (await panelCount()) === 1, 'the Arc button did not show the panel', 10_000);
-        await closePanel();
-        assert.equal(await p.evaluate(() => localStorage.getItem('ampi.arc.reopen')), '0', '⌘L hide of Arc left Arc set to reopen');
         await focusTranscript();
         await p.keyboard.press('ControlOrMeta+l');
         await regionIs('panel', '⌘L did not open and focus the panel');
@@ -2687,33 +2378,6 @@ export const journeys = [
         await p.locator('[data-region="panel"]').getByRole('button', { name: 'Open Arc by default' }).click();
         await closePanel();
         return { defaultOpened: name };
-      });
-      await j.step('arc-reopen', 'Arc shown last: a wide Session opens with Arc; with Arc open, a narrow pane opens the Session with Arc collapsed (R16)', async () => {
-        const reopenSession = async () => {
-          await j.goto('#/v/overview');
-          await p.locator('.side-scroll .row[data-thread="pi:sess-big"] a.title').click({ timeout: 15_000 });
-          await p.waitForURL(/\/t\/pi%3Asess-big/);
-          await p.locator(transcript).waitFor({ timeout: 15_000 });
-        };
-        const shown = () => p.locator('[data-region="panel"] .panel-tab-choice > button.on').innerText().catch(() => '');
-        await closePanel();
-        await p.evaluate(() => localStorage.setItem('ampi.arc.reopen', '1'));
-        await reopenSession();
-        await assertEventually(async () => (await panelCount()) === 1 && /Arc/.test(await shown()), 'a wide Session did not reopen Arc after the owner showed it', 10_000);
-        // I20: the reopen shows Arc and keeps focus where the Session open put it.
-        const afterReopen = await region();
-        assert.notEqual(afterReopen, 'panel', 'reopening Arc moved focus into the panel');
-        await p.setViewportSize({ width: 1000, height: 960 });
-        try {
-          await reopenSession();
-          // The collapse happens when the Session opens; give a late reopen time to show before reading the panel.
-          await p.waitForTimeout(500);
-          assert.equal(await panelCount(), 0, 'a narrow pane opened the Session with the saved Arc panel shown');
-        } finally {
-          await p.setViewportSize({ width: 1440, height: 960 });
-          await p.evaluate(() => localStorage.setItem('ampi.arc.reopen', '0'));
-        }
-        return { wideReopened: true, focusAfterReopen: afterReopen, narrowCollapsed: true };
       });
       await j.step('session-switch', 'Press Alt+↓ in the transcript: the next Session opens with focus in its composer; Alt+↑ opens the one above it', async () => {
         await startIn('transcript');

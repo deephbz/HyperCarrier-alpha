@@ -19,7 +19,7 @@ const CONTEXT_FILES = ["AGENTS.md", "CLAUDE.md"];
 const MAX_CONTEXT_CHARS = 60_000;
 
 /** Context files from the global agent dir, then from the root down to `cwd` (nearest last, so it wins). */
-export function loadContextFiles(cwd: string): { path: string; content: string }[] {
+function loadContextFiles(cwd: string): { path: string; content: string }[] {
 	const found: { path: string; content: string }[] = [];
 	const agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 	for (const name of CONTEXT_FILES) {

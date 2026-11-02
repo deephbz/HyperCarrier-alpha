@@ -1,4 +1,4 @@
-import type { HostState } from "../../../src/hub/hosts.ts";
+import type { HostState } from "../../../src/shared/hosts.ts";
 import { threadSource } from "../../../src/shared/protocol.ts";
 
 export function isPiHost(host: Pick<HostState, "kind"> | undefined): boolean {
@@ -6,7 +6,7 @@ export function isPiHost(host: Pick<HostState, "kind"> | undefined): boolean {
 }
 
 /**
- * The label of a Host wherever the owner sees it: dialogs, the sidebar header, Overview, Find, Arcs, panels and
+ * The label of a Host wherever the owner sees it: dialogs, the sidebar header, Overview, Find, panels and
  * notifications. When two Host sources share one Host ID (Pi and a durable node on one machine), each label names its
  * source; otherwise the label is the Host's own. `hosts` is every Host the hub serves, not only the ones on screen.
  */

@@ -12,7 +12,7 @@ function one(value: unknown, max = 160): string {
 const str = (value: unknown) => (typeof value === "string" || typeof value === "number" ? String(value) : "");
 
 /** The call's one line, as the tool row's head shows it. */
-export function argSummary(name: string, args: Args): string {
+function argSummary(name: string, args: Args): string {
 	switch (name) {
 		case "bash":
 			return one(args.command);

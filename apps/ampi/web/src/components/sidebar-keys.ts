@@ -1,6 +1,6 @@
 import { isEditableTarget } from "../keymap.ts";
 
-export type SidebarKeyAction = "previous" | "next" | "first" | "last" | "collapse" | "parent" | "expand" | "child" | "open" | undefined;
+type SidebarKeyAction = "previous" | "next" | "first" | "last" | "collapse" | "parent" | "expand" | "child" | "open" | undefined;
 
 export function sidebarKeyAction(key: string, expanded: boolean, expandable: boolean, hasParent: boolean): SidebarKeyAction {
 	if (key === "j") return "next";

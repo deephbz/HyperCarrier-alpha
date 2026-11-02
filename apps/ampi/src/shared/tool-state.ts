@@ -3,7 +3,7 @@
 // Pi Sessions send none, so the state never depends on them.
 
 /** `unfinished`: the call is still open, but the Session is not running a turn. */
-export type ToolCallState = "done" | "failed" | "running" | "interrupted" | "unfinished";
+type ToolCallState = "done" | "failed" | "running" | "interrupted" | "unfinished";
 
 /**
  * `open`: the call has no result, its entry did not stop as aborted, and no later turn follows it (see OpenCalls).
@@ -16,7 +16,7 @@ export function toolCallState({ result, open, active }: { result?: { isError: bo
 }
 
 /** The part of a transcript entry that opens or closes calls. A PiEntry fits: user, assistant and tool-result. */
-export type CallEvidence = { kind: string; stop?: string; blocks?: readonly { type: string; callId?: string }[]; callId?: string };
+type CallEvidence = { kind: string; stop?: string; blocks?: readonly { type: string; callId?: string }[]; callId?: string };
 
 /** Tracks the open calls while entries arrive in transcript order. Only calls of the last turn can be open. */
 export class OpenCalls {

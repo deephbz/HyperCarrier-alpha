@@ -5,7 +5,8 @@
 import { useEffect, useState } from "react";
 import type { ThreadSummary } from "../../../src/shared/protocol.ts";
 import { useNow } from "../client.ts";
-import { type HostThreads, LinkNotes, ThreadRow } from "./Sidebar.tsx";
+import type { HostThreads } from "./Sidebar.tsx";
+import { LinkNotes, ThreadRow } from "./SidebarRows.tsx";
 import { hostMeta, linkView, readHostFold, saveHostFold } from "./host-fold.ts";
 import { projectTeamRows } from "./team-nesting.ts";
 

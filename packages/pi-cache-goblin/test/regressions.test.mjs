@@ -8,6 +8,15 @@ const payload = () => ({ model: "claude-example", max_tokens: 100, stream: true,
   system: [{ type: "text", text: "global\n<cwd>\n/project\n</cwd>" }], messages: [user("held")] });
 const plan = { sessionTtl: "5m", globalBoundary: (text) => text.indexOf("<cwd>") };
 
+test("request-head computation does not inspect message content", () => {
+  const input = payload();
+  const expected = headOf(input);
+  Object.defineProperty(input.messages[0], "content", {
+    get() { throw new Error("message content must not be read"); },
+  });
+  assert.deepEqual(headOf(input), expected);
+});
+
 test("all request-head fields invalidate held pins, including new provider fields", () => {
   const first = placeMarkers(payload(), { ...plan, pins: [{ name: "held" }] });
   for (const change of [ { model: "claude-other" }, { tools: [{ name: "new", input_schema: {} }] },

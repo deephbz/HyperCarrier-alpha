@@ -9,29 +9,24 @@ import { hostname } from "node:os";
 import { basename, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
-import { type HostsFrame, type HubOps, type NodeFrame, type PinsFrame, type Topic, threadSource } from "../shared/protocol.ts";
-import { type HostConfig, HostLink, type HostState, linkKey } from "./hosts.ts";
+import { type BrowserFrame, type HostsFrame, type HubOps, type NodeFrame, type PinsFrame, type Topic, threadSource } from "../shared/protocol.ts";
+import { HostLink, linkKey } from "./hosts.ts";
+import type { HostConfig, HostState } from "../shared/hosts.ts";
 import { type HubHome, newHubToken } from "./home.ts";
 import { Pins } from "./pins.ts";
 import { PiHost, type PiHostConfig } from "../pi/host.ts";
-import { buildQueue, deriveQueue, roleWaitQueue } from "../pi/derive-queue.ts";
+import { deriveQueue } from "../pi/derive-queue.ts";
+import { arcQueue } from "../pi/views/arc.ts";
 import { sweepAskScratch } from "../pi/ask.ts";
 import { complete, instant, nowUs, span, tracing } from "../trace.ts";
 import { loopWindow, watched } from "../loop-watch.ts";
-import { type ArcEvidence, type HelperModels, hubConfigPath, updateHubHosts, useHubConfig } from "./helper-models.ts";
+import { type HelperModels, hubConfigPath, updateHubHosts, useHubConfig } from "./helper-models.ts";
 
 export { hubConfigPath };
 
 // `models` names helper models; helper-models.ts reads them from the file on every call and owns every hub.json write.
 /** `persistentCookie`: the login cookie outlives the client session (see `loginCookie`). */
-export type HubConfig = { hosts: (HostConfig | PiHostConfig)[]; self?: string; models?: HelperModels; arcEvidence?: ArcEvidence; persistentCookie?: boolean };
-
-/** Browser → hub frames: node frames addressed to one host, plus hub operations. */
-type BrowserFrame =
-	| { t: "req"; id: number; host: string; op: string; args?: unknown }
-	| { t: "sub"; sid: number; host: string; topic: Topic }
-	| { t: "unsub"; sid: number }
-	| { t: "hub"; id: number; op: string; args?: Record<string, unknown> };
+type HubConfig = { hosts: (HostConfig | PiHostConfig)[]; self?: string; models?: HelperModels; persistentCookie?: boolean };
 
 /** `host` is the link key the subscription resolved to. */
 type BrowserSub = { sid: number; host: string; topic: Topic; hostSid?: number };
@@ -48,7 +43,7 @@ const MIME: Record<string, string> = {
 };
 
 /** Browsers send cookies to every port of a host, so the cookie names its port: no other loopback server receives it. */
-export function cookieName(port: number): string {
+function cookieName(port: number): string {
 	return `ampi_k_${port}`;
 }
 
@@ -57,7 +52,7 @@ export function cookieName(port: number): string {
  * opts in (`persistentCookie`: the owner's long-lived hub) leaves a year-long cookie; every other hub's cookie ends with
  * the client session. The expiring form matches it attribute for attribute, or the client keeps the old one.
  */
-export function loginCookie(port: number, value: string, persistent: boolean): string {
+function loginCookie(port: number, value: string, persistent: boolean): string {
 	return `${cookieName(port)}=${value}; HttpOnly; SameSite=Strict; Path=/${persistent ? "; Max-Age=31536000" : ""}`;
 }
 const expiredCookie = (name: string) => `${name}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`;
@@ -168,7 +163,7 @@ export class Hub {
 		this.pins = new Pins(options.home);
 		this.persistentCookie = options.persistentCookie ?? config.persistentCookie === true;
 		this.configPath = options.configPath;
-		useHubConfig(options.configPath, config.models, config.arcEvidence);
+		useHubConfig(options.configPath, config.models);
 		this.token = options.token ?? options.home?.token() ?? newHubToken();
 		for (const host of config.hosts) this.#addLink(host);
 	}
@@ -524,7 +519,7 @@ export class Hub {
 		if (url.pathname === "/api/health") {
 			// Unauthenticated callers learn only that this hub answers and a proof that it holds the key, so the app hands
 			// the key only to the real hub, never to another process that took the port.
-			const body = this.#authorized(req) ? { ok: true, proof: hubProof(this.token), hosts: this.hostStates(), derive: deriveQueue(), builds: buildQueue(), roleWaits: roleWaitQueue(), loop: loopWindow() ?? null, missedInputs: [...this.links.values()].reduce((n, l) => n + (l instanceof PiHost ? l.missedInputs : 0), 0) } : { ok: true, proof: hubProof(this.token) };
+			const body = this.#authorized(req) ? { ok: true, proof: hubProof(this.token), hosts: this.hostStates(), derive: deriveQueue(), builds: arcQueue(), loop: loopWindow() ?? null, missedInputs: [...this.links.values()].reduce((n, l) => n + (l instanceof PiHost ? l.missedInputs : 0), 0) } : { ok: true, proof: hubProof(this.token) };
 			res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(body));
 			return;
 		}

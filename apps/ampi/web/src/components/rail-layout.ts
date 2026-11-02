@@ -7,12 +7,12 @@ const PITCH = 6;
 const MAX_DASHES = 40;
 const MAX_SHARE = 0.4;
 /** A Session with fewer prompts has no rail: the transcript keeps its native scrollbar, and the prompt header steps through them. */
-export const MIN_PROMPTS = 8;
+const MIN_PROMPTS = 8;
 /** Find marks closer than this merge into one. */
 const MERGE_PX = 3;
 
 /** A Find match on the rail, placed in prompt units: its prompt's index, plus a half when it lies in that prompt's answer. */
-export type RailFind = { id: string; at: number; cur: boolean };
+type RailFind = { id: string; at: number; cur: boolean };
 /** The rail as drawn: the prompts that show a dash, and the Find marks, in px from the strip's top. */
 export type RailLayout = { shown: ReadonlySet<number>; marks: { id: string; y: number; cur: boolean }[] };
 

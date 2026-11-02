@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useSyncExternalStore, type ReactNode, type RefObject } from "react";
-import type { SearchHit } from "../../../src/pi/search.ts";
+import type { SearchHit } from "../../../src/shared/search.ts";
 import type { PiThreadView, ThreadOutline } from "../../../src/shared/protocol.ts";
 import { hub } from "../client.ts";
 import { findSteps, navigate } from "../nav.ts";
@@ -43,7 +43,7 @@ export function useSessionFind(host: string, threadId: string, reading: () => st
 		endFilter: () => session.setFilter(false),
 	};
 }
-export type SessionFind = ReturnType<typeof useSessionFind>;
+type SessionFind = ReturnType<typeof useSessionFind>;
 
 /** The Find bar: a band above the transcript, never over it. On a narrow row its controls wrap below the query. */
 export function FindBar({ find, onClose }: { find: SessionFind; onClose: () => void }) {

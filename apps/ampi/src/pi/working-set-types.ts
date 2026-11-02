@@ -1,20 +1,14 @@
 // Rebuildable Pi working-set values. Source evidence stays in the copied JSONL.
 import type { PiEntry } from "../shared/protocol.ts";
-import { CHUNKER_VERSION, EXCERPT_VERSION, type Chunk } from "./views/cos-arc-chunks.ts";
 import type { Kinds, RarebitItem } from "./views/rarebit.ts";
-import type { FindAsk } from "./search.ts";
+import type { FindAsk } from "../shared/search.ts";
 
 /** Bump when the entry index changes; every Session then rebuilds its entries. */
-export const DERIVATION_VERSION = 7;
-/**
- * A derived Session version: the index rules, the chunk and excerpt rules, then the reader's source version. A chunker
- * or excerpt change gives an unchanged Session a new version, so its next derive re-chunks it without an index rebuild.
- */
-export const derivedVersion = (source: string) => `${DERIVATION_VERSION}/${CHUNKER_VERSION}/${EXCERPT_VERSION}:${source}`;
-/** Whether a stored derived version used these index rules (any chunk rules); otherwise the entries rebuild. */
-export const sameIndex = (version: string) => version.startsWith(`${DERIVATION_VERSION}:`) || version.startsWith(`${DERIVATION_VERSION}/`);
+export const DERIVATION_VERSION = 8;
+export const derivedVersion = (source: string) => `${DERIVATION_VERSION}:${source}`;
+export const sameIndex = (version: string) => version.startsWith(`${DERIVATION_VERSION}:`);
 /** Bump when `derive` adds or changes a Session summary field; unchanged Sessions then re-derive without an index rebuild. */
-export const SUMMARY_VERSION = 5;
+export const SUMMARY_VERSION = 6;
 export const WINDOW_ENTRIES = 400;
 /** UTF-8 bytes in one page of a full projected entry. */
 export const ENTRY_PAGE_BYTES = 64 * 1024;
@@ -31,7 +25,7 @@ export type WorkerJob =
  | { op: "derive"; source: Source; urgent?: boolean }
  | { op: "find"; source: Source; query: string; version: string; ask?: FindAsk }
  | { op: "forget"; source: Source; version: string; watermark?: unknown };
-export type Series = {
+type Series = {
  start: number; end: number; buckets: [number, number, number][];
  entries: [number, string][]; marks: [number, string, "stop" | "error"][];
  stopped: boolean; priced: boolean; entryCount: number; omittedHints: number; omittedMarks: number;
@@ -49,11 +43,10 @@ export type Derived = {
  /** Tool calls of the last turn that are still open (src/shared/tool-state.ts). */
  openCalls?: number;
  timeline: Series;
- arc: { chunks: Chunk[]; excludedEntries: number; shortenedChunks: number; inputChars: number };
  rarebit: { stats: { user: number; continuation: number; stop: number; compactions: number; rarebitTokens: number; totalTokens: number; ratio: number | null };
  diagnosis: { session: Kinds; live: Kinds; entries: number; ms: number }; selector: string;
   /** Rarebit messages and compactions on the active branch; with `fingerprint`, the Arc staleness input. */
-  count: number; fingerprint: string };
+  count: number; fingerprint: string; lastStopAt?: string; trigger?: { id: string; kind: "user" | "stop" } };
 };
 export type StoredEntry = { id: string; position: number; t: number | null; ui?: PiEntry; rarebit?: RarebitItem };
 export const indexFile = (source: Source) => `${source.file}.index.sqlite`;

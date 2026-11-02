@@ -3,7 +3,7 @@
 
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { PiTeamTask } from "../../src/pi/views/team.ts";
+import type { PiTeamTask } from "../../src/shared/team.ts";
 import { cosDemo } from "./cos.ts";
 
 /** `now` is the seed clock (DEMO_NOW): every demo writer dates its files from it, so one seed writes the same bytes. */

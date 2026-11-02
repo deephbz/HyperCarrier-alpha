@@ -8,7 +8,8 @@ import { resolvePin } from "./pin-place.ts";
 import { hintPin, setPin, usePins } from "../client.ts";
 import { ago, go, href } from "../util.ts";
 import { Popover, at } from "./Popover.tsx";
-import { ActivityIcon, type HostThreads } from "./Sidebar.tsx";
+import type { HostThreads } from "./Sidebar.tsx";
+import { ActivityIcon } from "./ThreadStatus.tsx";
 
 // A pin names a Session by threadId alone (src/hub/pins.ts); its host is a hint.
 const pinned = (pins: Pin[], threadId: string) => pins.some((p) => p.threadId === threadId);

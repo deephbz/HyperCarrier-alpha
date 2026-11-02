@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import { Hub } from "../src/hub/hub.ts";
 import { FAKE_HERDR } from "../test/pi-fixtures.ts";
 import { DEMO_EXTENSIONS } from "./demo/index.ts";
+import { seedDemoArcs } from "./demo/cos.ts";
 import { writeDemoSessions, type DemoSession } from "./demo/sessions.ts";
 // @ts-ignore: a plain ESM script without types
 import { webDistCurrent } from "./web-inputs.mjs";
@@ -35,6 +36,9 @@ const agentDir = join(dir, "agent");
 const now = Number(process.env.DEMO_NOW) || Date.now();
 export type { DemoSession };
 export const sessions = writeDemoSessions(agentDir, now);
+// UI journeys must not wait through automatic cadence after fixture appends. Trigger tests verify that policy.
+process.env.PI_CODING_AGENT_DIR = agentDir;
+writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ ampi_arc: { auto: false } }));
 
 const agent = (pane: string, ws: string, tab: string, s: DemoSession, status = "idle", title = "") => ({
 	pane_id: pane,
@@ -129,9 +133,10 @@ const hub = new Hub(
 			},
 		],
 		// Helper models have no built-in default; the offline stand-in answers whatever they name.
-		models: { arcLabels: "anthropic/claude-haiku-5-5", arcSynthesis: "anthropic/claude-sonnet-5-5", rarebitAsk: "anthropic/claude-sonnet-5-5" },
+		models: { rarebitAsk: "anthropic/claude-sonnet-5-5" },
 	},
 	{ token },
 );
 const port = await hub.listen(Number(process.env.PORT ?? 7880));
+await seedDemoArcs(port, token, Object.values(sessions).map(s => `pi:${s.id}`));
 console.log(`demo hub: http://127.0.0.1:${port}/?k=${token}  (data: ${dir})`);

@@ -11,7 +11,7 @@ import type { ThreadSummary } from "../../../src/shared/protocol.ts";
 import { openCalls } from "../../../src/shared/tool-state.ts";
 import { findHost, hub, readVersioned, refusal, useHosts, useTopic } from "../client.ts";
 import { INDEXING, NOT_FOUND, STALE_VERSION } from "../../../src/shared/protocol.ts";
-import { isPiHost } from "./Sidebar.tsx";
+import { isPiHost } from "./host-label.ts";
 import { entryId, entryState, flushEntry, noteEntry, revealStore } from "../nav.ts";
 import { ACTIVITY_LABEL, MOD, attentionOf, clock, go, href, money, tokens } from "../util.ts";
 import { PANELS } from "./Panel.tsx";
@@ -23,7 +23,6 @@ import { markSeen } from "../seen.ts";
 import { newBelow, newBelowLabel } from "./new-below.ts";
 import { RarebitControls, RarebitJump, RarebitTools, useRarebitLens } from "../views/rarebit/Lens.tsx";
 import { rarebitState } from "../views/rarebit/state.ts";
-import { useArcReopen } from "../views/cos/arc-reopen.ts";
 import { FindBar, FindFiltered, useFindHighlight, useSessionFind } from "./FindBar.tsx";
 import { EntryBody, fetchEntry, shortenedLabel } from "./EntryBody.tsx";
 import { PI_BANDS } from "../views/registry.ts";
@@ -107,8 +106,6 @@ export function NoticeEntry({ entry, host, threadId, fragment }: { entry: Extrac
 	);
 }
 
-// Memoized: earlier pages of a long thread do not re-render while the live tail streams.
-/** Entries drawn in the first frame after a switch. */
 /** How long a read refused as stale waits for the view to show the newer version before it reads again. */
 const VERSION_WAIT = 2000;
 /** A history read still pending after this long shows its quiet cue; a quick read shows none. */
@@ -126,6 +123,7 @@ type Reveal = { entry: string; holder: string; seq: number };
 /** How long a reveal keeps the target centred while layout moves (images, folds, bodies), and how long it waits for the row. */
 const SETTLE_MS = 1500;
 const RENDER_WAIT_MS = 1000;
+/** Entries drawn in the first frame after a switch. */
 const FIRST_PAINT = 40;
 /** Messages rendered after first paint, and how many more each time the reader scrolls near the top. */
 const WINDOW = 120;
@@ -138,7 +136,6 @@ type Place = { id: string; offset: number; limit: number; unit?: "css" };
 const PLACES = new Map<string, Place>();
 /** Branch summaries in a window: Pi writes one where the reader's Session moved to another branch. */
 const branchMarks = (entries: PiEntry[]) => entries.flatMap((e) => e.kind === "compaction" && e.reason === "branch" ? [e.id] : []);
-/** Entries after the reader's last-seen entry: a count, or "some" when that entry left the served window. */
 /**
  * Painted rows split after each row that the source window followed with dropped, unpainted entries. Each segment's key
  * names the boundary that starts it, `head` for the first, so a trim above never renames or remounts a segment.
@@ -152,6 +149,7 @@ function segments<T extends { id: string }>(rows: T[], omitted: Set<string>, hea
 	return parts;
 }
 
+// Memoized: earlier pages of a long thread do not re-render while the live tail streams.
 const Entries = memo(function Entries({
 	entries,
 	live,
@@ -219,7 +217,7 @@ const Entries = memo(function Entries({
 	};
 	const parts = useMemo(() => lens ? toolRuns(entries, busy) : [], [entries, lens, busy]);
 	const open = useMemo(() => openCalls(entries), [entries]);
-	const calls = new Set(entries.flatMap((entry) => entry.kind === "assistant" ? entry.blocks.flatMap((b) => b.type === "tool" ? [b.callId] : []) : []));
+	const calls = useMemo(() => new Set(entries.flatMap((entry) => entry.kind === "assistant" ? entry.blocks.flatMap((b) => b.type === "tool" ? [b.callId] : []) : [])), [entries]);
 	/** `fragment` names this rendered part of the entry: the lens part key, or the entry ID for a whole entry. */
 	const renderEntry = (preview: PiEntry, fragment = preview.id) => {
 				const entry = fullEntries.get(preview.id) ?? preview;
@@ -421,8 +419,6 @@ export function ThreadView({
 		if (viewArrived) perfMarkPainted("switch-done");
 	}, [viewArrived]);
 	const pi = isPiHost(findHost(useHosts().hosts, host));
-	// A Pi Session opens with Arc when the owner last showed it and the pane is wide; a narrow pane collapses it (R16).
-	useArcReopen(pi, panel, setPanel);
 	const reader = pi;
 	// Find opens at the reader's place.
 	const find = useSessionFind(host, threadId, () => readingEntry(scroller.current), view);

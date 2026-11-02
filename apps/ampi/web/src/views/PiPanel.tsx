@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { ThreadSummary } from "../../../src/shared/protocol.ts";
 import { PI_PANELS } from "./registry.ts";
-import { PANEL_DEFAULT_KEY, panelClosed } from "./cos/arc-reopen.ts";
+import { PANEL_DEFAULT_KEY } from "./panel-preference.ts";
 
 export function piPanels(summary: ThreadSummary | undefined) {
 	return PI_PANELS.filter((p) => !p.available || p.available(summary));
@@ -28,7 +28,7 @@ export function PiPanel({ name, host, threadId, summary, entry, setPanel }: { na
 					))}
 				</div>
 				<span style={{ flex: 1 }} />
-				<button className="btn ghost small panel-close" onClick={() => { panelClosed(name); setPanel(undefined); }} title="Close panel" aria-label="Close panel">
+				<button className="btn ghost small panel-close" onClick={() => setPanel(undefined)} title="Close panel" aria-label="Close panel">
 					✕
 				</button>
 			</div>

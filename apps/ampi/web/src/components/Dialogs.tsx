@@ -10,7 +10,8 @@ import type { Overlay } from "../focus.ts";
 import { PAGES } from "../views/registry.ts";
 import { carrier, navigate } from "../nav.ts";
 import { href } from "../util.ts";
-import { isPiHost, type HostThreads } from "./Sidebar.tsx";
+import type { HostThreads } from "./Sidebar.tsx";
+import { isPiHost } from "./host-label.ts";
 import { FormRow } from "./FormRow.tsx";
 import { hoverIntent } from "./Popover.tsx";
 import { Segmented } from "./Segmented.tsx";
@@ -239,7 +240,7 @@ export function HostSetupDialog({ onClose }: { onClose: () => void }) {
 }
 
 /** The ⌘K palette's two searches: Session names and titles (local), or prose in retained copies (each Pi Host's `sessions.search`). */
-export type PaletteScope = "sessions" | "prose";
+type PaletteScope = "sessions" | "prose";
 let lastScope: PaletteScope = "sessions";
 const SCOPES = [["sessions", "Sessions"], ["prose", "Prose"]] as const;
 

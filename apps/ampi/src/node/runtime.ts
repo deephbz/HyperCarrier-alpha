@@ -40,6 +40,7 @@ import { Terminals } from "./terminals.ts";
 import { Accounts } from "./accounts.ts";
 import { NODE_IMAGE_LIMITS } from "./images.ts";
 import { buildId } from "../shared/build.ts";
+import { ampiHome } from "../shared/home.ts";
 
 export const VERSION = "0.1.0";
 
@@ -162,7 +163,7 @@ export class NodeRuntime {
 	#closing = false;
 
 	constructor(options: NodeOptions = {}) {
-		this.home = options.home ?? process.env.AMPI_HOME ?? join(homedir(), ".ampi");
+		this.home = options.home ?? ampiHome();
 		mkdirSync(join(this.home, "threads"), { recursive: true, mode: 0o700 });
 		this.models =
 			options.models ??

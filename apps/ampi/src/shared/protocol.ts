@@ -4,15 +4,24 @@
 
 import type { Spend } from "./spend.ts";
 import type { Op } from "@earendil-works/chord/delta";
-import type { HostState } from "../hub/hosts.ts";
-import type { ModelChoice } from "../node/models.ts";
-import type { SearchResult } from "../pi/search.ts";
-import type { ArcListValue, ArcValue } from "../pi/views/cos-arc.ts";
-import type { TimelineValue } from "../pi/views/cos-timeline.ts";
-import type { RarebitSide, RarebitValue } from "../pi/views/rarebit.ts";
-import type { TeamValue } from "../pi/views/team.ts";
+import type { HostState } from "./hosts.ts";
+import type { ModelChoice } from "./models.ts";
+import type { SearchResult } from "./search.ts";
+import type { ArcValue } from "./arc.ts";
+export type { ArcValue, ArcReceipt, ArcWork, Claim, Cite, Bullet, Chapter, ChapterSummary, Point, BuildRecord, UsageSeries } from "./arc.ts";
+import type { TimelineValue } from "./timeline.ts";
+import type { RarebitValue } from "../pi/views/rarebit.ts";
+import type { RarebitSide } from "./rarebit.ts";
+import type { TeamValue } from "./team.ts";
 
 export const PROTOCOL = "ampi/1";
+
+/** Browser → hub frames: node frames addressed to one host, plus hub operations. */
+export type BrowserFrame =
+	| { t: "req"; id: number; host: string; op: string; args?: unknown }
+	| { t: "sub"; sid: number; host: string; topic: Topic }
+	| { t: "unsub"; sid: number }
+	| { t: "hub"; id: number; op: string; args?: Record<string, unknown> };
 
 /**
  * Request from a client. `id` is unique per connection; the response echoes it. On the wire `op` is any string: the
@@ -104,12 +113,8 @@ export type ThreadSummary = {
 	lastError?: string;
 	/** Rarebit Summary status projection (C4), node Sessions only; undefined means unknown. */
 	rarebit?: { status: string; reason?: string; asOf: number; fresh: boolean };
-	/**
-	 * Pi backend: the tier-2 Arc context head (C4, D16); undefined means not built. `asks` lists open Needs-you asks
-	 * per kind with the oldest ask time (ms, null when unknown); `finished` means every tier-2 thread is done and
-	 * nothing is open. An Assessment, never runtime, Task, or Project truth.
-	 */
-	arc?: { builtAt: string; stale: boolean; newMessages: number; finished: boolean; asks: { kind: "decision" | "approval" | "input" | "blocker"; n: number; since: number | null }[]; overtaken?: number };
+	/** Cited Arc assessment; never runtime or Task state. */
+	arc?: { needsYou: number; oldestAt?: string; stale: number };
 	/** Positive evidence from other authorities that the owner is needed (for example a blocked or failed Task). */
 	closed?: { at: number; by: string };
 	attention?: { source: string; reason: string }[];
@@ -345,8 +350,6 @@ export type HostOps = {
 export type RarebitAskArgs = { threadId: string; sideId?: string; question?: string; model?: string; end?: boolean };
 /** `{}` after `end`; otherwise the side conversation with its newest turn answered or failed. */
 export type RarebitAskResult = { side: RarebitSide } | Done;
-/** The Arc a Session has not got: it is outside the Host's local copies. */
-export type ArcMissing = { missing: true; notice: string };
 
 /**
  * Views a Pi Host serves (src/pi/views), keyed by view name: the topic's parameters, the published value, and the
@@ -364,8 +367,7 @@ export type ViewTopics = {
 	};
 	team: { params: { threadId?: string }; value: TeamValue; ops: None };
 	"cos.timeline": { params: None; value: TimelineValue; ops: { locate: OpSpec<{ threadId: string; at: number }, { entry?: string; ref: string }> } };
-	/** Without `threadId`, the Host's list of Sessions with Arc heads. */
-	"cos.arc": { params: { threadId?: string }; value: ArcValue | ArcListValue | ArcMissing; ops: { build: OpSpec<{ threadId: string; model?: string }, { started: true }> } };
+	arc: { params: { threadId: string }; value: ArcValue; ops: { build: OpSpec<{ threadId: string; rebuild?: boolean }, { started: true }> } };
 };
 export type ViewName = keyof ViewTopics;
 /** A topic of one view; the default is the union over every view. */

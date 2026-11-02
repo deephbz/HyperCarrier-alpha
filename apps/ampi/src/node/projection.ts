@@ -2,9 +2,8 @@
 // projected object (memoized by the immutable EntryRecord), so chord's structural diff between two projections only
 // walks what a commit changed.
 
+import { TOOL_TEXT_LIMIT } from "../shared/tool-text-limit.ts";
 import type { ConversationView, EntryRecord, JsonValue } from "./durable-types.ts";
-
-export const TOOL_TEXT_LIMIT = 48_000;
 const DETAILS_LIMIT = 24_000;
 
 export type UiBlock =

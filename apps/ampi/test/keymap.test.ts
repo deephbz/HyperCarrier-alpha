@@ -30,18 +30,9 @@ test("focus toggle distinguishes hidden, visible-unfocused, and focused regions"
 	assert.equal(regionToggle(false, true), "hide-and-return");
 });
 
-test("the Arc button uses the ArcPanel toggle; Cmd+L opens the configured default panel (focus R15)", () => {
-	const root = new URL("../web/src/", import.meta.url);
-	// The Session header's Arc button sits in the Rarebit controls.
-	const controls = readFileSync(new URL("views/rarebit/Lens.tsx", root), "utf8");
-	const app = readFileSync(new URL("App.tsx", root), "utf8");
-	assert.match(controls, /onClick=\{\(\) => toggleArcPanel\(panel, setPanel\)\}>Arc</);
-	assert.match(app, /localStorage\.getItem\(PANEL_DEFAULT_KEY\)/);
-});
-
-test("Cmd+L hide is an explicit close: hiding Arc stops a wide Session from reopening it (focus R21)", () => {
+test("Cmd+L opens the configured default panel", () => {
 	const app = readFileSync(new URL("../web/src/App.tsx", import.meta.url), "utf8");
-	assert.match(app, /panel: \(open\) => \{\s*if \(!open && panel\) panelClosed\(panel\);/);
+	assert.match(app, /localStorage\.getItem\(PANEL_DEFAULT_KEY\)/);
 });
 
 test("a global binding without a handler is unavailable: it does not fire, the palette omits it, help names its context", () => {

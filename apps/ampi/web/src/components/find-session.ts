@@ -1,6 +1,6 @@
 // Find in one open Session (FindBar): which match is current, and when to ask the hub for another window. The hub owns
 // the windows (search.ts findCollector); this module owns the reader's place among them. It has no React and no DOM.
-import type { FindAsk, FindWindow, SearchHit, SearchResult } from "../../../src/pi/search.ts";
+import type { FindAsk, FindWindow, SearchHit, SearchResult } from "../../../src/shared/search.ts";
 import type { FindReply } from "../../../src/shared/protocol.ts";
 
 /** One scope of a Find result: its matches, the window they form, and the scope's total. */
@@ -24,12 +24,12 @@ export type Wrap = "top" | "bottom";
  * total and the reader stays where they are. `indexing`: the Host has not indexed the Session yet, and the request
  * waits for it.
  */
-export type FindView = {
+type FindView = {
 	open: boolean; query: string; busy: boolean; indexing: boolean; error?: string; tools: boolean; filter: boolean;
 	matches: SearchHit[]; total: number; skipped: number; at?: number; wrapped?: Wrap; scanned: number; more: boolean;
 };
 
-export type FindIo = {
+type FindIo = {
 	/** One `thread.find` request. */
 	find: (query: string, ask: FindAsk) => Promise<FindReply>;
 	/** The entry at the reader's place, or undefined when the transcript is hidden. */

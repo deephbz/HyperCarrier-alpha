@@ -1,5 +1,5 @@
 /** A scroll region's bar shows for this long after it scrolls, so a wheel or key scroll shows where the reader is. */
-export const QUIET_SCROLL_REVEAL_MS = 1000;
+const QUIET_SCROLL_REVEAL_MS = 1000;
 
 /**
  * Marks a scrolled .quiet-scroll region with data-scrolled for QUIET_SCROLL_REVEAL_MS; styles.css then paints its thumb.

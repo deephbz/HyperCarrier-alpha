@@ -21,7 +21,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /** deploy-live.sh names this variable since it began to run the dev/ampi-int tip's deploy logic. */
-export const ENTRY_MARKER = 'AMPI_DEPLOY_LOGIC';
+const ENTRY_MARKER = 'AMPI_DEPLOY_LOGIC';
 const ENTRY = 'apps/ampi/scripts/deploy-live.sh';
 const INT = 'refs/heads/dev/ampi-int';
 
@@ -79,7 +79,7 @@ function declared(log, path, from, to) {
 }
 
 /** { ok, lines }: one line per warning or refusal, then a summary. */
-export async function checkPins(root, target, { base, timeoutMs = Number(process.env.AMPI_PIN_FETCH_TIMEOUT_MS ?? 4000) } = {}) {
+async function checkPins(root, target, { base, timeoutMs = Number(process.env.AMPI_PIN_FETCH_TIMEOUT_MS ?? 4000) } = {}) {
   const lines = [];
   // One round of independent reads; each names the target (and a given base), so none waits for their resolution.
   // Without --base, the base tree and log wait for the merge base below.

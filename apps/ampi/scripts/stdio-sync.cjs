@@ -2,5 +2,6 @@
 // socket asynchronously, and process.exit drops the bytes the kernel has not taken yet. A slow reader, or the 4 KiB pipe
 // that Linux gives a user over fs.pipe-user-pages-soft, then loses the tail: under gate load on 2026-10-31,
 // `run-tests.cjs --list` printed only part of its list. Blocking writes keep every byte. A script that calls process.exit
-// loads this module before its first write (test/run-tests.test.ts).
+// loads this module before its first write; apps/ampi/test/run-tests.test.ts checks the AmPi scripts.
+// A byte-equal copy of this file travels alone with the AmPi scripts; a parity test keeps the two copies equal.
 for (const stream of [process.stdout, process.stderr]) stream._handle?.setBlocking?.(true);
