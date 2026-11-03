@@ -58,6 +58,8 @@ async function startHub() {
 	let stopping: Promise<void> | undefined;
 	stopHub = () => {
 		if (stopping) return stopping;
+		// The after hook must finish even after the escalation timer fires.
+		child.ref();
 		return stopping = (async () => {
 			if (child.exitCode === null && child.signalCode === null) {
 				await new Promise<void>((resolve) => {

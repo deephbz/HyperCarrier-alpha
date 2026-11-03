@@ -48,7 +48,8 @@ test("test runner: a file that leaves a detached process running fails, and the 
     const output = run.stdout + run.stderr;
     assert.equal(run.status, 1, output);
     const pid = Number(readFileSync(join(leaky, "child.pid"), "utf8"));
-    assert.match(output, new RegExp(`STRAY .*leaky\\.test\\.ts: pid ${pid} had not ended when the file did.* Command: `));
+    assert.match(output, new RegExp(`STRAY .*leaky\\.test\\.ts: pid ${pid} ppid (?:\\d+|unknown) pgid ${pid} startedAt \\S+ observedAt \\S+ had not ended when the file did.* Command: `));
+    if (process.platform === "linux") assert.match(output, /startedAt \d{4}-\d{2}-\d{2}T[\d:.]+Z/);
     assert.doesNotMatch(output, new RegExp(`STRAY .*${ENV_PATTERN}`), "a STRAY line never prints the environment");
     assert.match(output, /▸ fail .*leaky\.test\.ts/);
     assert.match(output, /failed files: .*leaky\.test\.ts \(left 1 process running\)/);

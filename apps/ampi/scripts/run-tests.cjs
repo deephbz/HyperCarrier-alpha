@@ -126,14 +126,18 @@ const MARKER = "AMPI_TEST_FILE_TOKEN";
 // A zombie or an exiting process has already ended; only a live one is a stray. Linux: state Z or X. macOS: state Z or flag E.
 const ended = (state) => /^[ZXx]/.test(state) || (process.platform === "darwin" && state.includes("E"));
 const strayOf = (child) => (proc) => proc.pid !== process.pid && proc.pgid !== child.pid && !ended(proc.state);
+const traceClock = process.platform === "linux" ? { hz: Number(spawnSync("getconf", ["CLK_TCK"], { encoding: "utf8" }).stdout), boot: Number(/^btime (\d+)$/m.exec(fs.readFileSync("/proc/stat", "utf8"))?.[1]) } : undefined;
 function procStrays(child) {
 	const token = `${MARKER}=${child.home}`, found = [];
 	for (const entry of fs.readdirSync("/proc")) {
 		if (!/^\d+$/.test(entry)) continue;
 		try {
 			if (!fs.readFileSync(`/proc/${entry}/environ`, "utf8").split("\0").includes(token)) continue;
-			const [state, , pgid] = fs.readFileSync(`/proc/${entry}/stat`, "utf8").replace(/^.*\) /s, "").split(" ");
-			found.push({ pid: Number(entry), pgid: Number(pgid), state, command: fs.readFileSync(`/proc/${entry}/cmdline`, "utf8").split("\0").join(" ").trim() });
+			const fields = fs.readFileSync(`/proc/${entry}/stat`, "utf8").replace(/^.*\) /s, "").split(" ");
+			const [state, ppid, pgid] = fields;
+			const startedMs = (traceClock.boot + Number(fields[19]) / traceClock.hz) * 1000;
+			const startedAt = Number.isFinite(startedMs) ? new Date(startedMs).toISOString() : undefined;
+			found.push({ pid: Number(entry), ppid: Number(ppid), pgid: Number(pgid), startedAt, state, command: fs.readFileSync(`/proc/${entry}/cmdline`, "utf8").split("\0").join(" ").trim() });
 		} catch {}
 	}
 	return found.filter(strayOf(child));
@@ -226,7 +230,7 @@ function runFile(file) {
 				else times[name(file)] = Math.round(times[name(file)] ? (times[name(file)] + ms) / 2 : ms);
 			}
 			for (const proc of left)
-				console.log(`STRAY ${name(file)}: pid ${proc.pid} had not ended when the file did, outside its process group; the runner ended it. Usual causes: a test started a detached process and did not stop it, or did not await its exit. Command: ${proc.command}`);
+				console.log(`STRAY ${name(file)}: pid ${proc.pid} ppid ${proc.ppid ?? "unknown"} pgid ${proc.pgid} startedAt ${proc.startedAt ?? "unknown"} observedAt ${new Date().toISOString()} had not ended when the file did, outside its process group; the runner ended it. Usual causes: a test started a detached process and did not stop it, or did not await its exit. Command: ${proc.command}`);
 			console.log(`▸ ${timeout ? "timeout" : code === 0 && !left.length ? "pass" : "fail"} ${name(file)} ${(ms / 1000).toFixed(1)} s`);
 			done();
 		});
