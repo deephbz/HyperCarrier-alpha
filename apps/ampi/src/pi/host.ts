@@ -1851,13 +1851,14 @@ export class PiHost extends EventEmitter {
 	}
 
 	/**
-	 * The pi-hc-control build this Host's live controls run: the first one of another build, else the expected build;
-	 * null with no live control. /api/health reports it.
+	 * The pi-hc-control build this Host's live controls run: the first one that is unstamped (null) or of another build,
+	 * else the expected build; null with no live control. /api/health reports it.
 	 */
 	get controlStamp(): Stamp | null {
 		const live = this.#agents.flatMap((a) => (a.control?.live ? [a.control.stamp ?? null] : []));
 		if (!live.length) return null;
-		return live.find((s) => s?.id !== this.#controlExpected.id) ?? this.#controlExpected;
+		const off = live.find((s) => s?.id !== this.#controlExpected.id);
+		return off === undefined ? this.#controlExpected : off;
 	}
 
 	#imagesFor<I extends { data: string; mimeType: string }>(agent: RemoteAgent, images: I[]): I[] {

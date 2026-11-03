@@ -394,6 +394,27 @@ test("pi host: /api/health names the hub's stamp and the control build of each H
 	}
 });
 
+test("pi host: /api/health names an unstamped live control null, and the expected build only when every control runs it", async (t) => {
+	const { f, hub } = await setup(t, { controlStamp: EXPECTED });
+	const health = async () => (await (await fetch(`http://127.0.0.1:${hub.port}/api/health`, { headers: { cookie: `ampi_k_${hub.port}=${TOKEN}` } })).json()).hosts[0].controlStamp;
+	const until = async (want: unknown, why: string) => {
+		for (let i = 0; JSON.stringify(await health()) !== JSON.stringify(want); i++) {
+			assert.ok(i < 100, why);
+			await new Promise((r) => setTimeout(r, 50));
+		}
+	};
+	const a = await control(f, f.sessionA, { stamp: EXPECTED });
+	t.after(() => a.close());
+	await until(EXPECTED, "one matching control: the expected build");
+	// The live Mac case: unstamped controls beside a matching one read as the expected build.
+	const unstamped = await control(f, f.sessionB, { stamp: null });
+	await until(null, "an unstamped live control beside a matching one did not read null");
+	unstamped.close();
+	const other = await control(f, f.sessionB, { stamp: SKEWED[0][1] });
+	t.after(() => other.close());
+	await until(SKEWED[0][1], "a control of another build beside a matching one did not read its build");
+});
+
 const PNG = { data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAwS2OUAAAAABJRU5ErkJggg==", mimeType: "image/png" };
 
 test("pi host: images go only through a live control; keys or too large a set refuse at once", async (t) => {

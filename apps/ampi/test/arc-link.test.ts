@@ -254,6 +254,7 @@ test('Arc real link: lost acceptance replays during replacement and both hub res
  await second.browser.until<any>(second.sid,v=>v.canDismiss);
  const health = async () => (await (await fetch(`http://127.0.0.1:${second.port}/api/health`, {headers:{authorization:`Bearer ${"f".repeat(64)}`}})).json()) as any;
  assert.deepEqual((await health()).hosts[0].arcStamp, initial.stamp);
+ assert.deepEqual((await health()).arcTarget, initial.stamp, "health reports the bundle offered to the Host");
  assert.equal("hosts" in await (await fetch(`http://127.0.0.1:${second.port}/api/health`)).json(), false);
  const gate=h.gate('held-running-call');h.plan([{answer:answer(),gate}]);
  writeFileSync(h.holdAcks,'hold');

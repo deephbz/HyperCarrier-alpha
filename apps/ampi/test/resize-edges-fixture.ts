@@ -12,6 +12,7 @@ import { findChrome } from "../scripts/perf/browser.mjs";
 import { stamp } from "../src/shared/build.ts";
 import { engineSkip } from "./engines.ts";
 import { waitForDemoArc } from "../scripts/demo/cos.ts";
+import { maintainHost } from "../src/arc/service/client.ts";
 
 // The owner's resize incident (ui-resize-edges): the real App and stylesheet, built in memory from web/src, on the
 // synthetic demo hub (scripts/pi-demo.ts). Real mouse down/move/up drive both edges in Chromium and in WebKit, the
@@ -65,16 +66,19 @@ async function startHub() {
 					try { process.kill(-child.pid!, "SIGTERM"); } catch { clearTimeout(timer); resolve(); }
 				});
 			}
-			rmSync(run, { recursive: true, force: true });
-			// Signal delivery does not prove every descendant has exited.
+			// End every hub-owned manager before stopping the independent resident.
 			const deadline = Date.now() + 5000;
 			while (true) {
 				const pids = execFileSync("ps", ["-axo", "pid=,pgid=,stat="], { encoding: "utf8", timeout: 1000 }).trim().split("\n")
 					.map((line) => line.trim().split(/\s+/)).filter(([, group, state]) => Number(group) === child.pid && !state?.startsWith("Z")).map(([pid]) => pid);
-				if (!pids.length) return;
+				if (!pids.length) break;
 				if (Date.now() >= deadline) assert.fail(`the demo hub process group ${child.pid} did not end within 5 s; pids: ${pids.join(", ")}`);
 				await new Promise((resolve) => setTimeout(resolve, 20));
 			}
+			// The resident owns a separate process group. Keep its lock until stop completes.
+			const stopped = await maintainHost({ id: "devbox", label: "devbox", kind: "pi-local", agentConfig: { agentDir: join(demo, "agent") } }, { op: "stop", timeoutMs: 10_000 });
+			assert.equal(stopped.state, "stopped", `demo Arc teardown: ${JSON.stringify(stopped)}`);
+			rmSync(run, { recursive: true, force: true });
 		})();
 	};
 	const deadline = Date.now() + 50_000;

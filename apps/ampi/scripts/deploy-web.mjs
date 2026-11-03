@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Usage: node deploy-web.mjs <checkout> <cacheDir>
-//        node deploy-web.mjs --served <port> <checkout> <cacheDir>   (smoke row b; see servedBundle)
+//        node deploy-web.mjs --served <port> <checkout> <cacheDir>   (smoke row b; see servedBundle; key in AMPI_SMOKE_KEY)
 // Puts the web build of <checkout> into apps/ampi/web/dist for the live deploy, and skips Vite when the inputs are unchanged.
 // A cache entry is <cacheDir>/<key>/{dist,inputs.json}. The key hashes the content of every module Vite loaded for that
 // build, plus the build configuration, the lock file and the Node version. A new import changes an existing input, so
@@ -93,7 +93,11 @@ function install(checkout, cacheDir, key) {
 
 // Smoke row b: the hub serves the build keyed for <checkout>'s current inputs. It reads index.html and every
 // /assets/ file that index.html names over HTTP and compares their sha256 with the cache entry's dist.
+// The hub adds one build meta line to index.html (hub.ts #serve). The row removes that line before the compare and
+// requires its content to equal the stamp in the hub's /api/health, which needs the key in headers.
 // A skipped or stale web step fails here even when the hub is healthy.
+const BUILD_META = /<meta name="ampi-build" content="([^"]*)" \/>\n/g;
+
 export async function servedBundle({ port, checkout, cacheDir, headers = {} }) {
 	const key = findCached(checkout, cacheDir);
 	if (!key) return { ok: false, line: "no keyed build for the checkout's web inputs" };
@@ -106,13 +110,24 @@ export async function servedBundle({ port, checkout, cacheDir, headers = {} }) {
 	};
 	const index = readFileSync(join(dist, "index.html"));
 	const paths = ["/", ...new Set([...index.toString().matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g)].map((m) => m[1]))];
+	let build;
+	try { build = JSON.parse((await get("/api/health")).toString()).stamp?.id; } catch {}
+	if (!build) return { ok: false, line: "no hub build stamp in /api/health (is the key missing?)" };
 	const bad = [];
 	for (const p of paths) {
-		const want = sha(p === "/" ? index : readFileSync(join(dist, p)));
-		try { if (sha(await get(p)) !== want) bad.push(p); } catch (e) { bad.push(`${p} (${e.message})`); }
+		try {
+			let body = await get(p);
+			if (p === "/") {
+				const metas = [...body.toString().matchAll(BUILD_META)].map((m) => m[1]);
+				if (metas.length !== 1) { bad.push(`/ (${metas.length} build meta lines)`); continue; }
+				if (metas[0] !== build) { bad.push(`/ (build meta ${metas[0]} is not the hub's ${build})`); continue; }
+				body = Buffer.from(body.toString().replace(BUILD_META, ""));
+			}
+			if (sha(body) !== sha(p === "/" ? index : readFileSync(join(dist, p)))) bad.push(p);
+		} catch (e) { bad.push(`${p} (${e.message})`); }
 	}
 	const what = `${key.slice(0, 12)} index+${paths.length - 1} assets`;
-	return bad.length ? { ok: false, line: `served bundle differs from ${what}: ${bad.join(" ")}` } : { ok: true, line: `served = ${what}` };
+	return bad.length ? { ok: false, line: `served bundle differs from ${what}: ${bad.join(" ")}` } : { ok: true, line: `served = ${what}, build ${build}` };
 }
 
 function prune(cacheDir, keep) {
@@ -122,7 +137,8 @@ function prune(cacheDir, keep) {
 async function main([checkout, cacheDir, ...rest]) {
 	if (checkout === "--served") {
 		// node deploy-web.mjs --served <port> <checkout> <cacheDir>: smoke row b alone, for sims and manual checks.
-		const r = await servedBundle({ port: Number(cacheDir), checkout: resolve(rest[0]), cacheDir: rest[1] });
+		const port = Number(cacheDir), key = process.env.AMPI_SMOKE_KEY;
+		const r = await servedBundle({ port, checkout: resolve(rest[0]), cacheDir: rest[1], headers: key ? { cookie: `ampi_k_${port}=${key}` } : {} });
 		console.log(`${r.ok ? "PASS" : "FAIL"} b=${r.ok ? "ok" : "stale bundle"} | ${r.line}`);
 		process.exit(r.ok ? 0 : 1);
 	}

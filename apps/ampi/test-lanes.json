@@ -127,6 +127,7 @@
     "rarebit-tool-runs.test.ts",
     "resize-edges.test.ts",
     "resize-edges-limits.test.ts",
+    "resize-edges-teardown.test.ts",
     "reveal-cancel.test.ts",
     "run-tests.test.ts",
     "run-tests-strays.test.ts",

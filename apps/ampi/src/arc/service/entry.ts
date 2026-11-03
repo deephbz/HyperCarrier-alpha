@@ -2,6 +2,7 @@
 // lock. A running service also checks order before it agrees to drain.
 import { closeSync, existsSync, fstatSync, fsyncSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
+import type { Socket } from "node:net";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -9,7 +10,7 @@ import { serviceRelay } from "./relay.ts";
 import type { ArcFrame } from "../link.ts";
 import { compare, type Stamp } from "./engine.ts";
 import { launchLocked, inheritedLock, LOCK_BUSY } from "./lock.ts";
-import { controlStore, STORE_SCHEMA } from "./store.ts";
+import { controlStore, durableJson, readJson, storeIncarnation, STORE_SCHEMA } from "./store.ts";
 import { replacementText, serviceStatus, serviceError } from "./status.ts";
 import { controlRequest, startService as runtime } from "./runtime.ts";
 
@@ -22,6 +23,16 @@ declare const __ARC_OUTPUT_LIMIT_SOURCE__: string;
 export const serviceVersion = typeof __ARC_VERSION__ === "undefined" ? "development" : __ARC_VERSION__;
 export const stamp: Stamp = { id: serviceVersion, order: buildOrder, line: releaseLine };
 export type ManageOperation = { op: "ensure" | "stop" | "status"; host: string; agentDir?: string; timeoutMs?: number };
+type LockedOperation = ManageOperation & { stopGeneration?: string | null; storeIncarnation?: string | null };
+function stopGeneration(store: string): string | null {
+ const path = join(store, "stop.json");
+ try {
+  const value = readJson(path) as { generation?: unknown } | undefined;
+  if (value === undefined) return null;
+  if (typeof value?.generation !== "string" || !/^[0-9a-f-]{36}$/.test(value.generation)) throw new Error("Invalid stop generation");
+  return value.generation;
+ } catch (error) { throw new Error(`Cannot read Arc stop fence ${path}. Run ampi arc stop on this Host to replace this file, then retry.`, { cause: error }); }
+}
 export function relay(body: string, options: { host: string; agentDir: string; known: Record<string, number>; emit(frame: ArcFrame): void; pollMs?: number }) {
  return serviceRelay({ ...options, stamp,
   ensure: () => manage(body, { op: "ensure", host: options.host, agentDir: options.agentDir, timeoutMs: 5000 }),
@@ -31,7 +42,9 @@ export function relay(body: string, options: { host: string; agentDir: string; k
 const agentDirectory = () => process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 function installFile(path: string, body: string) {
  if (existsSync(path)) { if (readFileSync(path, "utf8") !== body) throw new Error("Arc service version has different content"); return; }
- mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+ for (const dir of [dirname(dirname(path)), dirname(path)]) {
+  try { mkdirSync(dir, { mode: 0o700 }); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+ }
  const temp = path + "." + randomUUID() + ".tmp";
  const fd = openSync(temp, "wx", 0o600);
  try { writeFileSync(fd, body); fsyncSync(fd); } finally { closeSync(fd); }
@@ -43,11 +56,18 @@ export async function startService(agentDir: string, host: string, ready: (value
  installFile(extensionPath, __ARC_OUTPUT_LIMIT_SOURCE__);
  return runtime({ agentDir, host, serviceVersion, releaseLine, buildOrder, extensionPath, ready, exit: () => process.exit(0) });
 }
-async function lockedMain(operation: ManageOperation, body: string) {
- const lock = inheritedLock(), control = controlStore(lock), agentDir = operation.agentDir ?? agentDirectory();
- let selected = control.read().selected;
+async function lockedMain(operation: LockedOperation, body: string) {
+ const agentDir = operation.agentDir ?? agentDirectory(), store = join(agentDir, "ampi-arc");
  const reply = (value: unknown) => process.stdout.write(JSON.stringify(value) + "\n");
- if (operation.op === "status" || operation.op === "stop") {
+ if (operation.op === "ensure" && (!operation.storeIncarnation || operation.storeIncarnation !== storeIncarnation(store))) {
+  reply(serviceStatus(operation.host, { state: "stopped", running: false, pid: null, serviceLogPath: join(store, "service.log") })); return;
+ }
+ const lock = inheritedLock(), control = controlStore(lock);
+ let selected = control.read().selected;
+ // A stop fences every ensure admitted before it, including launchers that
+ // have not acquired the lifetime lock and callers retrying LOCK_BUSY.
+ if (operation.op === "stop") durableJson(lock, "stop.json", { generation: randomUUID() });
+ if (operation.op === "status" || operation.op === "stop" || operation.stopGeneration !== stopGeneration(lock.store)) {
   reply(serviceStatus(operation.host, { releaseLine: selected?.id === serviceVersion ? releaseLine : null,
    buildOrder: selected?.order ?? null, serviceVersion: selected?.id ?? null, stamp: selected,
    serviceLogPath: join(lock.store, "service.log"), running: false, pid: null,
@@ -65,18 +85,22 @@ async function lockedMain(operation: ManageOperation, body: string) {
  const module = await import(pathToFileURL(join(lock.store, "versions", selected.id, "service.mjs")).href);
  await module.startService(agentDir, operation.host, reply);
 }
-function launch(staging: string, store: string, operation: ManageOperation): Promise<any> {
+function launch(staging: string, store: string, operation: LockedOperation): Promise<any> {
  return new Promise((resolve, reject) => {
   const log = openSync(join(store, "service.log"), "a", 0o600), logStart = fstatSync(log).size;
   let child;
-  try { child = launchLocked(store, [staging, "_locked", JSON.stringify(operation)], { detached: true, stdio: ["ignore", "pipe", log] }); }
+  try { child = launchLocked(store, [staging, "_locked", JSON.stringify(operation)], { detached: true, stdio: ["ignore", "pipe", log, "pipe"], env: { ...process.env, AMPI_ARC_PARENT_FD: "3" } }); }
   finally { closeSync(log); }
+  const parent = child.stdio[3] as Socket;
+  parent.on("error", () => {}); parent.resume();
   let output = "", ready = false, outcome: { result: any } | { error: unknown } | undefined;
   // Only readiness transfers the child to its independent resident lifetime.
   // Every other launch outcome completes after close has reaped the child.
   const reap = (value: NonNullable<typeof outcome>) => {
    if (ready || outcome) return;
-   outcome = value; clearTimeout(timer); child.kill("SIGKILL");
+   outcome = value; clearTimeout(timer);
+   // The guardian handles group termination by killing and reaping Node.
+   try { process.kill(-child.pid!, "SIGTERM"); } catch { child.kill("SIGKILL"); }
   };
   const timer = setTimeout(() => reap({ error: new Error("Arc service startup timed out") }), operation.timeoutMs ?? 30_000);
   child.on("error", e => reap({ error: Object.assign(new Error(`Arc service launcher could not start: ${e.message}`), (e as NodeJS.ErrnoException).code === "ENOENT" ? { state: "cannot-start", prerequisite: "perl" } : { state: "error" }) }));
@@ -85,7 +109,7 @@ function launch(staging: string, store: string, operation: ManageOperation): Pro
    try {
     const result = JSON.parse(output.slice(0, at));
     if (result?.running !== true) { reap({ result }); return; }
-    ready = true; clearTimeout(timer); child.stdout!.destroy(); child.unref(); resolve(result);
+    ready = true; clearTimeout(timer); parent.end("R"); child.stdout!.destroy(); child.unref(); resolve(result);
    } catch (error) { reap({ error }); }
   });
   child.on("close", code => {
@@ -105,13 +129,18 @@ function launch(staging: string, store: string, operation: ManageOperation): Pro
 export async function manage(body: string, operation: ManageOperation): Promise<any> {
  if (!operation.host || !["ensure", "stop", "status"].includes(operation.op)) throw new Error("Invalid Arc maintenance command");
  const agentDir = operation.agentDir ?? agentDirectory(), store = join(agentDir, "ampi-arc");
- const command = { ...operation, agentDir }, deadline = Date.now() + (operation.timeoutMs ?? 330_000);
+ const deadline = Date.now() + (operation.timeoutMs ?? 330_000), serviceLogPath = join(store, "service.log");
+ let command: LockedOperation;
+ try {
+  if (operation.op === "ensure") mkdirSync(store, { recursive: true, mode: 0o700 });
+  command = { ...operation, agentDir, ...(operation.op === "ensure" ? { storeIncarnation: storeIncarnation(store, true), stopGeneration: stopGeneration(store) } : {}) };
+ } catch (error) { throw Object.assign(error as Error, { serviceLogPath }); }
  let staging: string | undefined, replacing = false, sawBusy = false;
- const serviceLogPath = join(store, "service.log");
  const failedReplacement = (cause: string) => serviceStatus(operation.host, { state: "error", code: "replacement-failed", serviceLogPath, detail: replacementText(operation.host, cause, serviceLogPath) });
  const busy = () => replacing ? failedReplacement("timed out waiting for the service to drain and release its lock") : serviceStatus(operation.host, { state: "busy", kind: "busy", serviceLogPath, detail: "Arc service holds its lock but does not answer" });
  try {
   while (true) {
+   if (operation.op === "ensure" && command.storeIncarnation !== storeIncarnation(store)) return serviceStatus(operation.host, { state: "stopped", running: false, pid: null, serviceLogPath });
    let live: any;
    try { live = await controlRequest(store, { op: "status", refreshAuth: operation.op === "status" }, Math.max(1, Math.min(operation.op === "status" ? 20_000 : 1000, deadline - Date.now()))); } catch {}
    if (live) {
@@ -130,7 +159,7 @@ export async function manage(body: string, operation: ManageOperation): Promise<
    }
    if (Date.now() >= deadline) return busy();
    if (!staging) {
-    mkdirSync(store, { recursive: true, mode: 0o700 });
+    if (operation.op !== "ensure") mkdirSync(store, { recursive: true, mode: 0o700 });
     staging = join(store, "launch-" + randomUUID() + ".mjs");
     writeFileSync(staging, body, { mode: 0o600, flag: "wx" });
    }
@@ -141,6 +170,7 @@ export async function manage(body: string, operation: ManageOperation): Promise<
    await new Promise(resolve => setTimeout(resolve, 100));
   }
  } catch (error) {
+  if (operation.op === "ensure" && command.storeIncarnation !== storeIncarnation(store)) return serviceStatus(operation.host, { state: "stopped", running: false, pid: null, serviceLogPath });
   if (replacing) return failedReplacement((error as Error).message);
   if (sawBusy && Date.now() >= deadline) return busy();
   throw Object.assign(error as Error, { serviceLogPath: join(store, "service.log") });
@@ -149,6 +179,10 @@ export async function manage(body: string, operation: ManageOperation): Promise<
 }
 if (process.argv[2] === "_locked" && import.meta.url === pathToFileURL(realpathSync(process.argv[1]!)).href) {
  lockedMain(JSON.parse(process.argv[3]!), readFileSync(process.argv[1]!, "utf8")).catch(error => {
-  process.stdout.write(JSON.stringify(serviceError(JSON.parse(process.argv[3]!).host, Object.assign(error, { serviceLogPath: join(inheritedLock().store, "service.log") }))) + "\n"); process.exitCode = 1;
+  const operation: LockedOperation = JSON.parse(process.argv[3]!), store = join(operation.agentDir ?? agentDirectory(), "ampi-arc");
+  if (operation.op === "ensure" && operation.storeIncarnation !== storeIncarnation(store)) {
+   process.stdout.write(JSON.stringify(serviceStatus(operation.host, { state: "stopped", running: false, pid: null, serviceLogPath: join(store, "service.log") })) + "\n"); return;
+  }
+  process.stdout.write(JSON.stringify(serviceError(operation.host, Object.assign(error, { serviceLogPath: join(store, "service.log") }))) + "\n"); process.exitCode = 1;
  });
 }

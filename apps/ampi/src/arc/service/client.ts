@@ -10,15 +10,22 @@ import type { PiHostConfig } from "../../pi/host.ts";
 import { sshOptions } from "../../shared/host-transport.ts";
 import { serviceStatus, type ServiceStatus } from "./status.ts";
 import type { ManageOperation } from "./entry.ts";
+import type { Stamp } from "./engine.ts";
 const exec = promisify(execFile);
 let bundlePromise: Promise<string> | undefined;
+let target: Stamp | null = null;
+/** The stamp of the cached bundle sent to Hosts; null until the build succeeds. */
+export const serviceTarget = (): Stamp | null => target;
 export function serviceBundle(): Promise<string> {
  return bundlePromise ??= (async () => {
   const script = fileURLToPath(new URL("../../../scripts/build-arc-service.mjs", import.meta.url));
   const dir = mkdtempSync(join(tmpdir(), "ampi-arc-bundle-"));
   try {
    const { stdout } = await exec(process.execPath, [script, join(dir, "service.mjs")], { maxBuffer: 1024 * 1024 });
-   return readFileSync(JSON.parse(stdout).output, "utf8");
+   const built = JSON.parse(stdout);
+   const body = readFileSync(built.output, "utf8");
+   target = { id: built.version, order: built.buildOrder, line: built.releaseLine };
+   return body;
   } finally { rmSync(dir, { recursive: true, force: true }); }
  })().catch(e => { bundlePromise = undefined; throw e; });
 }

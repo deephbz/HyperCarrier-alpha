@@ -38,7 +38,21 @@ for (const [engine, type, path] of ENGINES) for (const [label, display] of DISPL
 	test(`row menu ${engine} ${label}: opens at the pointer, inside the viewport, and moves nothing`, { skip: engineSkip(engine) }, async (t) => {
 		// An idle Session: a live one follows its output and scrolls on its own.
 		const page = await open(t, engine, type, path(), { display, route: "#/h/devbox/t/pi%3Asess-big" });
-		await page.setViewportSize({ width: 1600, height: 600 });
+		const resize = async (height: number) => {
+			const before = await page.evaluate(() => {
+				const scroll = document.querySelector<HTMLElement>(".scroll")!;
+				return { viewport: innerHeight, scroll: scroll.clientHeight, scale: scroll.getBoundingClientRect().height / scroll.offsetHeight };
+			});
+			await page.setViewportSize({ width: 1600, height });
+			// WebKit can acknowledge the viewport before applying it. The idle Session follows the end when its
+			// scroller shrinks: 800 -> 600 px moves scrollTop by 200 px without any transcript content growth.
+			await page.waitForFunction(({ height, clientHeight }) => {
+				const scroll = document.querySelector<HTMLElement>(".scroll");
+				return innerWidth === 1600 && innerHeight === height && scroll && Math.abs(scroll.clientHeight - clientHeight) <= 1
+					&& Math.abs(scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop) <= 1;
+			}, { height, clientHeight: before.scroll + (height - before.viewport) / before.scale });
+		};
+		await resize(600);
 		const rows = page.locator(".side .row[data-thread]");
 		await rows.first().waitFor();
 		// The demo's Team data can arrive after the rows: each lead then folds its Workers, and the rows below move up.
@@ -66,7 +80,7 @@ for (const [engine, type, path] of ENGINES) for (const [label, display] of DISPL
 		// The row is named by its Session, after the Team fold and the layout settle.
 		const lowest = () => rows.evaluateAll((els) => els.map((el) => ({ id: (el as HTMLElement).dataset.thread!, bottom: el.getBoundingClientRect().bottom }))
 			.filter((r) => r.bottom <= innerHeight).reduce((a, b) => (b.bottom > a.bottom ? b : a)));
-		await page.setViewportSize({ width: 1600, height: Math.ceil((await lowest()).bottom) + 4 });
+		await resize(Math.ceil((await lowest()).bottom) + 4);
 		const viewport = page.viewportSize()!;
 		rest = await settle();
 		const chosen = await lowest();

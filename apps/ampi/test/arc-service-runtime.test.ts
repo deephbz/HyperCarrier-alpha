@@ -2,14 +2,17 @@ import "./bound.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, symlinkSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { chmodSync, copyFileSync, symlinkSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, createReadStream } from "node:fs";
+import { once } from "node:events";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createConnection } from "node:net";
+import { createConnection, createServer } from "node:net";
 // @ts-expect-error Build script runs as native ESM.
 import { buildArcService } from "../scripts/build-arc-service.mjs";
 import { launchLocked } from "../src/arc/service/lock.ts";
 import { serviceText, serviceStatus } from "../src/arc/service/status.ts";
+import { storeIncarnation } from "../src/arc/service/store.ts";
+import type { Socket } from "node:net";
 import { controlRequest as rawControlRequest } from "../src/arc/service/runtime.ts";
 import type { ControlCommand } from "../src/arc/service/runtime.ts";
 import { pathToFileURL } from "node:url";
@@ -56,10 +59,10 @@ if (isMainThread && process.argv[2] === '_locked' && JSON.parse(process.argv[3])
  }
  const pids = new Set<number>(), managers = new Map<ReturnType<typeof spawn>, Promise<void>>();
  let tearingDown = false, closed: Promise<void> | undefined;
- async function manage(op: string, extra: any = {}, next = false) {
+ async function manage(op: string, extra: any = {}, next = false, env = {}) {
   if (tearingDown) throw new Error("Arc fixture is closed");
   const result = await new Promise<any>((resolve, reject) => {
-   const child = spawn(process.execPath, [runner, next ? join(dir, "next.mjs") : bundle, JSON.stringify({ op, host: "synthetic", agentDir: agent, timeoutMs: 10000, ...extra })], { cwd: dir, env: { HOME: dir, PATH: process.env.PATH, PI_BIN: pi, ...(virtualTime ? { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` } : {}) }, stdio: ["ignore", "pipe", "pipe"] });
+   const child = spawn(process.execPath, [runner, next ? join(dir, "next.mjs") : bundle, JSON.stringify({ op, host: "synthetic", agentDir: agent, timeoutMs: 10000, ...extra })], { cwd: dir, env: { HOME: dir, PATH: process.env.PATH, PI_BIN: pi, ...(virtualTime ? { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` } : {}), ...env }, stdio: ["ignore", "pipe", "pipe"] });
    const ended = new Promise<void>(resolve => child.once("close", () => resolve()));
    managers.set(child, ended); void ended.then(() => managers.delete(child));
    let out = "", err = ""; const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("manager hung: " + err)); }, 15000);
@@ -123,6 +126,74 @@ test("Arc fixture: teardown settles managers and refuses later launches", async 
  await f.close();
 });
 
+for (const phase of ["module-import", "socket-bind"]) test(`Arc manager SIGKILL closes an unready launcher's parent pipe (${phase})`, { timeout: 15000 }, async t => {
+ const f = await fixture(t), entered = join(f.dir, "unready-pid");
+ const mark = `startupFs.writeFileSync(${JSON.stringify(entered)}, String(process.pid));`;
+ const hold = phase === "module-import" ? `${mark} await new Promise(() => setInterval(() => {}, 1000));`
+  : `StartupServer.prototype.listen = function () { ${mark} setInterval(() => {}, 1000); return this; };`;
+ writeFileSync(f.bundle, `import * as startupFs from 'node:fs';
+ import { Server as StartupServer } from 'node:net';
+ if (import.meta.url.includes('/versions/')) { ${hold} }\n` + f.body);
+ const pending = assert.rejects(f.manage("ensure"), /Arc fixture is closed/);
+ await until(() => existsSync(entered), "launcher did not enter startup");
+ const pid = Number(readFileSync(entered, "utf8"));
+ t.after(() => { try { process.kill(pid, "SIGKILL"); } catch {} });
+ await f.close(); await pending;
+ assert.throws(() => process.kill(pid, 0), { code: "ESRCH" }, "fixture completion must leave no unready launcher");
+});
+
+test("Arc manager death during synchronous startup cannot leave teardown busy", { timeout: 15000 }, async t => {
+ const f = await fixture(t), entered = join(f.dir, "blocked-pid"), managerPid = join(f.dir, "manager-pid");
+ const runner = join(f.dir, "runner.mjs");
+ writeFileSync(runner, `import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(managerPid)}, String(process.pid));\n` + readFileSync(runner, "utf8"));
+ writeFileSync(f.bundle, `import {writeFileSync as markBlocked} from 'node:fs';
+ if (import.meta.url.includes('/versions/')) {
+  markBlocked(${JSON.stringify(entered)}, String(process.pid));
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+ }\n` + f.body);
+ const pending = assert.rejects(f.manage("ensure"));
+ await until(() => existsSync(entered), "launcher did not enter synchronous startup");
+ const pid = Number(readFileSync(entered, "utf8")); f.pids.add(pid);
+ process.kill(Number(readFileSync(managerPid, "utf8")), "SIGKILL");
+ await pending;
+ const stopped = await f.manage("stop", { timeoutMs: 10_000 });
+ assert.equal(stopped.state, "stopped", `product teardown must not remain busy: ${JSON.stringify(stopped)}`);
+ assert.throws(() => process.kill(pid, 0), { code: "ESRCH" }, "stopped must leave no blocked startup process");
+});
+
+for (const release of [false, true]) test(`Arc ready reply requires the manager release byte (release=${release})`, async t => {
+ const f = await fixture(t);
+ mkdirSync(f.store);
+ const operation = { op: "ensure", host: "synthetic", agentDir: f.agent, storeIncarnation: storeIncarnation(f.store, true), stopGeneration: null };
+ const child = launchLocked(f.store, [f.bundle, "_locked", JSON.stringify(operation)], {
+  detached: true, stdio: ["ignore", "pipe", "ignore", "pipe"],
+  env: { ...process.env, PI_BIN: join(f.dir, "pi"), AMPI_ARC_PARENT_FD: "3" },
+ });
+ const closed = once(child, "close");
+ t.after(async () => { child.kill("SIGKILL"); await closed; });
+ const parent = child.stdio[3] as Socket; parent.on("error", () => {}); parent.resume();
+ const result = await new Promise<any>((resolve, reject) => {
+  let body = "";
+  child.stdout!.on("data", data => { body += data; if (body.includes("\n")) { try { resolve(JSON.parse(body.split("\n")[0]!)); } catch (e) { reject(e); } } });
+  child.once("error", reject);
+ });
+ assert.equal(result.running, true);
+ const disconnected = once(parent, "close");
+ if (release) parent.end("R"); else parent.end();
+ await disconnected;
+ if (release) {
+  process.kill(result.pid, 0);
+  assert.equal((await f.manage("ensure")).pid, result.pid, "a released resident must survive the manager pipe");
+  assert.equal((await f.manage("stop")).state, "stopped");
+ } else {
+  await closed;
+  assert.throws(() => process.kill(result.pid, 0), { code: "ESRCH" }, "EOF after ready but before release must cancel startup");
+  assert.equal((await f.manage("ensure")).running, true, "the next manager must be able to restart");
+  assert.equal((await f.manage("stop")).state, "stopped");
+ }
+ await closed;
+});
+
 test("Arc startup timeout kills and reaps its unready launcher", { timeout: 15000 }, async t => {
  const f = await fixture(t), entered = join(f.dir, "unready-pid");
  const body = `import * as startupFs from 'node:fs';
@@ -155,6 +226,73 @@ test("Arc startup error kills and reaps its launcher before replying", { timeout
  const probe = launchLocked(f.store, ["-e", "process.exit(0)"], { stdio: "ignore" });
  const code = await new Promise<number | null>((resolve, reject) => { probe.once("exit", resolve); probe.once("error", reject); });
  assert.equal(code, 0, "a failed startup releases its lifetime lock");
+});
+
+test("Arc maintenance: stop fences an ensure held before lifetime-lock acquisition", async t => {
+ const f = await fixture(t), bin = join(f.dir, "bin"), entered = join(f.dir, "entered"), release = join(f.dir, "release");
+ mkdirSync(bin);
+ assert.equal(spawnSync("mkfifo", [entered, release]).status, 0);
+ const perl = spawnSync("which", ["perl"], { encoding: "utf8" }).stdout.trim();
+ const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
+ writeFileSync(join(bin, "perl"), `#!/bin/sh\ncase "$*" in *'"op":"ensure"'*) printf entered > ${quote(entered)}; read release < ${quote(release)} ;; esac\nexec ${quote(perl)} "$@"\n`);
+ chmodSync(join(bin, "perl"), 0o755);
+ const signal = createReadStream(entered), ready = once(signal, "data");
+ t.after(() => signal.destroy());
+ const pending = f.manage("ensure", {}, false, { PATH: bin + ":" + process.env.PATH });
+ await ready;
+ assert.equal((await f.manage("stop")).state, "stopped");
+ writeFileSync(release, "release\n");
+ const stale = await pending;
+ assert.equal(stale.state, "stopped", "an ensure admitted before stop must not start a later resident");
+ assert.equal(stale.running, false);
+ const fresh = await f.manage("ensure");
+ assert.equal(fresh.running, true, "a fresh ensure after stop can start normally");
+ assert.equal((await f.manage("stop")).state, "stopped");
+ assert.throws(() => process.kill(fresh.pid, 0), { code: "ESRCH" });
+});
+
+for (const recreate of [false, true]) test(`Arc maintenance: stop fences an admitted ensure across store deletion (recreate=${recreate})`, async t => {
+ const f = await fixture(t), gate = join(f.dir, "admission.sock"), server = createServer();
+ t.after(() => server.close());
+ await new Promise<void>(resolve => server.listen(gate, resolve));
+ const connected = once(server, "connection");
+ const needle = "\tlet staging, replacing = false, sawBusy = false;";
+ assert.equal(f.body.split(needle).length, 2, "the built manage admission seam is unique");
+ const pause = `if (operation.op === 'ensure' && process.env.ADMISSION_GATE === '1') {
+  const {createConnection} = await import('node:net');
+  await new Promise((resolve,reject) => {
+   const socket=createConnection(${JSON.stringify(gate)});
+   socket.once('connect',()=>socket.write('admitted'));
+   socket.once('end',resolve);socket.once('error',reject);
+  });
+ }\n`;
+ writeFileSync(f.bundle, f.body.replace(needle, pause + needle));
+ const pending = f.manage("ensure", {}, false, { ADMISSION_GATE: "1" });
+ const [socket] = await connected;
+ t.after(() => socket.destroy());
+ await once(socket, "data");
+ assert.equal((await f.manage("stop")).state, "stopped");
+ rmSync(f.store, { recursive: true, force: true });
+ if (recreate) assert.equal((await f.manage("ensure")).running, true, "a fresh ensure creates a new incarnation");
+ socket.end();
+ const stale = await pending;
+ assert.equal(stale.state, "stopped", "an admitted ensure must not resurrect a deleted store");
+ assert.equal(stale.running, false);
+ assert.equal((await f.manage("ensure")).running, true, "a fresh ensure after deletion starts normally");
+ assert.equal((await f.manage("stop")).state, "stopped");
+});
+
+for (const name of ["stop.json", "incarnation.json"]) test(`Arc maintenance: corrupt ${name} fails closed with a recovery path`, async t => {
+ const f = await fixture(t);
+ assert.equal((await f.manage("ensure")).running, true);
+ await f.manage("stop");
+ writeFileSync(join(f.store, name), "{");
+ const config = { id: "synthetic", label: "Synthetic", kind: "pi-local" as const, agentConfig: { agentDir: f.agent }, env: { HOME: f.dir, PI_BIN: join(f.dir, "pi") } };
+ const result = await maintainHost(config, { op: "ensure" }, f.body);
+ assert.equal(result.state, "error");
+ assert.ok(result.detail.includes(join(f.store, name)), result.detail);
+ assert.match(result.detail, /retry|restart AmPi/);
+ assert.equal(result.serviceLogPath, join(f.store, "service.log"));
 });
 
 test("Arc maintenance: stopped means the prior lifetime-lock owner has exited", async t => {
