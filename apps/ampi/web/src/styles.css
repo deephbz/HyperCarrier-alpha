@@ -291,7 +291,7 @@ kbd {
 html[data-input="keyboard"] .resize-edge:focus::after { left: 2px; width: 4px; background: var(--accent); }
 @media (max-width: 600px) {
 	/* Below the desktop acceptance sizes the sidebar itself becomes an overlay. */
-	/* App reads --side-overlay: the side panels are drawers, one side shows at a time, and the drawer state is not saved. */
+	/* App follows this breakpoint: the side panels are drawers, one side shows at a time, and the drawer state is not saved. */
 	:root { --side-overlay: 1; }
 	/* A drawer opens over the page and changes nothing under it: the header keeps ☰'s reserve while a drawer is open. */
 	.main-slot > .main > :first-child { padding-left: var(--reveal-reserve); }
@@ -1284,6 +1284,7 @@ details[open] > .disclosure::before,
 }
 .composer-feedback { padding: 4px 12px; font-size: 12px; overflow-wrap: anywhere; white-space: pre-line; color: var(--text-2); max-height: 96px; overflow-y: auto; }
 .composer-feedback.error { color: var(--err); }
+.image-admission-feedback { font-size: 11px; line-height: 1.15; }
 .composer-feedback.uncertain { color: var(--attn); }
 .composer-feedback.returned { display: flex; align-items: center; gap: 6px; }
 .composer-feedback.returned > span { flex: 1; }
@@ -1860,7 +1861,12 @@ details[open] > .disclosure::before,
 .attn-note > div > * { font-size: 13px; }
 .attn-note strong { color: var(--attn); font-weight: 500; }
 /* Overlay panel (narrow windows): only over the transcript, so the topbar and composer stay usable. */
-.panel-overlay .panel-slot { top: var(--transcript-top, 0px); bottom: var(--transcript-bottom, 0px); border-left: 1px solid var(--border); }
+.panel-overlay .panel-slot { top: var(--transcript-top, 0px); bottom: var(--transcript-bottom, 0px); border-left: 1px solid var(--border); container: panel-slot / size; }
+/* A short transcript slot cannot fit the panel's vertical padding or a pinned status. Let both scroll. */
+@container panel-slot (max-height: 200px) {
+	.panel-body { padding-block: 0; }
+	.arc-status { position: static; }
+}
 /* A focused region or page root draws its ring only after keyboard input (App's data-input). A pointer, a touch, or a
    script's move before any input draws none: :focus-visible matches a script's focus on a fresh page. */
 :is([data-region], [data-page-root], [data-page-focus]):focus { outline: none; }

@@ -2,7 +2,7 @@ import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, 
 import type { TimelineSession, TimelineValue } from "../../../../src/shared/timeline.ts";
 import { isSessionInScope, SESSION_SCOPE_MS } from "../../../../src/shared/session-scope.ts";
 import { navigate } from "../../nav.ts";
-import { href, isAttentionEligible, money, needsYou, tokens, type Route } from "../../util.ts";
+import { href, isAttentionEligible, money, needsYou, threadRef, tokens, type Route } from "../../util.ts";
 import { historySpend, spendLabel, spendSuffix } from "../../../../src/shared/spend.ts";
 import { dateTime, FeedStatus, useFleet } from "./data.tsx";
 import { shortTick } from "./axis.ts";
@@ -120,7 +120,7 @@ export function Timeline({ route }: { route: Route }) {
 }
 
 export function TimelinePanel({ host, threadId, summary }: { host: string; threadId: string; summary?: { team?: { teamId: string } } }) {
-	const route: Route = { page: "timeline", rest: [], query: new URLSearchParams({ focus: `${host}/${threadId}`, all: "1" }) };
+	const route: Route = { page: "timeline", rest: [], query: new URLSearchParams({ focus: threadRef(host, threadId), all: "1" }) };
 	return <TimelineView route={route} selected={{ host, threadId, teamId: summary?.team?.teamId }} />;
 }
 
@@ -239,7 +239,7 @@ function TimelineView({ route, selected }: { route: Route; selected?: PanelSelec
 	const first = Math.max(0, Math.min(bands.length - 1, Math.floor(scroll / ROW) - 3)), visible = bands.slice(first, first + 28);
 	return <main className={`main cos-page${selected ? " cos-panel" : ""}`}>
 		{readers}
-		<header className="cos-header"><h1>Timeline</h1><span className="cos-meta">{sessions.length} Sessions · {bands.length} streams · {unit === 2 ? spendLabel(laneSpend(sessions, rangeTotal)) : amount(unit, rangeTotal)} in range</span>{selected ? <a href={href.page("timeline", [], { focus: `${selected.host}/${selected.threadId}` })}>Open Timeline page ↗</a> : null}</header>
+		<header className="cos-header"><h1>Timeline</h1><span className="cos-meta">{sessions.length} Sessions · {bands.length} streams · {unit === 2 ? spendLabel(laneSpend(sessions, rangeTotal)) : amount(unit, rangeTotal)} in range</span>{selected ? <a href={href.page("timeline", [], { focus: threadRef(selected.host, selected.threadId) })}>Open Timeline page ↗</a> : null}</header>
 		<nav className="cos-toolbar" aria-label="Timeline controls">
 			<span>Width</span>
 			{selected ? <>

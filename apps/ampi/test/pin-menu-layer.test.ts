@@ -34,6 +34,25 @@ async function menuAt(page: Page, row: ReturnType<Page["locator"]>, dy: (box: { 
 }
 
 const DISPLAYS = [["100%", undefined], ["overall 125%", { overall: 1.25 }], ["sidebar 120%", { sidebar: 1.2 }]] as const;
+// Session IDs declared by scripts/demo/sessions.ts and scripts/demo/index.ts (with DEMO_STRESS=0). Waiting for the
+// whole fixture avoids taking a baseline while the Host is still indexing later rows.
+const FIXTURE_THREAD_IDS = [
+	"pi:sess-lead",
+	"pi:sess-worker-reader",
+	"pi:sess-worker-gui",
+	"pi:sess-big",
+	"pi:sess-solo",
+	"pi:sess-ops-lead",
+	"pi:sess-ops-worker",
+	"pi:sess-long-title",
+	"pi:sess-loose",
+	"pi:sess-asks",
+	"pi:sess-rarebit-empty",
+	"pi:sess-rarebit-error",
+	"pi:sess-typography",
+	"pi:sess-lens-runs",
+	"pi:sess-lens-window",
+] as const;
 for (const [engine, type, path] of ENGINES) for (const [label, display] of DISPLAYS) {
 	test(`row menu ${engine} ${label}: opens at the pointer, inside the viewport, and moves nothing`, { skip: engineSkip(engine) }, async (t) => {
 		// An idle Session: a live one follows its output and scrolls on its own.
@@ -55,17 +74,27 @@ for (const [engine, type, path] of ENGINES) for (const [label, display] of DISPL
 		await resize(600);
 		const rows = page.locator(".side .row[data-thread]");
 		await rows.first().waitFor();
-		// The demo's Team data can arrive after the rows: each lead then folds its Workers, and the rows below move up.
-		// The fold toggles mark that change, which settle() cannot see.
-		await page.locator(".side [data-collapse-toggle]").first().waitFor();
+		// Expand both fixture Teams, then wait for every Session declared by scripts/demo/sessions.ts. A single Team
+		// row is not readiness: the Host may still add later fixture rows after a transient pause.
+		for (const leadId of ["pi:sess-lead", "pi:sess-ops-lead"]) {
+			const fold = page.locator(`.side .row[data-thread="${leadId}"] [data-collapse-toggle]`);
+			await fold.waitFor();
+			if (await fold.getAttribute("aria-expanded") === "false") await fold.click();
+		}
+		const unplaced = page.locator('.side [data-sidebar-toggle="unplaced"]');
+		await unplaced.waitFor();
+		if (await unplaced.getAttribute("aria-expanded") === "false") await unplaced.click();
+		await Promise.all(FIXTURE_THREAD_IDS.map((id) => page.locator(`.side .row[data-thread="${id}"]`).first().waitFor()));
+		// Restore the initial folds after confirming that every fixture Session reached the sidebar.
+		for (const leadId of ["pi:sess-lead", "pi:sess-ops-lead"]) {
+			const fold = page.locator(`.side .row[data-thread="${leadId}"] [data-collapse-toggle]`);
+			if (await fold.getAttribute("aria-expanded") === "true") await fold.click();
+		}
+		if (await unplaced.getAttribute("aria-expanded") === "true") await unplaced.click();
+		await page.locator(".side-scroll").evaluate((el: HTMLElement) => { el.scrollTop = 0; });
 
-		// The Session finishes loading first: its scrolls would close the menu and change the layout.
-		const settle = async () => {
-			let last = await layout(page);
-			for (let i = 0; i < 40; i++) { await page.waitForTimeout(150); const now = await layout(page); if (JSON.stringify(now) === JSON.stringify(last)) break; last = now; }
-			return last;
-		};
-		let rest = await settle();
+		// Every fixture row is present. Capture the baseline before opening the menu.
+		let rest = await layout(page);
 		// A row with room below: the menu's top-left corner is the pointer.
 		const top = await menuAt(page, rows.first(), (b) => b.height / 2);
 		const viewport0 = page.viewportSize()!;
@@ -80,9 +109,14 @@ for (const [engine, type, path] of ENGINES) for (const [label, display] of DISPL
 		// The row is named by its Session, after the Team fold and the layout settle.
 		const lowest = () => rows.evaluateAll((els) => els.map((el) => ({ id: (el as HTMLElement).dataset.thread!, bottom: el.getBoundingClientRect().bottom }))
 			.filter((r) => r.bottom <= innerHeight).reduce((a, b) => (b.bottom > a.bottom ? b : a)));
-		await resize(Math.ceil((await lowest()).bottom) + 4);
+		const target = await lowest();
+		await resize(Math.ceil(target.bottom) + 4);
+		await page.waitForFunction((id) => {
+			const row = [...document.querySelectorAll<HTMLElement>(".side .row[data-thread]")].find((el) => el.dataset.thread === id);
+			return row && row.getBoundingClientRect().bottom > innerHeight - 12 && row.getBoundingClientRect().bottom <= innerHeight;
+		}, target.id);
 		const viewport = page.viewportSize()!;
-		rest = await settle();
+		rest = await layout(page);
 		const chosen = await lowest();
 		assert.ok(chosen.bottom > viewport.height - 12, `the lowest row ends near the bottom: ${JSON.stringify(chosen)} of ${viewport.height}`);
 		const row = page.locator(`.side .row[data-thread="${chosen.id}"]`).first();

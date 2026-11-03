@@ -1,10 +1,13 @@
 // Stage 2 of D15: the GUI asks Herdr to start or close a Pi agent. Herdr keeps owning panes, tabs, and workspaces;
-// these dialogs only say where, and report what Herdr confirmed.
+// these dialogs only say where, and report what Herdr confirmed. New agent is one dialog for every Host kind: the
+// chosen Host's kind draws the form (HostKindUi.NewForm), and Pi's form is the default.
 
 import { useState } from "react";
 import type { ThreadSummary } from "../../../src/shared/protocol.ts";
 import { findHost, hub, type HostState } from "../client.ts";
-import { hostLabelFor } from "./host-label.ts";
+import { hostKind } from "../host-kinds.ts";
+import { kindUi, type NewFormProps } from "../shell-slots.ts";
+import { hostLabel, hostLabelFor } from "./host-label.ts";
 import { useFeeds } from "../context.ts";
 import { MOD, go } from "../util.ts";
 import { freshPress } from "../composer-keys.ts";
@@ -13,16 +16,47 @@ import { Segmented } from "./Segmented.tsx";
 import { newId } from "../ids.ts";
 
 type Place = "right" | "down" | "workspace";
-const LAST_KEY = "ampi.newAgent";
+/** The last New agent choices; every form writes its Host link as `host`, so the dialog reopens on it. */
+export const NEW_AGENT_KEY = "ampi.newAgent";
 
-/** Where a new agent goes: beside the open Session (its pane, split right or down) or in a new Herdr workspace. */
+/**
+ * New agent: the Host select, then the chosen Host kind's form. A kind that prefers new work (HostKind.preferNew) is
+ * the default: from a Session, the same Host's preferred source; without one, the first connected preferred Host.
+ * The form keeps its fields across Hosts of one kind; another kind draws a new form.
+ */
 export function NewAgentDialog({ hosts, defaultHost, beside, onClose }: { hosts: HostState[]; defaultHost?: string; beside?: ThreadSummary; onClose: () => void }) {
-	const last = JSON.parse(localStorage.getItem(LAST_KEY) ?? "{}") as { host?: string; place?: Place; cwd?: Record<string, string> };
+	const last = JSON.parse(localStorage.getItem(NEW_AGENT_KEY) ?? "{}") as { host?: string };
 	const connected = hosts.filter((h) => h.status === "connected");
 	const routed = findHost(hosts, defaultHost);
-	const [host, setHost] = useState(routed?.link ?? findHost(hosts, last.host)?.link ?? connected[0]?.link ?? "");
-	const besidePane = beside?.location?.pane && host === routed?.link ? beside : undefined;
-	const [chosen, setPlace] = useState<Place>(besidePane ? (last.place === "workspace" ? "right" : (last.place ?? "right")) : "workspace");
+	const preferred = (h: HostState) => hostKind(h).preferNew === true;
+	const twin = routed && !preferred(routed) ? connected.find((h) => h.id === routed.id && preferred(h)) : undefined;
+	const fallback = routed ? undefined : connected.find(preferred);
+	const [host, setHost] = useState(twin?.link ?? routed?.link ?? fallback?.link ?? findHost(hosts, last.host)?.link ?? connected[0]?.link ?? "");
+	const chosen = findHost(hosts, host);
+	const Form = kindUi(chosen).NewForm ?? PiNewForm;
+	return (
+		<Modal onClose={onClose}>
+			<h2>New agent</h2>
+			<div className="field">
+				Host
+				<select value={host} onChange={(e) => setHost(e.target.value)} aria-label="Host">
+					{hosts.map((h) => (
+						<option key={h.link} value={h.link} disabled={h.status !== "connected"}>
+							{hostLabel(h, hosts)} {h.status === "connected" ? "" : `— ${h.status}`}
+						</option>
+					))}
+				</select>
+			</div>
+			<Form key={hostKind(chosen).source} host={host} hosts={hosts} beside={host === routed?.link ? beside : undefined} onClose={onClose} />
+		</Modal>
+	);
+}
+
+/** Where a new Pi agent goes: beside the open Session (its pane, split right or down) or in a new Herdr workspace. */
+function PiNewForm({ host, hosts, beside, onClose }: NewFormProps) {
+	const last = JSON.parse(localStorage.getItem(NEW_AGENT_KEY) ?? "{}") as { host?: string; place?: string; cwd?: Record<string, string> };
+	const besidePane = beside?.location?.pane ? beside : undefined;
+	const [chosen, setPlace] = useState<Place>(besidePane ? (last.place === "down" ? "down" : "right") : "workspace");
 	// Without a Session in a pane on this Host there is nothing to sit beside.
 	const place: Place = besidePane ? chosen : "workspace";
 	const [cwd, setCwd] = useState(besidePane?.cwd ?? last.cwd?.[host] ?? "");
@@ -48,7 +82,7 @@ export function NewAgentDialog({ hosts, defaultHost, beside, onClose }: { hosts:
 				...(prompt.trim() ? { prompt: prompt.trim() } : {}),
 				requestId,
 			});
-			localStorage.setItem(LAST_KEY, JSON.stringify({ host, place, cwd: { ...last.cwd, [host]: cwd.trim() } }));
+			localStorage.setItem(NEW_AGENT_KEY, JSON.stringify({ ...last, host, place, cwd: { ...last.cwd, [host]: cwd.trim() } }));
 			// The Session's ID is chosen before Herdr runs anything, so it can be opened at once, even before Pi writes it.
 			const problems = [
 				res.evidence === "unknown" ? `Herdr opened pane ${res.pane ?? ""} but did not confirm that Pi started.` : "",
@@ -68,18 +102,7 @@ export function NewAgentDialog({ hosts, defaultHost, beside, onClose }: { hosts:
 		}
 	};
 	return (
-		<Modal onClose={onClose}>
-			<h2>New agent</h2>
-			<div className="field">
-				Host
-				<select value={host} onChange={(e) => setHost(e.target.value)} aria-label="Host">
-					{hosts.map((h) => (
-						<option key={h.link} value={h.link} disabled={h.status !== "connected"}>
-							{h.label} {h.status === "connected" ? "" : `— ${h.status}`}
-						</option>
-					))}
-				</select>
-			</div>
+		<>
 			<div className="field">
 				Where
 				<Segmented label="Where" value={place} onChange={setPlace} options={[...(besidePane ? [["right", "Beside, right"], ["down", "Beside, below"]] as const : []), ["workspace", "New workspace"]]} />
@@ -137,7 +160,7 @@ export function NewAgentDialog({ hosts, defaultHost, beside, onClose }: { hosts:
 					</button>
 				)}
 			</div>
-		</Modal>
+		</>
 	);
 }
 

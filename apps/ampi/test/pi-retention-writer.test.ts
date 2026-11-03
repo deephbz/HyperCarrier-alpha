@@ -9,7 +9,7 @@ import { Hub } from "../src/hub/hub.ts";
 import { WorkingSet } from "../src/pi/working-set.ts";
 import type { Source } from "../src/pi/working-set-types.ts";
 import { Browser } from "./helpers.ts";
-import { fixture, replaceFile } from "./pi-fixtures.ts";
+import { fixture, replaceFile, stopFixture } from "./pi-fixtures.ts";
 const pause = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 const line = (o: unknown) => JSON.stringify(o) + "\n";
 function gate() { let resolve!: () => void; const promise = new Promise<void>(r => { resolve = r; }); return { promise, resolve }; }
@@ -74,7 +74,7 @@ async function hostFixture(t: { after(fn: () => unknown): void }) {
  writeFileSync(f.sessionB, header("sess-b", old) + message("e0", null, "live evidence", old));
  const hub = new Hub({ hosts: [{ id: "fixture", label: "fixture", kind: "pi-local", cacheDir: join(f.dir, "cache"), agentConfig: { agentDir: f.agentDir, pollMs: 30, discoverMs: 150, teams: false }, env: { HOME: f.dir, HERDR_BIN: join(f.dir, "herdr"), FAKE_HERDR_STATE: join(f.dir, "state.json"), FAKE_HERDR_LOG: join(f.dir, "calls.jsonl") } }] }, { token: "c".repeat(64) });
  const port = await hub.listen(0); const browser = await Browser.open(port, undefined, `ampi_k_${port}=${"c".repeat(64)}`);
- t.after(async () => { browser.ws.close(); await hub.close(); rmSync(f.dir, { recursive: true, force: true }); });
+ t.after(async () => { browser.ws.close(); await hub.close(); await stopFixture(f); rmSync(f.dir, { recursive: true, force: true }); });
  const threads = browser.sub("fixture", { kind: "threads" });
  await browser.until<any>(threads, v => v.threads["pi:sess-a"]?.live && v.threads["pi:sess-b"]?.live);
  return { f, hub, browser, threads, closeA: () => f.setState({ ...f.state, agents: f.state.agents.filter((a: any) => a.agent_session?.value !== f.sessionA) }) };

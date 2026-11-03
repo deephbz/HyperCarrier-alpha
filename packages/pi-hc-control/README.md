@@ -30,24 +30,57 @@ On `session_start` the extension writes, under
 `socket` is the actual socket path. When the preferred path exceeds the unix
 socket limit (103 bytes), the socket lives in a private `hc-ctl-<uid>/`
 directory under the OS temp directory (or `/tmp`). Session shutdown, a switch
-to another Session, and process exit remove both files. A new endpoint sweeps
+to another Session, and process exit remove both files. A reload removes the
+socket and rewrites the descriptor with `state: "reloading"`, `targetStamp`,
+and a `deadline` 10 s out, so AmPi holds sends for the reloaded control
+instead of typing them into the pane. `/hc-control-reload` runs Pi's reload. A new endpoint sweeps
 descriptors whose pid is dead.
 
 Frames are one JSON object per line; replies carry the request `id`. Multiple
 clients and pipelined requests are allowed. Ops: `status`, `submit`, `abort`,
 `commands`, `command`. `status.stamp` names this control's build:
 `{ id, order, line }`, computed at load from `src/` and the
-checkout's HEAD commit time (`src/stamp.mjs`). It is null when the checkout
-has no git metadata. AmPi serves only a control of its own build (AmPi P1).
-Another build gets a refusal that names both builds, and nothing reaches Pi.
-To update, pull the checkout Pi loads this package from, then run `/reload`
-in each Pi pane.
+checkout's HEAD commit time (`src/stamp.ts`). It is null when the checkout
+has no git metadata. AmPi serves a control of any build that speaks its
+protocol (the descriptor `schema`, `hc-control/1`) and reports build drift.
+A control on another protocol gets a refusal that names both protocols, and
+nothing reaches Pi. To update, pull the checkout Pi loads this package from.
+The sources are `.ts`, so `/reload` loads the new code.
+`test/reload.sim.test.mjs` proves it in pi-sim, and
+`test/reload.rpc.test.mjs` in the installed Pi.
+
+Self-update (`src/update.ts`): AmPi names the build it expects in
+`status.expect`. The control runs `/hc-control-reload` itself when all of
+these hold:
+
+- the build on disk equals `expect` and differs from the loaded build;
+- Pi is idle, with nothing queued, held, or compacting, and no owner input
+  or agent event for 30 s, checked again just before the reload;
+- no custom compaction method holds an `hc.compaction-method` claim (the
+  hc-auto-compact README). A reload would cancel that run. Its release
+  starts the 30 s window again;
+- the checkout has no `index.lock`, `rebase-merge`, or `rebase-apply`, and
+  two reads of the disk build 2 s apart agree;
+- this Session has not tried this build before;
+- Cache Goblin, when loaded (its `/cache` command, by package path), sets
+  `globalThis[Symbol.for("cache-goblin.persistence")]`. An older Cache
+  Goblin keeps the `/cache` TTL in memory only, so the update waits for a
+  Pi restart and the pane says so once per Session and build.
+
+Without `expect`, nothing reloads, so a local edit never triggers one. A
+check triggered by status waits a random 0 to 5 s. An unchanged tree costs
+file stats only. After the reload, the pane shows one notice:
+`HC control updated to <id>; extensions reloaded`. If the reload did not
+load `expect`, the notice names both builds and says to restart the Session;
+the control does not try that build again. `test/update.test.mjs` covers each
+guard; `test/reload.rpc.test.mjs` proves the path in the installed Pi and
+checks that the command never reaches the model.
 
 `submit` takes `text`, `deliverAs`, and optional `images`: at most 8
 `{ data, mimeType }` objects with base64 `data` and a PNG, JPEG, GIF, or WebP
 `mimeType`, at most 6 MiB of base64 in total. `text` may be empty when images
 are attached. The images reach Pi in the same user message as the text, and
-Pi may resize them. The limits are the ones `control.mjs` exports as
+Pi may resize them. The limits are the ones `control.ts` exports as
 `IMAGE_LIMITS`.
 
 ## Acknowledgements

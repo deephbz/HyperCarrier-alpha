@@ -313,9 +313,10 @@ export function useNow(active: boolean): number {
 const subscribeHosts = (listener: () => void) => hub.subscribeHosts(listener);
 
 export function useHosts(): { hosts: HostState[]; connected: boolean; listed: boolean } {
-	const hosts = useSyncExternalStore(subscribeHosts, () => hub.hosts);
-	const connected = useSyncExternalStore(subscribeHosts, () => hub.connected);
-	const listed = useSyncExternalStore(subscribeHosts, () => hub.hostsListed);
+	// The same snapshot on the server, so a server render of a Host-aware row works.
+	const hosts = useSyncExternalStore(subscribeHosts, () => hub.hosts, () => hub.hosts);
+	const connected = useSyncExternalStore(subscribeHosts, () => hub.connected, () => hub.connected);
+	const listed = useSyncExternalStore(subscribeHosts, () => hub.hostsListed, () => hub.hostsListed);
 	return { hosts, connected, listed };
 }
 

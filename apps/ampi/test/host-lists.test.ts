@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { emptyNote, reading, unavailable } from "../web/src/host-lists.ts";
 
 // The Overview's empty text from ThreadsState flags and the subscription end reason.
-const list = (over: { stale?: boolean; indexing?: boolean; error?: string }) => ({ host: { label: "devbox" }, threads: [], stale: false, ...over });
+const list = (over: { stale?: boolean; indexing?: boolean; error?: string }) => ({ host: { id: "devbox", label: "devbox", kind: "pi-local" as const }, threads: [], stale: false, ...over });
 
 test("host lists: an empty list says No Sessions yet only after init, and an ended list says why", () => {
 	const noDb = list({ indexing: true });

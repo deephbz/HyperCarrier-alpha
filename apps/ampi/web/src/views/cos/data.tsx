@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ViewFailure } from "../../../../src/shared/protocol.ts";
 import { useHosts, type HostState } from "../../client.ts";
+import { hostLabel, servesHostOps } from "../../components/host-label.ts";
 
 type Feed<T> = { host: HostState; value?: T; stale: boolean; error?: string };
 /** One Host's replica of a fleet view, as `useTopic` returns it. Define it at module scope: it is a hook. */
@@ -20,11 +21,11 @@ export function useFleet<T>(feed: FleetFeed<T>) {
 	const { hosts, connected } = useHosts();
 	const [values, setValues] = useState<Record<string, Omit<Feed<T>, "host">>>({});
 	const update = useCallback((id: string, feed: Omit<Feed<T>, "host">) => setValues((old) => ({ ...old, [id]: feed })), []);
-	const pi = useMemo(() => hosts.filter((h) => h.kind === "pi-local" || h.kind === "pi-ssh"), [hosts]);
-	const feeds = useMemo(() => pi.map((host) => ({ host, ...(values[host.link] ?? { stale: true }) })), [pi, values]);
+	const sources = useMemo(() => hosts.filter(servesHostOps), [hosts]);
+	const feeds = useMemo(() => sources.map((host) => ({ host, ...(values[host.link] ?? { stale: true }) })), [sources, values]);
 	return {
 		feeds,
-		readers: pi.map((host) => <HostValue<T> key={host.link} host={host} feed={feed} onValue={update} />),
+		readers: sources.map((host) => <HostValue<T> key={host.link} host={host} feed={feed} onValue={update} />),
 		connected,
 	};
 }
@@ -32,5 +33,5 @@ export function useFleet<T>(feed: FleetFeed<T>) {
 export const dateTime = (t: number | string | null) => t === null ? "Unknown time" : new Date(t).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 export function FeedStatus({ feeds, connected }: { feeds: Feed<unknown>[]; connected: boolean }) {
 	if (!connected) return <p className="cos-notice" role="status">Hub disconnected. Showing cached evidence; reconnect to refresh it.</p>;
-	return <>{feeds.map((f) => f.error || f.stale || f.host.status !== "connected" ? <p className="cos-notice" role="status" key={f.host.link}>{f.host.label}: {f.error ?? (f.value ? "Host away; cached evidence, not current liveness. Reconnect the Host to refresh." : "Reading the Sessions…")}</p> : null)}</>;
+	return <>{feeds.map((f) => f.error || f.stale || f.host.status !== "connected" ? <p className="cos-notice" role="status" key={f.host.link}>{hostLabel(f.host, feeds.map((other) => other.host))}: {f.error ?? (f.value ? "Host away; cached evidence, not current liveness. Reconnect the Host to refresh." : "Reading the Sessions…")}</p> : null)}</>;
 }

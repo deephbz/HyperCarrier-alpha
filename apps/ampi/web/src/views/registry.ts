@@ -10,13 +10,15 @@ import { RarebitBand } from "./rarebit/Lens.tsx";
 import { Timeline, TimelinePanel } from "./cos/Timeline.tsx";
 import { ArcPanel } from "./arc/ArcPanel.tsx";
 
-/** A side panel beside a Pi Session's transcript (Rarebit, Team, Arc). */
-type PanelView = {
+/** A side panel beside a Session's transcript (Rarebit, Team, Arc); a Host kind adds its own (ThreadSurface.panels). */
+export type PanelView = {
 	name: string;
 	label: string;
 	/** Shown in the panel's tabs only when this returns true for the open Session. */
 	available?: (summary: ThreadSummary | undefined) => boolean;
 	component: ComponentType<{ host: string; threadId: string; summary?: ThreadSummary; entry?: string }>;
+	/** The panel takes the wide width (a diff). */
+	wide?: true;
 };
 
 /** A top-level page with its own address, `#/v/<name>/…` (Chief of Staff pages). */

@@ -4,6 +4,7 @@
 import { useEffect, useRef } from "react";
 import type { ThreadSummary } from "../../src/shared/protocol.ts";
 import type { HostThreads } from "./components/Sidebar.tsx";
+import { hostLabel } from "./components/host-label.ts";
 import { native } from "./native.ts";
 import { navigate } from "./nav.ts";
 import { attentionOf, go, href, isAttentionEligible, isBusy, needsYou, arcNeedsCount } from "./util.ts";
@@ -71,9 +72,9 @@ export function notices(before: Map<string, ThreadSummary>, data: HostThreads[],
 			const viewing = !away && current?.host === host.link && current?.thread === t.id;
 			if (viewing) continue;
 			const reason = needsYou(t);
-			if (reason && (newSignal(was, t) || arcNeedsCount(t) > arcNeedsCount(was))) out.push({ title: `Needs you: ${t.title}`, body: `${host.label} · ${reason}${t.lastError ? ` — ${t.lastError}` : ""}`, host: host.link, threadId: t.id });
+			if (reason && (newSignal(was, t) || arcNeedsCount(t) > arcNeedsCount(was))) out.push({ title: `Needs you: ${t.title}`, body: `${hostLabel(host, hosts)} · ${reason}${t.lastError ? ` — ${t.lastError}` : ""}`, host: host.link, threadId: t.id });
 			else if (away && isBusy(was) && !isBusy(t) && t.kind !== "worker" && !reason)
-				out.push({ title: `Finished: ${t.title}`, body: `${host.label} · ${t.preview ?? "the agent settled"}`, host: host.link, threadId: t.id });
+				out.push({ title: `Finished: ${t.title}`, body: `${hostLabel(host, hosts)} · ${t.preview ?? "the agent settled"}`, host: host.link, threadId: t.id });
 		}
 	return out;
 }

@@ -8,7 +8,9 @@ import { useHeaderFold } from "./header-fold.ts";
 import type { InjectedMessage, PiEntry, ToolArgsPreview } from "../../../src/shared/protocol.ts";
 import type { ThreadSummary } from "../../../src/shared/protocol.ts";
 import { openCalls } from "../../../src/shared/tool-state.ts";
-import { hub, readVersioned, refusal, useTopic } from "../client.ts";
+import { findHost, hub, readVersioned, refusal, useHosts, useTopic } from "../client.ts";
+import { hostKind } from "../host-kinds.ts";
+import { useThreadSurface } from "../shell-slots.ts";
 import { INDEXING, NOT_FOUND, STALE_VERSION } from "../../../src/shared/protocol.ts";
 import { entryId, entryState, flushEntry, noteEntry, revealStore } from "../nav.ts";
 import { ACTIVITY_LABEL, MOD, attentionOf, clock, go, href, money, tokens } from "../util.ts";
@@ -51,7 +53,9 @@ function NoticeParts({ message }: { message: InjectedMessage }) {
 
 /** One extension message as one disclosure row: kind badge, sender and first line; open, its text and, when shortened, the full text in the card. */
 export function NoticeEntry({ entry, host, threadId, fragment }: { entry: Extract<PiEntry, { kind: "custom" }>; host: string; threadId: string; fragment?: string }) {
-	const { message } = entry;
+	const surface = useThreadSurface(host);
+	const message = entry.message ?? surface.noticeMessage?.(entry);
+	const rawExport = surface.rawExport?.(entry);
 	return (
 		<details className="msg notice" data-entry={entry.id} data-fragment={fragment ?? entry.id}>
 			<summary className="disclosure">
@@ -62,6 +66,7 @@ export function NoticeEntry({ entry, host, threadId, fragment }: { entry: Extrac
 			</summary>
 			<div className="notice-body">
 				<NoticeParts message={message} />
+				{rawExport && <a className="notice-raw" href={rawExport} target="_blank" rel="noreferrer">Open the raw export</a>}
 				{entry.clipped && <EntryBody host={host} threadId={threadId} entry={entry.id} label={shortenedLabel("Text", entry.clippedBytes)} show={(full) => full.kind === "custom" && <NoticeParts message={full.message} />} />}
 			</div>
 		</details>
@@ -120,6 +125,7 @@ const Entries = memo(function Entries({
 	onOpenConversation,
 	lens = false,
 	busy = false,
+	closed = false,
 	reveal,
 }: {
 	entries: PiEntry[];
@@ -129,6 +135,8 @@ const Entries = memo(function Entries({
 	onOpenConversation: (conversationId: string) => void;
 	lens?: boolean;
 	busy?: boolean;
+	/** The thread is closed (EntryActionProps). */
+	closed?: boolean;
 	/** The entry a reveal targets, the row that renders it, and the request: its folds and tool body open once per request. */
 	reveal?: Reveal;
 }) {
@@ -172,6 +180,8 @@ const Entries = memo(function Entries({
 	const slots = new Map<string, LiveSlot>();
 	for (const slot of (live?.tools ?? []) as Any[]) slots.set(String(slot.callId), slot);
 	const parts = useMemo(() => lens ? toolRuns(entries, busy) : [], [entries, lens, busy]);
+	const { entryAction: EntryAction, userImages: UserImages, compactionRow: CompactionRow } = useThreadSurface(host);
+	const compactions = CompactionRow ? entries.filter((e) => e.kind === "compaction").length : 0;
 	const open = useMemo(() => openCalls(entries), [entries]);
 	const calls = useMemo(() => new Set(entries.flatMap((entry) => entry.kind === "assistant" ? entry.blocks.flatMap((b) => b.type === "tool" ? [b.callId] : []) : [])), [entries]);
 	/** `fragment` names this rendered part of the entry: the lens part key, or the entry ID for a whole entry. */
@@ -187,17 +197,17 @@ const Entries = memo(function Entries({
 									<span className="you-label">You</span>
 									<span>{clock(entry.ts)}</span>
 									<span style={{ flex: 1 }} />
-									<RarebitJump host={host} threadId={threadId} entry={entry.id} />
+									{EntryAction ? <EntryAction host={host} threadId={threadId} entry={entry.id} closed={closed} /> : <RarebitJump host={host} threadId={threadId} entry={entry.id} />}
 								</div>
 								<div data-quote-body className={fade ? "clip-fade" : undefined}>{entry.text}</div>
 								{proseToggle(preview)}
-								{entry.images > 0 && <div className="hint">{entry.images} image(s)</div>}
+								{entry.images > 0 && (UserImages ? <UserImages host={host} threadId={threadId} entryId={entry.id} count={entry.images} /> : <div className="hint">{entry.images} image(s)</div>)}
 							</div>
 						);
 					case "assistant":
 						return (
 							<div key={entry.id} className="msg assistant" data-entry={entry.id} data-fragment={fragment}>
-								{entry.blocks.some((b) => b.type === "text") && <RarebitJump host={host} threadId={threadId} entry={entry.id} />}
+								{!EntryAction && entry.blocks.some((b) => b.type === "text") && <RarebitJump host={host} threadId={threadId} entry={entry.id} />}
 								{entry.blocks.map((block, i) =>
 									block.type === "text" ? (
 										i === lastText && fade ? <div key={i} className="clip-fade"><Markdown text={block.text} /></div> : <Markdown key={i} text={block.text} />
@@ -233,7 +243,9 @@ const Entries = memo(function Entries({
 						);
 					case "tool-result":
 						return lens && !calls.has(entry.callId) ? <div key={entry.id} data-entry={entry.id} data-fragment={fragment}><ToolCall name={entry.name} args={{ summary: "" }} result={results.get(entry.callId)} outputSource={outputSource(entry.callId)} reveal={reveal?.entry === entry.id ? reveal.seq : undefined} /></div> : null;
-					case "compaction":
+					case "compaction": {
+						const more = entry.clipped && <EntryBody host={host} threadId={threadId} entry={entry.id} label={shortenedLabel("Summary", entry.clippedBytes)} show={(full) => full.kind === "compaction" && <Markdown text={full.summary ?? ""} />} />;
+						if (CompactionRow) return <CompactionRow key={entry.id} entry={entry} host={host} threadId={threadId} fragment={fragment} compactions={compactions} more={more} />;
 						return (
 							<Fragment key={entry.id}>
 								<div className="compaction" data-entry={entry.id} data-fragment={fragment}>
@@ -243,10 +255,11 @@ const Entries = memo(function Entries({
 								<details className="compaction-body">
 									<summary className="disclosure">Summary the agent continues from</summary>
 									<Markdown text={entry.summary} />
-									{entry.clipped && <EntryBody host={host} threadId={threadId} entry={entry.id} label={shortenedLabel("Summary", entry.clippedBytes)} show={(full) => full.kind === "compaction" && <Markdown text={full.summary ?? ""} />} />}
+									{more}
 								</details>
 							</Fragment>
 						);
+					}
 					case "reset":
 						return (
 							<div key={entry.id} className="compaction" data-entry={entry.id} data-fragment={fragment}>
@@ -282,12 +295,13 @@ function lastEntryShows(entries: PiEntry[], error: string): boolean {
 function ModelError({ host, text, prefix = "Model error" }: { host: string; text: string; prefix?: string }) {
 	const auth = AUTH_FAILURE.test(text);
 	const message = /"message"\s*:\s*"([^"]+)"/.exec(text)?.[1];
+	const { signIn } = useThreadSurface(host);
 	return (
 		<div className="err-box" data-model-error={auth ? "auth" : "other"}>
 			{auth ? (
 				<>
 					The model provider rejected this host's sign-in{message ? ` (${message})` : ""}.{" "}
-					Sign in again in the Pi pane.
+					{signIn ? <button className="btn small" onClick={() => signIn(host)}>Fix sign-in</button> : "Sign in again in the Pi pane."}
 				</>
 			) : (
 				<>
@@ -365,12 +379,16 @@ export function ThreadView({
 	useEffect(() => {
 		if (viewArrived) perfMarkPainted("switch-done");
 	}, [viewArrived]);
+	const hostState = findHost(useHosts().hosts, host);
+	// `reader`: the Host kind serves HostOps and reader views (Find, Rarebit, Arc, history pages). `pi`: Herdr runs it.
+	const { reader, herdr: pi } = hostKind(hostState);
+	const surface = useThreadSurface(host);
 	// Find opens at the reader's place.
 	const find = useSessionFind(host, threadId, () => readingEntry(scroller.current), view);
 	const findBar = useRef<HTMLDivElement>(null);
 	const focusIntent = useFocusIntent();
 	// ⌘F opens the bar, or takes the reader back to its query.
-	useKeyAction("find", (event) => { event.preventDefault(); find.show(); findBar.current?.querySelector("input")?.select(); });
+	useKeyAction("find", reader ? (event) => { event.preventDefault(); find.show(); findBar.current?.querySelector("input")?.select(); } : undefined);
 	const scroller = useRef<HTMLDivElement>(null);
 	useFindHighlight(scroller, find.open ? find.query : "", find.tools, find.at === undefined ? undefined : find.matches[find.at]?.entry);
 	const composer = useRef<ComposerHandle>(null);
@@ -406,14 +424,14 @@ export function ThreadView({
 		setJump(undefined);
 		setRevealScope((n) => n + 1);
 	}, [keepPlace.capture]);
-	const lens = useRarebitLens(host, threadId, true, beforeLensChange);
-	useKeyAction("transcript.mode", (event) => {
+	const lens = useRarebitLens(host, threadId, reader, beforeLensChange);
+	useKeyAction("transcript.mode", reader ? (event) => {
 		if (event.target instanceof HTMLElement && event.target.closest("select, [role=dialog]")) return;
 		event.preventDefault();
 		const state = rarebitState(host, threadId);
 		beforeLensChange();
 		state.set({ lens: !state.get().lens });
-	});
+	} : undefined);
 	const [older, setOlder] = useState<PiEntry[]>([]);
 	const [olderMore, setOlderMore] = useState(true);
  const [historyError, setHistoryError] = useState<HistoryFailure>();
@@ -731,7 +749,7 @@ export function ThreadView({
 		pinned.current = false;
 		// Earlier messages arrive above: keep the message being read where it is.
 		keepPlace.capture();
-		setOlder((prev) => [...page.entries, ...prev].slice(0, 400));
+		setOlder((prev) => [...page.entries, ...prev].slice(0, reader ? 400 : undefined));
 		setOlderMore(page.more);
   } catch (error) { setHistoryError(historyFailure(error, () => void loadOlderRef.current())); }
 	};
@@ -754,7 +772,7 @@ export function ThreadView({
 			let pages = 0;
 			const loaded = () => older.some((e) => e.id === entry) || view.entries.some((e) => e.id === entry);
 			const collected: PiEntry[] = [];
-			if (!loaded()) {
+			if (!loaded() && reader) {
 				try {
 					const page = await readHistory("Loading entry…", (version) => hub.request(host, "thread.history", { threadId, around: entry, version }), view.sourceVersion);
 					if (cancelled) return;
@@ -787,7 +805,7 @@ export function ThreadView({
 			}
 			const all = [...collected, ...older, ...(view.entries ?? [])];
 			const target = all.find((e) => e.id === entry) as Any;
-			if (!target) { setMissing({ entry, why: "branch" }); return; }
+			if (!target) { setMissing({ entry, why: reader ? "branch" : "paged" }); return; }
 			setMissing(undefined);
 			// A tool result renders inside its call: the assistant message that made the call holds it.
 			const holder = target.kind === "tool-result" ? (all.find((e) => (e as Any).blocks?.some((b: Any) => b.callId === target.callId)) as Any) : undefined;
@@ -874,27 +892,29 @@ export function ThreadView({
 		if (view && document.visibilityState === "visible") markSeen(`${host}/${threadId}`);
 	}, [host, threadId, view]);
 	const parent = summary?.parentId;
-	const outline = useThreadOutline(host, threadId, view?.sourceVersion, missing?.entry);
-	const promptPlace = usePromptPlace(scroller, outline.outline, true);
+	const outline = useThreadOutline(host, threadId, reader ? view?.sourceVersion : undefined, missing?.entry);
+	const promptPlace = usePromptPlace(scroller, outline.outline, reader);
 	const closeFind = () => { readerMoved(); find.close(); focusIntent("find.close"); };
 	// A reveal from elsewhere (a link, a prompt step, the rail) shows the full transcript.
 	// eslint-disable-next-line react-hooks/exhaustive-deps
 	useEffect(() => { if (want) find.endFilter(); }, [want?.seq]);
-	const paneActions = summary?.live && summary.location?.pane ? summary : undefined;
+	const paneActions = pi && summary?.live && summary.location?.pane ? summary : undefined;
+	const MenuItems = summary?.live ? surface.menuItems : undefined;
 	// More exists while it holds something; when it goes, it goes closed.
-	const hasMore = !!paneActions || folded;
+	const hasMore = !!paneActions || !!MenuItems || folded;
 	useEffect(() => { if (!hasMore) setMoreOpen(false); }, [hasMore]);
 	// The header's secondary actions: one list, drawn in the bar or as More items (header-fold.ts decides which).
 	const secondary = (place: "bar" | "menu") => {
 		const btn = place === "bar" ? "btn ghost small" : undefined;
 		return <>
-			{summary && !summary.live && <button className={btn} title="Start Pi on this Session again, in a Herdr pane" onClick={() => setResuming(true)}>Resume</button>}
-			<RarebitControls host={host} threadId={threadId} panel={panel} setPanel={setPanel} beforeLensChange={beforeLensChange} place={place} />
+			{pi && summary && !summary.live && <button className={btn} title="Start Pi on this Session again, in a Herdr pane" onClick={() => setResuming(true)}>Resume</button>}
+			{reader && <RarebitControls host={host} threadId={threadId} panel={panel} setPanel={setPanel} beforeLensChange={beforeLensChange} place={place} />}
 		</>;
 	};
 	const findMarks = useMemo(() => find.open && find.query.trim() ? find.matches.map((hit, i) => ({ id: hit.entry, prompt: hit.prompt, cur: i === find.at })) : undefined, [find.open, find.query, find.matches, find.at]);
 	// A Session with a rail hides the native scrollbar; one without keeps it and draws no Find marks.
-	const rail = usePromptRail(outline.outline, promptPlace, findMarks);
+	const rail = usePromptRail(reader ? outline.outline : undefined, promptPlace, findMarks);
+	const { header: Header, closeDialog: CloseDialog = CloseAgentDialog, rename, canQuote = (s?: ThreadSummary) => !!s?.control } = surface;
 	return (
 		<div className="main">
 			{/* The Session name is the field; run state shows in the transcript tail and the composer's Stop. */}
@@ -905,16 +925,20 @@ export function ThreadView({
 					value={title}
 					aria-label="Thread title"
 					title={title}
-					readOnly
+					readOnly={!rename}
+					onChange={rename && ((e) => setTitle(e.target.value))}
+					onBlur={rename && (() => title !== summary?.title && rename(host, threadId, title))}
+					onKeyDown={rename && ((e) => e.key === "Enter" && (e.target as HTMLInputElement).blur())}
 				/>
 				</SessionTitle>
 			}>
 				{stale && <span className="badge err">{error ?? "reconnecting…"}</span>}
-				{summary && !summary.live && <span className="badge">not running</span>}
+				{pi && summary && !summary.live && <span className="badge">not running</span>}
+				{Header && <Header host={host} threadId={threadId} summary={summary} hostState={hostState} close={() => setClosing(true)} />}
 				<PinStar host={host} threadId={threadId} title={summary?.title || title} />
-				<button className="btn ghost small" aria-label="Find in this Session" aria-expanded={find.open} title={`Find in this Session (${MOD}F)`} onClick={() => (find.open ? closeFind() : find.show())}>
+				{reader && <button className="btn ghost small" aria-label="Find in this Session" aria-expanded={find.open} title={`Find in this Session (${MOD}F)`} onClick={() => (find.open ? closeFind() : find.show())}>
 					<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.25" /><path d="m10.25 10.25 3.25 3.25" /></svg>
-				</button>
+				</button>}
 				{/* The name and the primary actions always show; the secondary actions fold into More when short (header-fold.ts). */}
 				<span className="header-fold" ref={foldGroup} data-folded={folded || undefined} inert={folded || undefined}>
 					{secondary("bar")}
@@ -926,7 +950,8 @@ export function ThreadView({
 						</summary>
 						{moreOpen && <Popover className="t-more-menu" anchor={() => moreRef.current?.querySelector("summary")?.getBoundingClientRect()} align="end" gap={4} owner={moreRef.current?.querySelector("summary")} onClose={() => moreRef.current?.removeAttribute("open")} menu>
 							{folded && secondary("menu")}
-							{folded && paneActions && <hr />}
+							{folded && (paneActions || MenuItems) && <hr />}
+							{MenuItems && <MenuItems host={host} threadId={threadId} summary={summary} hostState={hostState} close={() => setClosing(true)} />}
 							{paneActions && (
 								<>
 									<button title={`Start another agent in a pane beside this one (${MOD}N)`} onClick={() => window.dispatchEvent(new Event("ampi:new"))}>
@@ -948,9 +973,9 @@ export function ThreadView({
 				)}
 			</FormRow>
 			{resuming && summary && <ResumeAgentDialog host={host} summary={summary} onClose={() => setResuming(false)} />}
-			{closing && summary && <CloseAgentDialog host={host} summary={summary} onClose={() => setClosing(false)} />}
-			{find.open && <div ref={findBar}><FindBar find={find} onClose={closeFind} /></div>}
-			{(view?.agent as Any)?.readError && <p className="err-box" role="status">Last indexed copy · {(view!.agent as Any).readError}. New source bytes retry the read.</p>}
+			{closing && summary && <CloseDialog host={host} summary={summary} onClose={() => setClosing(false)} />}
+			{reader && find.open && <div ref={findBar}><FindBar find={find} onClose={closeFind} /></div>}
+			{reader && (view?.agent as Any)?.readError && <p className="err-box" role="status">Last indexed copy · {(view!.agent as Any).readError}. New source bytes retry the read.</p>}
 			{historyCue && !historyError && (
 				<div className="entry-missing" role="status" data-history-cue>
 					<span>{historyCue}</span>
@@ -1035,21 +1060,21 @@ export function ThreadView({
 							{(view.hiddenBefore || older.length > 0) && olderMore && (
 								<div style={{ textAlign: "center" }}>
 									<button className="btn small" onClick={() => void loadOlder()}>
-										Read an earlier page
+										{reader ? "Read an earlier page" : "Show earlier messages"}
 									</button>
 								</div>
 							)}
 							{older.length > 0 && (
 								<>
-									<Entries entries={older.filter((e) => !shown.some((v) => v.id === e.id))} live={NO_LIVE} host={host} threadId={threadId} onOpenConversation={openConversation} lens={lens} reveal={jump?.threadId === threadId ? jump : undefined} />
-									<div className="compaction">Newest messages below · intermediate entries may be omitted</div>
+									<Entries entries={reader ? older.filter((e) => !shown.some((v) => v.id === e.id)) : older} live={NO_LIVE} host={host} threadId={threadId} onOpenConversation={openConversation} lens={lens} closed={!!summary?.closed} reveal={jump?.threadId === threadId ? jump : undefined} />
+									<div className="compaction">{reader ? "Newest messages below · intermediate entries may be omitted" : "Earlier messages above"}</div>
 								</>
 							)}
 							{view.entries.length === 0 && !busy && <div className="empty">{(view as { updating?: true }).updating ? "Updating this Session…" : "Send a message to start."}</div>}
 							{segments(shown, omitted.current, head.current).map((part, i, parts) => (
 								<Fragment key={part.key}>
 									{i > 0 && <div className="omitted">Some entries after this one were never shown here. ↓ new goes to the newest.</div>}
-									<Entries entries={part.rows} live={view.live} host={host} threadId={threadId} onOpenConversation={openConversation} lens={lens} busy={i === parts.length - 1 && tailPainted() && busy} reveal={jump?.threadId === threadId ? jump : undefined} />
+									<Entries entries={part.rows} live={view.live} host={host} threadId={threadId} onOpenConversation={openConversation} lens={lens} closed={!!summary?.closed} busy={i === parts.length - 1 && tailPainted() && busy} reveal={jump?.threadId === threadId ? jump : undefined} />
 								</Fragment>
 							))}
 							{/* Live output belongs after the newest entry; a frozen window ends earlier. */}
@@ -1073,7 +1098,7 @@ export function ThreadView({
 					)}
 				</div>
 			</div>
-			<PromptHeader host={host} threadId={threadId} state={outline} place={promptPlace} />
+			{reader && <PromptHeader host={host} threadId={threadId} state={outline} place={promptPlace} />}
 			{rail.layout && <CompanionScrollbar host={host} threadId={threadId} state={outline} place={promptPlace} scroller={scroller} layout={rail.layout} strip={rail.strip} />}
 			</div>
 			{summary && attentionOf(summary).length > 0 && (
@@ -1087,13 +1112,13 @@ export function ThreadView({
 					))}
 				</div>
 			)}
-			{PI_BANDS.map((Band, i) => <Band key={i} host={host} threadId={threadId} lens={lens} />)}
+			{pi && PI_BANDS.map((Band, i) => <Band key={i} host={host} threadId={threadId} lens={lens} />)}
 			{/* Availability gates new quotes. An open note keeps its Session draft custody through availability changes. */}
-			<QuoteSelection key={`${host}/${threadId}`} draftKey={`${host}/${threadId}`} enabled={!!(view && !summary?.closed && summary?.control)} onQuote={(text, note) => {
+			<QuoteSelection key={`${host}/${threadId}`} draftKey={`${host}/${threadId}`} enabled={!!(view && !summary?.closed && canQuote(summary))} onQuote={(text, note) => {
 				if (composer.current) composer.current.quote(text, note);
 				else quoteDraft(host, threadId, text, note);
 			}} transcript={scroller} />
-			{view && <Composer composerRef={composer} host={host} threadId={threadId} view={view} summary={summary} />}
+			{view && <Composer composerRef={composer} host={host} threadId={threadId} view={view} summary={summary} actions={{ panel, openPanel: setPanel }} />}
 		</div>
 	);
 }

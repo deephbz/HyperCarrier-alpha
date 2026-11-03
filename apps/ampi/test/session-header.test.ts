@@ -1,10 +1,11 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 import { devices, type Page } from "playwright";
 import { engineSkip } from "./engines.ts";
-import { ENGINES, open, sidesSettled } from "./resize-edges-fixture.ts";
+import { ENGINES, open, seededArc, sidesSettled } from "./resize-edges-fixture.ts";
 
 // The adversarial finding H1: on a 390 px phone at display size 100% and 130%, with the sidebar closed, the Session
 // header drew its secondary actions and gave the name 0 px. One composition rule covers every header: FormRow
@@ -36,6 +37,32 @@ const revealBox = (page: Page) => page.evaluate(() => {
 	const icon = box(document.querySelector(".sidebar-reveal svg")!), find = box(document.querySelector('.thread-bar [aria-label="Find in this Session"] svg')!);
 	return { w: r.width, h: r.height, off: mid(r) - mid(pin), icon: [icon.width, icon.height], find: [find.width, find.height], iconOff: mid(icon) - mid(find) };
 });
+
+async function pinnedPanelProof(page: Page, label: string, screenshot: string) {
+	const body = page.locator(".panel-body");
+	await body.evaluate((el) => { const filler = document.createElement("div"); filler.dataset.scrollProbe = ""; filler.style.height = "1000px"; el.querySelector(".arc-panel")!.append(filler); el.scrollTop = el.scrollHeight; });
+	await settle(page);
+	const result = await page.evaluate(() => {
+		const body = document.querySelector<HTMLElement>(".panel-body")!;
+		const status = document.querySelector<HTMLElement>(".arc-status")!;
+		const build = status.querySelector<HTMLElement>(".arc-actions > button")!;
+		const meta = status.querySelector<HTMLElement>(".arc-status-meta")!;
+		const r = (el: Element) => { const b = el.getBoundingClientRect(); return { top: b.top, bottom: b.bottom, left: b.left, right: b.right }; };
+		const button = r(build), buttonHit = document.elementFromPoint((button.left + button.right) / 2, (button.top + button.bottom) / 2);
+		const text = r(meta), textHit = document.elementFromPoint(text.left + 2, text.top + 2);
+		const lineHeight = Number.parseFloat(getComputedStyle(meta).lineHeight);
+		return { atEnd: body.scrollTop + body.clientHeight >= body.scrollHeight - 1, scrollTop: body.scrollTop, status: r(status), body: r(body), position: getComputedStyle(status).position, metaLines: meta.offsetHeight / lineHeight, metaVisible: meta.checkVisibility({ opacityProperty: true, visibilityProperty: true }), metaHit: Boolean(textHit?.closest(".arc-status-meta")), buildVisible: build.checkVisibility({ opacityProperty: true, visibilityProperty: true }), buildHit: Boolean(buttonHit?.closest(".arc-status")) };
+	});
+	assert.ok(result.atEnd, `${label}: panel body is at its scroll end`);
+	assert.ok(result.scrollTop > 0, `${label}: panel body scrolled`);
+	assert.ok(result.status.top >= result.body.top - 1, `${label}: status stays inside the panel body: ${JSON.stringify(result)}`);
+	assert.ok(result.status.top < result.body.bottom, `${label}: status remains visible at scroll end`);
+	assert.equal(result.position, "sticky", `${label}: Arc status stays pinned`);
+	assert.ok(result.metaVisible && result.metaHit, `${label}: Arc status remains visible at scroll end`);
+	assert.ok(result.metaLines <= 2, `${label}: Arc status uses at most two lines`);
+	assert.ok(result.buildVisible && result.buildHit, `${label}: Build remains visible and hit-testable at scroll end`);
+	await page.screenshot({ path: join(process.cwd(), `output/zoom-overlap/${screenshot}`) });
+}
 
 async function header(page: Page) {
 	return page.evaluate(() => {
@@ -106,6 +133,77 @@ for (const [engine, type, path] of ENGINES) for (const zoom of [0.8, 1, 1.3]) {
 }
 
 for (const [engine, type, path] of ENGINES) {
+	test(`session layout ${engine}: Arc and panel tabs stay out of the composer at display zoom and phone size`, { skip: engineSkip(engine) }, async (t) => {
+		await seededArc();
+		const page = await open(t, engine, type, path(), { display: { overall: 2 }, route: `${ROUTE}?p=arc` });
+		page.setDefaultTimeout(4000);
+		const inspect = () => page.evaluate(() => {
+			const rect = (selector: string) => {
+				const el = document.querySelector<HTMLElement>(selector);
+				if (!el || !el.getClientRects().length) return null;
+				const r = el.getBoundingClientRect();
+				return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width };
+			};
+			const composer = rect(".composer");
+			const textarea = document.querySelector<HTMLTextAreaElement>(".composer textarea");
+			const input = textarea?.getBoundingClientRect();
+			const send = document.querySelector<HTMLElement>('.composer [type="submit"], .composer button[aria-label^="Send"]')?.getBoundingClientRect();
+			const points = composer ? Array.from({ length: 5 }, (_, i) => ({ x: composer.left + composer.width * (i + 1) / 6, y: composer.top + 4 })) : [];
+			const hit = (x: number, y: number) => {
+				const el = document.elementFromPoint(x, y);
+				return { tag: el?.tagName.toLowerCase() ?? null, inside: Boolean(el?.closest(".composer")) };
+			};
+			return { composer, textarea: input && { left: input.left, right: input.right, top: input.top, bottom: input.bottom }, textareaHit: input ? hit((input.left + input.right) / 2, (input.top + input.bottom) / 2) : null, topBandHits: points.map(({ x, y }) => hit(x, y)), sendHit: send ? hit((send.left + send.right) / 2, (send.top + send.bottom) / 2) : null };
+		});
+		const failures: string[] = [];
+		await page.setViewportSize({ width: 640, height: 400 });
+		await sidesSettled(page);
+		await settle(page);
+		const zoomed = await inspect();
+		if (zoomed.textareaHit?.tag !== "textarea") failures.push(`640x400 at 200%: textarea hit test is ${zoomed.textareaHit?.tag}`);
+		if (zoomed.topBandHits.some((point) => !point.inside)) failures.push(`640x400 at 200%: composer top-band points miss the composer: ${JSON.stringify(zoomed.topBandHits)}`);
+		if (!zoomed.sendHit?.inside) failures.push("640x400 at 200%: Send hit test misses the composer");
+		mkdirSync(join(process.cwd(), "output/zoom-overlap"), { recursive: true });
+		await page.screenshot({ path: join(process.cwd(), `output/zoom-overlap/${engine}-640x400-200.png`) });
+		const panelBody = page.locator(".panel-body");
+		await panelBody.evaluate((body) => { const filler = document.createElement("div"); filler.dataset.scrollProbe = ""; filler.style.height = "1000px"; body.querySelector(".arc-panel")!.append(filler); });
+		await panelBody.evaluate((body) => { body.scrollTop = body.scrollHeight; });
+		const build = page.locator(".arc-status .arc-actions > button").first();
+		await build.scrollIntoViewIfNeeded();
+		assert.ok(await build.isVisible(), "640x400/200%: Build is reachable by scrolling the panel body");
+		assert.ok(await build.isEnabled(), "640x400/200%: Build is enabled");
+		await build.click();
+		await seededArc();
+		await page.setViewportSize({ width: 320, height: 480 });
+		await page.evaluate(() => { localStorage.setItem("ampi.display", JSON.stringify({ overall: 1 })); window.dispatchEvent(new Event("ampi:display")); });
+		await sidesSettled(page);
+		const closePanel = page.getByTitle("Close panel", { exact: true });
+		if (await closePanel.isVisible()) await closePanel.click();
+		await settle(page);
+		const phone = await inspect();
+		if (phone.textareaHit?.tag !== "textarea") failures.push(`320x480: textarea hit test is ${phone.textareaHit?.tag}`);
+		if (phone.topBandHits.some((point) => !point.inside)) failures.push(`320x480: composer top-band points miss the composer: ${JSON.stringify(phone.topBandHits)}`);
+		if (!phone.sendHit?.inside) failures.push("320x480: Send hit test misses the composer");
+		await page.setViewportSize({ width: 1280, height: 800 });
+		await sidesSettled(page);
+		await settle(page);
+		await page.screenshot({ path: join(process.cwd(), `output/zoom-overlap/${engine}-1280.png`) });
+		await page.setViewportSize({ width: 390, height: 844 });
+		await sidesSettled(page);
+		await settle(page);
+		await page.screenshot({ path: join(process.cwd(), `output/zoom-overlap/${engine}-390.png`) });
+		const wide = await open(t, engine, type, path(), { display: { overall: 2 }, route: `${ROUTE}?p=arc` });
+		await wide.setViewportSize({ width: 1280, height: 800 });
+		await sidesSettled(wide);
+		await settle(wide);
+		await pinnedPanelProof(wide, "1280x800/200%", `${engine}-1280x800-200.png`);
+		const tallPhone = await open(t, engine, type, path(), { route: `${ROUTE}?p=arc`, context: { viewport: { width: 390, height: 844 } } });
+		await sidesSettled(tallPhone);
+		await settle(tallPhone);
+		await pinnedPanelProof(tallPhone, "390x844/100%", `${engine}-390x844-100.png`);
+		assert.deepEqual(failures, [], JSON.stringify({ zoomed, phone }));
+	});
+
 	test(`session header ${engine}: the bar's Arc button opens and closes the Arc panel`, { skip: engineSkip(engine) }, async (t) => {
 		const page = await open(t, engine, type, path(), { route: ROUTE });
 		page.setDefaultTimeout(4000);

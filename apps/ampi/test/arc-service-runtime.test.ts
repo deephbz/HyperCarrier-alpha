@@ -13,11 +13,13 @@ import { launchLocked } from "../src/arc/service/lock.ts";
 import { serviceText, serviceStatus } from "../src/arc/service/status.ts";
 import { storeIncarnation } from "../src/arc/service/store.ts";
 import type { Socket } from "node:net";
-import { controlRequest as rawControlRequest } from "../src/arc/service/runtime.ts";
+import { controlRequest as rawControlRequest, serviceAddress } from "../src/arc/service/runtime.ts";
 import type { ControlCommand } from "../src/arc/service/runtime.ts";
 import { pathToFileURL } from "node:url";
 const controlRequest = (store: string, command: ControlCommand, timeout?: number) => rawControlRequest(store, { stamp: JSON.parse(readFileSync(join(store, "control.json"), "utf8")).selected, ...command }, timeout);
 import { maintainHost, maintenanceLaunch, parseArcArgs } from "../src/arc/service/client.ts";
+import { piSource } from "../src/arc/service/source.ts";
+import { fingerprint, storeAnswer } from "../src/arc/core/construct.ts";
 
 async function fixture(t: any, virtualTime = false) {
  const dir = mkdtempSync(join(tmpdir(), "arc-runtime-")), agent = join(dir, "agent"), bundle = join(dir, "service.mjs");
@@ -89,6 +91,18 @@ if (isMainThread && process.argv[2] === '_locked' && JSON.parse(process.argv[3])
 async function until(check: () => Promise<boolean> | boolean, message: string) {
  const end = Date.now() + 10000;
  while (!await check()) { if (Date.now() >= end) throw new Error(message); await new Promise(r => setTimeout(r, 30)); }
+}
+function managerClock(f: { dir: string }) {
+ const address = join(f.dir, "manager-clock.sock"), preload = join(f.dir, "manager-clock.mjs");
+ writeFileSync(preload, `import {mock} from 'node:test'; import {createServer} from 'node:net';
+if(process.argv.length===1 || process.argv[1]?.endsWith('/runner.mjs')){
+ mock.timers.enable({apis:['Date','setTimeout'],now:Date.now()});
+ const server=createServer(socket=>socket.once('data',data=>{mock.timers.tick(Number(data));socket.end('advanced');server.unref();}));
+ await new Promise(resolve=>server.listen(${JSON.stringify(address)},resolve));
+}`);
+ return { env: { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` }, async advance(ms: number) {
+  const socket = createConnection(address); socket.resume(); await once(socket, "connect"); socket.end(String(ms)); await once(socket, "close");
+ } };
 }
 function blockingModel(f: Awaited<ReturnType<typeof fixture>>, loss = false) {
  const sessions = join(f.agent, "sessions"); mkdirSync(sessions);
@@ -194,19 +208,27 @@ for (const release of [false, true]) test(`Arc ready reply requires the manager 
  await closed;
 });
 
-test("Arc startup timeout kills and reaps its unready launcher", { timeout: 15000 }, async t => {
- const f = await fixture(t), entered = join(f.dir, "unready-pid");
+for (const enteredNode of [false, true]) test(`Arc startup timeout kills and reaps its unready launcher (enteredNode=${enteredNode})`, { timeout: 15000 }, async t => {
+ const f = await fixture(t), entered = join(f.dir, "unready-pid"), guardian = join(f.dir, "guardian-pid");
+ // Advance the unchanged 500 ms manager deadline only after the tested phase exists.
+ const clock = managerClock(f);
+ const seam = "my $fd = fileno($lock);";
+ const guardianProbe = `open(my $probe, '>', '${guardian}') or die $!; print {$probe} $$; close($probe);\n`;
  const body = `import * as startupFs from 'node:fs';
  if (import.meta.url.includes('/versions/')) {
   startupFs.writeFileSync(${JSON.stringify(entered)}, String(process.pid));
   await new Promise(() => setInterval(() => {}, 1000));
- }\n` + f.body;
- const config = { id: "synthetic", label: "Synthetic", kind: "pi-local" as const, agentConfig: { agentDir: f.agent }, env: { HOME: f.dir, PI_BIN: join(f.dir, "pi") } };
+ }\n` + f.body.replace(seam, () => guardianProbe + (enteredNode ? "" : "select(undef, undef, undef, 10);\n") + seam);
+ const config = { id: "synthetic", label: "Synthetic", kind: "pi-local" as const, agentConfig: { agentDir: f.agent }, env: { HOME: f.dir, PI_BIN: join(f.dir, "pi"), ...clock.env } };
  const result = maintainHost(config, { op: "ensure", timeoutMs: 500 }, body);
- await until(() => existsSync(entered), "launcher did not enter startup");
- const pid = Number(readFileSync(entered, "utf8")); f.pids.add(pid);
- assert.equal((await result).state, "error");
- assert.throws(() => process.kill(pid, 0), { code: "ESRCH" }, "a failed startup must reap its child before replying");
+ await until(() => existsSync(enteredNode ? entered : guardian), "launcher did not reach the tested phase");
+ await clock.advance(500);
+ const failed = await result; assert.equal(failed.state, "error"); assert.match(failed.detail!, /Arc service startup timed out/);
+ assert.equal(existsSync(entered), enteredNode, "both pre-exec abort and entered Node must run deterministically");
+ for (const pidFile of enteredNode ? [guardian, entered] : [guardian]) {
+  const pid = Number(readFileSync(pidFile, "utf8")); assert.ok(pid > 0); f.pids.add(pid);
+  assert.throws(() => process.kill(pid, 0), { code: "ESRCH" }, "a failed startup must reap the guardian and any entered Node before replying");
+ }
 });
 
 test("Arc startup error kills and reaps its launcher before replying", { timeout: 15000 }, async t => {
@@ -293,6 +315,17 @@ for (const name of ["stop.json", "incarnation.json"]) test(`Arc maintenance: cor
  assert.ok(result.detail.includes(join(f.store, name)), result.detail);
  assert.match(result.detail, /retry|restart AmPi/);
  assert.equal(result.serviceLogPath, join(f.store, "service.log"));
+});
+
+for (const missing of ["store", "lock", "socket"]) test(`Arc resident exits when its ${missing} disappears`, { timeout: 5000 }, async t => {
+ const f = await fixture(t), resident = await f.manage("ensure");
+ rmSync(missing === "store" ? f.store : missing === "lock" ? join(f.store, "service.lock") : serviceAddress(f.store), { recursive: true, force: true });
+ const deadline = performance.now() + 3000;
+ while (true) {
+  try { process.kill(resident.pid, 0); } catch { break; }
+  assert.ok(performance.now() < deadline, `resident outlived its missing ${missing}`);
+  await new Promise(resolve => setTimeout(resolve, 25));
+ }
 });
 
 test("Arc maintenance: stopped means the prior lifetime-lock owner has exited", async t => {
@@ -393,10 +426,88 @@ test("Arc status: typed settings, auth caching, version facts and stopping cause
  assert.equal(malformed.settingsKey, "$"); assert.equal(serviceText(malformed), `synthetic: ${join(f.agent, "settings.json")} is not valid JSON. Fix the file, then run ampi arc status --host synthetic.`);
  f.settings(); await controlRequest(f.store, request("drain")); await until(() => existsSync(model.pid), "model never received prompt");
  f.pids.add(Number(readFileSync(model.pid, "utf8"))); assert.equal(readFileSync(auth, "utf8"), "check\ncheck\n");
- const stopping = f.manage("stop");
- await until(async () => (await controlRequest(f.store, { op: "snapshot" })).state === "stopping", "stop was labelled update");
- writeFileSync(model.release, "release"); const stopped = await stopping; assert.equal(stopped.state, "stopped");
+ assert.equal((await controlRequest(f.store, { op: "stop" })).state, "stopping", "stop was labelled update");
+ const stopped = await f.manage("stop"); assert.equal(stopped.state, "stopped");
  assert.equal(serviceText(stopped), "synthetic: Arc service is stopped. A linked hub restarts it within seconds.");
+});
+
+test("Arc stop reaps current children and exits when the store disappears during cancellation", { timeout: 10000 }, async t => {
+ const f = await fixture(t), model = blockingModel(f);
+ const marker = "if (cancelActive) {";
+ assert.ok(f.body.includes(marker));
+ writeFileSync(f.bundle, f.body.replace(marker, marker + " rmSync(lock.store, { recursive: true, force: true });"));
+ const resident = await f.manage("ensure"); await controlRequest(f.store, request("lost-authority"));
+ await until(() => existsSync(model.pid), "model never received prompt");
+ const child = Number(readFileSync(model.pid, "utf8")); f.pids.add(child);
+ await f.manage("stop");
+ const deadline = performance.now() + 3000;
+ while (true) {
+  try { process.kill(resident.pid, 0); } catch { break; }
+  assert.ok(performance.now() < deadline, "resident outlived lost authority during cancellation");
+  await new Promise(resolve => setTimeout(resolve, 25));
+ }
+ assert.throws(() => process.kill(child, 0), { code: "ESRCH" });
+});
+test("Arc old resident leaves a successor socket after losing lock identity", { timeout: 5000 }, async t => {
+ const f = await fixture(t), resident = await f.manage("ensure"), address = serviceAddress(f.store);
+ rmSync(join(f.store, "service.lock")); writeFileSync(join(f.store, "service.lock"), "successor"); rmSync(address);
+ const successor = createServer(socket => socket.on("data", () => socket.end('{"state":"successor"}\n')));
+ await new Promise<void>(resolve => successor.listen(address, resolve)); t.after(() => successor.close());
+ process.kill(resident.pid, "SIGTERM");
+ const deadline = performance.now() + 3000;
+ while (true) {
+  try { process.kill(resident.pid, 0); } catch { break; }
+  assert.ok(performance.now() < deadline, "old resident did not end"); await new Promise(resolve => setTimeout(resolve, 25));
+ }
+ assert.equal(existsSync(address), true, "old resident cannot unlink its successor socket");
+ assert.equal((await rawControlRequest(f.store, { op: "status" })).state, "successor");
+});
+test("Arc stop retains its lock after a valid-store save failure, then exits after authority loss", async t => {
+ const f = await fixture(t), model = blockingModel(f), marker = "function durableJson(lock, name, value) {";
+ assert.ok(f.body.includes(marker));
+ writeFileSync(f.bundle, f.body.replace(marker, marker + ` if(name==='builder.json' && Object.values(value.jobs??{}).some(job=>job.record.state==='cancelled')) throw new Error('synthetic terminal persistence failure');`));
+ const resident = await f.manage("ensure"); await controlRequest(f.store, request("failed-terminal-save"));
+ await until(() => existsSync(model.pid), "model never received prompt"); f.pids.add(Number(readFileSync(model.pid, "utf8")));
+ assert.equal((await f.manage("stop", { timeoutMs: 500 })).state, "busy");
+ process.kill(resident.pid, 0);
+ assert.equal((await controlRequest(f.store, { op: "status", refreshAuth: false })).state, "stopping");
+ process.kill(resident.pid, "SIGTERM"); await new Promise(resolve => setTimeout(resolve, 100));
+ process.kill(resident.pid, 0);
+ assert.match(readFileSync(join(f.store, "service.log"), "utf8"), /Arc service stop failed: synthetic terminal persistence failure/);
+ rmSync(f.store, { recursive: true, force: true });
+ const deadline = performance.now() + 3000;
+ while (true) {
+  try { process.kill(resident.pid, 0); } catch { break; }
+  assert.ok(performance.now() < deadline, "failed-stop resident did not observe later authority loss");
+  await new Promise(resolve => setTimeout(resolve, 25));
+ }
+});
+
+test("Arc stop cancels hanging model I/O, persists cancellation before unlock, and permits an explicit later Build", { timeout: 25000 }, async t => {
+ const f = await fixture(t), model = blockingModel(f);
+ const pi = join(f.dir, "pi");
+ writeFileSync(pi, readFileSync(pi, "utf8").replace("let body='';", "process.on('SIGTERM',()=>{});let body='';"));
+ await f.manage("ensure");
+ const accepted = await controlRequest(f.store, request("cancel-hanging"));
+ await until(() => existsSync(model.pid), "model never received prompt");
+ const pid = Number(readFileSync(model.pid, "utf8")); f.pids.add(pid);
+ const started = performance.now();
+ const stopped = await Promise.all([f.manage("stop"), f.manage("stop")]);
+ assert.ok(stopped.every(result => result.state === "stopped"), JSON.stringify(stopped));
+ const elapsed = performance.now() - started; t.diagnostic(`concurrent stop completed in ${elapsed.toFixed(1)} ms`);
+ assert.ok(elapsed < 10000, "stop must retain its ten-second deadline");
+ assert.throws(() => process.kill(pid, 0), { code: "ESRCH" }, "stop must reap the model before unlock");
+ const saved = JSON.parse(readFileSync(join(f.store, "builder.json"), "utf8")), job = saved.jobs[accepted.buildId];
+ assert.equal(job.state, "cancelled"); assert.equal(job.record.state, "cancelled"); assert.ok(job.record.endedAt);
+ assert.equal(job.record.usage.cost, null, "process exit cannot prove the interrupted call was free");
+ assert.equal(saved.sessions["pi:fixture-session"].status.pause, "uncertain-call");
+ writeFileSync(model.release, "release"); await f.manage("ensure");
+ const retry = await controlRequest(f.store, request("after-cancel"));
+ assert.equal(retry.outcome, "accepted"); assert.notEqual(retry.buildId, accepted.buildId);
+ const retried = JSON.parse(readFileSync(join(f.store, "builder.json"), "utf8")).jobs[retry.buildId];
+ assert.equal(retried.record.possibleRepeatCost, true); assert.equal(retried.record.retryOf, accepted.buildId);
+ await until(async () => (await controlRequest(f.store, {op: "snapshot"})).statuses.some((s: any) => s.buildId === retry.buildId && s.state === "idle"), "later Build did not finish");
+ assert.equal((await f.manage("stop")).state, "stopped");
 });
 
 test("Arc status: a failed store fences Builds and gives the restart action", { timeout: 15000 }, async t => {
@@ -532,6 +643,109 @@ let body='';process.stdin.on('data',b=>body+=b);process.stdin.on('end',()=>{
  assert.equal((await controlRequest(f.store, { op: "snapshot" })).receipts[0].revision, revision);
 });
 
+test("Arc resident answers status and stop during a long open tail with settled-point history", { timeout: 20000 }, async t => {
+ const f = await fixture(t), model = blockingModel(f), entered = join(f.dir, "prompt-preparation");
+ const sessions = join(f.agent, "sessions"), file = join(sessions, "session.jsonl");
+ const rows: any[] = [{ type: "session", version: 3, id: "fixture-session", timestamp: "2026-01-01T00:00:00Z", cwd: "/synthetic/project" }];
+ for (let n = 0; n < 1808; n++) rows.push({ type: "message", id: `u${n}`, parentId: n ? `u${n - 1}` : null, timestamp: "2026-01-01T00:00:00Z", message: { role: "user", content: `Synthetic evidence ${n}. ` + "Long open chapter evidence. ".repeat(6) } });
+ writeFileSync(file, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
+ const snapshot = await piSource({ sessionsDir: sessions, storeDir: f.store }).snapshot("pi:fixture-session");
+ const items = snapshot.items.slice(0, 1000), partial = { ...snapshot, items, entries: snapshot.entries.slice(0, snapshot.entries.findIndex(entry => entry.id === snapshot.items[1000]!.id)), fingerprint: fingerprint(items) };
+ const claim = { text: "Review the evidence.", cites: [{ id: items[0]!.id, quote: "Synthetic evidence 0." }] };
+ const chapter = { firstId: items[0]!.id, label: "Reviewed earlier evidence", closed: true, summary: { scope: claim, bullets: [] } };
+ const receipt = storeAnswer({ goal: claim, now: claim, chapters: [chapter, { ...chapter, firstId: items[100]!.id, label: "Reviewing open evidence", closed: false }], points: Array.from({ length: 1200 }, () => ({ kind: "request" as const, state: "done" as const, by: "owner" as const, title: "Review the synthetic settled request history", text: "Done: reviewed the evidence.", cites: claim.cites })) }, partial, undefined, "2026-01-01T00:00:00Z", "fixture/model", []);
+ mkdirSync(f.store, { recursive: true });
+ writeFileSync(join(f.store, "builder.json"), JSON.stringify({ schema: 1, revision: 1, commands: {}, jobs: {}, sessions: { "pi:fixture-session": { receipt: { revision: 1, sessionRef: "pi:fixture-session", receipt } } } }));
+ const marker = "function compactPrevious(previous) {";
+ const start = f.body.indexOf(marker); assert.ok(start >= 0);
+ const block = f.body.slice(start, f.body.indexOf("\n}", start) + 2);
+ const traced = block.replace(marker, marker + ` const tracePreparation = previous?.points.length > 500, preparationStart = performance.now(); if(tracePreparation) { console.error('PREPARATION_DIAG '+JSON.stringify({phase:'compactPrevious-begin',at:Date.now()})); markPreparation(${JSON.stringify(entered)},'entered'); } try {`).replace(/\n}$/, `} finally { if(tracePreparation) console.error('PREPARATION_DIAG '+JSON.stringify({phase:'compactPrevious',ms:performance.now()-preparationStart})); }\n}`);
+ let instrumented = f.body.replace(block, traced);
+ for (const [begin, end, phase] of [
+  ["let tail = source.items.slice", "const shortened = tailStart > 0;", "full-tail"],
+  ["const positions = /* @__PURE__ */ new Map();", "const itemStart =", "entry-index"],
+  ["const itemStart =", 'const prompt = prefix + serialized.join(",") + suffix;', "window-selection"]
+ ]) {
+  assert.ok(instrumented.includes(begin) && instrumented.includes(end), `missing ${phase} markers`);
+  instrumented = instrumented.replace(begin, `const phaseStart${phase.replaceAll("-", "")} = performance.now(); ` + begin).replace(end, `console.error('PREPARATION_DIAG '+JSON.stringify({phase:${JSON.stringify(phase)},ms:performance.now()-phaseStart${phase.replaceAll("-", "")}})); ` + end);
+ }
+ const persist = "function durableJson(lock, name, value) {";
+ assert.ok(instrumented.includes(persist));
+ instrumented = instrumented.replace(persist, persist + " const persistenceStart = performance.now();").replace('rmSync(temporary, { force: true });', `console.error('PREPARATION_DIAG '+JSON.stringify({phase:'persistence',name,ms:performance.now()-persistenceStart})); rmSync(temporary, { force: true });`);
+ const stopTrace = join(f.dir, "stop-phases");
+ for (const [marker, addition] of [
+  ["async function manage(body, operation) {", "if(operation.op==='stop') markStop('manager-enter');"],
+  ["async function lockedMain(operation, body) {", "if(operation.op==='stop') markStop('lock-owner-enter');"],
+  ["function stop(cancelActive = false) {", "if(cancelActive) markStop('resident-cancel-enter');"],
+  ["await checking;", "markStop('resident-children-and-cancellation-durable');"]
+ ]) {
+  assert.ok(instrumented.includes(marker), `missing stop marker ${marker}`);
+  instrumented = instrumented.replace(marker, marker + addition);
+ }
+ instrumented = instrumented.replaceAll("options.exit();", "markStop('resident-exit-called'); options.exit();");
+ writeFileSync(f.bundle, `import {writeFileSync as markPreparation,appendFileSync as appendStop} from 'node:fs';\nfunction markStop(phase){appendStop(${JSON.stringify(stopTrace)},JSON.stringify({phase,at:Date.now()})+'\\n');}\n` + instrumented);
+ await f.manage("ensure"); await controlRequest(f.store, request("long-history"));
+ await until(() => existsSync(entered), "prompt preparation did not start");
+ try {
+  let start = performance.now();
+  assert.equal((await controlRequest(f.store, {op: "status", refreshAuth: false}, 1000)).state, "running");
+  t.diagnostic(`long-history status: ${(performance.now() - start).toFixed(1)} ms`);
+  const stopAt = Date.now();
+  start = performance.now(); assert.equal((await f.manage("stop")).state, "stopped");
+  t.diagnostic(`long-history stop: ${(performance.now() - start).toFixed(1)} ms`);
+  for (const line of readFileSync(stopTrace, "utf8").trim().split("\n")) { const phase = JSON.parse(line); t.diagnostic(`stop phase ${phase.phase}: +${phase.at - stopAt} ms`); }
+ } finally {
+  for (const line of readFileSync(join(f.store, "service.log"), "utf8").split("\n").filter(line => line.startsWith("PREPARATION_DIAG "))) t.diagnostic(line);
+  if (existsSync(model.pid)) f.pids.add(Number(readFileSync(model.pid, "utf8")));
+ }
+});
+
+for (const release of [false, true]) test(`Arc stop proves completion from the lifetime lock after a lost control reply (release=${release})`, async t => {
+ const f = await fixture(t), marker = "stop(true).catch";
+ assert.ok(f.body.includes(marker));
+ writeFileSync(f.bundle, f.body.replace(marker, "for (const socket of sockets) socket.destroy(); " + (release ? marker : "Promise.resolve().catch")));
+ await f.manage("ensure");
+ const stopped = await f.manage("stop", { timeoutMs: release ? 10000 : 500 });
+ assert.equal(stopped.state, release ? "stopped" : "busy", "a lost control acknowledgement cannot replace the lifetime-lock proof");
+ if (!release) assert.equal((await f.manage("status")).running, true, "the held owner remains alive");
+});
+
+for (const held of [false, true]) test(`Arc stop tolerates socket loss after status and proves the lifetime lock (held=${held})`, async t => {
+ const f = await fixture(t), ready = join(f.dir, "held-lock-ready");
+ mkdirSync(f.store, { recursive: true });
+ let owner: ReturnType<typeof launchLocked> | undefined;
+ if (held) {
+  owner = launchLocked(f.store, ["-e", "require('node:fs').writeFileSync(process.argv[1],'ready');setInterval(()=>{},1000)", ready], { stdio: "ignore" });
+  t.after(async () => { if (owner?.exitCode === null) { owner.kill("SIGKILL"); await once(owner, "close"); } });
+  await until(() => existsSync(ready), "lifetime-lock owner did not start");
+ }
+ const socketPath = serviceAddress(f.store), server = createServer(socket => socket.once("data", () => {
+  // The status was valid, but its endpoint disappears before the stop command.
+  server.close();
+  socket.end(JSON.stringify({ running: true, state: "running", stamp: f.stamp }) + "\n");
+ }));
+ t.after(() => { if (server.listening) server.close(); });
+ await new Promise<void>(resolve => server.listen(socketPath, resolve));
+ const result = await f.manage("stop", { timeoutMs: held ? 500 : 10000 });
+ assert.equal(existsSync(socketPath), false);
+ assert.equal(result.state, held ? "busy" : "stopped");
+ if (held) assert.equal(owner!.exitCode, null, "an absent endpoint cannot prove that its lock owner exited");
+});
+
+test("Arc stop escalates an update drain and fences new commands from both clients", { timeout: 15000 }, async t => {
+ const f = await fixture(t), model = blockingModel(f); await f.manage("ensure");
+ const accepted = await controlRequest(f.store, request("before-drain"));
+ await until(() => existsSync(model.pid), "model never received prompt"); f.pids.add(Number(readFileSync(model.pid, "utf8")));
+ assert.equal((await controlRequest(f.store, { op: "offer", stamp: { id: f.version2, order: 200, line: "stable" } })).state, "updating");
+ assert.deepEqual(await controlRequest(f.store, request("before-drain")), accepted);
+ for (const requester of ["client-one", "client-two"]) {
+  const result = await controlRequest(f.store, { ...request(requester), requester });
+  assert.equal(result.outcome, "refused"); assert.equal(result.code, "service");
+ }
+ assert.equal((await f.manage("stop")).state, "stopped");
+ assert.equal(JSON.parse(readFileSync(join(f.store, "builder.json"), "utf8")).jobs[accepted.buildId].record.state, "cancelled");
+});
+
 test("Arc bundle: update drains a recorded call, fences admission and retains the committed receipt", { timeout: 20000 }, async t => {
  const f = await fixture(t), model = blockingModel(f); await f.manage("ensure");
  const accepted = await controlRequest(f.store, request("first")); assert.equal(accepted.outcome, "accepted");
@@ -570,11 +784,48 @@ test("Arc replacement: a drain timeout gives the Host update action", { timeout:
  const f = await fixture(t), model = blockingModel(f); await f.manage("ensure");
  await controlRequest(f.store, request("held-for-update"));
  await until(() => existsSync(model.pid), "model did not start"); f.pids.add(Number(readFileSync(model.pid, "utf8")));
- const failed = await f.manage("ensure", { timeoutMs: 150 }, true);
+ const clock = managerClock(f), observed = join(f.dir, "observed-lock-phase"), next = join(f.dir, "next.mjs");
+ const original = readFileSync(next, "utf8"), seam = 'phase = "lock";';
+ assert.equal(original.split(seam).length, 2);
+ writeFileSync(next, original.replace(seam, `{ phase = "lock"; writeFileSync(${JSON.stringify(observed)}, "observed"); }`));
+ const pending = f.manage("ensure", { timeoutMs: 150 }, true, clock.env);
+ await until(() => existsSync(observed), "manager did not observe the guardian's lock phase");
+ await clock.advance(150);
+ const failed = await pending;
  assert.equal(failed.code, "replacement-failed");
  assert.equal(failed.serviceLogPath, join(f.store, "service.log"));
  assert.match(serviceText(failed), /synthetic: AmPi could not replace the older Arc service \(timed out waiting for the service to drain and release its lock\)/);
  assert.ok(serviceText(failed).endsWith(`Run ampi arc status --host synthetic; the log is ${join(f.store, "service.log")}.`));
+ writeFileSync(model.release, "release");
+});
+
+for (const phase of ["lock", "startup", "legacy"] as const) test(`Arc replacement deadline preserves the observed guardian phase (${phase})`, { timeout: 15000 }, async t => {
+ const f = await fixture(t), model = blockingModel(f), guardian = join(f.dir, "guardian-pid"), held = join(f.dir, "held-phase-pid");
+ await f.manage("ensure");
+ if (phase !== "startup") {
+  await controlRequest(f.store, request("phase-held"));
+  await until(() => existsSync(model.pid), "model did not start");
+  f.pids.add(Number(readFileSync(model.pid, "utf8")));
+ }
+ const path = join(f.dir, "next.mjs"), original = readFileSync(path, "utf8");
+ const lockSeam = "flock($lock, LOCK_EX | LOCK_NB) or exit(73);";
+ const seam = phase === "startup" ? "  exec {$node} $node, @args;" : lockSeam;
+ assert.equal(original.split(seam).length, 2);
+ // Delay phase delivery, then hold the exact phase across the unchanged deadline.
+ const record = (path: string) => `open(my $probe, '>', '${path}') or die $!; print {$probe} $$; close($probe);\n`;
+ let body = original.replace("my ($store, $node, @args) = @ARGV;", "select(undef, undef, undef, 0.03);\nmy ($store, $node, @args) = @ARGV;")
+  .replace(lockSeam, () => record(guardian) + lockSeam)
+  .replace(seam, () => record(held) + "select(undef, undef, undef, 10);\n" + seam);
+ if (phase === "legacy") body = body.replace('syswrite($parent, "W")', "1").replace('syswrite($parent, "L")', "1");
+ writeFileSync(path, body);
+ const failed = await f.manage("ensure", { timeoutMs: 150 }, true);
+ assert.equal(failed.code, "replacement-failed");
+ assert.match(failed.detail, phase === "lock" ? /timed out waiting for the service to drain and release its lock/ : /Arc service startup timed out/);
+ for (const pidFile of [guardian, held]) {
+  assert.ok(existsSync(pidFile), "launcher did not reach the held phase");
+  const pid = Number(readFileSync(pidFile, "utf8")); assert.ok(pid > 0);
+  assert.throws(() => process.kill(pid, 0), { code: "ESRCH" }, "a deadline must reap the guardian and its child before replying");
+ }
  writeFileSync(model.release, "release");
 });
 

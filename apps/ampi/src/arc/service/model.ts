@@ -2,22 +2,31 @@
 // runner owns framing and isolation; this adapter owns the durable stdin barrier.
 import { execFile } from "node:child_process";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import { runPiCall } from "../../pi/isolated-call.ts";
 import type { ModelPort, ModelFailure, ModelResult } from "../core/index.ts";
 import type { BuildRecord } from "../../shared/arc.ts";
 import { inspectProcess } from "./process.ts";
 
-const exec = promisify(execFile);
 export type PiModelOptions = { agentDir: string; extensionPath: string; env?: NodeJS.ProcessEnv; checked?(result: ModelFailure | undefined): void };
-export function piModel(options: PiModelOptions): ModelPort & { preflight(exact: string): Promise<ModelFailure | undefined> } {
+export function piModel(options: PiModelOptions): ModelPort & { preflight(exact: string, signal?: AbortSignal): Promise<ModelFailure | undefined> } {
  const env: NodeJS.ProcessEnv = { ...process.env, ...options.env, PI_CODING_AGENT_DIR: options.agentDir, PI_OFFLINE: "1",
   PI_SESSION_ID: undefined, PI_SESSION_FILE: undefined, AMPI_ARC_LOCK_FD: undefined, AMPI_ARC_STORE: undefined };
- async function check(exact: string): Promise<ModelFailure | undefined> {
+ async function check(exact: string, signal?: AbortSignal): Promise<ModelFailure | undefined> {
   const settingsPath = join(options.agentDir, "settings.json"), settingsKey = "ampi_arc.model", authPath = join(options.agentDir, "auth.json");
   if (!/^[^\s/:]+\/[^\s:]+$/.test(exact)) return { kind: "failed", code: "settings", settingsPath, settingsKey, message: `${settingsPath}: ${settingsKey}: must name provider/modelId` };
   try {
-   const { stdout } = await exec(env.PI_BIN || "pi", ["auth", "check", "--model", exact, "--json"], { env, timeout: 15_000, maxBuffer: 64 * 1024 });
+   signal?.throwIfAborted();
+   const stdout = await new Promise<string>((resolve, reject) => {
+    let result: { error: Error | null; stdout: string };
+    const child = execFile(env.PI_BIN || "pi", ["auth", "check", "--model", exact, "--json"], { env, timeout: 15_000, maxBuffer: 64 * 1024, killSignal: "SIGKILL" }, (error, stdout) => { result = { error, stdout }; });
+    // execFile's signal abort sends SIGTERM even with killSignal. Reap an uncooperative auth child too.
+    const abort = () => { child.kill("SIGKILL"); };
+    signal?.addEventListener("abort", abort, { once: true }); if (signal?.aborted) abort();
+    child.once("close", () => {
+     signal?.removeEventListener("abort", abort);
+     result.error ? reject(Object.assign(result.error, { stdout: result.stdout })) : resolve(result.stdout);
+    });
+   });
    if (JSON.parse(stdout).status !== "ready") throw new Error("Invalid Pi auth reply");
    return undefined;
   } catch (e) {
@@ -30,7 +39,7 @@ export function piModel(options: PiModelOptions): ModelPort & { preflight(exact:
    return { kind: "failed", code: "model", prerequisite: "pi-auth-check", message: "Pi auth check is unavailable or did not finish" };
   }
  }
- async function preflight(exact: string) { const result = await check(exact); options.checked?.(result); return result; }
+ async function preflight(exact: string, signal?: AbortSignal) { const result = await check(exact, signal); options.checked?.(result); return result; }
  return {
   preflight,
   async reconcile(identity) {
@@ -38,13 +47,15 @@ export function piModel(options: PiModelOptions): ModelPort & { preflight(exact:
    return probe.kind === "gone" || probe.kind === "found" && probe.startedAt !== identity.startedAt ? "gone" : "running";
   },
   async call(input, exact, _permit, context): Promise<ModelResult> {
-   const refused = await preflight(exact); if (refused) return refused;
+   const refused = await preflight(exact, context.signal); if (refused) return refused;
    try {
     const answer = await runPiCall({ ...input, model: exact, resolved: true }, undefined, {
-     env, extensionPath: options.extensionPath,
+     env, extensionPath: options.extensionPath, signal: context.signal,
      started: async pid => {
+      context.signal?.throwIfAborted();
       const probe = await inspectProcess(pid);
       if (probe.kind !== "found") throw new Error("Cannot verify the model process start identity");
+      context.signal?.throwIfAborted();
       context.started({ pid, startedAt: probe.startedAt });
      },
      exited: context.exited,

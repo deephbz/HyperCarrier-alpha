@@ -96,7 +96,7 @@ export function closedState(t: ThreadSummary): string | undefined {
 }
 
 // route.ts is the canonical home for route helpers; this re-export is a temporary bridge until the Arc v2 freeze lifts.
-export { href, parseRef, parseRoute, type Route } from "./route.ts";
+export { href, parseRef, parseRoute, threadRef, type Route } from "./route.ts";
 
 export function hashRoute(): Route {
 	return parseRoute(location.hash);

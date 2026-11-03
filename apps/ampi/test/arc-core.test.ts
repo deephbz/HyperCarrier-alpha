@@ -37,6 +37,77 @@ function fixture(overrides: Partial<BuilderOptions> = {}) {
 function buildId(result: Awaited<ReturnType<ReturnType<typeof createBuilder>["request"]>>) { assert.ok("buildId" in result); return result.buildId; }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
 
+test("Builder cancellation fences clients, shares completion, persists terminal records and retains paid-call uncertainty", async () => {
+ const started = deferred<void>(), released = deferred<void>();
+ const f = fixture({ model: { reconcile: async () => "gone", call: async (_input, _model, _permit, context) => {
+  context.started({ pid: 4242, startedAt: "synthetic-birth" }); started.resolve();
+  await new Promise<void>(resolve => context.signal!.addEventListener("abort", () => { void released.promise.then(resolve); }, { once: true }));
+  context.exited(); return { kind: "measured-unknown", reason: "Interrupted after dispatch" };
+ } } });
+ const builder = f.create(), active = buildId(await builder.request("host/session", "first", "manual", "client-one"));
+ const run = builder.run(); await started.promise;
+ const pending = buildId(await builder.request("host/session", "queued", "rebuild", "client-two"));
+ const cancel = builder.cancel(); assert.equal(builder.cancel(), cancel);
+ for (const requester of ["client-one", "client-two"]) assert.equal((await builder.request("host/session", requester, "manual", requester)).outcome, "refused");
+ assert.equal((await builder.request("host/session", "first", "manual", "client-one")).outcome, "accepted", "accepted ID knowledge survives the fence");
+ released.resolve(); await cancel; await run;
+ for (const id of [active, pending]) { assert.equal(f.store.data!.jobs[id]!.state, "cancelled"); assert.equal(f.store.data!.jobs[id]!.record.state, "cancelled"); }
+ assert.deepEqual(f.releases, ["settled"], "the model exits before its permit is released once");
+ assert.equal(f.store.data!.jobs[active]!.record.usage.cost, null);
+ assert.equal(builder.status()[0]!.pause, "uncertain-call");
+ f.options.model.call = async input => answer(input);
+ const later = f.create();
+ assert.deepEqual(await later.request("host/session", "automatic", "incremental", "source"), { outcome: "refused", code: "paused" });
+ const retry = buildId(await later.request("host/session", "explicit", "manual", "client-two")); await later.run();
+ assert.equal(f.store.data!.jobs[retry]!.state, "done"); assert.equal(f.store.data!.jobs[retry]!.record.possibleRepeatCost, true);
+ assert.equal(f.store.data!.jobs[retry]!.record.retryOf, active);
+});
+
+test("Builder cancellation waits for every current call after one terminal save fails", async () => {
+ const started = deferred<void>(), exits = [deferred<void>(), deferred<void>()], exited: number[] = [];
+ let calls = 0;
+ const f = fixture({ model: { reconcile: async () => "gone", call: async (_input, _model, _permit, context) => {
+  const index = calls++; context.started({ pid: 4242 + index, startedAt: "synthetic-birth" });
+  if (calls === 2) started.resolve();
+  await exits[index]!.promise; exited.push(index); context.exited();
+  return { kind: "measured-unknown", reason: "Interrupted after dispatch" };
+ } } });
+ const builder = f.create();
+ await builder.request("host/one", "one", "manual", "client"); await builder.request("host/two", "two", "manual", "client");
+ const run = builder.run(); void run.catch(() => {}); await started.promise;
+ f.store.fail = () => true;
+ let settled = false;
+ const cancellation = builder.cancel(); void cancellation.finally(() => { settled = true; }).catch(() => {});
+ exits[0]!.resolve(); await new Promise(resolve => setImmediate(resolve));
+ assert.deepEqual(exited, [0]); assert.equal(settled, false, "another call still owns a child");
+ exits[1]!.resolve(); await assert.rejects(cancellation, /simulated process loss/); await Promise.allSettled([run]);
+ assert.deepEqual(exited, [0, 1]);
+});
+
+test("Builder cancellation cannot overwrite committed success or acknowledge a failed terminal save", async () => {
+ const f = fixture(), builder = f.create();
+ const done = buildId(await builder.request("host/session", "done", "manual", "client")); await builder.run();
+ const receipt = builder.receipts(); await builder.cancel();
+ assert.equal(f.store.data!.jobs[done]!.state, "done"); assert.deepEqual(builder.receipts(), receipt);
+ const other = fixture(), queued = other.create(); await queued.request("host/session", "queued", "manual", "client");
+ other.store.fail = state => Object.values(state.jobs).some(job => job.state === "cancelled");
+ await assert.rejects(queued.cancel(), /simulated process loss/);
+ assert.equal(Object.values(other.store.data!.jobs)[0]!.state, "queued", "a failed save never acknowledges cancellation");
+});
+
+test("Builder cancellation fences a request awaiting its source and a finishing model result", async () => {
+ const source = deferred<SourceSnapshot>(), f = fixture();
+ f.options.source.snapshot = () => source.promise;
+ const builder = f.create(), request = builder.request("host/session", "late", "manual", "client");
+ await builder.cancel(); source.resolve(snapshot());
+ assert.equal((await request).outcome, "refused"); assert.equal(Object.keys(f.store.data!.jobs).length, 0);
+ const started = deferred<void>(), reply = deferred<ModelResult>(), g = fixture({ model: { reconcile: async () => "gone", call: async input => { started.resolve(); await reply.promise; return answer(input); } } });
+ const finishing = g.create(), id = buildId(await finishing.request("host/session", "race", "manual", "client"));
+ const run = finishing.run(); await started.promise;
+ const cancel = finishing.cancel(); reply.resolve({ kind: "measured-unknown", reason: "unused" }); await cancel; await run;
+ assert.equal(g.store.data!.jobs[id]!.state, "cancelled"); assert.equal(g.store.data!.jobs[id]!.record.usage.cost, .01);
+});
+
 test("Arc chapter times use timestamped entries inside each chapter or null", () => {
  const source = snapshot(6);
  source.entries[0]!.at = "";

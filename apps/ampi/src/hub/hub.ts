@@ -15,7 +15,7 @@ import type { HostState } from "../shared/hosts.ts";
 import { type HubHome, newHubToken } from "./home.ts";
 import { Pins } from "./pins.ts";
 import { READ_OPS, skewText, type Stamp, stamp, VERSION_SKEW } from "../shared/build.ts";
-import { PiHost, type PiHostConfig } from "../pi/host.ts";
+import { CONTROL_PROTOCOL, PiHost, type PiHostConfig } from "../pi/host.ts";
 import type { Stamp as ArcStamp } from "../arc/service/engine.ts";
 import { serviceTarget } from "../arc/service/client.ts";
 import { deriveQueue } from "../pi/derive-queue.ts";
@@ -87,7 +87,9 @@ export function hubProof(token: string): string {
 /**
  * The `/api/health` body. An unauthenticated caller gets only `ok` and `proof`. An authorized one also gets the hub's
  * build `stamp` and, per Host link, the pi-hc-control build it sees: the first live control that is unstamped (null)
- * or of another build, else the expected one; null without a live control. `arcTarget` names the shipped Arc bundle;
+ * or of another build, else the expected one; null without a live control. `runningControls` counts the controls that run on any
+ * protocol, so 0 tells that null from an unstamped control. `controlProtocol` names the protocol this hub speaks and,
+ * per Host, the first running control's protocol that differs from it, else the hub's; null with no running control. `arcTarget` names the shipped Arc bundle;
  * null until its build succeeds. Each Host reports its running `arcStamp`. The route below builds exactly this shape.
  */
 export type HealthBody =
@@ -96,8 +98,9 @@ export type HealthBody =
 			ok: true;
 			proof: string;
 			stamp: Stamp;
+			controlProtocol: string;
 			arcTarget: ArcStamp | null;
-			hosts: (HostState & { controlStamp: Stamp | null; arcStamp: ArcStamp | null })[];
+			hosts: (HostState & { controlStamp: Stamp | null; runningControls: number; controlProtocol: string | null; arcStamp: ArcStamp | null })[];
 			derive: ReturnType<typeof deriveQueue>;
 			builds: { pending: number; done: number };
 			loop: ReturnType<typeof loopWindow> | null;
@@ -558,7 +561,7 @@ export class Hub {
 		if (url.pathname === "/api/health") {
 			// Unauthenticated callers learn only that this hub answers and a proof that it holds the key, so the app hands
 			// the key only to the real hub, never to another process that took the port.
-			const body: HealthBody = this.#authorized(req) ? { ok: true, proof: hubProof(this.token), stamp: this.stamp, arcTarget: serviceTarget(), hosts: [...this.links].map(([key, link]) => ({ ...link.state, link: key, arcStamp: link.arcStamp, controlStamp: link.controlStamp })), derive: deriveQueue(), builds: [...this.links.values()].reduce((sum, link) => { const q = link instanceof PiHost ? link.arcQueue : { pending: 0, done: 0 }; return { pending: sum.pending + q.pending, done: sum.done + q.done }; }, { pending: 0, done: 0 }), loop: loopWindow() ?? null, missedInputs: [...this.links.values()].reduce((n, l) => n + (l instanceof PiHost ? l.missedInputs : 0), 0) } : { ok: true, proof: hubProof(this.token) };
+			const body: HealthBody = this.#authorized(req) ? { ok: true, proof: hubProof(this.token), stamp: this.stamp, controlProtocol: CONTROL_PROTOCOL, arcTarget: serviceTarget(), hosts: [...this.links].map(([key, link]) => ({ ...link.state, link: key, arcStamp: link.arcStamp, controlStamp: link.controlStamp, runningControls: link.runningControls, controlProtocol: link.controlProtocol })), derive: deriveQueue(), builds: [...this.links.values()].reduce((sum, link) => { const q = link instanceof PiHost ? link.arcQueue : { pending: 0, done: 0 }; return { pending: sum.pending + q.pending, done: sum.done + q.done }; }, { pending: 0, done: 0 }), loop: loopWindow() ?? null, missedInputs: [...this.links.values()].reduce((n, l) => n + (l instanceof PiHost ? l.missedInputs : 0), 0) } : { ok: true, proof: hubProof(this.token) };
 			res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(body));
 			return;
 		}

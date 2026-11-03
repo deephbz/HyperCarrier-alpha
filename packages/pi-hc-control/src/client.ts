@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import net from "node:net";
 import { join } from "node:path";
-import { controlDir, pidAlive, readDescriptor, resolveAgentDir } from "./endpoint.mjs";
+import { controlDir, pidAlive, readDescriptor, resolveAgentDir } from "./endpoint.ts";
 
 /** Open a connection that sends frames and resolves replies by id. */
 export function connect(socketPath, { timeoutMs = 5_000 } = {}) {

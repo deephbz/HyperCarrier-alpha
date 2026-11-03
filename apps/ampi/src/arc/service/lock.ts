@@ -24,7 +24,9 @@ my ($store, $node, @args) = @ARGV;
 defined($store) && defined($node) && @args or die "Arc launcher: missing arguments\n";
 sysopen(my $lock, "$store/service.lock", O_RDWR | O_CREAT, 0600)
   or die "Arc launcher: open lock: $!\n";
+if ($parent) { syswrite($parent, "W") == 1 or exit(0); }
 flock($lock, LOCK_EX | LOCK_NB) or exit(73);
+if ($parent) { syswrite($parent, "L") == 1 or exit(0); }
 my $fd = fileno($lock);
 my $flags = fcntl($lock, F_GETFD, 0);
 defined($flags) or die "Arc launcher: get fd flags: $!\n";

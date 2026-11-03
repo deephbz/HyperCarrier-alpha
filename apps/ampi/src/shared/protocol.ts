@@ -52,7 +52,8 @@ export type Topic =
 	| { kind: "thread"; threadId: string }
 	| { kind: "node" }
 	/** A hub-side view of a Pi Host (src/pi/views): `view` names it; `threadId` scopes it to one Session. */
-	| ViewTopic;
+	| ViewTopic
+	| ExtraTopics[keyof ExtraTopics];
 
 export type ClientFrame = RequestFrame | SubscribeFrame | UnsubscribeFrame | { t: "ping" };
 /** What a host link emits, with its op results `R` and topic values `V`. */
@@ -82,8 +83,16 @@ export type NodeInfo = {
 /** Execution activity of a thread, derived from committed pi.live and pi.inbox (P5: one axis only). */
 export type Activity = "idle" | "thinking" | "streaming" | "tools" | "retrying" | "compacting" | "waiting";
 
+/**
+ * The thread backends this build serves, as a key set. Main registers `pi`; the durable line adds its backend by
+ * interface augmentation in src/shared/protocol-durable.ts. A key here never changes a Pi type.
+ */
+export interface BackendNames {
+	pi: true;
+}
+
 /** One row of the thread index, as clients see it. */
-export type ThreadSummary = {
+export interface ThreadSummary {
 	id: string;
 	title: string;
 	cwd: string;
@@ -135,7 +144,7 @@ export type ThreadSummary = {
 	control?: boolean;
 	/** The Session takes images in a message, under its carrier's limits. Absent: it takes none. */
 	images?: ImageLimits;
-};
+}
 
 /**
  * A carrier's image limits for one message, in the units it checks (base64 characters as sent). The carrier owns
@@ -155,7 +164,7 @@ export const isPiThreadId = (id: string): id is PiThreadId => id.startsWith("pi:
  * state only and an empty list proves no absence. `listing`: no agents list since the Host connected, so no row has
  * liveness or a pane yet. `updating`: the startup refresh of saved copies still runs.
  */
-export type ThreadsState = { threads: { [id: PiThreadId]: ThreadSummary }; layout?: HerdrLayout; backend?: "pi"; indexing?: true; listing?: true; updating?: true };
+export interface ThreadsState { threads: { [id: PiThreadId]: ThreadSummary }; layout?: HerdrLayout; backend?: keyof BackendNames; indexing?: true; listing?: true; updating?: true }
 
 // ---- Pi entry shapes (docs/wire-boundary.md, design 4 and 5) ----
 // The projection (src/pi/projection.ts) and the versioned index rows are their only constructors. They carry no
@@ -205,7 +214,7 @@ export type PiEntry = { bodyAvailable?: boolean } & (
 /** Each field of `T`, optional ones included: a projection typed with it fails to compile when it leaves a field out. */
 export type Every<T> = { [K in keyof Required<T>]: T[K] | undefined };
 /** One undelivered submission as the composer shows it. `images`: how many images it carried; Pi returns text only, so a returned message loses them. */
-export type PiQueuedItem = { id: string; mode: string; content: string; state: ControlSubmission["state"] | "unknown"; truncated?: boolean; images?: number };
+export interface PiQueuedItem { id: string; mode: string; content: string; state: ControlSubmission["state"] | "unknown"; truncated?: boolean; images?: number }
 /** A Pi Session's thread topic. `live.run` is present while the Session runs a turn. */
 export type PiThreadView = {
 	/** Content key for bounded Pi pages and body reads. */
@@ -245,7 +254,7 @@ export type ControlSubmission = { submission: string; deliverAs: "steer" | "foll
  * An action's reply: how it was delivered, its evidence, the Session entry it made when the Host names one, the
  * queued submission it made, and, for abort, what became of each queued submission.
  */
-export type ActionAck = { via?: string; evidence?: string; entryId?: string; submission?: string; submissions?: ControlSubmission[] };
+export interface ActionAck { via?: string; evidence?: string; entryId?: string; submission?: string; submissions?: ControlSubmission[] }
 /**
  * A Pi Session's slash commands, from its live control (packages/pi-hc-control README, Slash commands).
  * `supported: false`: a TUI-only built-in that runs only in the Pi pane.
@@ -257,7 +266,7 @@ export type SlashCommands = { commands: SlashCommand[]; models: { ref: string; n
  * template became a message, as for submit. `dispatched`: Pi has the extension command; its result shows in the pane.
  * `effect` is advisory: the model card reads the Session file.
  */
-export type CommandAck = {
+export interface CommandAck {
 	via?: string;
 	disposition: "handled" | "started" | "queued" | "dispatched";
 	notice?: string;
@@ -266,13 +275,21 @@ export type CommandAck = {
 	evidence?: string;
 	entryId?: string;
 	submission?: string;
-};
+}
 /** Where Herdr puts a new pane: beside a running Session's pane, or in a new workspace. */
 export type Placement = { beside: string; direction?: "right" | "down" } | { workspace: "new"; label?: string };
 /** What became of a create's first prompt: typed into the pane, or the reason it was not. */
 export type SubmittedPrompt = { via?: string; evidence?: string; error?: { code: string; message: string } };
+/**
+ * `thread.create`'s reply per backend. A Pi Session always has a pane; another backend declares its own reply type
+ * here by augmentation, so `ThreadCreated.pane` stays required for Pi.
+ */
+export interface ThreadCreatedReplies {
+	pi: ThreadCreated;
+}
+export type ThreadCreatedReply = ThreadCreatedReplies[keyof ThreadCreatedReplies];
 /** `pending`: Pi has not written the Session file yet; the thread is listed from the create. */
-export type ThreadCreated = { threadId: string; pane: string; evidence?: string; submitted?: SubmittedPrompt; warning?: string; pending?: true };
+export interface ThreadCreated { threadId: string; pane: string; evidence?: string; submitted?: SubmittedPrompt; warning?: string; pending?: true }
 export type ThreadResumed = { threadId: string; pane: string; evidence?: string; warning?: string };
 /** Compact navigation over the whole current branch. Ordinals are zero-based among projectable entries (non-null ui) on that branch. */
 export type ThreadOutline = { version: string; totalEntries: number; users: { id: string; ordinal: number; firstLine: string }[]; truncated: boolean };
@@ -313,7 +330,7 @@ export type HostOps = {
 	"thread.commands": OpSpec<{ threadId: string }, SlashCommands>;
 	/** `key` makes a retry return the first reply; `abort` lets /compact stop a running turn. */
 	"thread.command": OpSpec<{ threadId: string; name: string; args?: string; key?: string; abort?: boolean; whenBusy?: "steer" | "followUp" }, CommandAck>;
-	"thread.create": OpSpec<{ requestId: string; cwd: string; place: Placement; name?: string; prompt?: string }, ThreadCreated>;
+	"thread.create": OpSpec<{ requestId: string; cwd: string; place: Placement; name?: string; prompt?: string }, ThreadCreatedReply>;
 	"thread.resume": OpSpec<{ requestId: string; threadId: string; place: Placement; cwd?: string; name?: string }, ThreadResumed>;
 	"thread.close": OpSpec<{ threadId: string; lastPane?: boolean }, ActionAck>;
 	"sessions.search": OpSpec<{ query: string }, FleetSearchResult>;
@@ -377,12 +394,35 @@ export type OpRequest<K extends OpName = OpName> = { [P in K]: { op: P; args: Op
 export type PiTopicValues = { threads: ThreadsState; thread: PiThreadView; node: { backend: "pi"; host: string } };
 export type PiTopicValue = PiTopicValues[keyof PiTopicValues] | ViewValue;
 
-/** What the browser may request of a host: the Pi Host's ops. */
-export type ClientOps = Ops;
+/**
+ * Extension points for another line's backend, by interface augmentation (`declare module`). Main declares them empty,
+ * so every type below reads as the Pi Host's alone. `ExtraTopics`: topics by kind. `ExtraTopicValues`: their values
+ * by the same kind. `ExtraOps`: ops by name; an op the Pi Host also serves takes either backend's arguments.
+ */
+// biome-ignore lint/suspicious/noEmptyInterface: augmented by another line
+export interface ExtraTopics {}
+// biome-ignore lint/suspicious/noEmptyInterface: augmented by another line
+export interface ExtraTopicValues {}
+// biome-ignore lint/suspicious/noEmptyInterface: augmented by another line
+export interface ExtraOps {}
+
+/**
+ * `T` as a type alias of its fields. An interface carries no index signature, so it does not fit chord's JSON types;
+ * the same fields as a mapped type do. Use it where a protocol interface meets a JSON-typed API.
+ */
+export type Wire<T> = { [K in keyof T]: T[K] };
+
+/** What the browser may request of a host: the Pi Host's ops and any extra backend's, merged by name. */
+export type ClientOps = {
+	[K in OpName | keyof ExtraOps]: K extends OpName
+		? OpSpec<Ops[K]["args"] | (K extends keyof ExtraOps ? ExtraOps[K] extends OpSpec<infer A, unknown> ? A : never : never), Ops[K]["result"]>
+		: K extends keyof ExtraOps ? ExtraOps[K] : never;
+};
 /** The value the browser gets for a topic. */
 export type TopicValue<T extends Topic> = T extends { kind: "view"; view: infer N extends ViewName }
 	? ViewValue<N>
 	: T extends { kind: infer K extends keyof PiTopicValues } ? PiTopicValues[K]
+	: T extends { kind: infer K extends keyof ExtraTopicValues } ? ExtraTopicValues[K]
 	: never;
 
 /** Ops the hub serves itself (src/hub/hub.ts), on its own `hub` channel. */

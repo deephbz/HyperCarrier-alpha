@@ -33,7 +33,7 @@ const NOW = Date.now(), WENT_AWAY = NOW - 3_600_000;
 const HINT = "Check that `ssh devbox` works; the hub retries.";
 type Host = { id: string; label: string; kind: string; status: string; phase?: string; since?: number; hint?: string; error?: string; retryAt?: number; lastSeen?: number; attempts: number };
 const away = (over: Partial<Host> = {}): Host => ({ id: "devbox", label: "devbox", kind: "pi-ssh", status: "disconnected", since: WENT_AWAY, error: ERROR, hint: HINT, lastSeen: WENT_AWAY, attempts: 3, ...over });
-const render = (host: Host) => renderToStaticMarkup(createElement(section as never, { data: { host, threads: [], stale: false }, route: {}, filter: "" } as never));
+const render = (host: Host) => renderToStaticMarkup(createElement(section as never, { data: { host, threads: [], stale: false }, hosts: [host], route: {}, filter: "" } as never));
 const head = (html: string) => /<div class="side-head">[\s\S]*?<\/button>/.exec(html)?.[0] ?? "";
 /** What a sighted reader sees: the markup without visually hidden text. */
 const visible = (html: string) => html.replace(/<span class="visually-hidden">[\s\S]*?<\/span>/g, "");
@@ -130,6 +130,37 @@ test("connected Host with stale cache reads or a cache fault: the dot stays gree
 	assert.doesNotMatch(render(away({ status: "connected", since: undefined, hint: undefined, error: undefined }) as never), /data-stale-reads/);
 	const fault = render({ ...away({ status: "connected", since: undefined, hint: undefined, error: undefined }), cacheFault: "1 Session copy reads behind the derive Worker after a reopen" } as never);
 	assert.match(fault, /class="host-note warn" data-cache-fault="devbox">Cache fault: 1 Session copy reads behind the derive Worker after a reopen. Restart the hub if it lasts.</);
+});
+
+test("a Host with over 1,000 Sessions does not hide the tail behind a pager", async () => {
+	store.clear();
+	const connected = { ...away({ status: "connected", since: undefined, hint: undefined, error: undefined }), link: "http://127.0.0.1:1" };
+	const count = 1_001;
+	const threads = Array.from({ length: count }, (_, i) => ({
+		id: `pi:session-${i}`,
+		title: `Session ${i}`,
+		cwd: "/synthetic",
+		createdAt: NOW,
+		updatedAt: NOW - i,
+		kind: "thread",
+		activity: "idle",
+		queued: 0,
+		costUsd: 0,
+		location: { pane: "pane-1" },
+	}));
+	const html = renderToStaticMarkup(createElement(section as never, {
+		data: {
+			host: connected,
+			threads,
+			layout: { workspaces: [{ id: "workspace", tabs: [{ id: "tab", panes: ["pane-1"] }] }] },
+			stale: false,
+		},
+		hosts: [connected],
+		route: {},
+		filter: "",
+	} as never));
+	assert.equal((html.match(/data-thread=/g) ?? []).length, count, "every Session stays available in the sidebar");
+	assert.doesNotMatch(html, /class="list-page"/, "the Session tree has no page boundary");
 });
 
 test("connected Host after an upgrade: a status note counts the Sessions still updating, and each such row says updating", async () => {

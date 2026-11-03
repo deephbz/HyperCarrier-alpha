@@ -4,7 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { useKeepPlace } from "../keep-place.ts";
 import { useNow } from "../client.ts";
 import { linkLine, linkView } from "./host-fold.ts";
-import type { HostThreads } from "./Sidebar.tsx";
+import { hostLabel } from "./host-label.ts";
+import { overviewSteps } from "../extensions-ui.ts";
+import type { OverviewStepProps } from "../shell-slots.ts";
 import { ActivityIcon, ThreadBadges } from "./ThreadStatus.tsx";
 import { emptyNote, reading, unavailable } from "../host-lists.ts";
 import { arcCoverage, arcNeedsRows, coverageNote } from "../views/cos/needs.ts";
@@ -45,7 +47,7 @@ function List({ rows, empty, reason, link, id, page, onPage }: ListProps & { id:
  * The return-to-desk view (O1): what needs the owner and why, what is running, and what changed, across hosts. The
  * axes stay separate (P5): a thread can be running and need attention; idle never means done.
  */
-export function Overview({ data, onNew }: { data: HostThreads[]; onNew: () => void }) {
+export function Overview({ data, onNew, onHostSetup, onHelp }: OverviewStepProps) {
 	const scroller = useRef<HTMLDivElement>(null);
 	const pinned = useRef(false);
 	const keepPlace = useKeepPlace(scroller, "[data-place]", "data-place", pinned);
@@ -65,7 +67,7 @@ export function Overview({ data, onNew }: { data: HostThreads[]; onNew: () => vo
 	// The Host decides which Sessions are in scope (it keeps unknown-age and source-loss copies); count what it lists.
 	const inScope = (t: ThreadSummary) => !t.archived;
 	const hosts = data.map((d) => d.host);
-	const rows: Row[] = data.flatMap((d) => d.threads.filter(inScope).map((t) => ({ host: d.host.link, hostLabel: d.host.label, t })));
+	const rows: Row[] = data.flatMap((d) => d.threads.filter(inScope).map((t) => ({ host: d.host.link, hostLabel: hostLabel(d.host, hosts), t })));
 	// One pass over the rows; Hosts that share a link share its counts.
 	const perHost = new Map<string, { total: number; busy: number }>();
 	for (const r of rows) {
@@ -114,6 +116,7 @@ export function Overview({ data, onNew }: { data: HostThreads[]; onNew: () => vo
 			</div>
 			<div className="scroll" ref={scroller} onScroll={keepPlace.onScroll} data-page-scroller tabIndex={-1}>
 				<div className="overview">
+					{overviewSteps.map((Step, i) => <Step key={i} data={data} onNew={onNew} onHostSetup={onHostSetup} onHelp={onHelp} />)}
 					<section className="attention-summary" aria-label="Activity since your last visit">
 						<h1>{since ? "Since you last checked Overview" : "Recent activity"}</h1>
 						<p>{loading ? "Reading Sessions…" : <>{changed.toLocaleString()} Session{changed === 1 ? "" : "s"} updated {since ? `since ${new Date(since).toLocaleString()}` : "in the last 24 hours"}. {needs.length > 0 ? `${needs.length.toLocaleString()} ${needs.length === 1 ? "has" : "have"} a signal that ${needs.length === 1 ? "it needs" : "they need"} you.` : "No Session has a positive signal that it needs you."}</>}</p>
@@ -124,7 +127,7 @@ export function Overview({ data, onNew }: { data: HostThreads[]; onNew: () => vo
 						{data.map((d) => { const { host, threads } = d; return (
 							<div className="ov-host" key={host.link} data-host={host.id}>
 								<span className={`dot ${host.status}`} />
-								<b>{host.label}</b>
+								<b>{hostLabel(host, hosts)}</b>
 								<span className="hint">
 									{host.status === "connected"
 										? reading(d) ? "Reading Sessions…" : d.error ? d.error : `${host.node?.hostname ? `${host.node.hostname} · ` : ""}${perHost.get(host.link)?.busy ?? 0} running · ${(perHost.get(host.link)?.total ?? 0).toLocaleString()} Sessions in scope`

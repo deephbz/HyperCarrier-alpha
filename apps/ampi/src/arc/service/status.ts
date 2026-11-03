@@ -28,7 +28,7 @@ export function serviceText(s: ServiceStatus): string {
   case "running": return `${host}: Arc service is running${s.serviceVersion ? " (" + s.serviceVersion + ")" : ""}.`;
   case "stopped": return `${host}: Arc service is stopped. A linked hub restarts it within seconds.`;
   case "updating": return `${host}: Arc service is draining Builds for an update.`;
-  case "stopping": return `${host}: Stopping Arc drains Builds for every client. A linked hub restarts it within seconds.`;
+  case "stopping": return `${host}: Arc service is stopping for every client. A linked hub restarts it within seconds.`;
   case "no-sign-in": return `${host}: Arc service has no sign-in for ${s.model}. Sign in using ${s.authPath}.`;
   case "invalid-settings": return s.settingsKey === "$" ? `${host}: ${s.settingsPath} is not valid JSON. Fix the file, then run ${action("status")}.` : `${host}: Arc settings are invalid. Check ${s.settingsKey} in ${s.settingsPath}.`;
   case "cannot-start": return s.prerequisite === "pi-auth-check" ? `${host}: Arc service cannot start: this Pi has no pi auth check. Update Pi on ${host}.` : `${host}: Arc service cannot start: ${s.prerequisite ? s.prerequisite + " is missing" : "check " + (s.serviceLogPath ?? "~/.pi/agent/ampi-arc/service.log")}.`;

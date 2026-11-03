@@ -70,26 +70,38 @@ export function stamp(): Stamp {
 
 let expectedControl: Stamp | undefined;
 /**
- * The pi-hc-control stamp this hub expects: the package in this checkout, by the rule its `src/stamp.mjs` follows
- * (the `.mjs` files under src/, the HEAD committer time). Computed once per process; a checkout without the package
+ * The pi-hc-control stamp this hub expects: the package in this checkout, by the rule its `src/stamp.ts` follows
+ * (the `.ts` files under src/, the HEAD committer time). Computed once per process; a checkout without the package
  * or without git metadata throws.
  */
 export function controlStamp(): Stamp {
 	if (expectedControl) return expectedControl;
 	const src = join(APP, "../../packages/pi-hc-control/src");
 	if (!existsSync(src)) throw new Error(`No pi-hc-control at ${src}, so AmPi cannot stamp the control it serves.`);
-	expectedControl = { id: sourceHash(src, [".mjs"]), order: buildOrder(src), line: releaseLine() };
+	expectedControl = { id: sourceHash(src, [".ts"]), order: buildOrder(src), line: releaseLine() };
 	return expectedControl;
 }
 
 /**
- * The refusal for a Host's pi-hc-control, or undefined when it runs this build. `control` is the stamp its status
- * reports; null means it reported none (no git metadata), which fails closed. `detail` names both stamps for the log.
+ * The build drift of a Host's pi-hc-control, or undefined when it runs this build. `control` is the stamp its status
+ * reports; null means it reported none (no git metadata). Drift never refuses an op: the deploy parts row shows the
+ * message and the hub logs `detail`, which names both stamps.
  */
 export function controlSkew(expected: Stamp, control: Stamp | null | undefined, host: string): (Error & { code: string; detail: string }) | undefined {
 	const skew = control ? compare(expected, control) : "unstamped";
 	if (skew === "same") return undefined;
-	const message = skew === "older" ? skewText.controlOlder(host) : skew === "newer" ? skewText.controlNewer(host) : skewText.controlUnstamped(host);
+	const message = skew === "older" ? skewText.controlOlder(host, control!.id) : skew === "newer" ? skewText.controlNewer(host) : skewText.controlUnstamped(host);
 	const detail = `pi-hc-control on ${host}: ${stampLabel(control)}; this AmPi expects ${stampLabel(expected)}.`;
+	return Object.assign(new Error(message), { code: VERSION_SKEW, detail });
+}
+
+/**
+ * The refusal for a Host's pi-hc-control that speaks another protocol than `expected` (endpoint.ts SCHEMA), or that
+ * names it but answered `unknownOp` with unknown_op.
+ */
+export function controlProtocolSkew(expected: string, control: string, host: string, unknownOp?: string): Error & { code: string; detail: string } {
+	const unknown = unknownOp !== undefined && control === expected;
+	const message = unknown ? skewText.controlUnknownOp(host, control) : skewText.controlProtocol(host, control, expected);
+	const detail = `pi-hc-control on ${host} speaks ${control}${unknown ? ` without the ${unknownOp} op` : ""}; this AmPi speaks ${expected}.`;
 	return Object.assign(new Error(message), { code: VERSION_SKEW, detail });
 }

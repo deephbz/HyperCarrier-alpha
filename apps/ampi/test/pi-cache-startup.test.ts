@@ -14,7 +14,7 @@ import { PiHost } from "../src/pi/host.ts";
 import { repairReplicaTail } from "../src/pi/replica-file.ts";
 import { indexEntry, indexText, readIndex } from "../src/pi/copy-index-file.ts";
 import { WorkingSet, workingSetUsage } from "../src/pi/working-set.ts";
-import { fixture as herdrFixture } from "./pi-fixtures.ts";
+import { fixture as herdrFixture, stopFixture } from "./pi-fixtures.ts";
 import { openWorkingSet } from "../src/pi/working-set-db.ts";
 
 /**
@@ -302,7 +302,7 @@ test("startup: saved rows say listing until the first agents list, which places 
  await store.refresh({ host: config.id, cacheDir: host.cacheDir, path: f.sessionA, file: copy }); store.close();
  writeFileSync(join(host.cacheDir, "index.json"), JSON.stringify({ [f.sessionA]: { file: "a.jsonl", offset: statSync(copy).size } }));
  const frames: any[] = []; host.on("frame", fr => frames.push(fr));
- host.start(); t.after(async () => { await host.stop(); rmSync(f.dir, { recursive: true, force: true }); });
+ host.start(); t.after(async () => { await host.stop(); await stopFixture(f); rmSync(f.dir, { recursive: true, force: true }); });
  host.send({ t: "sub", sid: 1, topic: { kind: "threads" } });
  const first = await until(frames, 1, () => true);
  assert.equal(first.listing, true, "no agents list yet");

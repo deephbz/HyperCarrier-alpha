@@ -8,9 +8,13 @@ import { handleSidebarKeyDown } from "./sidebar-keys.ts";
 import { setThemeChoice, useThemeChoice, type ThemeChoice } from "../theme.ts";
 import { PinMenu, PinnedSection } from "./Pinned.tsx";
 import { Segmented } from "./Segmented.tsx";
+import { sidebarFooter } from "../extensions-ui.ts";
 
-/** `error`: why the Host ended or holds this list (pending or end frame); an ended list never loads further. */
-export type HostThreads = { host: HostState; threads: ThreadSummary[]; stale: boolean; layout?: HerdrLayout; error?: string } & Pick<ThreadsState, "indexing" | "listing" | "updating">;
+/**
+ * `error`: why the Host ended or holds this list (pending or end frame); an ended list never loads further. The list
+ * carries every other ThreadsState field as the Host sent it, so an augmented field reaches its view.
+ */
+export type HostThreads = { host: HostState; threads: ThreadSummary[]; stale: boolean; layout?: HerdrLayout; error?: string } & Omit<ThreadsState, "threads" | "layout" | "backend">;
 
 /** Why the browser has no hub, and the owner's next step; the client reconnects by itself (client.ts). */
 export function HubNotConnected() {
@@ -86,12 +90,13 @@ export function Sidebar({
 					</div>
 				))}
 				<PinnedSection data={data} />
-				{data.map((d) => <PiHostSection key={d.host.link} data={d} route={route} />)}
+				{data.map((d) => <PiHostSection key={d.host.link} data={d} hosts={data.map((other) => other.host)} route={route} />)}
 				<SkippedHosts />
 				<div className="side-footer">
 					<button className="btn ghost small" title="How to add a remote host: a prompt for your coding agent" onClick={onHostSetup}>
 						Remote host (?)
 					</button>
+					{sidebarFooter.map((Footer, i) => <Footer key={i} data={data} />)}
 					<button className="btn ghost small" title="Keys and help (?)" onClick={() => dispatchKeyAction("help", new KeyboardEvent("keydown"))}>
 						?
 					</button>

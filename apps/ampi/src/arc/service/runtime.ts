@@ -2,7 +2,7 @@
 // socket is not the remote-agent protocol; that carrier relays committed results.
 import { createServer, type Socket } from "node:net";
 import { randomUUID } from "node:crypto";
-import { chmodSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { serviceAddress, controlRequest } from "./connection.ts";
 export { serviceAddress, controlRequest } from "./connection.ts";
@@ -18,7 +18,7 @@ import { serviceStatus } from "./status.ts";
 import { hostAdmission } from "./admission.ts";
 
 export type ControlCommand = { op: "hello" | "status" | "snapshot" | "request" | "dismiss" | "offer" | "stop"; stamp?: Stamp; refreshAuth?: boolean; knownRevisions?: Record<string, number>; sessionRef?: string; requestId?: string; kind?: BuildKind; requester?: string; options?: RequestOptions; dropId?: string; toPosition?: number };
-export async function startService(options: { agentDir: string; host: string; serviceVersion: string; releaseLine?: string | null; buildOrder: number; extensionPath: string; pollMs?: number; ready?(status: unknown): void; exit?(): void }) {
+export async function startService(options: { agentDir: string; host: string; serviceVersion: string; releaseLine?: string | null; buildOrder: number; extensionPath: string; pollMs?: number; ready?(status: unknown): void; exit(): void }) {
  const lock: ServiceLock = inheritedLock(), incarnation = randomUUID();
  const stamp: Stamp = { id: options.serviceVersion, order: options.buildOrder, line: options.releaseLine ?? null };
  const store: Store = { load: () => readJson(join(lock.store, "builder.json")) as BuilderState | undefined, save: value => durableJson(lock, "builder.json", value) };
@@ -29,6 +29,7 @@ export async function startService(options: { agentDir: string; host: string; se
  const model = piModel({ agentDir: options.agentDir, extensionPath: options.extensionPath, checked: result => { signIn = result; } });
  let draining = false, drainCause: "update" | "stop" = "stop", lastHello = Date.now(), fault: string | undefined;
  let checking: Promise<void> | undefined;
+ const authCancellation = new AbortController();
  const admitter = hostAdmission(options.host, () => serviceSettings(options.agentDir).concurrency, store.load());
  const builder = createBuilder({ source, model, store, engineVersion: options.serviceVersion, settings: () => serviceSettings(options.agentDir), admission: {
   acquire: kind => draining || fault ? Promise.resolve({ kind: "wait" as const, facts: { reason: "unavailable" as const, running: admitter.running(), limit: 0, scope: options.host } }) : admitter.acquire(kind),
@@ -53,12 +54,17 @@ export async function startService(options: { agentDir: string; host: string; se
  }
  function checkSignIn() {
   return checking ??= (async () => {
-   try { await model.preflight(serviceSettings(options.agentDir).model); }
+   try { await model.preflight(serviceSettings(options.agentDir).model, authCancellation.signal); }
    catch { /* Status carries typed invalid-settings facts. */ }
   })().finally(() => { checking = undefined; });
  }
  let scanning = false, idleHours = 24;
+ function holdsLock() {
+  try { lock.assertHeld(); return true; } catch { return false; }
+ }
+ function hasAuthority() { return holdsLock() && existsSync(serviceAddress(lock.store)); }
  async function tick() {
+  if (!hasAuthority()) { await stop(true); return; }
   if (draining) return;
   let settings;
   try { settings = serviceSettings(options.agentDir); idleHours = settings.serviceIdleHours; } catch { /* retain the last valid idle bound */ }
@@ -79,16 +85,32 @@ export async function startService(options: { agentDir: string; host: string; se
  }
  const sockets = new Set<Socket>();
  let interval: ReturnType<typeof setInterval> | undefined;
- async function stop() {
-  if (draining) return;
-  draining = true; if (interval) clearInterval(interval);
-  await Promise.allSettled([...active]);
-  await new Promise<void>(resolve => setImmediate(resolve));
-  const closed = new Promise<void>(resolve => server.close(() => resolve()));
-  for (const socket of sockets) if (!socket.writableEnded) socket.destroy();
-  await closed;
-  rmSync(serviceAddress(lock.store), { force: true });
-  options.exit?.();
+ let stopping: Promise<void> | undefined, cancellation: Promise<void> | undefined;
+ function stop(cancelActive = false): Promise<void> {
+  if (!hasAuthority()) cancelActive = true;
+  if (cancelActive) { cancellation ??= builder.cancel(); void cancellation.catch(e => { fault = (e as Error).message; }); }
+  if (stopping) return stopping;
+  draining = true;
+  authCancellation.abort();
+  return stopping = (async () => {
+   await Promise.allSettled([...active]);
+   let shutdownError: unknown;
+   try { await cancellation; } catch (error) { shutdownError = error; }
+   try { await checking; } catch (error) { shutdownError ??= error; }
+   // Lost authority cannot retain a readable terminal record. A valid store
+   // still requires successful persistence before its lifetime lock can go.
+   if (shutdownError && hasAuthority()) throw shutdownError;
+   await new Promise<void>(resolve => setImmediate(resolve));
+   if (interval) clearInterval(interval);
+   for (const socket of sockets) if (!socket.writableEnded) socket.destroy();
+   // server.close() also unlinks a Unix socket. A displaced resident must
+   // leave its successor's socket untouched, including this implicit unlink.
+   if (!holdsLock()) { options.exit(); return; }
+   const closed = new Promise<void>(resolve => server.close(() => resolve()));
+   await closed;
+   if (holdsLock()) rmSync(serviceAddress(lock.store), { force: true });
+   options.exit();
+  })().catch(error => { stopping = undefined; throw error; });
  }
  const mismatch = () => ({ ...status(), state: "error", outcome: "refused", code: "build-mismatch", detail: `This AmPi is older than ${options.host}. Update it.` });
  async function handle(command: ControlCommand): Promise<unknown> {
@@ -111,7 +133,7 @@ export async function startService(options: { agentDir: string; host: string; se
   }
   if (command.op === "stop") {
    // Reply before draining this connection. No new admission starts after stop().
-   drainCause = "stop"; void stop(); return status();
+   drainCause = "stop"; void stop(true).catch(e => { fault = (e as Error).message; }); return status();
   }
   const session = canonicalSessionRef(command.sessionRef ?? "");
   if (!fault && (command.op === "request" || command.op === "dismiss")) {
@@ -141,7 +163,8 @@ export async function startService(options: { agentDir: string; host: string; se
   });
  });
  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(serviceAddress(lock.store), () => { chmodSync(serviceAddress(lock.store), 0o600); resolve(); }); });
- process.once("SIGTERM", () => { void stop(); }); process.once("SIGINT", () => { void stop(); });
+ process.once("SIGTERM", () => { void stop().catch(e => { fault = (e as Error).message; console.error(`Arc service stop failed: ${fault}`); }); });
+ process.once("SIGINT", () => { void stop().catch(e => { fault = (e as Error).message; console.error(`Arc service stop failed: ${fault}`); }); });
  interval = setInterval(() => { void tick().catch(e => { fault = (e as Error).message; }); }, options.pollMs ?? 2000);
  options.ready?.(status()); void tick();
  return { stop, status, builder };

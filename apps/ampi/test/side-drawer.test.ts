@@ -13,11 +13,10 @@ import { ENGINES, layoutMiss, open } from "./resize-edges-fixture.ts";
 const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true };
 const ROUTE = "#/h/devbox/t/pi%3Asess-lead";
 
-test("App has one sidebar writer: applyView.sidebar, and the drawer resets when the narrow rule ends", () => {
+test("App has one sidebar writer: applyView.sidebar", () => {
 	const app = readFileSync(new URL("../web/src/App.tsx", import.meta.url), "utf8");
 	const writes = app.split("\n").filter((line) => /\bset(SidebarHidden|SidebarPeek|Drawer)\(/.test(line)).map((line) => line.trim());
 	assert.equal(writes.length, 2, `sidebar writers:\n${writes.join("\n")}`);
-	assert.match(writes[0]!, /^const resize = .*if \(!overlay\) setDrawer\(false\); \};$/);
 	assert.match(writes[1]!, /^sidebar: \(show\) =>/);
 });
 
@@ -39,6 +38,28 @@ function ring(page: Page) {
 const focusedRegion = (page: Page, region: string) => page.waitForFunction((region) => document.activeElement?.getAttribute("data-region") === region, region, { timeout: 2000 });
 
 for (const [engine, type, path] of ENGINES) {
+	test(`side drawer ${engine}: resizing within phone width keeps an open drawer; wide width closes it`, { skip: engineSkip(engine) }, async (t) => {
+		const page = await open(t, engine, type, path(), { route: ROUTE, context: PHONE });
+		await page.evaluate(() => { localStorage.setItem("ampi.sidebar.hidden", "1"); localStorage.removeItem("ampi.panel"); });
+		await page.reload();
+		await page.getByRole("button", { name: "Show sidebar" }).click();
+		assert.deepEqual(await sides(page), { sidebar: true, panel: false, saved: "1" });
+
+		await page.setViewportSize({ width: 375, height: 844 });
+		await page.waitForFunction(() => {
+			const app = document.querySelector(".app")!;
+			return app.classList.contains("side-overlay") && !app.classList.contains("sidebar-hidden");
+		}).catch(layoutMiss(page, "375 px keeps the open phone drawer"));
+		assert.deepEqual(await sides(page), { sidebar: true, panel: false, saved: "1" }, "a phone-width resize keeps the drawer open");
+
+		await page.setViewportSize({ width: 900, height: 844 });
+		await page.waitForFunction(() => {
+			const app = document.querySelector(".app")!;
+			return !app.classList.contains("side-overlay") && app.classList.contains("sidebar-hidden");
+		}).catch(layoutMiss(page, "900 px closes the drawer and restores the saved desktop choice"));
+		assert.deepEqual(await sides(page), { sidebar: false, panel: false, saved: "1" }, "leaving phone width closes the drawer without changing the saved choice");
+	});
+
 	test(`side drawer ${engine}: a phone starts closed, never saves the drawer, and shows one side at a time`, { skip: engineSkip(engine) }, async (t) => {
 		const page = await open(t, engine, type, path(), { route: ROUTE, context: PHONE });
 		// The desktop choice says "shown"; a phone load still opens on the transcript.

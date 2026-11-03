@@ -1,5 +1,4 @@
 import "./bound.ts";
-// @ts-ignore: shared control limits.
 import { IMAGE_LIMITS } from "@hypercarrier/pi-hc-control/control";
 import assert from "node:assert/strict";
 import { join } from "node:path";

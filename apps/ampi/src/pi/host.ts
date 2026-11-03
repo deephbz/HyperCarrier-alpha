@@ -13,16 +13,18 @@ import { repairReplicaTail } from "./replica-file.ts";
 import { indexEntry, indexText, readIndex, replaceFile } from "./copy-index-file.ts";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { diffRevisions } from "@earendil-works/chord/delta";
+import { diffRevisions, type JsonValue } from "@earendil-works/chord/delta";
 import { negotiating, withStatus } from "../hub/hosts.ts";
 import type { HostBase, HostState, LinkStatus } from "../shared/hosts.ts";
 import type { ClientFrame, ControlSubmission, Every, HostOps, PiQueuedItem, OpHandlers, OpName, OpResult, Ops, Placement, PiHostFrame, PiThreadView, PiTopicValue, ThreadCreated, ThreadResumed, ThreadsState, ThreadSummary, Topic } from "../shared/protocol.ts";
 import { INDEXING, NOT_FOUND, STALE_VERSION, type ImageLimits } from "../shared/protocol.ts";
 import { admitImages, rejectionLine } from "../shared/image-admission.ts";
-import { controlSkew, controlStamp, type Stamp, VERSION_SKEW } from "../shared/build.ts";
+import { controlProtocolSkew, controlSkew, controlStamp, type Stamp, VERSION_SKEW } from "../shared/build.ts";
 import { ackResult, type AgentAck, commandFrame, commandResult, controlSubmissions, defined, isOpRequest, submitArgs, threadOf, UUID } from "./host-wire.ts";
-// @ts-ignore: pi-hc-control is plain ESM.
 import { IMAGE_LIMITS as CONTROL_IMAGE_LIMITS } from "@hypercarrier/pi-hc-control/control";
+import { SCHEMA as CONTROL_PROTOCOL } from "@hypercarrier/pi-hc-control/endpoint";
+/** The pi-hc-control protocol this AmPi speaks; /api/health reports it. */
+export { CONTROL_PROTOCOL };
 import { historySpend, spendLabel, unreadSpend } from "../shared/spend.ts";
 import { SESSION_SCOPE_MS } from "../shared/session-scope.ts";
 import { reconnectDelay, sshOptions } from "../shared/host-transport.ts";
@@ -86,9 +88,9 @@ type RemoteAgent = {
 	startedAt?: number;
 	/**
 	 * `stamp`: the control's build, null when it has none. `submissions` are raw wire records; controlSubmission reads
-	 * them.
+	 * them. `protocol`: set only for a live control on another protocol, which is not `live` and takes no op.
 	 */
-	control?: { live: boolean; idle: boolean; compacting: boolean; stamp?: Stamp | null; pending?: { steer: number; followUp: number }; submissions?: unknown[] } | null;
+	control?: { live: boolean; idle?: boolean; compacting?: boolean; stamp?: Stamp | null; protocol?: string; pending?: { steer: number; followUp: number }; submissions?: unknown[] } | null;
 };
 /**
  * This hub's record of one queued submission. `unknown`: the live control no longer reports it (Pi restarted or
@@ -139,7 +141,7 @@ type Copy = {
 
 const AGENT_SCRIPT = fileURLToPath(new URL("./remote-agent.cjs", import.meta.url));
 /** What a live Pi control takes in one message (pi-hc-control owns the values). */
-const IMAGE_LIMITS: ImageLimits = CONTROL_IMAGE_LIMITS;
+const IMAGE_LIMITS: ImageLimits = { ...CONTROL_IMAGE_LIMITS, types: [...CONTROL_IMAGE_LIMITS.types] };
 
 /** Reads the first stdin line `{ cfg, code }`, then runs the agent with the rest of stdin as its command stream. */
 export const BOOTSTRAP = Buffer.from(
@@ -238,8 +240,10 @@ export class PiHost extends EventEmitter {
 	#timer?: ReturnType<typeof setTimeout>;
 	#attempts = 0;
 	#nextCmd = 1;
-	/** The pi-hc-control build this Host serves; the remote agent refuses a control of another build. */
+	/** The pi-hc-control build this Host expects. A control of another build is served; its drift is logged once. */
 	#controlExpected: Stamp;
+	/** Session and stamp pairs whose drift the hub has logged. */
+	#driftLogged = new Set<string>();
  #arcBundle?: string;
 	#pending = new Map<number, { resolve: (value: AgentAck) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
 	/** Live subscriptions by sid: the topic, its last value, and how many ops frames were sent. */
@@ -279,6 +283,8 @@ export class PiHost extends EventEmitter {
 	#inputsGrace = 0;
 	/** Audit differences found since start: inputs that change marking missed (reported in /api/health). */
 	missedInputs = 0;
+	/** Agents frames handled since start: a test waits for discovery passes on it instead of a clock. */
+	agentsFrames = 0;
 	/** Queued submissions by ID, until delivered or dismissed; the full text when this hub sent it. */
 	#queued = new Map<string, QueuedInput>();
 	#panes?: RemotePane[];
@@ -808,7 +814,7 @@ export class PiHost extends EventEmitter {
 		this.#set({ attempts: ++this.#attempts }, negotiating(this.state, "transport", ssh ? `Starting the Pi agent over ssh on ${ssh}.` : "Starting the Pi agent."));
 		instant("agent-spawn", { attempt: this.#attempts, kind: this.config.kind });
 		const offsets = Object.fromEntries([...this.#copies].map(([path, c]) => [path, c.offset]));
-		const cfg = Buffer.from(JSON.stringify({ host: this.config.id, arcBundle: this.#arcBundle, arcKnown: this.#viewContext.arc?.known(), offsets, forgotten: this.#store.forgotten(), tailBytes: 0, herdrSession: this.config.herdrSession ?? "default", recentMs: this.#recentMs(), controlStamp: this.#controlExpected, ...agentModules(), ...this.config.agentConfig })).toString("base64");
+		const cfg = Buffer.from(JSON.stringify({ host: this.config.id, arcBundle: this.#arcBundle, arcKnown: this.#viewContext.arc?.known(), offsets, forgotten: this.#store.forgotten(), tailBytes: 0, herdrSession: this.config.herdrSession ?? "default", recentMs: this.#recentMs(), controlProtocol: CONTROL_PROTOCOL, controlStamp: this.#controlExpected, ...agentModules(), ...this.config.agentConfig })).toString("base64");
 		const code = readFileSync(AGENT_SCRIPT).toString("base64");
 		// The command line stays small and fixed: the agent and its config (offsets grow with every copy) arrive as
 		// stdin's first line, under the argument-length limit and out of the Host's process list.
@@ -992,6 +998,7 @@ export class PiHost extends EventEmitter {
 				this.#agentsByPath = new Map();
 				for (const a of this.#agents) if (!this.#agentsByPath.has(a.session)) this.#agentsByPath.set(a.session, a);
 				this.#listed = true;
+				this.#logDrift();
 				if (msg.layout) this.#layout = msg.layout;
 				// Without a pane list (Herdr unavailable) absence proves nothing.
 				this.#panes = Array.isArray(msg.panes) ? msg.panes : undefined;
@@ -1008,6 +1015,7 @@ export class PiHost extends EventEmitter {
 				this.#reconcileQueued();
 				this.#markHostChanges();
 				void this.#evictExpired();
+				this.agentsFrames++;
 				return;
 			}
 			case "teams":
@@ -1027,14 +1035,14 @@ export class PiHost extends EventEmitter {
 				if (msg.ok) pending.resolve(msg);
 				else {
 					const error = typeof msg.error === "object" && msg.error ? msg.error : { code: "refused", message: String(msg.error ?? "The Host refused the action") };
-					if (error.code === VERSION_SKEW) {
-						// The agent refused a control of another build; the hub words it, naming both builds in the log.
-						const skew = controlSkew(this.#controlExpected, (error as { control?: Stamp | null }).control ?? null, this.config.label);
-						if (skew) {
-							console.log(`hub: ${skew.detail}`);
-							pending.reject(skew);
-							return;
-						}
+					const protocol = (error as { protocol?: unknown }).protocol;
+					if (error.code === VERSION_SKEW && typeof protocol === "string") {
+						// The agent refused a control on another protocol; the hub words the one step.
+						const unknownOp = (error as { unknownOp?: unknown }).unknownOp;
+						const skew = controlProtocolSkew(CONTROL_PROTOCOL, protocol, this.config.label, typeof unknownOp === "string" ? unknownOp : undefined);
+						console.log(`hub: ${skew.detail}`);
+						pending.reject(skew);
+						return;
 					}
 					pending.reject(
 						Object.assign(new Error(String(error.message)), {
@@ -1560,7 +1568,8 @@ export class PiHost extends EventEmitter {
 				if (value === undefined) continue;
 				// No value sent yet: the first one goes as a snapshot.
 				if (sub.previous === undefined) { sub.previous = value; this.#emitFrame({ t: "snap", sid, value }); continue; }
-				const ops = diffRevisions(sub.previous, value);
+				// Protocol interfaces carry no index signature, so a topic value is JSON by contract, not by its type.
+				const ops = diffRevisions(sub.previous as JsonValue, value as JsonValue);
 				sub.previous = value;
 				// A change marked during this publish (data adopted while computing) is explained; the next publish carries it.
 				const explained = sub.topic.kind === "thread" ? this.#dirty.has(this.#byThread.get(sub.topic.threadId)?.path ?? "") : this.#dirty.size > 0 || this.#hostChanged;
@@ -1635,7 +1644,8 @@ export class PiHost extends EventEmitter {
 				return this.#noteSubmission(String(args.threadId), deliverAs, text, ackResult(ack));
 			},
 			"thread.commands": async (args) => {
-				const ack = await this.#slash(String(args.threadId), { t: "commands" }, 10_000);
+				// 15 s: the agent may hold the read up to 10 s while the control reloads (remote-agent.cjs holdForReload).
+				const ack = await this.#slash(String(args.threadId), { t: "commands" }, 15_000);
 				if (!ack.value) throw Object.assign(new Error("The control sent no command list"), { code: "control_error" });
 				return ack.value;
 			},
@@ -1852,7 +1862,7 @@ export class PiHost extends EventEmitter {
 
 	/**
 	 * The pi-hc-control build this Host's live controls run: the first one that is unstamped (null) or of another build,
-	 * else the expected build; null with no live control. /api/health reports it.
+	 * else the expected build; null with no live control. /api/health reports it beside liveControls.
 	 */
 	get controlStamp(): Stamp | null {
 		const live = this.#agents.flatMap((a) => (a.control?.live ? [a.control.stamp ?? null] : []));
@@ -1861,8 +1871,38 @@ export class PiHost extends EventEmitter {
 		return off === undefined ? this.#controlExpected : off;
 	}
 
+	/** One log line per Session and control build that is not the expected one; drift never refuses an op. */
+	#logDrift(): void {
+		for (const a of this.#agents) {
+			if (!a.control?.live) continue;
+			const skew = controlSkew(this.#controlExpected, a.control.stamp ?? null, this.config.label);
+			const key = `${a.session}\0${a.control.stamp?.id ?? ""}`;
+			if (!skew || this.#driftLogged.has(key)) continue;
+			this.#driftLogged.add(key);
+			console.log(`hub: pi:${a.sessionId ?? a.session} runs another control build. ${skew.detail} AmPi serves it.`);
+		}
+	}
+
+	/** A live control on another protocol takes no op: the refusal names the one step. */
+	#refuseForeign(agent: RemoteAgent | undefined): void {
+		const protocol = agent?.control?.protocol;
+		if (protocol && protocol !== CONTROL_PROTOCOL) throw controlProtocolSkew(CONTROL_PROTOCOL, protocol, this.config.label);
+	}
+
+	/** How many of this Host's Sessions run a control on any protocol; 0 tells "no control" from an unstamped one. */
+	get runningControls(): number {
+		return this.#agents.filter((a) => a.control?.live || a.control?.protocol).length;
+	}
+
+	/** The protocol of the first running control that speaks another, else this AmPi's; null with no running control. */
+	get controlProtocol(): string | null {
+		if (!this.runningControls) return null;
+		return this.#agents.find((a) => a.control?.protocol && a.control.protocol !== CONTROL_PROTOCOL)?.control?.protocol ?? CONTROL_PROTOCOL;
+	}
+
 	#imagesFor<I extends { data: string; mimeType: string }>(agent: RemoteAgent, images: I[]): I[] {
 		const refuse = (code: string, message: string) => Object.assign(new Error(message), { code });
+		this.#refuseForeign(agent);
 		if (!agent.control?.live) throw refuse("no_control", "This Session has no live control socket, so AmPi cannot send images; paste them in the Pi pane");
 		// The Composer's own admission, as defense: a client that skipped it still gets the reason.
 		const line = rejectionLine(admitImages([], images.map((image, i) => ({ name: `image ${i + 1}`, type: image.mimeType, base64: image.data.length })), IMAGE_LIMITS).rejected);
@@ -1877,6 +1917,7 @@ export class PiHost extends EventEmitter {
 	 */
 	#slash(threadId: string, cmd: Record<string, unknown>, timeoutMs: number): Promise<AgentAck> {
 		const { path, agent } = this.#target(threadId);
+		if (cmd.t === "commands") this.#refuseForeign(agent);
 		if (cmd.t === "commands" && !agent.control?.live) return Promise.reject(Object.assign(new Error("This Session has no live control socket, so AmPi cannot list slash commands; Enter types a command into the Pi pane"), { code: "no_control" }));
 		return this.#command({ ...cmd, session: path, pane: agent.pane }, timeoutMs);
 	}

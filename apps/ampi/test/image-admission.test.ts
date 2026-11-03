@@ -1,13 +1,12 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-// @ts-ignore: pi-hc-control is plain ESM.
 import { IMAGE_LIMITS } from "@hypercarrier/pi-hc-control/control";
 import { admitImages, base64Length, rejectionLine, type Offered } from "../src/shared/image-admission.ts";
 import type { ImageLimits } from "../src/shared/protocol.ts";
 
 const png = (name: string, base64 = 100): Offered => ({ name, type: "image/png", base64 });
-const pi: ImageLimits = IMAGE_LIMITS;
+const pi: ImageLimits = { ...IMAGE_LIMITS, types: [...IMAGE_LIMITS.types] };
 
 // The invariant: every offered file is accepted or rejected with a reason, in order, never dropped.
 function assertPartition(offered: Offered[], result: ReturnType<typeof admitImages<Offered>>) {

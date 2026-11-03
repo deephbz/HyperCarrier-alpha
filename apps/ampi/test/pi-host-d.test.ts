@@ -148,21 +148,35 @@ test("pi host: identical Herdr frames recompute nothing; a changed agent marks o
 	t.after(() => void PI_VIEWS.splice(PI_VIEWS.findIndex((v) => v.name === "quiet"), 1));
 	const { WorkingSet } = await import("../src/pi/working-set.ts");
 	const live = t.mock.method(WorkingSet.prototype, "live");
-	const { f, browser } = await setup(t);
+	const { f, hub, browser } = await setup(t);
+	const host = [...hub.links.values()].find((l) => l instanceof PiHost)!;
 	const threads = browser.sub("devbox", { kind: "threads" });
 	await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.activity !== undefined && v.threads["pi:sess-b"]);
-	const settle = () => new Promise((r) => setTimeout(r, 1200)); // about 8 agents frames at discoverMs 150
-	await settle();
-	calls.summarize.length = calls.changed.length = 0;
-	live.mock.resetCalls();
-	await settle();
+	// Waits for n more agents frames, and for the publish that each one schedules (setImmediate), not for a clock.
+	const frames = async (n: number) => {
+		const to = host.agentsFrames + n;
+		while (host.agentsFrames < to) await new Promise((r) => setTimeout(r, 20));
+		await new Promise((r) => setImmediate(r));
+	};
+	const reset = () => {
+		calls.summarize.length = calls.changed.length = 0;
+		live.mock.resetCalls();
+	};
+	// Under load the setup's own work ends at no fixed time. Wait for two frames that mark nothing; a change that marks
+	// on every frame never gets them, and then fails below.
+	for (let i = 0; i < 10; i++) {
+		reset();
+		await frames(2);
+		if (!calls.summarize.length && !calls.changed.length && !live.mock.callCount()) break;
+	}
+	await frames(4);
 	assert.deepEqual(calls, { summarize: [], changed: [] }, "identical agents frames mark no Session");
 	assert.equal(live.mock.callCount(), 0, "identical agents frames write no transcript-window liveness");
 	// sess-b's pane starts working: only sess-b changes, in one threads ops frame.
 	const n = browser.seq.get(threads);
 	f.setState({ ...f.state, agents: f.state.agents.map((a: any) => (a.pane_id === "w1:p1" ? { ...a, agent_status: "working" } : a)) });
 	await browser.until<any>(threads, (v) => v.threads["pi:sess-b"].activity === "streaming");
-	await settle();
+	await frames(2);
 	assert.deepEqual(calls.changed, ["pi:sess-b"]);
 	assert.equal(browser.seq.get(threads), n! + 1);
 	// A tab rename reaches the location label of the Sessions in that tab.

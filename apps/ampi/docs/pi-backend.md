@@ -39,7 +39,9 @@ Rules that apply to every part:
 ## 1. Control extension (`packages/pi-hc-control`)
 
 A Pi extension loaded in every Pi Session. On `session_start` it opens a unix
-socket and writes a descriptor; on shutdown it removes both.
+socket and writes a descriptor; on shutdown it removes both. A reload
+(`session_shutdown` with reason `reload`) removes only the socket and
+rewrites the descriptor as `reloading` until the reloaded control replaces it.
 
 - Directory: `<PI_CODING_AGENT_DIR or ~/.pi/agent>/hc-control/`, mode 0700.
 - Socket `<sessionId>.sock` (mode 0600) and descriptor `<sessionId>.json`:
@@ -48,12 +50,21 @@ socket and writes a descriptor; on shutdown it removes both.
   to a short one under the temporary directory.
   `nonce` is random per process start, so a stale descriptor cannot pass for a
   live Session.
+  While Pi reloads, the descriptor also carries `state: "reloading"`,
+  `targetStamp` (the build the reload loads, or null), and `deadline` (epoch
+  ms, 10 s out).
 - Frames: one JSON object per line.
-  - `{ id, op: "status" }` →
+  - `{ id, op: "status", expect? }` →
     `{ id, ok: true, value: { sessionId, sessionFile, nonce, idle, compacting, pending: { steer, followUp }, submissions, stamp } }`.
-    `stamp` is the control's build (`src/stamp.mjs`), null without git. The
-    remote agent refuses every op to a control whose stamp differs from the
-    hub's expected one with `version_skew` (P1).
+    `stamp` is the control's build (`src/stamp.ts`), null without git.
+    `expect` is the build the hub expects (the remote agent's probe sends
+    it). The control reloads itself when the build on disk equals `expect`
+    and differs from `stamp`, at a quiet point (pi-hc-control README). The
+    remote agent serves a control of any build on the descriptor `schema`
+    it speaks (`hc-control/1`); the hub logs build drift once per Session
+    and stamp, and the deploy parts row names it. A control on another
+    protocol, or one that answers an op with `unknown_op`, gets
+    `version_skew` and no keys (P1).
   - `{ id, op: "submit", text, deliverAs: "steer" | "followUp" }` →
     `{ id, ok: true, evidence: "admitted" | "started", entryId?, submission? }` or
     `{ id, ok: false, error: { code, message } }`.
@@ -151,6 +162,11 @@ In (hub → agent):
 
 Routing: if a live control descriptor names `session` (matching file and a
 socket that answers `status` with the same nonce), use the control socket.
+While a descriptor for `session` says `reloading` and its pid lives, a send
+never becomes keys. Before the deadline, hold it for the reloaded control
+(FIFO, at most 8); it goes to the new socket or fails with
+`control_reloading` and the restart step. After the deadline, refuse it at
+once the same way, until a live descriptor replaces it or the pid dies.
 Otherwise use Herdr keys after rechecking the exact pane↔Session binding:
 steer = `herdr agent prompt <pane> <text>` while busy or idle; follow-up =
 `herdr pane send-text <pane> <text>` (literal text; `agent send-keys` takes

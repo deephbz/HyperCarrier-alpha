@@ -6,9 +6,11 @@ import { CommandPalette, DisplayDialog, HelpDialog, HostSetupDialog, Palette } f
 import { Overview } from "./components/Overview.tsx";
 import { NewAgentDialog } from "./components/PiDialogs.tsx";
 import { PiPanel, piPanels } from "./views/PiPanel.tsx";
+import { threadSurface } from "./shell-slots.ts";
 import { PAGES } from "./views/registry.ts";
 import { type HostThreads, Sidebar, SidebarIcon } from "./components/Sidebar.tsx";
 import { SessionUnresolved } from "./components/SessionUnresolved.tsx";
+import { appLayers } from "./extensions-ui.ts";
 import { ThreadView } from "./components/ThreadView.tsx";
 import { hashRoute, href, MOD, type Route } from "./util.ts";
 import { FeedsContext, FocusIntentContext } from "./context.ts";
@@ -34,10 +36,11 @@ const MAIN_MIN = 480;
 const viewWidth = () => document.documentElement.clientWidth;
 /**
  * The side panels overlay the main (a phone). styles.css owns the width: its narrow rule sets --side-overlay. App reads
- * it at first render and on resize, and marks `.app` with `side-overlay` once it draws that layout.
+ * its media query at render and subscribes to that query's change event, then marks `.app` with `side-overlay`.
  * The mark is an observation for tests: nothing styles or branches on it.
  */
-const sideOverlay = () => getComputedStyle(document.documentElement).getPropertyValue("--side-overlay").trim() === "1";
+const sideOverlayQuery = matchMedia("(max-width: 600px)");
+const sideOverlay = () => sideOverlayQuery.matches;
 
 type Drag = { app: HTMLElement; pointer: number; x: number; scale: number; start: number; width: number };
 
@@ -121,7 +124,8 @@ function ResizeEdge({ side, width, onChange }: { side: "sidebar" | "panel"; widt
 function HostFeed({ host, onData }: { host: HostState; onData: (id: string, data: HostThreads) => void }) {
 	const { value, stale, error } = useTopic(host.link, { kind: "threads" });
 	useEffect(() => {
-		onData(host.link, { host, threads: Object.values(value?.threads ?? {}) as ThreadSummary[], stale, ...(value?.layout ? { layout: value.layout } : {}), indexing: value?.indexing, listing: value?.listing, updating: value?.updating, error });
+		const { threads, layout, backend: _backend, ...flags } = value ?? {};
+		onData(host.link, { host, threads: Object.values(threads ?? {}) as ThreadSummary[], stale, ...(layout ? { layout } : {}), ...flags, error });
 	}, [host, value, stale, error, onData]);
 	return null;
 }
@@ -327,13 +331,24 @@ export function App() {
 		};
 	}, []);
 	useEffect(() => {
-		// Display zoom changes the CSS width of the window without a resize event.
-		// A width that leaves the narrow rule ends the drawer's visit: a later phone width (a rotation back) starts closed.
-		const resize = () => { const overlay = sideOverlay(); setWindowWidth(viewWidth()); setOneSide(overlay); if (!overlay) setDrawer(false); };
+		// CSS owns the breakpoint; follow its media query even when mobile viewport setup emits no resize event.
+		// Leaving the rule ends the drawer's visit, so a later phone width starts closed.
+		const overlay = () => {
+			const narrow = sideOverlayQuery.matches;
+			if (narrow !== oneSideRef.current) {
+				setPanel(narrow ? undefined : localStorage.getItem("ampi.panel") ?? undefined);
+			}
+			setOneSide(narrow);
+			if (!narrow) setDrawer(false);
+		};
+		const resize = () => setWindowWidth(viewWidth());
+		overlay();
 		resize();
+		sideOverlayQuery.addEventListener("change", overlay);
 		window.addEventListener("resize", resize);
 		window.addEventListener("ampi:display", resize);
 		return () => {
+			sideOverlayQuery.removeEventListener("change", overlay);
 			window.removeEventListener("resize", resize);
 			window.removeEventListener("ampi:display", resize);
 		};
@@ -346,9 +361,10 @@ export function App() {
 	const closeDialog = useCallback(() => setDialog(undefined), []);
 	const onData = useCallback((id: string, data: HostThreads) => setFeeds((prev) => ({ ...prev, [id]: data })), []);
 	useEffect(() => {
+		if (oneSide) return;
 		if (panel) localStorage.setItem("ampi.panel", panel);
 		else localStorage.removeItem("ampi.panel");
-	}, [panel]);
+	}, [panel, oneSide]);
 	const data = hosts.map((host) => ({ ...(feeds[host.link] ?? { threads: [], stale: true }), host }));
 	useAttention(data, route);
 	const listed = data.some((d) => d.threads.length > 0);
@@ -396,22 +412,23 @@ export function App() {
 		return () => window.removeEventListener("keydown", key);
 	}, []);
 	const summary = route.host && route.thread ? feeds[route.host]?.threads.find((t) => t.id === route.thread) : undefined;
-	// A Session gets the registered panel views (views/registry.ts).
-	const panelAvailable = (name: string) => piPanels(summary).some((p) => p.name === name);
+	// A Session gets the registered panel views (views/registry.ts), then its Host kind's (ThreadSurface.panels).
+	const kindPanels = threadSurface(resolved ? findHost(hosts, route.host) : undefined).panels;
+	const panelAvailable = (name: string) => piPanels(summary, kindPanels).some((p) => p.name === name);
 	const showPanel = Boolean(resolved && route.thread && panel && panelAvailable(panel));
 	// Every panel writer (✕, tabs, ⌘J, links) reports a view change; focus moves only if it was lost (R11).
 	const setPanelTracked = useCallback((next?: string) => { setPanel(next); focusIntent("panel.set", undefined, { panelShown: Boolean(next && availableRef.current(next)) }); }, []);
 	availableRef.current = (name) => Boolean(route.thread) && panelAvailable(name);
 	const defaultPanel = () => {
 		const saved = localStorage.getItem(PANEL_DEFAULT_KEY) || "arc";
-		return panelAvailable(saved) ? saved : panelAvailable("arc") ? "arc" : piPanels(summary)[0]?.name;
+		return panelAvailable(saved) ? saved : panelAvailable("arc") ? "arc" : piPanels(summary, kindPanels)[0]?.name;
 	};
 	applyView.current = {
 		// The one sidebar writer: the phone's drawer, the squeezed sidebar's peek, or the saved desktop choice.
 		sidebar: (show) => (oneSideRef.current ? setDrawer(show) : squeezedRef.current ? setSidebarPeek(show) : setSidebarHidden(!show)),
 		panel: (open) => {
 			setPanel(open ? defaultPanel() : undefined);
-			const r = hashRoute();
+			const { route: r } = linkRoute(hashRoute(), hosts);
 			if (!open && r.panel && r.host && r.thread) navigate(href.thread(r.host, r.thread, r.entry ? { entry: r.entry } : {}), "replace", { reveal: false });
 		},
 	};
@@ -425,7 +442,7 @@ export function App() {
 		commit: (side, open) => { focusIntent(side === "sidebar" ? (open ? "sidebar.show" : "sidebar.hide") : open ? "panel.toggle" : "panel.close"); },
 	}), []);
 	// While a swipe opens the panel, an empty sheet with the default panel's title follows the finger.
-	const sheet = oneSide && !page && route.host && route.thread && !showPanel ? piPanels(summary).find((p) => p.name === defaultPanel())?.label : undefined;
+	const sheet = oneSide && !page && route.host && route.thread && !showPanel ? piPanels(summary, kindPanels).find((p) => p.name === defaultPanel())?.label : undefined;
 	// When a panel would squeeze the main below a usable width, the sidebar gives way first (not saved; ☰ peeks it back),
 	// and only then does the panel overlay the main.
 	const squeezed = !oneSide && showPanel && !sidebarHidden && windowWidth - sidebarWidth - panelWidth < MAIN_MIN;
@@ -463,13 +480,13 @@ export function App() {
 			) : route.host && route.thread ? (
 				<ThreadView key={`${route.host}|${route.thread}`} host={route.host} threadId={route.thread} summary={summary} panel={panel} setPanel={setPanelTracked} entry={route.entry} />
 			) : (
-				<Overview data={data} onNew={() => setDialog("new")} />
+				<Overview data={data} onNew={() => setDialog("new")} onHostSetup={() => setDialog("host")} onHelp={() => setDialog("help")} />
 			)}
 			</div>
 			{sheet && <div className="drawer-sheet" aria-hidden="true" inert><div className="panel-tabs"><span className="drawer-sheet-title">{sheet}</span></div></div>}
 			{!page && route.host && route.thread && panel && showPanel && <div className="panel-slot" data-region="panel" tabIndex={-1} onKeyDown={handleRegionScrollKey}>
 				<ResizeEdge side="panel" width={panelWidth} onChange={setPanelWidth} />
-				<PiPanel name={panel} host={route.host} threadId={route.thread} summary={summary} entry={route.entry} setPanel={setPanelTracked} />
+				<PiPanel name={panel} host={route.host} threadId={route.thread} summary={summary} entry={route.entry} extra={kindPanels} setPanel={setPanelTracked} />
 			</div>}
 			{dialog === "new" &&
 				// A new agent starts in Herdr (D15 stage 2).
@@ -479,6 +496,7 @@ export function App() {
 			{dialog === "commands" && <CommandPalette query={paletteQuery.current} onQuery={(query) => { paletteQuery.current = query; }} onClose={() => setDialog(undefined)} />}
 			{dialog === "display" && <DisplayDialog onClose={() => setDialog(undefined)} />}
 			{dialog === "help" && <HelpDialog onClose={() => setDialog(undefined)} />}
+			{appLayers.map((Layer, i) => <Layer key={i} feeds={feeds} hosts={hosts} />)}
 		</div>
 		</FocusIntentContext.Provider>
 		</FeedsContext.Provider>

@@ -170,11 +170,16 @@ export async function navAnchors(j) {
   await source('find', 'Press ⌘F, find the middle turn, click the result', async () => {
     await toEnd();
     await p.keyboard.press('ControlOrMeta+f');
-    const find = p.getByRole('region', { name: 'Find in this Session' });
+    const find = p.getByRole('search', { name: 'Find in this Session' });
     const input = find.getByRole('textbox', { name: 'Find in Session' });
     await input.fill(`Nav turn ${TURNS / 2}:`);
     await input.press('Enter');
-    await find.locator('a').first().click({ timeout: 20_000 });
+    // Wait for the long-session scan before filtering or choosing a result.
+    await find.getByRole('status').filter({ hasText: /\d+ \/ \d+/ }).waitFor({ timeout: 60_000 });
+    await find.getByRole('button', { name: 'Filter' }).click();
+    const result = p.locator('.find-filtered [data-find-hit]').first();
+    await result.waitFor({ timeout: 20_000 });
+    await result.click();
   });
 
   // On a long Session the rail shows a sample of the dashes; the pointer clicks the middle shown dash.
@@ -192,7 +197,9 @@ export async function navAnchors(j) {
         await j.goto(link(id));
         await observe(p, id);
         const t0 = Date.now();
-        await p.locator(`[data-entry="${id}"] .rb-jump`).first().click({ force: true });
+        const targetRow = p.locator(`[data-entry="${id}"]`);
+        await targetRow.hover();
+        await targetRow.locator('.rb-jump').click();
         const item = p.locator(`[data-rarebit="${id}"].rb-target`);
         await item.waitFor({ timeout: REVEAL_MS });
         const inView = await item.evaluate(el => { const r = el.getBoundingClientRect(), b = el.closest('.panel-body, [class*=scroll]')?.getBoundingClientRect(); return Boolean(b && r.bottom > b.top && r.top < b.bottom); });

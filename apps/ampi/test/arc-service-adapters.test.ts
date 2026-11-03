@@ -18,8 +18,16 @@ const input: ModelInput = { system: "Synthetic system", prompt: "Synthetic promp
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(r => { resolve = r; }); return { promise, resolve }; }
 async function waitFile(path: string) {
  const end = Date.now() + 3000;
- while (!existsSync(path)) { if (Date.now() > end) throw new Error("Synthetic process did not become ready"); await new Promise(r => setTimeout(r, 10)); }
+ while (!existsSync(path) || readFileSync(path, "utf8").length === 0) { if (Date.now() > end) throw new Error("Synthetic process did not become ready"); await new Promise(r => setTimeout(r, 10)); }
 }
+
+test("Arc model fixture readiness waits for marker contents", async t => {
+ const dir = scratch(); t.after(() => rmSync(dir, { recursive: true, force: true }));
+ const marker = join(dir, "pid"); writeFileSync(marker, "");
+ let ready = false; const waiting = waitFile(marker).then(() => { ready = true; });
+ await new Promise(resolve => setImmediate(resolve)); assert.equal(ready, false);
+ writeFileSync(marker, "4242"); await waiting;
+});
 
 test("Arc model: the real runner writes no prompt before the durable startup barrier", async t => {
  const dir = scratch(); t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -28,6 +36,29 @@ test("Arc model: the real runner writes no prompt before the durable startup bar
  const call = runPiCall(input, [process.execPath, "-e", code, ready, bytes], { started: async () => { started.resolve(); await barrier.promise; } });
  await started.promise; await waitFile(ready); assert.equal(existsSync(bytes), false);
  barrier.resolve(); assert.equal((await call).text, "answer"); assert.equal(readFileSync(bytes, "utf8"), input.prompt);
+});
+
+test("Arc model: cancellation reaps the child and settles its startup barrier before returning", async t => {
+ const dir = scratch(); t.after(() => rmSync(dir, { recursive: true, force: true }));
+ const controller = new AbortController(), barrier = deferred(), started = deferred(), ready = join(dir, "ready");
+ let pid = 0, exited = false, finished = false;
+ const call = runPiCall(input, [process.execPath, "-e", `require('node:fs').writeFileSync(process.argv[1],'ready');setInterval(()=>{},1000);`, ready], { signal: controller.signal, started: async child => { pid = child; started.resolve(); await barrier.promise; }, exited: () => { exited = true; } });
+ const rejected = assert.rejects(call, e => (e as {code: string; dispatched: boolean}).code === "cancelled" && (e as {dispatched: boolean}).dispatched === false).then(() => { finished = true; });
+ await started.promise; await waitFile(ready); controller.abort();
+ await new Promise(resolve => setTimeout(resolve, 30)); assert.equal(finished, false, "startup cannot write after cancellation returns");
+ barrier.resolve(); await rejected; assert.equal(exited, true);
+ assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+});
+
+test("Arc auth: cancellation reaps a hanging auth child before preflight returns", async t => {
+ const dir = scratch(); t.after(() => rmSync(dir, { recursive: true, force: true }));
+ const bin = join(dir, "pi"), pidFile = join(dir, "pid"), controller = new AbortController();
+ writeFileSync(bin, `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));process.on('SIGTERM',()=>{});setInterval(()=>{},1000);`); chmodSync(bin, 0o755);
+ const model = piModel({ agentDir: dir, extensionPath: join(dir, "limit.ts"), env: { PI_BIN: bin } });
+ const preflight = model.preflight(input.model, controller.signal); await waitFile(pidFile);
+ const pid = Number(readFileSync(pidFile, "utf8")); assert.ok(Number.isInteger(pid) && pid > 0); controller.abort();
+ assert.equal((await preflight)?.kind, "failed");
+ assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
 });
 
 function fakePi(dir: string, auth = true) {

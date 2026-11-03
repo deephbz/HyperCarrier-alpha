@@ -55,6 +55,10 @@ The Builder persists call intent before dispatch, records model-child identity b
 
 A failed later window can publish a checkpoint only when it covers more of the same selection than the stored receipt. A failed Rebuild keeps the last good Arc. Only an authoritative source check can prove that history changed. Only that proof requires a Rebuild. An unavailable source causes waiting; it does not prove a branch change. Obsolete work cannot publish.
 
+An explicit service stop cancels active and queued Builds for every client. The Builder checks cancellation at asynchronous boundaries. It reaps active model children and persists a `cancelled` Build record before the service releases its lock. Repeated stops share completion. A committed `done` Build stays done. Update replacement and idle shutdown drain Builds instead. An explicit stop can cancel an update drain.
+
+A cancelled Build preserves accepted checkpoints and measured usage. An interrupted call with unknown cost keeps automatic Builds paused. An explicit later Build can continue and carries a possible-repeat-cost warning. Cancellation does not fabricate an Arc receipt when no window was accepted. Older service versions retain their drain-only stop behavior until replaced.
+
 Process liveness and charge knowledge are separate. A recorded survivor holds capacity until verified exit. Exit releases capacity but does not prove that a call was free. Build records retain measured usage and possible repeat cost. Full-state write cost and Session scan cost remain unmeasured.
 
 A proved-gone child must not regain a held slot after restart. An intent without a recorded child can release capacity without paid-call uncertainty only when the service proves that the child never received the prompt. Wrong-model answers stay uncertain. Post-dispatch errors without usage stay uncertain; errors with usage retain it and can schedule retry. Unknown cost stays unknown. Service recovery checks cover these distinctions with synthetic Pi processes.
@@ -75,6 +79,8 @@ Acceptance does not prove completion. A late "unknown" reply cannot replace an a
 ### Triggers and admission
 
 The service watches Session files through the published selection. Owner messages and agent stops schedule automatic work when at least four Rarebits exist. Debounce is 20 seconds; automatic cadence is five minutes per Session. Manual Build skips both. A pending job retains its strongest intent across restart. Source cursors deduplicate automatic targets. Failed Builds retain retry times and backoff. Other Sessions can continue when one waits or fails.
+
+A resident checks its store, lifetime-lock identity and control socket at each existing service tick. Loss of any of these cancels current calls and ends the resident after child reaping. If terminal persistence fails while these authority paths remain valid, the resident retains its lock and stop reports busy. The existing tick still checks authority loss after that failure. A displaced resident never closes or removes a successor control socket. If the authority paths are gone, shutdown cannot retain a readable terminal record and still ends after child reaping. A fixture must stop and await the resident before it removes the store.
 
 **Provisional — Q1:** after the last compatible hub handshake, the service continues automatic work for up to `serviceIdleHours` (default 24 hours), then drains and stops. A crash or Host reboot requires a later hub connection to start it again. v2.1 adds no OS supervisor. The owner has not confirmed the no-hub lifetime.
 
@@ -148,7 +154,7 @@ The Session's Arc panel is the only prose surface. Overview receives only Needs-
 | older hub | This AmPi is older than devbox. Update it. | The service refuses this hub's build. | Update this AmPi. |
 | replacement failed | devbox: AmPi could not replace the older Arc service (`<cause>`). Run ampi arc status --host devbox; the log is `<path>`. | The hub could not replace the older service. | Check status and the named log. |
 | stopped | devbox: Arc service is stopped. A linked hub restarts it within seconds. | The service idled out or was stopped. | None. |
-| stopping | devbox: Arc service is stopping. It drains Builds for every client; a linked hub restarts it within seconds. | Stop drains work for every linked client. | Wait for drain and restart. |
+| stopping | devbox: Arc service is stopping for every client. A linked hub restarts it within seconds. | Stop cancels work for every linked client. | Wait for cancellation and restart. |
 | fault | devbox: Arc service stopped Builds after an internal error. Run ampi arc stop --host devbox to restart it; a linked hub starts it again within seconds. | The service fenced new Builds. | Restart it. |
 | busy | devbox: Arc service holds its lock but does not answer. Run ampi arc status --host devbox before retrying. | The lock owner did not answer. | Check status. |
 | error | devbox: Arc maintenance failed: `<cause>`. Run ampi arc status --host devbox; the log is `<path>`. | Maintenance did not finish. | Check status and the named log. |
@@ -187,7 +193,7 @@ ampi arc status [--json] [--host <id>]
 ampi arc stop (--host <id> | --all)
 ```
 
-Status defaults to all configured Pi Hosts. Stopping Arc drains Builds for every client. A linked hub restarts it within seconds. The hub link owns startup and updates; deployment needs no Arc transition hook. A bad release is fixed by rolling forward.
+Status defaults to all configured Pi Hosts. Stopping Arc cancels Builds for every client. A linked hub restarts it within seconds. The hub link owns startup and updates; deployment needs no Arc transition hook. A bad release is fixed by rolling forward.
 
 Cutover requires every v2 hub for a Host to update. On first replica use, the v2.1 hub deletes that Host cache's old `views/arc/` receipts and records completion in `arc-replica/replica.json`. Later starts do not repeat the deletion. Host evidence stays in place. Arc does not edit owner settings.
 

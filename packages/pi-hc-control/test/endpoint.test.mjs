@@ -9,9 +9,9 @@ import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { connect, findSession, probe, request } from "../src/client.mjs";
-import { MAX_SOCKET_PATH_BYTES, openEndpoint, readDescriptor, resolveAgentDir, socketPathFor } from "../src/endpoint.mjs";
-import { createHcControlExtension } from "../src/extension.mjs";
+import { connect, findSession, probe, request } from "../src/client.ts";
+import { MAX_SOCKET_PATH_BYTES, openEndpoint, readDescriptor, resolveAgentDir, socketPathFor } from "../src/endpoint.ts";
+import { createHcControlExtension } from "../src/extension.ts";
 
 const SID_A = randomUUID();
 const SID_B = randomUUID();
@@ -110,6 +110,64 @@ test("close removes socket and descriptor, but not a newer owner's descriptor", 
   assert.equal(readDescriptor(older.descriptorPath).nonce, newer.nonce);
 });
 
+test("a reload close leaves a reloading descriptor and no socket; the next endpoint replaces it", async (t) => {
+  const agentDir = scratch(t);
+  const old = await openEndpoint({ agentDir, sessionId: SID_A, sessionFile: "/synthetic/a.jsonl", version: "0.1.0", nonce: "a".repeat(32), handle: statusHandle(SID_A, "a".repeat(32)) });
+  const target = { id: "new000000000", order: 2, line: "stable" };
+  await old.close({ reloading: { targetStamp: target, deadline: 12_345 } });
+  assert.equal(existsSync(old.socketPath), false, "nothing answers on the old socket");
+  const held = readDescriptor(old.descriptorPath);
+  assert.deepEqual(
+    [held.state, held.targetStamp, held.deadline, held.pid, held.nonce, held.sessionFile],
+    ["reloading", target, 12_345, process.pid, "a".repeat(32), "/synthetic/a.jsonl"],
+  );
+
+  const next = await openEndpoint({ agentDir, sessionId: SID_A, sessionFile: "/synthetic/a.jsonl", version: "0.1.0", nonce: "b".repeat(32), handle: statusHandle(SID_A, "b".repeat(32)) });
+  t.after(() => next.close());
+  const live = readDescriptor(next.descriptorPath);
+  assert.equal(live.state, undefined);
+  assert.equal(live.nonce, "b".repeat(32));
+});
+
+test("extension: a reload shutdown writes reloading for 10 s; a quit removes the descriptor", async (t) => {
+  const agentDir = scratch(t);
+  const handlers = new Map();
+  const pi = {
+    on: (name, fn) => handlers.set(name, [...(handlers.get(name) ?? []), fn]),
+    events: { on() {} },
+    registerCommand() {},
+    sendUserMessage() {},
+  };
+  const emit = async (name, event, ctx) => {
+    for (const fn of handlers.get(name) ?? []) await fn({ type: name, ...event }, ctx);
+  };
+  const ctx = {
+    sessionManager: { getSessionId: () => SID_A, getSessionFile: () => `/synthetic/${SID_A}.jsonl`, getEntries: () => [] },
+    isIdle: () => true,
+    hasPendingMessages: () => false,
+    abort() {},
+    ui: { notify() {} },
+  };
+  createHcControlExtension({ agentDir, stamp: null })(pi);
+  await emit("session_start", { reason: "startup" }, ctx);
+  const path = join(agentDir, "hc-control", `${SID_A}.json`);
+  const before = Date.now();
+  // A manual /reload: no target is known.
+  await emit("session_shutdown", { reason: "reload" });
+  const held = readDescriptor(path);
+  assert.equal(held.state, "reloading");
+  assert.equal(held.targetStamp, null);
+  assert.ok(held.deadline >= before + 10_000 && held.deadline <= Date.now() + 10_000, `deadline ${held.deadline - before} ms out`);
+
+  // Pi drops the old runtime's handlers and loads a new one.
+  handlers.clear();
+  createHcControlExtension({ agentDir, stamp: null })(pi);
+  await emit("session_start", { reason: "reload" }, ctx);
+  assert.equal(readDescriptor(path).state, undefined, "the reloaded control replaces it");
+  await emit("session_shutdown", { reason: "quit" });
+  assert.equal(existsSync(path), false);
+});
+
 test("too-long socket paths fall back to a private temp directory recorded in the descriptor", async (t) => {
   const root = scratch(t);
   const agentDir = join(root, "a".repeat(120));
@@ -152,6 +210,7 @@ test("extension moves its socket when the runtime switches Session, and cleans u
   const pi = {
     on: (name, fn) => handlers.set(name, [...(handlers.get(name) ?? []), fn]),
     events: { on() {} },
+    registerCommand() {},
     sendUserMessage() {},
   };
   const emit = async (name, event, ctx) => {

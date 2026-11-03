@@ -15,7 +15,8 @@ import { app, checkout, keyOf, settled as settleHub } from './hub.mjs';
 import { waitForDemoArc } from '../demo/cos.ts';
 import { timelineTeams } from './timeline-teams.mjs';
 import { navAnchors } from './nav-anchors.mjs';
-import { controlStamp } from '../../../../packages/pi-hc-control/src/stamp.mjs';
+import { modelLabel } from '../../web/src/model-label.ts';
+import { controlStamp } from '../../../../packages/pi-hc-control/src/stamp.ts';
 
 /** A pi-hc-control build older than this checkout's: the Host's agent refuses it every op. */
 const OLDER_CONTROL = { id: '0ld000000000', order: 1, line: 'stable' };
@@ -1292,7 +1293,7 @@ export const journeys = [
         await j.step('open', 'Open the live A27 Session; its composer shows the control and the model card shows Sonnet', async () => {
           await j.goto(`#/h/devbox/t/${encodeURIComponent(s.thread)}`);
           await assertEventually(async () => (await threadsOf(j.state)).some(t => t.id === s.thread && t.control === true), 'the Host never lists the A27 Session with a live control', 20_000);
-          await assertEventually(async () => /claude-sonnet-5-5/.test(await p.locator('.model-hud-trigger').innerText().catch(() => '')), 'the model card does not show Sonnet', 10_000);
+          await assertEventually(async () => await showsModel(p, 'anthropic/claude-sonnet-5-5'), 'the model card does not show Sonnet', 10_000);
           return { model: await p.locator('.model-hud-trigger').innerText() };
         });
         await j.step('model', 'Type /model anthropic/claude-opus-5-5 and press Enter; the model card shows Opus, the transcript has no /model message, and Pi got a command op and no submit', async () => {
@@ -1301,7 +1302,7 @@ export const journeys = [
           await assertEventually(async () => s.model() === 'anthropic/claude-opus-5-5' || s.userTexts().some(t => t.startsWith('/model')), 'the composer sent nothing to Pi', 10_000);
           assert.deepEqual(s.userTexts().filter(t => t.startsWith('/model')), [], 'the /model command became a user message in the Session file');
           assert.equal(s.requests.filter(r => r.op === 'submit').length, 0, 'the /model command reached Pi as text');
-          await assertEventually(async () => /claude-opus-5-5/.test(await p.locator('.model-hud-trigger').innerText().catch(() => '')), 'the model card does not show Opus after /model', 10_000);
+          await assertEventually(async () => await showsModel(p, 'anthropic/claude-opus-5-5'), 'the model card does not show Opus after /model', 10_000);
           assert.equal(await p.locator('.transcript').getByText('/model anthropic', { exact: false }).count(), 0, 'the transcript shows a /model message');
           assert.equal(await box.inputValue(), '', 'the draft was not cleared after a handled command');
           return { model: await p.locator('.model-hud-trigger').innerText(), commandOps: s.requests.filter(r => r.op === 'command').map(r => `${r.name} ${r.args}`) };
@@ -2510,29 +2511,14 @@ export const journeys = [
       const box = p.getByRole('textbox', { name: 'Message the agent' });
       const old = await addFixture(j, () => addCommandSession(j.state, { id: 'sess-verify-skew', pane: 'w1:p28', older: true }), r => [r.thread]);
       try {
-        await j.step('control-older', 'Open a Session whose pi-hc-control is an older build, type /model anthropic/claude-opus-5-5 and press Enter; AmPi shows the two-line refusal, nothing reaches Pi, and the draft stays', async () => {
+        // The gate is the control protocol: an older build on hc-control/1 serves every op (remote-agent.cjs foreign()).
+        await j.step('control-older', 'Open a Session whose pi-hc-control is an older build, type /model anthropic/claude-opus-5-5 and press Enter; the older control runs it, and the model card shows Opus', async () => {
           await j.goto(`#/h/devbox/t/${encodeURIComponent(old.thread)}`);
           await assertEventually(async () => (await threadsOf(j.state)).some(t => t.id === old.thread && t.control === true), 'the Host never lists the older-control Session with a live control', 20_000);
           await box.fill('/model anthropic/claude-opus-5-5');
           await box.press('Enter');
-          const refusal = p.locator('.composer-feedback[data-outcome="refused"]');
-          await refusal.waitFor({ timeout: 10_000 });
-          const text = await refusal.innerText();
-          assert.match(text, /devbox runs an older pi-hc-control\. Update it\.\nPull pi-hc-control on devbox, then run \/reload in each Pi pane there/, `the composer shows no skew refusal: "${text}"`);
-          assert.equal(await p.locator('[data-command-choice]').count(), 0, 'the refusal offers a text send');
-          assert.deepEqual(old.requests.filter(r => r.op !== 'status'), [], 'an op reached the older control');
-          assert.deepEqual(old.userTexts().filter(t => t.startsWith('/model')), [], 'the /model command became a user message');
-          assert.equal(await box.inputValue(), '/model anthropic/claude-opus-5-5', 'the draft was not kept');
-          return { refusal: text };
-        });
-        await j.step('control-updated', 'Update the control in place, then press Enter on the kept draft; the command runs and the model card shows Opus', async () => {
-          old.upgrade();
-          // Two status probes after the update: the Host's agent has seen the new build at least once.
-          const probes = old.requests.filter(r => r.op === 'status').length;
-          await assertEventually(async () => old.requests.filter(r => r.op === 'status').length >= probes + 2, 'the Host never probed the updated control', 20_000);
-          await box.press('Enter');
-          await assertEventually(async () => old.model() === 'anthropic/claude-opus-5-5', 'Enter on the kept draft did not run /model', 10_000);
-          await assertEventually(async () => /claude-opus-5-5/.test(await p.locator('.model-hud-trigger').innerText().catch(() => '')), 'the model card does not show Opus after the update', 10_000);
+          await assertEventually(async () => old.model() === 'anthropic/claude-opus-5-5', 'Enter did not run /model through the older control', 10_000);
+          await assertEventually(async () => await showsModel(p, 'anthropic/claude-opus-5-5'), 'the model card does not show Opus', 10_000);
           assert.equal(old.requests.filter(r => r.op === 'submit').length, 0, 'the /model command reached Pi as text');
           return { ops: old.requests.filter(r => r.op !== 'status').map(r => r.op) };
         });
@@ -2540,6 +2526,9 @@ export const journeys = [
     },
   },
 ];
+
+/** The model card renders modelLabel(ref); match that, so a change to the label shape moves the journeys with it. */
+const showsModel = async (p, ref) => (await p.locator('.model-hud-trigger').innerText().catch(() => '')).startsWith(modelLabel(ref));
 
 export async function assertEventually(test, message, ms = 10_000) {
   const end = Date.now() + ms;

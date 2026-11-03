@@ -10,11 +10,13 @@ import type { Overlay } from "../focus.ts";
 import { PAGES } from "../views/registry.ts";
 import { carrier, navigate } from "../nav.ts";
 import { href } from "../util.ts";
-import type { HostThreads } from "./Sidebar.tsx";
 import { FormRow } from "./FormRow.tsx";
 import { hoverIntent } from "./Popover.tsx";
 import { Segmented } from "./Segmented.tsx";
 import { paletteSessions } from "./palette-sessions.ts";
+import type { HostThreads } from "./Sidebar.tsx";
+import { hostLabel, servesHostOps } from "./host-label.ts";
+import { helpActions } from "../extensions-ui.ts";
 import { proseRows, type HostProse, type ProseRow } from "./palette-prose.ts";
 
 /** The opener of the open Modal. A Modal opened from inside another (palette switching) inherits it. */
@@ -113,7 +115,7 @@ export function HostSetupDialog({ onClose }: { onClose: () => void }) {
 	);
 }
 
-/** The ⌘K palette's two searches: Session names and titles (local), or prose in retained copies (each Pi Host's `sessions.search`). */
+/** The ⌘K palette's two searches: Session names and titles (local), or prose in retained copies (each Host's `sessions.search`). */
 type PaletteScope = "sessions" | "prose";
 let lastScope: PaletteScope = "sessions";
 const SCOPES = [["sessions", "Sessions"], ["prose", "Prose"]] as const;
@@ -125,8 +127,11 @@ export function Palette({ data, onClose, query = "", onQuery }: { data: HostThre
 	const setScope = (next: PaletteScope) => { lastScope = next; setScopeState(next); setIndex(0); };
 	const [index, setIndex] = useState(0);
 	const sessions = useMemo(() => paletteSessions(data, q), [data, q]);
-	const piHosts = useMemo(() => data.map((d) => d.host), [data]);
-	const prose = useProseSearch(scope === "prose" ? q : "", piHosts);
+	const searchHosts = useMemo(() => {
+		const all = data.map((d) => d.host);
+		return all.filter(servesHostOps).map((host) => ({ ...host, label: hostLabel(host, all) }));
+	}, [data]);
+	const prose = useProseSearch(scope === "prose" ? q : "", searchHosts);
 	// The hub's hit title can be a raw thread id; the loaded Session list holds the title the sidebar shows.
 	const titles = useMemo(() => new Map(data.flatMap((d) => d.threads.map((t) => [`${d.host.link}|${t.id}`, t.title] as const))), [data]);
 	const count = scope === "sessions" ? sessions.length : prose.rows.length;
@@ -181,7 +186,7 @@ export function Palette({ data, onClose, query = "", onQuery }: { data: HostThre
 				{scope === "sessions" && sessions.length === 0 && <div className="empty">{q.trim() ? "No Sessions match. Try a Team, Worker, or Session name." : "No Sessions yet."}</div>}
 				{scope === "prose" && prose.rows.map((row, i) => (
 					<button key={`${row.host}|${row.threadId}|${row.entry}`} className={`palette-item prose-hit ${i === index ? "on" : ""}`} data-target={href.thread(row.host, row.threadId, { entry: row.entry })} {...hoverIntent(() => setIndex(i))} onClick={() => pick(i)} title={row.title}>
-						<span className="palette-title" dir="auto"><b>{titles.get(`${row.host}|${row.threadId}`) || row.title}</b>{piHosts.length > 1 ? <span className="hint"> · {row.hostLabel}</span> : null}<br /><span className="palette-snippet">{row.snippet}</span></span>
+						<span className="palette-title" dir="auto"><b>{titles.get(`${row.host}|${row.threadId}`) || row.title}</b>{searchHosts.length > 1 ? <span className="hint"> · {row.hostLabel}</span> : null}<br /><span className="palette-snippet">{row.snippet}</span></span>
 					</button>
 				))}
 				{scope === "prose" && prose.notes.map((note) => <div key={note} className="hint" role="status">{note}</div>)}
@@ -194,7 +199,7 @@ export function Palette({ data, onClose, query = "", onQuery }: { data: HostThre
 	);
 }
 
-/** Searches each Pi Host's retained prose as the query settles; a newer query discards older answers. */
+/** Searches the retained prose of each Host that serves Host operations as the query settles; a newer query discards older answers. */
 function useProseSearch(query: string, hosts: HostState[]): { rows: ProseRow[]; notes: string[]; scope?: string; busy: boolean } {
 	const [state, setState] = useState<{ rows: ProseRow[]; notes: string[]; scope?: string; busy: boolean }>({ rows: [], notes: [], busy: false });
 	const generation = useRef(0);
@@ -264,10 +269,11 @@ export function HelpDialog({ onClose }: { onClose: () => void }) {
 				{(["global", "sidebar", "transcript", "composer", "panel"] as const).map((region) => <section key={region}><h3>{region[0]!.toUpperCase() + region.slice(1)}</h3><div className="kbd-grid">{KEYMAP.filter((binding) => binding.region === region && (keyAvailable(binding) || binding.context)).map((binding, i) => <Fragment key={`${binding.id}:${binding.code}:${i}`}><span className="kbd">{bindingLabel(binding)}{appOnly(binding) ? " · app only" : ""}</span><span>{binding.label}{binding.note ? ` · ${binding.note}` : ""}{binding.appNote && carrier() === "app" ? ` · ${binding.appNote}` : ""}{keyAvailable(binding) ? "" : ` · ${binding.context}`}</span></Fragment>)}{region === "composer" && COMPOSER_KEYS.map(({ key, help }) => <Fragment key={key}><span className="kbd">{key}</span><span>{help}</span></Fragment>)}{region === "global" && <><Fragment><span className="kbd">Alt+↑ / Alt+↓</span><span>Previous or next Session</span></Fragment><Fragment><span className="kbd">Esc</span><span>Interrupt or close the current popup</span></Fragment></>}</div></section>)}
 			</div>
 			<p className="hint">
-				In a terminal: <code>ampi doctor</code> checks this machine and every Pi Host and says how to fix what is missing;{" "}
+				In a terminal: <code>ampi doctor</code> checks this machine and every host and says how to fix what is missing;{" "}
 				<code>ampi open</code> prints the link to this window with its access key.
 			</p>
 			<div className="actions">
+				{helpActions.map((Action, i) => <Action key={i} onClose={onClose} />)}
 				<button className="btn primary" onClick={onClose}>
 					Close
 				</button>

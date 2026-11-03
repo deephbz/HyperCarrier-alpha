@@ -27,8 +27,9 @@ export interface Admission {
  release(permit: Permit, outcome: "settled" | "uncertain"): Promise<void>;
 }
 export type ExecutionIdentity = { pid: number; startedAt: string };
-export type CallContext = { callId: string; started(identity: ExecutionIdentity): void; exited(): void };
+export type CallContext = { signal?: AbortSignal; callId: string; started(identity: ExecutionIdentity): void; exited(): void };
 export interface ModelPort {
+ // On signal abort, stop the call and reap its child before returning. Charge knowledge remains independent.
  // Spawn with stdin blocked. Call context.started and wait for its durable return before writing the prompt.
  // If started throws, kill the unadmitted child. A PID alone does not prove process identity.
  call(input: ModelInput, exactModel: string, permit: Permit, context: CallContext): Promise<ModelResult>;
@@ -40,7 +41,7 @@ export type BuildSettings = { model: string; retries: number; windowTokens?: num
 export type CallRecord = { id: string; input: ModelInput; permit: Permit; state: "intent" | "answered" | "uncertain" | "failed"; failure?: ModelFailure; ms?: number; execution?: ExecutionIdentity; executionState?: "running" | "gone"; answer?: ModelAnswer; reason?: string; uncertaintyCode?: "model-mismatch"; usage?: BuildRecord["usage"] };
 export type BuildJob = {
  buildId: string; sessionRef: string; kind: BuildKind; requester: string; settings: BuildSettings; engineVersion: string;
- state: "queued" | "running" | "done" | "uncertain" | "failed" | "obsolete";
+ state: "queued" | "running" | "done" | "uncertain" | "failed" | "obsolete" | "cancelled";
  record: BuildRecord; snapshot?: SourceSnapshot; checkpoint?: ArcReceipt; complete?: boolean;
  calls: CallRecord[]; callHistory: CallRecord[]; reason?: string; elapsedMs?: number; nextAt?: string;
 };
@@ -62,4 +63,6 @@ export interface Builder {
  status(): BuildStatus[];
  // Run accepted work, or retry admission after a wait. There is no timer or transport in the core.
  run(sessionRef?: string): Promise<void>;
+ // Fence new work, cancel active calls and persist terminal records before return. Repeated calls share completion.
+ cancel(): Promise<void>;
 }

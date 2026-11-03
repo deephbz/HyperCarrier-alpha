@@ -85,6 +85,11 @@ async function lockedMain(operation: LockedOperation, body: string) {
  const module = await import(pathToFileURL(join(lock.store, "versions", selected.id, "service.mjs")).href);
  await module.startService(agentDir, operation.host, reply);
 }
+type LaunchPhase = "unknown" | "lock" | "startup";
+class LaunchDeadline extends Error {
+ readonly phase: LaunchPhase;
+ constructor(phase: LaunchPhase) { super("Arc service startup timed out"); this.phase = phase; }
+}
 function launch(staging: string, store: string, operation: LockedOperation): Promise<any> {
  return new Promise((resolve, reject) => {
   const log = openSync(join(store, "service.log"), "a", 0o600), logStart = fstatSync(log).size;
@@ -92,6 +97,15 @@ function launch(staging: string, store: string, operation: LockedOperation): Pro
   try { child = launchLocked(store, [staging, "_locked", JSON.stringify(operation)], { detached: true, stdio: ["ignore", "pipe", log, "pipe"], env: { ...process.env, AMPI_ARC_PARENT_FD: "3" } }); }
   finally { closeSync(log); }
   const parent = child.stdio[3] as Socket;
+  // W enters lock acquisition; L starts the engine. Legacy guardians send neither.
+  // These bytes do not accept readiness or extend the launch deadline.
+  let phase: LaunchPhase = "unknown";
+  parent.on("data", bytes => {
+   for (const byte of bytes) {
+    if (phase === "unknown" && byte === 87) phase = "lock";
+    else if (phase === "lock" && byte === 76) phase = "startup";
+   }
+  });
   parent.on("error", () => {}); parent.resume();
   let output = "", ready = false, outcome: { result: any } | { error: unknown } | undefined;
   // Only readiness transfers the child to its independent resident lifetime.
@@ -102,7 +116,7 @@ function launch(staging: string, store: string, operation: LockedOperation): Pro
    // The guardian handles group termination by killing and reaping Node.
    try { process.kill(-child.pid!, "SIGTERM"); } catch { child.kill("SIGKILL"); }
   };
-  const timer = setTimeout(() => reap({ error: new Error("Arc service startup timed out") }), operation.timeoutMs ?? 30_000);
+  const timer = setTimeout(() => reap({ error: new LaunchDeadline(phase) }), operation.timeoutMs ?? 30_000);
   child.on("error", e => reap({ error: Object.assign(new Error(`Arc service launcher could not start: ${e.message}`), (e as NodeJS.ErrnoException).code === "ENOENT" ? { state: "cannot-start", prerequisite: "perl" } : { state: "error" }) }));
   child.stdout!.on("data", chunk => {
    output += chunk; const at = output.indexOf("\n"); if (at < 0 || ready || outcome) return;
@@ -155,7 +169,11 @@ export async function manage(body: string, operation: ManageOperation): Promise<
      // Drain can remove the socket after status. The lifetime lock decides
      // whether this launcher can install; a lost offer reply is not failure.
      try { await controlRequest(store, { op: "offer", stamp }, Math.max(1, Math.min(1000, deadline - Date.now()))); } catch {}
-    } else await controlRequest(store, { op: "stop" });
+    } else {
+     // Stop can remove the socket after status. Only lifetime-lock acquisition
+     // below proves completion; a lost control acknowledgement proves neither outcome.
+     try { await controlRequest(store, { op: "stop" }, Math.max(1, Math.min(1000, deadline - Date.now()))); } catch {}
+    }
    }
    if (Date.now() >= deadline) return busy();
    if (!staging) {
@@ -171,6 +189,7 @@ export async function manage(body: string, operation: ManageOperation): Promise<
   }
  } catch (error) {
   if (operation.op === "ensure" && command.storeIncarnation !== storeIncarnation(store)) return serviceStatus(operation.host, { state: "stopped", running: false, pid: null, serviceLogPath });
+  if (replacing && error instanceof LaunchDeadline && error.phase === "lock") return busy();
   if (replacing) return failedReplacement((error as Error).message);
   if (sawBusy && Date.now() >= deadline) return busy();
   throw Object.assign(error as Error, { serviceLogPath: join(store, "service.log") });

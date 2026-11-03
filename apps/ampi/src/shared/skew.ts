@@ -26,15 +26,28 @@ export function compare(local: Stamp, remote: Stamp): Skew {
 export const stampLabel = (s: Stamp | null | undefined): string =>
 	s ? `${s.id} (${s.line ?? "no line"}, ${new Date(s.order * 1000).toISOString()})` : "no stamp";
 
+const protocolNumber = (p: string) => Number(/^hc-control\/(\d+)$/.exec(p)?.[1]);
+
 /**
- * Every sentence AmPi says about a version difference. A pi-hc-control refusal has two lines: what differs, then the
- * update step.
+ * Every sentence AmPi says about a version difference. Each pi-hc-control text has two lines: what differs, then the
+ * update step. Only `controlProtocol` refuses an op; the build texts name drift in the deploy parts row. A control on
+ * the hub's protocol updates itself once its Host's checkout has the build (pi-hc-control src/update.ts), and deploy:live
+ * moves this machine's main checkout (scripts/main-checkout.mjs). The pull step is the fallback when that part reads
+ * manual; a restart is needed only for Sessions that started before self-update shipped.
  */
 export const skewText = {
 	page: "This page is older than AmPi. Reload.",
-	controlOlder: (host: string) => `${host} runs an older pi-hc-control. Update it.\nPull pi-hc-control on ${host}, then run /reload in each Pi pane there.`,
+	controlOlder: (host: string, old: string) =>
+		`${host}'s pi-hc-control runs an older build (${old}); it updates at its next idle moment or restart.`,
 	controlNewer: (host: string) => `This AmPi is older than ${host}'s pi-hc-control. Update it.\nPull AmPi on this machine, then restart the hub (npm run deploy:live in apps/ampi).`,
-	controlUnstamped: (host: string) => `${host}'s pi-hc-control has no build stamp. Update it.\nPull pi-hc-control on ${host}, then run /reload in each Pi pane there.`,
+	controlUnstamped: (host: string) => `${host}'s pi-hc-control has no build stamp. Update it.\nPull pi-hc-control on ${host}, then restart each Pi Session there.`,
+	controlProtocol: (host: string, control: string, hub: string) =>
+		protocolNumber(control) < protocolNumber(hub)
+			? `${host}'s pi-hc-control speaks ${control}; this AmPi speaks ${hub}. Update it.\nPull pi-hc-control on ${host}, then restart each Pi Session there.`
+			: `This AmPi speaks ${hub}; ${host}'s pi-hc-control speaks ${control}. Update it.\nPull AmPi on this machine, then restart the hub (npm run deploy:live in apps/ampi).`,
+	// The control names the protocol AmPi speaks but refused one of its ops as unknown: it is older than its protocol says.
+	controlUnknownOp: (host: string, protocol: string) =>
+		`${host}'s pi-hc-control names ${protocol} but lacks an op this AmPi's ${protocol} sends. Update it.\nPull pi-hc-control on ${host}, then restart each Pi Session there.`,
 } as const;
 
 /** The refusal code of every version difference; the composer treats it as final and keeps the draft. */

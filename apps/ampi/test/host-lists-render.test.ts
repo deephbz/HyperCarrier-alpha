@@ -30,7 +30,7 @@ const failed = { host: { id: "devbox", label: "devbox", kind: "pi-local", status
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/\s+/g, " ");
 
 test("host lists render: a failed init says unavailable and the full reason, never No Sessions yet", () => {
-	const side = text(renderToStaticMarkup(createElement(section as never, { data: failed, route: {}, filter: "" })));
+	const side = text(renderToStaticMarkup(createElement(section as never, { data: failed, hosts: [failed.host], route: {}, filter: "" })));
 	assert.match(side, /unavailable/);
 	assert.doesNotMatch(side, /copies readable/);
 	assert.ok(side.includes(REASON), side);
@@ -42,10 +42,10 @@ test("host lists render: a failed init says unavailable and the full reason, nev
 test("host lists render: before the first agents list, saved rows stay listed as not placed yet under the note", () => {
 	const row = { id: "pi:sess-a", ref: "devbox/pi:sess-a", title: "Saved Session", cwd: "/work", createdAt: 0, updatedAt: 0, kind: "thread", activity: "idle", queued: 0, costUsd: 0, live: false, control: false };
 	const data = { host: { id: "devbox", label: "devbox", kind: "pi-local", status: "connected", attempts: 0 }, threads: [row], stale: false, listing: true };
-	const side = text(renderToStaticMarkup(createElement(section as never, { data, route: {}, filter: "" })));
+	const side = text(renderToStaticMarkup(createElement(section as never, { data, hosts: [data.host], route: {}, filter: "" })));
 	assert.match(side, /Looking for live Sessions….*Not placed yet \(1\)/);
 	assert.doesNotMatch(side, /Not in a pane/);
-	const listed = text(renderToStaticMarkup(createElement(section as never, { data: { ...data, listing: undefined }, route: {}, filter: "" })));
+	const listed = text(renderToStaticMarkup(createElement(section as never, { data: { ...data, listing: undefined }, hosts: [data.host], route: {}, filter: "" })));
 	assert.match(listed, /Not in a pane \(1\)/);
 	assert.doesNotMatch(listed, /Looking for live Sessions/);
 });

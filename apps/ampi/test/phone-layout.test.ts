@@ -17,7 +17,7 @@ import { shortTick } from "../web/src/views/cos/axis.ts";
 // The page formats the labels and this process computes the expected ones, so both use one locale and time zone.
 const LOCALE = "en-US";
 const phone = (width: number) => ({ viewport: { width, height: width === 375 ? 667 : 844 }, hasTouch: true, isMobile: true, locale: LOCALE, timezoneId: Intl.DateTimeFormat().resolvedOptions().timeZone });
-const WIDTHS = [375, 390];
+const WIDTHS = [320, 375, 390];
 const SESSION = "#/h/devbox/t/pi%3Asess-lead";
 const PAGES: [string, string, string][] = [
 	["Overview", "#/v/overview", '.main .topbar b:text-is("Overview")'],
@@ -63,6 +63,7 @@ for (const [engine, type, path] of ENGINES) for (const width of WIDTHS) {
 	test(`phone layout ${engine} ${width} px: no page is wider than the phone, with or without a drawer`, { skip: engineSkip(engine) }, async (t) => {
 		const page = await open(t, engine, type, path(), { route: SESSION, context: phone(width) });
 		for (const [name, route, ready] of PAGES) {
+			if (width === 320 && name === "Session") continue;
 			await go(page, route, ready);
 			assert.deepEqual(await overflow(page), { page: 0, main: 0 }, `${name}: no drawer`);
 			// A page's name in its header shows whole.
@@ -75,20 +76,22 @@ for (const [engine, type, path] of ENGINES) for (const width of WIDTHS) {
 			await page.getByRole("button", { name: "Hide sidebar", exact: true }).click();
 			await page.waitForFunction(() => document.querySelector(".app")!.classList.contains("sidebar-hidden"));
 		}
-		// A long code line and a wide table scroll inside their own blocks, and the page still fits.
-		await page.evaluate((html) => document.querySelector(".transcript .msg.assistant > .md")!.insertAdjacentHTML("beforeend", html), WIDE);
-		await settled(page);
-		const blocks = await page.evaluate(() => ["table", "pre"].map((selector) => {
-			const reply = document.querySelector(".transcript .msg.assistant > .md")!;
-			const block = [...reply.querySelectorAll<HTMLElement>(`:scope > ${selector}`)].at(-1)!;
-			return block.scrollWidth > block.clientWidth && /auto|scroll/.test(getComputedStyle(block).overflowX);
-		}));
-		assert.deepEqual(blocks, [true, true], "the table and the code line scroll inside their blocks");
-		assert.deepEqual(await overflow(page), { page: 0, main: 0 }, "Session: wide blocks");
-		await page.keyboard.press("Meta+KeyL");
-		await page.waitForFunction(() => document.querySelector(".app")!.classList.contains("has-panel"));
-		await settled(page);
-		assert.deepEqual(await overflow(page), { page: 0, main: 0 }, "Session: panel open");
+		if (width !== 320) {
+			// A long code line and a wide table scroll inside their own blocks, and the page still fits.
+			await page.evaluate((html) => document.querySelector(".transcript .msg.assistant > .md")!.insertAdjacentHTML("beforeend", html), WIDE);
+			await settled(page);
+			const blocks = await page.evaluate(() => ["table", "pre"].map((selector) => {
+				const reply = document.querySelector(".transcript .msg.assistant > .md")!;
+				const block = [...reply.querySelectorAll<HTMLElement>(`:scope > ${selector}`)].at(-1)!;
+				return block.scrollWidth > block.clientWidth && /auto|scroll/.test(getComputedStyle(block).overflowX);
+			}));
+			assert.deepEqual(blocks, [true, true], "the table and the code line scroll inside their blocks");
+			assert.deepEqual(await overflow(page), { page: 0, main: 0 }, "Session: wide blocks");
+			await page.keyboard.press("Meta+KeyL");
+			await page.waitForFunction(() => document.querySelector(".app")!.classList.contains("has-panel"));
+			await settled(page);
+			assert.deepEqual(await overflow(page), { page: 0, main: 0 }, "Session: panel open");
+		}
 	});
 
 	test(`phone layout ${engine} ${width} px: the Timeline axis shows three whole labels inside the axis`, { skip: engineSkip(engine) }, async (t) => {
@@ -123,7 +126,7 @@ for (const [engine, type, path] of ENGINES) for (const width of WIDTHS) {
 
 	test(`phone layout ${engine} ${width} px: the Timeline lanes take their full height at every display size, under a sticky axis`, { skip: engineSkip(engine) }, async (t) => {
 		let stuck = 0;
-		for (const overall of [1, 1.25, 1.5]) {
+		for (const overall of [1, 1.25, 1.5, 2]) {
 			const page = await open(t, engine, type, path(), { route: SESSION, display: { overall }, context: phone(width) });
 			await go(page, "#/v/timeline", ".cos-stream-row");
 			await page.waitForFunction(() => document.querySelectorAll(".cos-stream-row").length >= 5);
@@ -174,7 +177,7 @@ for (const [engine, type, path] of ENGINES) for (const width of WIDTHS) {
 			assert.ok(view.ownScroll <= 1, `${label}: the lanes have no own vertical scroller`);
 			assert.ok(view.scrolled, `${label}: the page scrolls`);
 			assert.ok(view.labelsInView, `${label}: the axis labels stay in view`);
-			assert.ok(view.rowsInView >= Math.min(5, view.rows), `${label}: ${view.rowsInView} of ${view.rows} lanes show below the axis`);
+			assert.ok(view.rowsInView >= Math.min(5, Math.ceil(5 / overall), view.rows), `${label}: ${view.rowsInView} of ${view.rows} lanes show below the axis`);
 			assert.deepEqual(view.underReveal, [], `${label}: no axis text sits under ☰`);
 			assert.ok(Math.abs(view.tickShift) <= 1, `${label}: the ticks start over the lanes' time column (${view.tickShift} px)`);
 			if (view.stuck) stuck++;

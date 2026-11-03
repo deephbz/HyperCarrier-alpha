@@ -24,7 +24,7 @@ export function failureText(error: BuildRecord["error"], host: string): string {
 }
 
 function serviceText(service: ArcService): string {
-	if (service.state === "stopping") return `${service.host}: Arc service is stopping. It drains Builds for every client; a linked hub restarts it within seconds.`;
+	if (service.state === "stopping") return `${service.host}: Arc service is stopping for every client. A linked hub restarts it within seconds.`;
 	if (service.state === "unreachable") return `${service.host}: Host is unreachable since ${clock(Date.parse(service.since))}. Check the SSH connection, then run ampi arc status --host ${service.host}.`;
 	if (service.text) return service.text;
 	const host = service.host;

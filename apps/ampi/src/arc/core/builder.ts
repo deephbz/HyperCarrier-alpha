@@ -17,6 +17,9 @@ export function createBuilder(options: BuilderOptions): Builder {
  const state: BuilderState = store.load() ?? { schema: 1, revision: 0, commands: {}, jobs: {}, sessions: {} };
  for (const records of [state.commands, state.jobs, state.sessions]) Object.setPrototypeOf(records, null);
  const running = new Map<string, Promise<void>>(), inFlight = new Set<string>();
+ const cancellation = new AbortController();
+ let cancelled: Promise<void> | undefined;
+ const checkCancellation = () => { if (cancellation.signal.aborted) throw error("cancelled", "Arc service stop cancelled this Build."); };
  let reconciliation: Promise<Set<string>> | undefined;
  const clocks = new Map<string, { start: number; elapsed: number }>();
  const monotonic = options.monotonic ?? (() => performance.now());
@@ -25,7 +28,7 @@ export function createBuilder(options: BuilderOptions): Builder {
   if (fault) throw fault;
   for (const [buildId, clock] of clocks) {
    const job = state.jobs[buildId]!; job.elapsedMs = clock.elapsed + Math.max(0, monotonic() - clock.start);
-   if (state.sessions[job.sessionRef]?.status?.state !== "building" || ["done", "failed", "uncertain", "obsolete"].includes(job.state)) clocks.delete(buildId);
+   if (state.sessions[job.sessionRef]?.status?.state !== "building" || ["done", "failed", "uncertain", "obsolete", "cancelled"].includes(job.state)) clocks.delete(buildId);
   }
   try { store.save(copy(state)); } catch (e) { fault = e; throw e; }
   try { options.changed?.(); } catch { /* A projection cannot undo a committed write. */ }
@@ -88,13 +91,16 @@ export function createBuilder(options: BuilderOptions): Builder {
   if (fault) throw fault;
   const prior = priorRequest(sessionRef, requestId, kind, requester, requestOptions); if (prior) return prior;
   if (!sessionRef || !requestId || !requester || !Object.hasOwn(rank, kind) || requestOptions.trigger !== undefined && !["stop", "owner"].includes(requestOptions.trigger) || requestOptions.nextAt !== undefined && !Number.isFinite(Date.parse(requestOptions.nextAt))) return { outcome: "refused", code: "invalid" };
+  if (cancellation.signal.aborted) return { outcome: "refused", code: "service", transient: true, detail: "Arc service is stopping" };
   let target;
   try { target = copy(await source.snapshot(sessionRef)); } catch (e) { return { outcome: "refused", code: "source", detail: (e as Error).message }; }
   if (fault) throw fault;
+  if (cancellation.signal.aborted) return { outcome: "refused", code: "service", transient: true, detail: "Arc service is stopping" };
   const accepted = priorRequest(sessionRef, requestId, kind, requester, requestOptions); if (accepted) return accepted;
   const session = Object.hasOwn(state.sessions, sessionRef) ? state.sessions[sessionRef]! : (state.sessions[sessionRef] = {});
   const oldActive = session.active ? state.jobs[session.active] : undefined;
-  const uncertain = oldActive?.state === "uncertain" ? oldActive : undefined;
+  const paused = session.status?.pause === "uncertain-call" ? state.jobs[session.status.buildId] : undefined;
+  const uncertain = oldActive?.state === "uncertain" ? oldActive : paused;
   if (uncertain && kind === "incremental") return { outcome: "refused", code: "paused" };
   const active = uncertain ? undefined : oldActive;
   let job = session.pending ? state.jobs[session.pending] : undefined;
@@ -131,6 +137,7 @@ export function createBuilder(options: BuilderOptions): Builder {
   if (fault) throw fault;
   const old = replay({ sessionRef, requestId, kind: "dismiss", dropId, toPosition }) as DismissResult | undefined;
   if (old) return old;
+  if (cancellation.signal.aborted) return { outcome: "refused", code: "service", transient: true, detail: "Arc service is stopping" };
   const receipt = state.sessions[sessionRef]?.receipt;
   if (!requestId || !dropId || !receipt || !Number.isSafeInteger(toPosition) || toPosition < 1 || toPosition > receipt.receipt.asOfCount || !receipt.receipt.drops?.some(d => d.id === dropId) && !receipt.receipt.dismissedDrops?.some(d => d.id === dropId)) return { outcome: "refused", code: "invalid" };
   const previous = receipt.receipt.dismissedDrops ?? [];
@@ -146,7 +153,9 @@ export function createBuilder(options: BuilderOptions): Builder {
    waitingSince: prior?.state === "waiting" && prior.buildId === job.buildId && prior.waitCause === cause ? prior.waitingSince ?? now() : now(), ...extra };
  }
  async function check(job: BuildJob) {
+  checkCancellation();
   const checked = await source.check(job.snapshot!);
+  checkCancellation();
   if (checked.kind === "unavailable") throw error("unavailable", checked.reason);
   if (checked.kind === "history-changed") {
    const session = state.sessions[job.sessionRef]!;
@@ -166,6 +175,7 @@ export function createBuilder(options: BuilderOptions): Builder {
   const session = state.sessions[job.sessionRef]!;
   let record = copy(job.record);
   try {
+   checkCancellation();
    if (job.engineVersion !== engineVersion) {
     (record.engineChanges ??= []).push({ from: job.engineVersion, to: engineVersion, afterCount: job.checkpoint?.asOfCount ?? 0 });
     account(job, record);
@@ -221,7 +231,7 @@ export function createBuilder(options: BuilderOptions): Builder {
      clocks.set(job.buildId, { start: monotonic(), elapsed: job.elapsedMs ?? 0 }); save();
      let result; const calledAt = monotonic(); inFlight.add(entry.id);
      try { result = await model.call(plain, job.settings.model, acquired.permit, {
-      callId: entry.id,
+      signal: cancellation.signal, callId: entry.id,
       started: identity => { entry.execution = copy(identity); entry.executionState = "running"; save(); },
       exited: () => { entry.executionState = "gone"; save(); },
      }); }
@@ -237,6 +247,7 @@ export function createBuilder(options: BuilderOptions): Builder {
       throw Object.assign(error("uncertain", result.reason), { usage: result.usage });
      }
      entry.state = "answered"; entry.answer = copy(result.answer); save(); settled = true;
+     checkCancellation();
      return result.answer;
     } finally {
      const live = entry.execution && entry.executionState !== "gone";
@@ -253,7 +264,7 @@ export function createBuilder(options: BuilderOptions): Builder {
     job.callHistory.push(...job.calls); job.calls = []; callIndex = 0;
     if (!job.complete) publish(job, receipt, record, false);
     save();
-   }, job.settings.retries);
+   }, job.settings.retries, cancellation.signal);
    await check(job); account(job, record);
    record.endedAt = now(); record.state = "done";
    job.record = record; job.state = "done"; session.failures = 0;
@@ -266,6 +277,7 @@ export function createBuilder(options: BuilderOptions): Builder {
    if (fault) throw fault;
    const code = (e as { code?: string }).code, reason = (e as Error).message;
    account(job, record);
+   if (cancellation.signal.aborted && !["done", "obsolete"].includes(job.state)) { cancelJob(job, record); save(); return; }
    if (job.state === "obsolete") {
     record.state = "failed"; record.endedAt = now(); record.reason = job.reason; job.record = record; save(); return;
    }
@@ -292,6 +304,31 @@ export function createBuilder(options: BuilderOptions): Builder {
    }
    save();
   }
+ }
+ function cancelJob(job: BuildJob, record = job.record) {
+  const session = state.sessions[job.sessionRef]!;
+  account(job, record); record.state = "cancelled"; record.endedAt = now(); record.reason = "Arc service stop cancelled this Build.";
+  job.record = record; job.state = "cancelled"; pauseClock(job);
+  if (session.active === job.buildId) session.active = undefined;
+  if (session.pending === job.buildId) session.pending = undefined;
+  const uncertain = job.calls.some(call => call.state === "intent" || call.state === "uncertain");
+  if (uncertain || session.status?.pause !== "uncertain-call") session.status = { sessionRef: job.sessionRef, buildId: job.buildId, state: uncertain ? "uncertain" : "idle", ...(uncertain ? { pause: "uncertain-call" as const } : {}), detail: record.reason };
+  if (session.receipt?.receipt.builds.some(build => build.buildId === job.buildId)) {
+   session.receipt.receipt.builds = session.receipt.receipt.builds.map(build => build.buildId === job.buildId ? copy(record) : build);
+   session.receipt.revision = ++state.revision;
+  }
+ }
+ function cancel(): Promise<void> {
+  if (cancelled) return cancelled;
+  cancellation.abort(error("cancelled", "Arc service stop cancelled this Build."));
+  return cancelled = (async () => {
+   const outcomes = await Promise.allSettled([...running.values()]);
+   const rejected = outcomes.find(outcome => outcome.status === "rejected");
+   if (rejected?.status === "rejected") throw rejected.reason;
+   if (fault) throw fault;
+   for (const job of Object.values(state.jobs)) if (job.state === "queued" || job.state === "running") cancelJob(job);
+   save();
+  })();
  }
  function publish(job: BuildJob, checkpoint: import("../../shared/arc.ts").ArcReceipt, record: BuildRecord, complete: boolean) {
   const session = state.sessions[job.sessionRef]!, prior = session.receipt?.receipt;
@@ -324,6 +361,7 @@ export function createBuilder(options: BuilderOptions): Builder {
  async function drain(sessionRef: string) {
   const session = state.sessions[sessionRef]; if (!session) return;
   while (true) {
+   if (cancellation.signal.aborted) return;
    const blocked = (await reconcileSurvivors()).has(sessionRef);
    // Poll a paused Session too. Local liveness and charge uncertainty are separate.
    if (session.status?.pause === "uncertain-call") return;
@@ -344,7 +382,7 @@ export function createBuilder(options: BuilderOptions): Builder {
   running.set(sessionRef, promise); return promise;
  }
  return {
-  request, dismiss, replay,
+  request, dismiss, replay, cancel,
   receipts: (knownRevisions = {}) => {
    if (fault) throw fault;
    return copy(Object.values(state.sessions).flatMap(s => s.receipt && s.receipt.revision > (knownRevisions[s.receipt.sessionRef] ?? 0) ? [s.receipt] : []).sort((a,b) => a.revision - b.revision));
@@ -359,6 +397,6 @@ export function createBuilder(options: BuilderOptions): Builder {
     return [{ ...s.status, elapsedMs, ...(live ? { observedAt: now() } : {}), ...(job ? { record: job.record } : {}) }];
    }));
   },
-  run: async sessionRef => { await Promise.all((sessionRef ? [sessionRef] : Object.keys(state.sessions)).map(runOne)); },
+  run: async sessionRef => { if (cancellation.signal.aborted) return; await Promise.all((sessionRef ? [sessionRef] : Object.keys(state.sessions)).map(runOne)); },
  };
 }

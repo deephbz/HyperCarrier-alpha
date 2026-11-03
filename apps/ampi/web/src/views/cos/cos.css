@@ -120,3 +120,7 @@
 	.cos-tick-full { display: none; }
 	.cos-tick-short { display: inline; }
 }
+@media (max-width: 340px) {
+	.cos-axis, .cos-stream-row { grid-template-columns: 112px minmax(0, 1fr); }
+	.cos-axis { grid-template-columns: calc(122px - var(--reveal-reserve)) minmax(0, 1fr); }
+}

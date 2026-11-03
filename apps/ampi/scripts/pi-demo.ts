@@ -18,6 +18,8 @@ import { Hub } from "../src/hub/hub.ts";
 import { maintainHost } from "../src/arc/service/client.ts";
 import { FAKE_HERDR } from "../test/pi-fixtures.ts";
 import { DEMO_EXTENSIONS } from "./demo/index.ts";
+import { demoDataMode } from "./demo/data/modes.ts";
+import { contentArcSeed, demoFixtures, pruneDemoSessions, writeContentSessions } from "./demo/data/registry.ts";
 import { seedDemoArcs } from "./demo/cos.ts";
 import { writeDemoSessions, type DemoSession } from "./demo/sessions.ts";
 // @ts-ignore: a plain ESM script without types
@@ -31,12 +33,16 @@ if (!web.ok && process.env.DEMO_WEB !== "external") {
 	process.exit(1);
 }
 
+const dataMode = demoDataMode(process.argv.slice(2));
 const dir = process.env.DEMO_DIR ?? join(tmpdir(), "ampi-pi-demo");
 if (process.env.DEMO_KEEP !== "1") rmSync(dir, { recursive: true, force: true });
 const agentDir = join(dir, "agent");
 const now = Number(process.env.DEMO_NOW) || Date.now();
 export type { DemoSession };
-export const sessions = writeDemoSessions(agentDir, now);
+const baseSessions = writeDemoSessions(agentDir, now);
+const fixtureSet = demoFixtures(dataMode, Object.values(baseSessions), [{ sessions: writeContentSessions(agentDir, now, dataMode) }]);
+const keepSessions = new Set(fixtureSet.sessions.map((session) => session.file));
+export const sessions = baseSessions;
 // UI journeys must not wait through automatic cadence after fixture appends. Trigger tests verify that policy.
 process.env.PI_CODING_AGENT_DIR = agentDir;
 writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ ampi_arc: { auto: false, model: "synthetic/model" } }));
@@ -78,7 +84,7 @@ writeFileSync(
 			agent("w2:p6", "w2", "w2:t3", s.long, "idle", "π Benachrichtigungseinstellungen überarbeiten und die Übersetzungen für 日本語 prüfen"),
 			agent("w3:p7", "w3", "w3:t4", s.ops, "working", "π deploy lead"),
 			agent("w3:p8", "w3", "w3:t4", s.opsWorker, "working", "π deploy worker"),
-		],
+		].filter((row) => keepSessions.has(row.agent_session.value)),
 	}),
 );
 mkdirSync(join(agentDir, "sessions", "--work-new--"), { recursive: true });
@@ -114,8 +120,10 @@ const observationFile = join(dir, "observation.json");
 writeFileSync(observationFile, JSON.stringify(observation));
 writeFileSync(
 	ptb,
-	`import { readFileSync as readDemoObservation } from "node:fs";\nexport async function readObservationSnapshot() { return JSON.parse(readDemoObservation(${JSON.stringify(observationFile)}, "utf8")); }\n` + DEMO_EXTENSIONS.map((extend) => extend({ dir, agentDir, now, sessions })).join("\n"),
+	`import { readFileSync as readDemoObservation } from "node:fs";\nexport async function readObservationSnapshot() { return JSON.parse(readDemoObservation(${JSON.stringify(observationFile)}, "utf8")); }\n` + DEMO_EXTENSIONS.map((extend) => extend({ dir, agentDir, now, sessions, dataMode, contentArcAnswer: contentArcSeed(dataMode) })).join("\n"),
 );
+
+if (dataMode === "empty" || dataMode === "one") pruneDemoSessions(agentDir, keepSessions);
 
 // DEMO_HUB_TOKEN lets a test restart the demo hub with another key (a stale login cookie).
 const token = process.env.DEMO_HUB_TOKEN ?? "d".repeat(64);
@@ -152,8 +160,8 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) process.once(signal, () => 
 });
 try {
  const port = await hub.listen(Number(process.env.PORT ?? 7880));
- console.log(`demo hub: http://127.0.0.1:${port}/?k=${token}  (data: ${dir})`);
+ console.log(`demo hub: http://127.0.0.1:${port}/?k=${token}  (data: ${dir}; fixture: ${dataMode})`);
  // Arc consumers wait for their own receipt. A model or resident failure must not stop the demo hub.
- void seedDemoArcs(port, token, Object.values(sessions).map(s => `pi:${s.id}`))
+ void seedDemoArcs(port, token, fixtureSet.sessions.map(s => `pi:${s.id}`))
   .catch(error => { if (!closing) console.error(error); });
 } catch (error) { await close(); throw error; }

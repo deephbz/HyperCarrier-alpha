@@ -1,5 +1,5 @@
 // This control's build stamp, for AmPi's one-build rule (apps/ampi P1). The rule is AmPi's
-// (apps/ampi/src/shared/build.ts `controlStamp`): `id` hashes the `.mjs` files under src/,
+// (apps/ampi/src/shared/build.ts `controlStamp`): `id` hashes the `.ts` files under src/,
 // `order` is the checkout's HEAD committer time, and `line` only names the line.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -9,14 +9,14 @@ import { fileURLToPath } from "node:url";
 
 const SRC = fileURLToPath(new URL("./", import.meta.url));
 
-/** A hash over the `.mjs` files under `root`, with their paths from `/src/` on. */
-function sourceHash(root) {
+/** A hash over the `.ts` files under `root`, with their paths from `/src/` on. */
+function sourceHash(root: string): string {
   const hash = createHash("sha256");
-  const walk = (dir) => {
+  const walk = (dir: string) => {
     for (const name of readdirSync(dir).sort()) {
       const path = join(dir, name);
       if (statSync(path).isDirectory()) walk(path);
-      else if (name.endsWith(".mjs")) hash.update(path.slice(path.lastIndexOf("/src/"))).update(readFileSync(path));
+      else if (name.endsWith(".ts")) hash.update(path.slice(path.lastIndexOf("/src/"))).update(readFileSync(path));
     }
   };
   walk(root);
@@ -27,7 +27,7 @@ function sourceHash(root) {
  * `{ id, order, line }`, or null when the checkout has no git metadata. A null stamp fails
  * closed: AmPi refuses every control op and names both stamps.
  */
-export function controlStamp(root = SRC) {
+export function controlStamp(root = SRC): { id: string; order: number; line: string } | null {
   let order = 0;
   try {
     order = Number(execFileSync("git", ["log", "-1", "--format=%ct"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim());

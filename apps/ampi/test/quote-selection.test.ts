@@ -13,7 +13,6 @@ import { findChrome } from "../scripts/perf/browser.mjs";
 import { engineSkip } from "./engines.ts";
 import { track } from "@earendil-works/chord/delta";
 import type { SlashCommands } from "../src/shared/protocol.ts";
-// @ts-ignore: pi-hc-control is plain ESM.
 import { IMAGE_LIMITS } from "@hypercarrier/pi-hc-control/control";
 
 // Real ThreadView, Composer, selection API and stylesheet; the hub sends synthetic snapshots.
@@ -106,6 +105,7 @@ async function open(t: TestContext, kind: string, engine: "chromium" | "webkit" 
 	const css = readFileSync(join(web, "src/styles.css"), "utf8");
 	await page.route("**/*", (route) => {
 		const url = new URL(route.request().url());
+		if (url.protocol === "blob:" || url.protocol === "data:") return route.continue();
 		if (url.origin !== ORIGIN) return route.abort();
 		if (url.pathname === "/component.js") return route.fulfill({ contentType: "text/javascript; charset=utf-8", body: script });
 		if (url.pathname === "/") return route.fulfill({ contentType: "text/html; charset=utf-8", body: `<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style><div id="root"></div><script src="/component.js"></script>` });
@@ -488,7 +488,7 @@ for (const engine of ['chromium','webkit'] as const) for (const attached of [fal
  const draft=page.getByRole('textbox',{name:'Message the agent'});
  await draft.fill('Keep this draft');
  if(attached){
-  await page.locator('.composer input[type="file"]').setInputFiles({name:'synthetic.png',mimeType:'image/png',buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=','base64')});
+  await page.locator('.composer input[type="file"]').setInputFiles({name:'synthetic.png',mimeType:'image/png',buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4AWJiYPj/HwAAAP//SnIwEgAAAAZJREFUAwADDAIB6Pxv8AAAAABJRU5ErkJggg==','base64')});
   await page.locator('.attachment').waitFor();
  }
  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));

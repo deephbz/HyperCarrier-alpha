@@ -1,3 +1,5 @@
+// @ts-nocheck: plain JavaScript in a .ts file, so Pi's /reload runs new code (jiti transpiles only TypeScript). Typing
+// it is a separate change.
 // Session control core: validates frames, honors compaction and C1 delivery
 // holds, submits owner input through Pi, runs typed slash commands, and
 // acknowledges only what Pi showed.
@@ -502,6 +504,8 @@ export function createControl(pi, options = {}) {
     try {
       switch (frame.op) {
         case "status":
+          // AmPi names the build it expects (`expect`); self-update reads it (update.ts).
+          if (frame.expect !== undefined) options.onExpect?.(frame.expect);
           return { id, ok: true, value: status() };
         case "abort":
           return await abort(id);

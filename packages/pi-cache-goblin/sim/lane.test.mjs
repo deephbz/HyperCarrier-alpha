@@ -151,3 +151,15 @@ for (const seed of [71, 9183]) test(`seed ${seed} replays request and session hi
   const second = await scenario(`replay-${seed}-b`, { seed }, run);
   assert.deepEqual(first.trace, second.trace);
 });
+
+test('G2: /cache 1h lasts across a real Pi reload, as a custom entry the model never sees', async () => {
+  await scenario('g2-reload', {}, async world => {
+    await command(world, 'cache 1h'); await world.prompt('A');
+    await world.run(() => world.session.reload());
+    await world.advance(1000); await world.prompt('B');
+    tailTtl(world.requests[0], '1h'); tailTtl(world.requests[1], '1h');
+    const chosen = world.sessionManager.getEntries().filter(e => e.type === 'custom' && e.customType === 'cache-goblin:ttl');
+    assert.deepEqual(chosen.map(e => e.data), [{ sessionTtl: '1h' }]);
+    assert.ok(!JSON.stringify(world.requests[1].body.messages).includes('cache-goblin'));
+  });
+});

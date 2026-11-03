@@ -1,7 +1,6 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-// @ts-ignore: pi-hc-control is plain ESM.
 import { IMAGE_LIMITS } from "@hypercarrier/pi-hc-control/control";
 import { ENGINES, open } from "./resize-edges-fixture.ts";
 import { engineSkip } from "./engines.ts";
@@ -124,5 +123,44 @@ for (const [engine, type, path] of ENGINES) {
 		await resend(4);
 		assert.equal(submits[3]!.content, "Lost reply!");
 		assert.ok(!submits.slice(0, 3).some((s) => s.requestId === submits[3]!.requestId), `an edited payload takes a new key: ${JSON.stringify(submits)}`);
+	});
+}
+
+// A rejection that arrives after the owner left the Session is held beside the draft; it never becomes the draft.
+for (const [engine, type, path] of ENGINES) {
+	test(`draft custody ${engine}: a rejection after leaving the Session is held, not written into the empty draft`, { skip: engineSkip(engine) }, async (t) => {
+		const page = await open(t, engine, type, path(), { route: "#/h/devbox/t/pi%3Asess-worker-gui" });
+		let submit: number | undefined;
+		let reject: (() => void) | undefined;
+		await routeFixture(page, {}, { requests: [] }, { through: (ws: WebSocketRoute) => ({
+			connectToServer: () => ws.connectToServer(),
+			onMessage: (fn: (message: string | Buffer) => void) => ws.onMessage((raw) => {
+				const frame = JSON.parse(String(raw));
+				if (frame.op === "thread.submit") submit = frame.id;
+				fn(raw);
+			}),
+			send: (raw: string) => {
+				const frame = JSON.parse(raw);
+				if (frame.t === "snap" && frame.value?.threads) for (const thread of Object.values(frame.value.threads) as { control?: boolean }[]) thread.control = true;
+				if (frame.t === "res" && frame.id === submit) return void (reject = () => ws.send(JSON.stringify({ t: "res", id: frame.id, ok: false, error: { code: "bad_request", message: "Synthetic late rejection" } })));
+				ws.send(JSON.stringify(frame));
+			},
+		}) });
+		await page.reload();
+		const input = page.getByRole("textbox", { name: "Message the agent" });
+		await input.fill("Sent before leaving");
+		await input.press("Enter");
+		for (let i = 0; i < 50 && !reject; i++) await page.waitForTimeout(100);
+		assert.ok(reject, "the submit went out");
+		await page.getByRole("link", { name: "Overview", exact: true }).click();
+		await input.waitFor({ state: "detached" });
+		reject();
+		await page.waitForTimeout(300);
+		await page.goBack();
+		await input.waitFor();
+		const held = page.locator(".composer [role=alert].returned");
+		for (let i = 0; i < 20 && !(await held.count()); i++) await page.waitForTimeout(100);
+		assert.equal(await input.inputValue(), "", "the late outcome is held beside the draft");
+		assert.match(await held.textContent() ?? "", /Synthetic late rejection.*Sent before leaving/);
 	});
 }

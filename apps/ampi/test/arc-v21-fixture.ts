@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { Hub } from "../src/hub/hub.ts";
 import { Browser, ownHome, tempHome } from "./helpers.ts";
-import { fixture, replaceFile, type Fixture } from "./pi-fixtures.ts";
+import { fixture, replaceFile, stopFixture, type Fixture } from "./pi-fixtures.ts";
 import { controlRequest } from "../src/arc/service/connection.ts";
 // @ts-expect-error Build script runs as native ESM.
 import { buildArcService } from "../scripts/build-arc-service.mjs";
@@ -113,7 +113,8 @@ export async function arcFixture(t: { after(fn: () => unknown): void }, rttMs = 
 	const models = hosts.map((host) => new RecordingModel(join(host.dir, "recording-model")));
 	t.after(async () => {
 		for (const hub of hubs) await hub.close();
-		for (const host of hosts) rmSync(host.dir, { recursive: true, force: true });
+		for (const model of models) model.release();
+		for (const host of hosts) { await stopFixture(host); rmSync(host.dir, { recursive: true, force: true }); }
 		rmSync(root, { recursive: true, force: true });
 	});
 	const shim = writeDelayShim(root, rttMs);
@@ -218,7 +219,7 @@ process.on('SIGTERM',stop);process.stdin.on('end',stop);child.on('exit',()=>proc
 	t.after(async () => {
 		model.release();
 		for (const hub of hubs) await hub.close();
-		try { const s = await controlRequest(store, { op: "status", refreshAuth: false }, 1000); await controlRequest(store, { op: "stop" }, 1000); if (s.pid) { try { process.kill(s.pid, "SIGKILL"); } catch {} } } catch {}
+		await stopFixture(host);
 		for (const call of model.calls) { try { process.kill(call.pid, "SIGKILL"); } catch {} }
 		rmSync(root, { recursive: true, force: true }); rmSync(host.dir, { recursive: true, force: true });
 	});

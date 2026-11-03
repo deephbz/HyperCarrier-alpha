@@ -1,6 +1,8 @@
 // The GUI's routes as data: parse and build hashes. Pure, so nav.ts and util.ts both read it
 // without importing each other; navigation itself lives in nav.ts.
 
+import { hostIdOf, kindOfLink, kindOfThread, kinds } from "./host-kinds.ts";
+
 /**
  * The GUI's one address space (docs/one-gui-views.md, "Links"):
  * - `#/h/<host>/t/<thread>?e=<entry>&p=<panel>`: a Session, optionally scrolled to one entry, with a side panel open;
@@ -10,11 +12,10 @@ export type Route = { host?: string; thread?: string; entry?: string; panel?: st
 
 /**
  * The Host ID of a link key (`devbox#pi`) or of a Host ID. One Session has one route, so a thread route names its Host
- * by Host ID; findHost resolves it with the thread ID. A route without a thread keeps the link key.
+ * by Host ID; findHost resolves it with the thread ID. A route without a thread keeps the link key: there a Host ID can
+ * name two sources.
  */
-function hostId(host: string): string {
-	return host.replace(/#pi$/, "");
-}
+const hostId = hostIdOf;
 
 export function parseRoute(hash: string): Route {
 	const [path = "", search = ""] = hash.replace(/^#/, "").split("?");
@@ -46,12 +47,26 @@ export const href = {
 		const qs = q.toString();
 		return `#/v/${[page, ...rest].map(encodeURIComponent).join("/")}${qs ? `?${qs}` : ""}`;
 	},
-	/** A Session or entry citation, `<host>/pi:<sessionId>[#<entryId>]` (K5.I3), as a place in the GUI. */
+	/**
+	 * A Session or entry citation, `<host>/pi:<sessionId>[#<entryId>]` (K5.I3), as a place in the GUI. A kind with a
+	 * citation prefix (HostKind.citation) names its source there; the route drops it.
+	 */
 	ref(ref: string, opts: { panel?: string } = {}): string | undefined {
 		const parsed = parseRef(ref);
-		return parsed ? href.thread(parsed.host, parsed.thread, { entry: parsed.entry, ...opts }) : undefined;
+		if (!parsed) return undefined;
+		const prefix = kinds().find((kind) => kind.citation && parsed.thread.startsWith(kind.citation))?.citation ?? "";
+		return href.thread(parsed.host, parsed.thread.slice(prefix.length), { entry: parsed.entry, ...opts });
 	},
 };
+
+/**
+ * The Session citation of a thread on a Host source, as views write `ref`. A link key's suffix names the source; a bare
+ * Host ID, as a thread route names it, picks the source by the thread ID (HostKind.ownsThread).
+ */
+export function threadRef(link: string, threadId: string): string {
+	const kind = kindOfLink(link) ?? kindOfThread(threadId);
+	return `${hostIdOf(link)}/${kind?.citation ?? ""}${threadId}`;
+}
 
 export function parseRef(ref: string): { host: string; thread: string; entry?: string } | undefined {
 	const m = /^([^/#]+)\/([^#]+?)(?:#(.+))?$/.exec(ref);

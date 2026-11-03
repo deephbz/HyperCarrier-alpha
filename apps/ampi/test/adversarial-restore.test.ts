@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-// @ts-ignore plain ESM public control interface.
 import { IMAGE_LIMITS } from "@hypercarrier/pi-hc-control/control";
 import type { WebSocketRoute } from "playwright";
 // @ts-ignore plain ESM synthetic protocol projection.

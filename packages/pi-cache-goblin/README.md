@@ -64,8 +64,15 @@ it proves local layout, not HTTP success or a cache write. One-token requests
 never capture pending pins. Replay uses the last real request's TTL and pin
 snapshot, so a TTL change does not rewrite an in-flight warmer replay.
 
-Session start, replacement, and shutdown clear pins, replay state, and the
-command-selected TTL. The configured initial TTL applies again.
+`/cache 5m` and `/cache 1h` write a `cache-goblin:ttl` custom entry when the TTL
+changes. The entry never reaches the model. Each Session start (startup,
+reload, resume, fork) restores the latest one; a Session without one uses the
+configured initial TTL. Session start, replacement, and shutdown clear the held
+pin: its owner restarts too. A reload keeps the last real request's TTL, replay
+pins, and warming verdict, because the process and the provider cache are
+unchanged. Any other start clears that replay state. The extension sets
+`globalThis[Symbol.for("cache-goblin.persistence")]` to say so: pi-hc-control
+self-updates by reload only when it is set.
 
 ## Warming and route limits
 

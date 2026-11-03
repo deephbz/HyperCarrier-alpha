@@ -23,8 +23,11 @@ for (const [engine, type, path] of ENGINES) for (const zoom of [0.8, 1, 1.3]) fo
     await (target === "composer" ? composer : transcript).focus();
     await page.getByRole("button", { name: "Show sidebar", exact: true }).click();
     await page.getByRole("button", { name: "Hide sidebar", exact: true }).click();
-    await page.waitForFunction(wanted => document.activeElement?.closest<HTMLElement>("[data-region]")?.dataset.region === wanted, target, { timeout: 3000 });
-    focusChecks.push({ target, actual: await region() });
+    // returnTarget in focus.ts skips the composer in oneSide layouts, so the phone drawer returns to the transcript.
+    const oneSide = await page.locator(".app").evaluate(el => el.classList.contains("side-overlay"));
+    const expected = target === "composer" && oneSide ? "transcript" : target;
+    await page.waitForFunction(wanted => document.activeElement?.closest<HTMLElement>("[data-region]")?.dataset.region === wanted, expected, { timeout: 3000 });
+    focusChecks.push({ target, expected, actual: await region() });
   }
   await page.locator("[data-user-mark]").first().waitFor({ state: "attached" });
   await transcript.evaluate(el => { el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight - 1500); });

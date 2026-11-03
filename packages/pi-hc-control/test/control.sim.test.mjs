@@ -8,10 +8,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { SimWorld } from "@hypercarrier/pi-sim";
-import { socketPathFor } from "../src/endpoint.mjs";
-import { STAMP, VERSION, createHcControlExtension } from "../src/extension.mjs";
-import { controlStamp } from "../src/stamp.mjs";
+import { socketPathFor } from "../src/endpoint.ts";
+import { buildStamp, VERSION, createHcControlExtension, isCacheGoblin } from "../src/extension.ts";
+import { createCacheGoblinExtension } from "../../pi-cache-goblin/src/extension.mjs";
+import { controlStamp } from "../src/stamp.ts";
 
+// The stamp runs git, which pi-sim refuses inside a world: compute it here, outside one.
+const STAMP = buildStamp();
 const tick = (ms = 1) => new Promise((resolve) => setTimeout(resolve, ms));
 async function until(predicate, label, limit = 2000) {
   for (let i = 0; !predicate(); i++) {
@@ -29,6 +32,7 @@ async function scenario(options, body) {
     ...options,
     extensionFactories: [
       createHcControlExtension({
+        stamp: STAMP,
         ...options.control,
         listen: async (path, handle) => {
           transport.listens.push({ path, handle });
@@ -340,7 +344,7 @@ test("descriptor names the live Session; shutdown removes it and closes the sock
     const status = await world.run(() => ctl({ id: 1, op: "status" }));
     assert.equal(status.value.nonce, descriptor.nonce);
     assert.equal(status.value.sessionId, sessionId);
-    // The build stamp replaces capability flags: AmPi serves only a control of its own build.
+    // No capability flags: the protocol (descriptor schema) fixes the op set, and the stamp names the build.
     assert.deepEqual(status.value.stamp, STAMP);
     assert.match(STAMP.id, /^[0-9a-f]{12}$/);
     assert.ok(Number.isInteger(STAMP.order) && STAMP.order > 0);
@@ -559,7 +563,7 @@ test("command /compact while busy is refused unless abort is explicit; a repeate
 test("a checkout without git metadata reports no stamp, so AmPi refuses the control", async () => {
   const dir = mkdtempSync(join(tmpdir(), "hc-stamp-"));
   try {
-    writeFileSync(join(dir, "control.mjs"), "export {};\n");
+    writeFileSync(join(dir, "control.ts"), "export {};\n");
     assert.equal(controlStamp(dir), null);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -568,4 +572,76 @@ test("a checkout without git metadata reports no stamp, so AmPi refuses the cont
     const status = await world.run(() => ctl({ id: 1, op: "status" }));
     assert.equal(status.value.stamp, null);
   });
+});
+
+test("self-update waits while a custom compaction method holds its claim, and runs after the release", async () => {
+  const pulled = { id: "pulled000000", order: STAMP.order + 1, line: STAMP.line };
+  const reloads = [];
+  const src = mkdtempSync(join(tmpdir(), "hcc-claim-"));
+  // pi-sim refuses git inside a world, so the checkout has no Git directory.
+  const selfUpdate = { src, gitDir: null, readDisk: () => pulled, reload: (target) => reloads.push(target.id), quietMs: 0, stableMs: 0, jitterMs: 0 };
+  try {
+    await scenario({ replies: [], control: { selfUpdate } }, async ({ world, ctl, probe }) => {
+      // hc-auto-compact's claim (its README): no delivery hold in this window, as in a background fork.
+      const claim = (active) => probe.pi.events.emit("hc.compaction-method", { owner: "hc-auto-compact", method: "summary", active, token: "run-1" });
+      await world.run(async () => {
+        claim(true);
+        assert.equal((await ctl({ id: "s", op: "status", expect: pulled })).ok, true);
+        await new Promise((resolve) => setTimeout(resolve, 60_000));
+        assert.deepEqual(reloads, [], "no reload while the claim is active");
+        claim(false);
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+      });
+      assert.deepEqual(reloads, [pulled.id], "the release lets the reload run");
+    });
+  } finally {
+    rmSync(src, { recursive: true, force: true });
+  }
+});
+
+const PERSISTENCE = Symbol.for("cache-goblin.persistence");
+
+/** A self-update to a pulled build beside `cacheGoblin`; returns the reloads and notices after a quiet minute. */
+async function besideCacheGoblin(cacheGoblin) {
+  const pulled = { id: "pulled000000", order: STAMP.order + 1, line: STAMP.line };
+  const reloads = [], notices = [];
+  const src = mkdtempSync(join(tmpdir(), "hcc-goblin-"));
+  delete globalThis[PERSISTENCE];
+  // pi-sim names every factory <inline:N>; the match is by command here, by package path in Pi (isCacheGoblin).
+  const selfUpdate = { src, gitDir: null, readDisk: () => pulled, reload: (target) => reloads.push(target.id), notify: (text) => notices.push(text), quietMs: 0, stableMs: 0, jitterMs: 0 };
+  try {
+    await scenario({ replies: [], control: { selfUpdate, isCacheGoblin: (c) => c.name === "cache" }, extraFactories: [cacheGoblin] }, async ({ world, ctl }) => {
+      await world.run(async () => {
+        for (let i = 0; i < 2; i++) {
+          assert.equal((await ctl({ id: `s${i}`, op: "status", expect: pulled })).ok, true);
+          await new Promise((resolve) => setTimeout(resolve, 60_000));
+        }
+      });
+    });
+  } finally {
+    delete globalThis[PERSISTENCE];
+    rmSync(src, { recursive: true, force: true });
+  }
+  return { reloads, notices, pulled };
+}
+
+test("self-update waits for a restart beside a Cache Goblin that keeps /cache in memory only, and says so once", async () => {
+  const old = (pi) => pi.registerCommand("cache", { description: "Cache Goblin session TTL", handler: async () => {} });
+  const { reloads, notices, pulled } = await besideCacheGoblin(old);
+  assert.deepEqual(reloads, [], "a reload would drop the old Cache Goblin's 1h TTL");
+  assert.equal(notices.length, 1, "one notice per Session and build");
+  assert.match(notices[0], new RegExp(`${pulled.id}.*restart`));
+});
+
+test("self-update reloads beside a Cache Goblin that persists /cache", async () => {
+  const { reloads, notices, pulled } = await besideCacheGoblin(createCacheGoblinExtension());
+  assert.deepEqual(reloads, [pulled.id]);
+  assert.deepEqual(notices, []);
+});
+
+test("isCacheGoblin matches the /cache command by Cache Goblin's package path", () => {
+  const cmd = (name, path, source = "extension") => ({ name, source, sourceInfo: { path, source: "local", scope: "user", origin: "package" } });
+  assert.equal(isCacheGoblin(cmd("cache", "/srv/pi/repos/HyperCarrier/packages/pi-cache-goblin/src/extension.mjs")), true);
+  assert.equal(isCacheGoblin(cmd("cache", "/srv/pi/.pi/agent/extensions/other-cache.ts")), false);
+  assert.equal(isCacheGoblin(cmd("cache", "/x/pi-cache-goblin/prompts/cache.md", "prompt")), false);
 });

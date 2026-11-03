@@ -69,6 +69,11 @@ export function ArcPanelView({ host, threadId, value, error, disconnected, summa
 	const remaining = receipt && value?.sourceCount !== undefined && !value.branchChanged ? Math.max(0, value.sourceCount - receipt.asOfCount) : 0;
 	const partial = remaining > 0;
 	const savedPartial = partial && receipt?.builds.at(-1)?.state === "failed";
+	const statusLabel = receipt ? `Arc · ${savedPartial ? "Saved" : arrival.updated ? "Updated" : "built"} ${time(receipt.builtAt)}${savedPartial ? " (partial)" : ""}` : "Arc · not built";
+	const statusCoverage = receipt && partial ? `Covers ${receipt.asOfCount.toLocaleString()} of ${value!.sourceCount!.toLocaleString()} messages` : undefined;
+	const statusThrough = receipt && !partial ? `covers to ${current ? time(current.lastAt) : receipt.asOf.slice(0, 6)}` : undefined;
+	const statusNewer = receipt && !partial && !stale && !unavailable ? `${value!.stale} newer message${value!.stale === 1 ? "" : "s"}` : undefined;
+	const statusDetailTitle = statusCoverage ?? `${statusThrough ?? ""}${statusNewer ? ` · ${statusNewer}` : ""}`;
 	const points = receipt?.points.filter((p) => scope === "all" || p.chapter === scope) ?? [];
 	const selected = points.filter((p) => p.kind === kind);
 	const needs = receipt?.points.filter((p) => p.needsYou).sort((a, b) => {
@@ -86,7 +91,7 @@ export function ArcPanelView({ host, threadId, value, error, disconnected, summa
 	};
 	return <ReceiptPlace stamp={receipt?.builtAt}>
 		<header className="arc-status">
-			<span className="arc-meta">Arc{receipt ? <> · {savedPartial ? "Saved" : arrival.updated ? "Updated" : "built"} {time(receipt.builtAt)}{savedPartial && " (partial)"} · {partial ? <span className="arc-nowrap">Covers {receipt.asOfCount.toLocaleString()} of {value!.sourceCount!.toLocaleString()} messages</span> : <>covers to {current ? time(current.lastAt) : receipt.asOf.slice(0, 6)}{!stale && !unavailable && <> · {value!.stale} newer message{value!.stale === 1 ? "" : "s"}</>}</>}</> : " · not built"}</span>
+			<span className="arc-meta arc-status-meta" title={`${statusLabel}${statusDetailTitle ? ` · ${statusDetailTitle}` : ""}`}><span className="arc-status-label">{statusLabel}</span>{statusDetailTitle && <span className="arc-status-detail">{statusCoverage ? <span className="arc-status-count">{statusCoverage}</span> : <><span className="arc-status-through">{statusThrough}</span>{statusNewer && <><span aria-hidden="true"> · </span><span className="arc-status-count">{statusNewer}</span></>}</>}</span>}</span>
 			<div className="arc-actions"><button className="btn small" disabled={busy || cannotBuild} onClick={() => build.start()}>{build.pending ? "Build requested" : value?.status.state === "waiting" ? "Waiting" : busy ? "Building…" : "Build"}</button>
 			<details className="arc-menu"><summary aria-label="Arc Build options">⋯</summary><button className="btn small" disabled={busy || cannotBuild} onClick={(e) => { e.currentTarget.closest("details")!.open = false; build.start(true); }}>Rebuild</button></details></div>
 		</header>

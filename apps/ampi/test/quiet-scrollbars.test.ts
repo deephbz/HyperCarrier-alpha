@@ -34,7 +34,7 @@ const REGIONS: Record<string, RegExp | string> = {
 	".rb-tools summary": /<summary className="quiet-scroll">\{run\.entries/, ".cos-scroll": /<div className="cos-scroll /,
 	".ptb-graph-scroll": /<div className="ptb-graph-scroll /,
 	".composer textarea": /^\t+ref=\{ref\}\n\t+className="quiet-scroll"\n\t+data-scrollbar="none"/m, ".queue": /<div className="queue /,
-	".composer-feedback": /composer-feedback/, ".prompt-outline": /<Popover className="prompt-outline quiet-scroll" /,
+	".composer-feedback": /composer-feedback(?! error image-admission-feedback)/, ".composer-feedback.image-admission-feedback": /className="composer-feedback error image-admission-feedback quiet-scroll"/, ".prompt-outline": /<Popover className="prompt-outline quiet-scroll" /,
 	".scroll": "transcript: owned by Task ui-transcript-strip",
 	".main": "page column: its children scroll, it does not",
 	".md pre": "generated Markdown: inherits its region's bar in Chromium, native in WebKit",

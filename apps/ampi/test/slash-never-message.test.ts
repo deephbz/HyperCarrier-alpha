@@ -19,7 +19,7 @@ for (const [engine, type, path] of ENGINES) {
 		let listError = noControl;
 		const refusals: Record<string, { code: string; message: string }> = {
 			no_control: noControl,
-			version_skew: { code: "version_skew", message: skewText.controlOlder("devbox") },
+			version_skew: { code: "version_skew", message: skewText.controlProtocol("devbox", "hc-control/0", "hc-control/1") },
 			editor_not_empty: { code: "editor_not_empty", message: "The Pi pane's input box is not empty" },
 			unknown_command: { code: "unknown_command", message: "Pi has no /modle command that AmPi can type without a control socket" },
 		};
@@ -96,7 +96,7 @@ for (const [engine, type, path] of ENGINES) {
 			await input.press("Enter");
 			const refusal = page.locator('.composer-feedback[data-outcome="refused"]');
 			await refusal.waitFor();
-			assert.match(await refusal.innerText(), /runs an older pi-hc-control\. Update it\.\nPull pi-hc-control on devbox, then run \/reload in each Pi pane there/);
+			assert.match(await refusal.innerText(), /speaks hc-control\/0; this AmPi speaks hc-control\/1\. Update it\.\nPull pi-hc-control on devbox, then restart each Pi Session there\./);
 			assert.equal(await choice.count(), 0, "a skew refusal offers no text send");
 			assert.deepEqual(sent, tier === "list" ? [] : [{ op: "thread.command", name: "model" }]);
 			assert.equal(await input.inputValue(), "/model m4", "the skew refusal returns the draft");

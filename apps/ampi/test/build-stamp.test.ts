@@ -5,8 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { buildOrder, compare, controlSkew, controlStamp, skewText, stamp, type Stamp, VERSION_SKEW } from "../src/shared/build.ts";
-// @ts-expect-error: the control package is plain JavaScript.
-import { controlStamp as ownControlStamp } from "../../../packages/pi-hc-control/src/stamp.mjs";
+import { controlStamp as ownControlStamp } from "../../../packages/pi-hc-control/src/stamp.ts";
 
 const s = (id: string, order: number, line: Stamp["line"] = "stable"): Stamp => ({ id, order, line });
 
@@ -46,18 +45,19 @@ test("stamp: this checkout has a version, an order and a line", () => {
 	assert.equal(stamp(), own, "computed once per process");
 });
 
-test("control skew: each direction names the right part; no stamp fails closed; the detail names both stamps", () => {
+test("control skew: each direction names the right part; no stamp is drift too; the detail names both stamps", () => {
 	const hub = s("hub", 20);
 	assert.equal(controlSkew(hub, s("hub", 20), "devbox"), undefined);
 	const older = controlSkew(hub, s("ctl", 10), "devbox")!;
 	assert.equal(older.code, VERSION_SKEW);
-	assert.equal(older.message, skewText.controlOlder("devbox"));
-	assert.equal(older.message, "devbox runs an older pi-hc-control. Update it.\nPull pi-hc-control on devbox, then run /reload in each Pi pane there.");
+	assert.equal(older.message, skewText.controlOlder("devbox", s("ctl", 10).id));
+	// Same protocol, older build: AmPi serves it, and the control updates itself once the Host has the build.
+	assert.equal(older.message, `devbox's pi-hc-control runs an older build (${s("ctl", 10).id}); it updates at its next idle moment or restart.`);
 	const newer = controlSkew(hub, s("ctl", 30), "devbox")!;
 	assert.equal(newer.message, "This AmPi is older than devbox's pi-hc-control. Update it.\nPull AmPi on this machine, then restart the hub (npm run deploy:live in apps/ampi).");
 	const none = controlSkew(hub, null, "devbox")!;
 	assert.equal(none.code, VERSION_SKEW);
-	assert.equal(none.message, "devbox's pi-hc-control has no build stamp. Update it.\nPull pi-hc-control on devbox, then run /reload in each Pi pane there.");
+	assert.equal(none.message, "devbox's pi-hc-control has no build stamp. Update it.\nPull pi-hc-control on devbox, then restart each Pi Session there.");
 	assert.match(older.detail, /ctl .*expects hub/);
 	assert.match(none.detail, /no stamp; this AmPi expects hub/);
 });

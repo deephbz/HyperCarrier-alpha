@@ -9,18 +9,18 @@ import { useRevealOpen } from "../../components/reveal-open.ts";
 import { Segmented, type Segment } from "../../components/Segmented.tsx";
 import "./rarebit.css";
 
-export function useRarebitLens(host: string, threadId: string, pi: boolean, beforeChange: () => void) {
+export function useRarebitLens(host: string, threadId: string, reader: boolean, beforeChange: () => void) {
 	const [state, set] = useRarebitState(host, threadId);
 	useEffect(() => {
-		if (!pi) return;
+		if (!reader) return;
 		const key = (e: KeyboardEvent) => {
 			if (e.key.toLowerCase() !== "l" || e.metaKey || e.ctrlKey || e.altKey || (e.target as HTMLElement)?.closest("input, textarea, select, [contenteditable], [role=dialog]")) return;
 			e.preventDefault(); beforeChange(); set({ lens: !state.lens });
 		};
 		window.addEventListener("keydown", key);
 		return () => window.removeEventListener("keydown", key);
-	}, [pi, state.lens, host, threadId, beforeChange]);
-	return pi && state.lens;
+	}, [reader, state.lens, host, threadId, beforeChange]);
+	return reader && state.lens;
 }
 
 const MODES: readonly Segment<"full" | "chat">[] = [

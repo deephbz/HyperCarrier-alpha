@@ -1,4 +1,33 @@
 /**
+ * How a submission went out: its busy mode and the request that carried it. A draft carries it only while its key
+ * names a send with an unknown outcome, so a retry repeats the same request under the same key.
+ */
+export type SendIntent = {
+	whenBusy: "followUp" | "steer";
+	// `asText`: the owner chose to send slash text as a message (protocol.ts thread.submit).
+	route?: { kind: "message"; content: string; asText?: true } | { kind: "command"; name: string; args: string; abort?: boolean };
+};
+/**
+ * Why a submission came back. `uncertain`: no reply proves a refusal, so it may already have arrived. `text` is the
+ * owner's sentence. `once` is the retry promise of an uncertain outcome; it holds only while the payload keeps the key
+ * and intent it went out under, so the presenter derives it from the current identity (`outcomeText`).
+ */
+export type Outcome = { uncertain: boolean; text: string; once?: string };
+/**
+ * The outcome of recovered text in the draft, until a send or a dismiss. A refusal ends when `text` leaves the
+ * draft; an uncertain send stays uncertain whatever the owner types. `key` is the draft key the text came back under.
+ */
+type DraftNotice = { id: string; text: string; key: string; outcome: Outcome };
+
+/** What a draft says about an uncertain send once its key is gone: an edit, a merge, or a fork. */
+export const MAYBE_SENT = "This message may already be in the history; check before you send.";
+
+/** The owner's sentence for an outcome. `keyed`: the payload still holds the key and intent it went out under. */
+export function outcomeText(outcome: Outcome, keyed: boolean): string {
+	return outcome.once ? `${outcome.text} ${keyed ? outcome.once : MAYBE_SENT}` : outcome.text;
+}
+
+/**
  * An open quote note is Session draft input, keyed by host/thread outside the view.
  * Only Enter (append to the draft) or explicit Escape/cancel ends it. Transcript updates,
  * scroll, reflow, re-render, view reload, control flicker and Session switch-and-back never discard it.
@@ -17,7 +46,6 @@ export function setQuoteDraft(key: string, value: QuoteDraft | undefined): void 
 	else quoteDrafts.delete(key);
 	for (const listener of quoteListeners) listener();
 }
-
 /** Quotes are free draft text; appending leaves the rest of the draft unchanged. */
 export function appendDraftQuote<D extends { text: string }>(draft: D, selection: string, note: string): D {
 	if (!selection.trim()) return draft;
@@ -32,81 +60,88 @@ export function appendDraftQuote<D extends { text: string }>(draft: D, selection
  * draft, or else held beside the draft until the owner restores or discards it. A late outcome never writes over a
  * newer draft.
  *
- * Outcome: every submission that comes back carries one `Outcome`, in every placement: a held record keeps it, and a
- * give-back into the draft leaves it as the draft's `notice` until the next send or until the draft is empty. The
- * Composer presents only this value, so a placement or a navigation cannot turn an uncertain outcome into a refusal.
- * The retry promise of an uncertain outcome (`once`) names one payload: it shows only while that payload keeps its
- * retry key (`outcomeText`). An edit, a merge, or a partial restore ends the promise and keeps the uncertainty.
+ * A key is a retry identity only while `intent` is set: the send under it has an unknown outcome. Any change to the
+ * payload (text or images) gives the draft a new key and drops the intent, so an edited message is a new message.
  *
- * Keys: a request key names exactly one unchanged payload whose outcome is uncertain. Only an uncertain outcome keeps
- * its key, so the key and the shown outcome cannot disagree: a held message carries it as `retry`, a draft as its key with `retry: true`. A final
- * refusal carries no key. Any change of payload (an edit, a merge, a partial restore) takes a fresh key, so a key never
- * names two payloads. Pi hosts do not deduplicate keys, so a same-key retry can still be placed twice. Fresh keys come in as arguments; the module stays pure.
+ * Outcome: every submission that comes back carries one `Outcome`, in every placement. A held record keeps it; a
+ * give-back or a restore into the draft keeps it as a notice on that text. The Composer presents only this value, so a
+ * placement or a navigation cannot turn an uncertain outcome into a refusal. The key follows the outcome: only an
+ * uncertain outcome keeps the submission's key and intent.
  */
-/**
- * Why a submission came back. `uncertain`: no reply proves a refusal, so it may already have arrived. `text` is the
- * owner's sentence. `once` is the retry promise of an uncertain outcome; it holds only under the submission's key.
- */
-export type Outcome = { uncertain: boolean; text: string; once?: string };
-export type Draft<I> = { text: string; images: I[]; key: string; retry?: true };
-export type Returned<I> = { id: string; outcome: Outcome; text: string; images: I[]; retry?: string };
-export type Custody<I> = { draft: Draft<I>; returned: Returned<I>[]; notice?: Outcome };
+export type Draft<I> = { text: string; images: I[]; key: string; intent?: SendIntent };
+export type Returned<I> = Draft<I> & { id: string; outcome: Outcome };
+/** `notices` warn about recovered text in the draft; `commandResult` is the answer to the last command sent. */
+export type Custody<I> = { draft: Draft<I>; returned: Returned<I>[]; notices?: DraftNotice[]; commandResult?: { id: string; notice?: string; body?: string } };
 
-export const isEmpty = (draft: { text: string; images: readonly unknown[] }) => !draft.text.trim() && draft.images.length === 0;
+export const isEmpty = (draft: Draft<unknown>) => !draft.text.trim() && draft.images.length === 0;
 
-/** What an uncertain send says once its payload has a new key. */
-export const MAYBE_SENT = "This message may already be in the history; check before you send.";
+/** A notice keeps its retry promise only while the draft holds the key and intent the text came back under. */
+export const noticeKeyed = (draft: Draft<unknown>, notice: DraftNotice) => !!draft.intent && draft.key === notice.key;
 
-/** The owner's sentence for an outcome. `keyed`: the payload still holds the retry key it went out under. */
-export function outcomeText(outcome: Outcome, keyed: boolean): string {
-	return outcome.once ? `${outcome.text} ${keyed ? outcome.once : MAYBE_SENT}` : outcome.text;
-}
-
-/** The submission and the custody after it: an empty draft under `nextKey`, without the draft's notice. */
+/** The submission and the custody after it: an empty draft under `nextKey`. Notices end with the text they name. */
 export function takeDraft<I>(custody: Custody<I>, nextKey: string): [Custody<I>, Draft<I>] {
-	const { text, images, key } = custody.draft;
-	return [{ returned: custody.returned, draft: { text: "", images: [], key: nextKey } }, { text, images, key }];
+	const { notices: _sent, ...rest } = custody;
+	return [{ ...rest, draft: { text: "", images: [], key: nextKey } }, custody.draft];
 }
 
 /**
- * Changes the draft's content. The first change of a draft that holds a retry key gives it `freshKey`. The notice ends
- * when the draft is empty.
- */
-export function editDraft<I>(custody: Custody<I>, change: { text?: string; images?: I[] }, freshKey: string): Custody<I> {
-	const { text = custody.draft.text, images = custody.draft.images } = change;
-	if (text === custody.draft.text && images === custody.draft.images) return custody;
-	const draft = { text, images, key: custody.draft.retry ? freshKey : custody.draft.key };
-	return isEmpty(draft) ? { draft, returned: custody.returned } : { ...custody, draft };
-}
-
-/**
- * An uncertain `outcome` keeps the submission's key, so a retry of the unchanged submission reuses it.
+ * An uncertain `outcome` keeps the submission's key and intent, so a retry is placed at most once. Otherwise the
+ * submission comes back under a new key, as a new message.
  * `hold`: keep it beside the draft even when the draft is empty, e.g. when the owner is not looking at this Session.
  * `quiet`: a give-back into the draft leaves no notice, because the caller states the outcome itself (a choice).
  */
-export function giveBack<I>(custody: Custody<I>, submission: Draft<I>, { id, outcome, hold = false, quiet = false }: { id: string; outcome: Outcome; hold?: boolean; quiet?: boolean }): Custody<I> {
-	const { text, images, key } = submission;
-	if (!hold && isEmpty(custody.draft)) {
-		const draft: Draft<I> = outcome.uncertain ? { text, images, key, retry: true } : { text, images, key: custody.draft.key };
-		return quiet ? { draft, returned: custody.returned } : { ...custody, draft, notice: outcome };
-	}
-	return { ...custody, returned: [...custody.returned, { id, outcome, text, images, ...(outcome.uncertain ? { retry: key } : {}) }] };
+export function giveBack<I>(custody: Custody<I>, submission: Draft<I>, { id, outcome, newKey, hold = false, quiet = false }: { id: string; outcome: Outcome; newKey: () => string; hold?: boolean; quiet?: boolean }): Custody<I> {
+	const back: Draft<I> = outcome.uncertain ? submission : { text: submission.text, images: submission.images, key: newKey() };
+	if (!hold && isEmpty(custody.draft)) return { ...custody, draft: back, ...(quiet ? {} : { notices: [...(custody.notices ?? []), { id, text: back.text, key: back.key, outcome }] }) };
+	return { ...custody, returned: [...custody.returned, { ...back, id, outcome }] };
 }
 
 /**
- * Moves a returned message into the draft, text first; images the draft cannot admit stay held, without a key. Only an
- * unchanged message, into an empty draft with every image, keeps its retry key; any other restore takes `freshKey`. The
- * draft takes the message's outcome as its notice, unless that would replace an uncertain notice with a certain one.
+ * Moves a returned message into the draft, text first; images the draft cannot admit stay held in the record. The
+ * message keeps its key and intent only when it lands whole in an empty draft; any other result is a new payload. The
+ * moved text keeps the record's outcome as a notice.
  */
-export function restoreReturned<I>(custody: Custody<I>, id: string, admit: (current: readonly I[], incoming: readonly I[]) => { accepted: I[]; rejected: I[] }, freshKey: string): Custody<I> {
+export function restoreReturned<I>(custody: Custody<I>, id: string, admit: (current: readonly I[], incoming: readonly I[]) => { accepted: I[]; rejected: I[] }, newKey: () => string): Custody<I> {
 	const record = custody.returned.find((r) => r.id === id);
 	if (!record) return custody;
 	const { accepted, rejected } = admit(custody.draft.images, record.images);
-	const unchanged = isEmpty(custody.draft) && rejected.length === 0;
-	const text = [record.text, custody.draft.text].filter((t) => t.trim()).join("\n\n");
-	const images = [...custody.draft.images, ...accepted];
-	const draft: Draft<I> = unchanged && record.retry ? { text, images, key: record.retry, retry: true } : { text, images, key: freshKey };
-	const returned = rejected.length ? custody.returned.map((r) => (r === record ? { id: r.id, outcome: r.outcome, text: "", images: rejected } : r)) : custody.returned.filter((r) => r !== record);
-	const notice = custody.notice?.uncertain && !record.outcome.uncertain ? custody.notice : record.outcome;
-	return { draft, returned, notice };
+	const rest = custody.returned.filter((r) => r !== record);
+	const notices = [...(custody.notices ?? []), { id: record.id, text: record.text, key: record.key, outcome: record.outcome }];
+	if (isEmpty(custody.draft) && !rejected.length) return { ...custody, draft: { text: record.text, images: record.images, key: record.key, ...(record.intent ? { intent: record.intent } : {}) }, returned: rest, notices };
+	const draft = { text: [record.text, custody.draft.text].filter((t) => t.trim()).join("\n\n"), images: [...custody.draft.images, ...accepted], key: newKey() };
+	return { ...custody, draft, notices, returned: rejected.length ? custody.returned.map((r) => (r === record ? { id: r.id, outcome: r.outcome, text: "", images: rejected, key: newKey() } : r)) : rest };
+}
+
+/**
+ * Changes the draft's payload. The first change to a draft that carries an intent gives it a new key, so the edit is
+ * a new message. A refusal notice ends when its text leaves the draft. Images compare by reference, so a new array with the
+ * same images also counts as a change and rekeys: a spare key costs nothing, a reused key can drop a message.
+ */
+export function editDraft<I>(custody: Custody<I>, change: { text?: string; images?: I[] }, newKey: () => string): Custody<I> {
+	const { draft } = custody;
+	const text = change.text ?? draft.text, images = change.images ?? draft.images;
+	if (text === draft.text && images === draft.images) return custody;
+	const next: Draft<I> = draft.intent ? { text, images, key: newKey() } : { ...draft, text, images };
+	const notices = custody.notices?.filter((notice) => notice.outcome.uncertain || text.includes(notice.text));
+	return { ...custody, draft: next, ...(custody.notices ? { notices } : {}) };
+}
+
+/**
+ * The message a draft's text sends. `literal` (ComposerSurface.literalText) keeps the text as typed; otherwise it is
+ * trimmed. `escaped`: the text starts with the `//` escape, which loses one slash.
+ */
+export function messageText(text: string, literal: boolean | undefined, escaped = false): string {
+	const content = literal ? text : text.trim();
+	return escaped ? content.replace(/^(\s*)\//, "$1") : content;
+}
+
+/** Adds `text` after the draft; `outcome` stays with it until the text leaves the draft. */
+export function appendDraftText<I>(custody: Custody<I>, text: string, newKey: () => string, outcome?: Outcome): Custody<I> {
+	const current = custody.draft.text;
+	const next = editDraft(custody, { text: current ? `${current}\n\n${text}` : text }, newKey);
+	return outcome ? { ...next, notices: [...(next.notices ?? []), { id: newKey(), text, key: next.draft.key, outcome }] } : next;
+}
+
+export function dismissNotice<I>(custody: Custody<I>, id: string): Custody<I> {
+	return { ...custody, notices: (custody.notices ?? []).filter((notice) => notice.id !== id) };
 }

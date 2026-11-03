@@ -29,6 +29,8 @@
 //   pollMs, discoverMs, teamsMs, teams, ptbObservation, herdrSession
 //   agentDir        Pi agent dir (default $PI_CODING_AGENT_DIR or ~/.pi/agent)
 //   autoCompactResolve  hc-auto-compact's settings resolver as a data: module URL, from the hub (agent-modules.ts)
+//   controlStamp    the pi-hc-control build the hub expects; each status op names it as `expect`, and a control on
+//                   the same protocol updates itself to it (pi-hc-control update.ts)
 //   controlStatusMs status query timeout per socket (default 500)
 //   controlSubmitMs submit/abort reply timeout (default 130000; the extension waits up to 120 s on compaction)
 //   keys.typeArgv   Herdr argv that types literal text without submitting.
@@ -46,6 +48,8 @@ const cfg = JSON.parse(Buffer.from(process.env.HCM_CFG || 'e30=', 'base64').toSt
 // Consume transport payload before any child starts. The Arc bundle can exceed
 // Linux's 128 KiB limit for one environment or argv string.
 delete process.env.HCM_CFG;
+// The pi-hc-control protocol this AmPi speaks (host.ts sends endpoint.ts SCHEMA).
+const CONTROL_PROTOCOL = cfg.controlProtocol;
 
 // ---- perf trace ----
 // With AMPI_TRACE=<runDir> the agent records Chrome Trace Event spans on the Unix-epoch µs clock: frames sent, Herdr
@@ -369,7 +373,7 @@ function readDescriptors() {
   for (const f of files) {
     try {
       const d = JSON.parse(fs.readFileSync(path.join(controlDir, f), 'utf8'));
-      if (d?.schema !== 'hc-control/1' || typeof d.sessionFile !== 'string' || typeof d.nonce !== 'string') continue;
+      if (!/^hc-control\/\d+$/.test(d?.schema) || typeof d.sessionFile !== 'string' || typeof d.nonce !== 'string') continue;
       d.socket = typeof d.socket === 'string' ? d.socket : path.join(controlDir, `${d.sessionId}.sock`);
       d.sessionFile = path.resolve(d.sessionFile);
       list.push(d);
@@ -379,11 +383,13 @@ function readDescriptors() {
 }
 const pidAlive = (pid) => { if (!Number.isInteger(pid)) return true; try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
 
-// Live means: the descriptor's socket answers `status` with the descriptor's nonce and file.
+// Live means: the descriptor's socket answers `status` with the descriptor's nonce and file. A control on another
+// protocol is never asked anything: a live process makes it `{ protocol }`, which takes no op (foreign()).
 async function probe(d) {
   if (!pidAlive(d.pid)) return null;
+  if (d.schema !== CONTROL_PROTOCOL) return { descriptor: d, value: null, protocol: d.schema };
   try {
-    const r = await controlRequest(d.socket, { id: `s${++controlSeq}`, op: 'status' }, controlStatusMs);
+    const r = await controlRequest(d.socket, { id: `s${++controlSeq}`, op: 'status', ...(cfg.controlStamp ? { expect: cfg.controlStamp } : {}) }, controlStatusMs);
     const v = r?.ok ? r.value : null;
     if (!v || v.nonce !== d.nonce || path.resolve(v.sessionFile || '') !== d.sessionFile) return null;
     // A new control endpoint (a restart or /reload) can serve other commands: forget the old list.
@@ -397,12 +403,53 @@ async function liveControls() {
   for (const r of res) if (r) map.set(r.descriptor.sessionFile, r);
   return map;
 }
+// A control that reloads (pi-hc-control endpoint.ts close({ reloading })) leaves its descriptor as
+// `state: "reloading"` until its new endpoint opens. While its pid lives, a send for that Session never becomes keys.
+// Before the deadline it waits for the new endpoint, in FIFO turns, at most RELOAD_HOLD_MAX at a time; the wait ends
+// with a live control or a refusal (`refused`, code control_reloading: nothing was sent). After the deadline it is
+// refused at once, until a live descriptor replaces this one or the pid dies (a restart): a Pi hung mid-reload, or one
+// reloaded without pi-hc-control, must not get keys. The turn lasts until the caller sends and calls
+// `release`, so held sends reach Pi in order.
+const RELOAD_HOLD_MAX = 8;
+const RELOAD_HOLD_MS = 10000;
+const reloadHolds = new Map(); // sessionFile -> { count, tail }
 async function liveControlFor(session) {
   const file = path.resolve(session);
-  for (const d of readDescriptors()) if (d.sessionFile === file) { const r = await probe(d); if (r) return r; }
-  return null;
+  // Later sends queue behind held ones, even once the new endpoint answers.
+  if (reloadHolds.has(file)) return holdForReload(file, null);
+  let reloading = null;
+  for (const d of readDescriptors()) if (d.sessionFile === file) {
+    if (d.state === 'reloading') { if (pidAlive(d.pid)) reloading = d; continue; }
+    const r = await probe(d);
+    if (r) return r;
+  }
+  return reloading ? holdForReload(file, reloading) : null;
 }
-const controlView = (r) => r ? {
+async function holdForReload(file, d) {
+  const hold = reloadHolds.get(file) ?? { count: 0, tail: Promise.resolve(), descriptor: d, since: Date.now() };
+  if (hold.count >= RELOAD_HOLD_MAX) return { refused: { code: 'control_reloading', message: `pi-hc-control on this Host is reloading and already holds ${RELOAD_HOLD_MAX} sends for this Session. Send again in a few seconds` } };
+  hold.count++;
+  reloadHolds.set(file, hold);
+  let release;
+  const done = new Promise((resolve) => { release = resolve; });
+  const turn = hold.tail;
+  hold.tail = turn.then(() => done);
+  const finish = () => { if (--hold.count === 0 && reloadHolds.get(file) === hold) reloadHolds.delete(file); release(); };
+  await turn;
+  const target = hold.descriptor.targetStamp?.id ?? null;
+  const until = Math.min(Number(hold.descriptor.deadline) || 0, hold.since + RELOAD_HOLD_MS);
+  while (Date.now() < until) {
+    for (const n of readDescriptors()) {
+      if (n.sessionFile !== file || n.state === 'reloading') continue;
+      const r = await probe(n);
+      if (r && (!target || r.value.stamp?.id === target)) return { ...r, release: finish };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  finish();
+  return { refused: { code: 'control_reloading', message: 'pi-hc-control on this Host began a reload and did not return within 10 s. Restart this Pi Session' } };
+}
+const controlView = (r) => r?.protocol ? { live: false, protocol: r.protocol } : r ? {
   live: true, idle: !!r.value.idle, compacting: !!r.value.compacting, stamp: r.value.stamp ?? null,
   pending: { steer: r.value.pending?.steer ?? 0, followUp: r.value.pending?.followUp ?? 0 },
   submissions: Array.isArray(r.value.submissions) ? r.value.submissions.map(submissionView) : [],
@@ -512,14 +559,14 @@ async function discover() {
     for (const [file, r] of controls) {
       if (seen.has(file)) continue;
       // Pi writes the file only with the first message; the descriptor alone makes the Session present until then.
-      agents.push(blankAgent(file, { status: r.value.idle ? 'idle' : 'working', source: 'control', control: controlView(r), ...startedOf(r) }));
+      agents.push(blankAgent(file, { status: r.value ? (r.value.idle ? 'idle' : 'working') : 'unknown', source: 'control', control: controlView(r), ...startedOf(r) }));
     }
     // Recent files no pane or control socket shows: copied and listed, with no pane and no live state.
     const listed = new Set(agents.map((a) => path.resolve(a.session)));
     for (const file of recentSessionFiles()) if (!listed.has(path.resolve(file))) agents.push(blankAgent(file, { source: 'recent', control: null }));
     for (const a of agents) {
       track(a.session, !!(a.pane || a.control?.live));
-      const id = a.control ? controls.get(path.resolve(a.session))?.value.sessionId : undefined;
+      const id = a.control ? controls.get(path.resolve(a.session))?.value?.sessionId : undefined;
       a.sessionId = id || sessionIdOf(a.session);
       try { a.bytes = fs.statSync(a.session).size; } catch {} // lets the hub detect a stalled copy
     }
@@ -544,13 +591,18 @@ function ackOf(msg, via, r) {
   out({ t: 'ack', id: msg.id, via, at: Date.now(), ...r });
 }
 const fail = (msg, via, code, message) => ackOf(msg, via, { ok: false, error: { code, message } });
-// AmPi serves only a control of its own build (P1): the hub sends the build it expects (cfg.controlStamp). A control
-// of another build, or of none, gets no op; the refusal carries its stamp, and the hub words it (build.ts controlSkew).
-function skewed(msg, r) {
-  if (r.value.stamp?.id === cfg.controlStamp?.id) return false;
-  ackOf(msg, 'control', { ok: false, error: { code: 'version_skew', message: 'pi-hc-control runs another build', control: r.value.stamp ?? null } });
+// The gate is the wire protocol (cfg.controlProtocol, pi-hc-control endpoint.ts SCHEMA). A control of another build
+// on the same protocol serves every op; the hub logs the drift. A control on another protocol gets no op, and no keys
+// either: the refusal carries its protocol, and the hub words the one step (build.ts controlProtocolSkew).
+function foreign(msg, r) {
+  if (!r.protocol) return false;
+  ackOf(msg, 'control', { ok: false, error: { code: 'version_skew', message: `pi-hc-control speaks ${r.protocol}`, protocol: r.protocol } });
   return true;
 }
+// A control that names this protocol but does not know one of its ops is a protocol fault too: the same refusal.
+const refusalOf = (rep, r, op) => rep.error?.code === 'unknown_op'
+  ? { code: 'version_skew', message: `pi-hc-control lacks the ${op} op`, protocol: r.descriptor.schema, unknownOp: op }
+  : rep.error || { code: 'control_error', message: 'control refused' };
 
 // Exact pane<->Session binding on the named Herdr server. Never inferred from a pane ID alone.
 async function boundPane(msg) {
@@ -583,14 +635,18 @@ const fill = (argv, vars) => argv.map((x) => x.replace(/\{(pane|text)\}/g, (_, k
 async function viaControl(msg, req, r) {
   r ??= await liveControlFor(msg.session);
   if (!r) return false;
-  if (skewed(msg, r)) return true;
+  if (r.refused) { fail(msg, 'control', r.refused.code, r.refused.message); return true; }
+  try { return await sendViaControl(msg, req, r); } finally { r.release?.(); }
+}
+async function sendViaControl(msg, req, r) {
+  if (foreign(msg, r)) return true;
   try {
     const rep = await controlRequest(r.descriptor.socket, { id: `c${++controlSeq}`, ...req }, controlSubmitMs);
     if (rep.ok) ackOf(msg, 'control', {
       ok: true, evidence: rep.evidence, entryId: rep.entryId, submission: rep.submission,
       ...(Array.isArray(rep.submissions) ? { submissions: rep.submissions.map(submissionView) } : {}),
     });
-    else ackOf(msg, 'control', { ok: false, error: rep.error || { code: 'control_error', message: 'control refused' } });
+    else ackOf(msg, 'control', { ok: false, error: refusalOf(rep, r, req.op) });
   } catch (e) {
     // The socket was live a moment ago; the input may or may not have landed. Never retry through keys.
     fail(msg, 'control', 'control_unconfirmed', String(e.message || e));
@@ -606,7 +662,11 @@ async function viaCommandControl(msg, req, typed) {
   const r = msg.session ? await liveControlFor(msg.session) : null;
   if (!r && typed) return commandKeys(msg, typed);
   if (!r) return fail(msg, 'control', 'no_control', 'This Session has no live control socket, so AmPi cannot run slash commands; use the Pi pane');
-  if (skewed(msg, r)) return;
+  if (r.refused) return fail(msg, 'control', r.refused.code, r.refused.message);
+  try { await commandViaControl(msg, req, r); } finally { r.release?.(); }
+}
+async function commandViaControl(msg, req, r) {
+  if (foreign(msg, r)) return;
   try {
     const rep = await controlRequest(r.descriptor.socket, { id: `c${++controlSeq}`, ...req }, controlSubmitMs);
     if (rep.ok) {
@@ -614,7 +674,7 @@ async function viaCommandControl(msg, req, typed) {
       if (req.op === 'commands' && Array.isArray(result.value?.commands))
         seenCommands.set(r.descriptor.sessionFile, { nonce: r.descriptor.nonce, names: new Set(result.value.commands.filter((c) => c?.supported !== false).map((c) => c?.name)) });
       ackOf(msg, 'control', { ok: true, ...result });
-    } else ackOf(msg, 'control', { ok: false, error: rep.error || { code: 'control_error', message: 'control refused' } });
+    } else ackOf(msg, 'control', { ok: false, error: refusalOf(rep, r, req.op) });
   } catch (e) {
     // A command may have run; the outcome is unknown, so it is never retried here.
     fail(msg, 'control', 'control_unconfirmed', String(e.message || e));

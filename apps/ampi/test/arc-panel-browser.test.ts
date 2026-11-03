@@ -259,7 +259,7 @@ test("Arc service facts, request outcomes, loss disclosure and stale elapsed on 
 			if (service.state === "stopping") {
 				value.services = [{ ...service, text: "devbox: Stopping Arc drains Builds for every client. A linked hub restarts it within seconds." }]; await send();
 				rendered.stopping = await page.locator(".arc-service").innerText();
-				assert.equal(rendered.stopping, "devbox: Arc service is stopping. It drains Builds for every client; a linked hub restarts it within seconds.");
+				assert.equal(rendered.stopping, "devbox: Arc service is stopping for every client. A linked hub restarts it within seconds.");
 			}
 		}
   value.services = [{ host: "devbox", state: "stopped" }];
@@ -341,6 +341,11 @@ test("Arc service facts, request outcomes, loss disclosure and stale elapsed on 
 		await page.locator(".arc-builds > summary").click();
 		assert.match(await page.locator(".arc-builds").innerText(), /from desk · built on devbox/);
 		assert.match(await page.locator(".arc-builds").innerText(), /may have been charged/);
+		// The existing receipt reader displays a new terminal label without treating it as success.
+		value.receipt!.builds.at(-1)!.state = "cancelled";
+		value.status = { ...value.status, state: "uncertain", pause: "uncertain-call", record: value.receipt!.builds.at(-1)! }; await send();
+		assert.match(await page.locator(".arc-builds").innerText(), /· cancelled ·/);
+		await page.getByText("Automatic Builds paused: the last Build stopped during a model call that may have been charged. Press Build to continue (it may charge again).", { exact: true }).waitFor();
 		assert.deepEqual(errors, []);
 	});
 });
@@ -464,6 +469,34 @@ test("Arc panel: source disclosure, timeline sync, scoped boards, receipt arriva
 	assert.match(await page.getByRole("alert").innerText(), /Showing the last good Arc/);
 	assert.equal(await page.locator("[data-chapter]").count(), 15);
 	assert.match(await page.locator(".arc-status").innerText(), /Covers 640 of 1,076 messages/);
+	for (const width of [1280, 390, 320]) {
+		await page.setViewportSize({ width, height: 1000 }); await frames(page);
+		const display = await page.evaluate(() => {
+			const meta = document.querySelector<HTMLElement>(".arc-status-meta")!;
+			const detail = meta.querySelector<HTMLElement>(".arc-status-detail")!;
+			const count = detail.querySelector<HTMLElement>(".arc-status-count")!;
+			const d = detail.getBoundingClientRect(), c = count.getBoundingClientRect();
+			return { text: detail.innerText, title: meta.title, startsWithDot: /^\s*·/.test(detail.innerText), countFits: c.left >= d.left - 1 && c.right <= d.right + 1 && count.scrollWidth <= count.clientWidth };
+		});
+		assert.equal(display.startsWithDot, false, `${width}px: rendered detail has no leading separator`);
+		assert.ok(display.title.includes(" · Covers 640 of 1,076 messages"), `${width}px: title keeps the separator and full detail`);
+		assert.equal(display.text, "Covers 640 of 1,076 messages", `${width}px: coverage count remains whole`);
+		assert.ok(display.countFits, `${width}px: coverage count is not clipped`);
+		if (process.env.AMPI_ARC_PROOF && (width === 390 || width === 1280)) await page.screenshot({ path: join(process.env.AMPI_ARC_PROOF, `arc-status-${width}.png`) });
+	}
+	value.receipt!.asOfCount = 1076; value.stale = 436;
+	socket!.send(JSON.stringify({ t: "snap", sid: sid!, value })); await frames(page);
+	await page.setViewportSize({ width: 320, height: 1000 }); await frames(page);
+	const newer = await page.evaluate(() => {
+		const detail = document.querySelector<HTMLElement>(".arc-status-detail")!;
+		const count = detail.querySelector<HTMLElement>(".arc-status-count")!;
+		const d = detail.getBoundingClientRect(), c = count.getBoundingClientRect();
+		return { text: count.innerText, fits: c.left >= d.left - 1 && c.right <= d.right + 1 && count.scrollWidth <= count.clientWidth };
+	});
+	assert.equal(newer.text, "436 newer messages");
+	assert.ok(newer.fits, "320px: newer-message count remains whole");
+	value.receipt!.asOfCount = 640;
+	socket!.send(JSON.stringify({ t: "snap", sid: sid!, value })); await frames(page);
 	assert.match(await page.getByRole("alert").innerText(), /Build failed: the model call failed\..*Build to cover the remaining messages/);
 	assert.equal(await page.getByRole("button", { name: "Build", exact: true }).isEnabled(), true);
 	assert.match(await page.getByRole("alert").innerText(), /Next try 21:05/);

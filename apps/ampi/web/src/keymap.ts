@@ -1,12 +1,17 @@
 import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { overlayChord, type Overlay } from "./focus.ts";
 import { carrier } from "./nav.ts";
+import { keyBindings } from "./extensions.ts";
+
+/** Actions another line adds with its key bindings (extensions.ts): augment this interface with one key per action. */
+export interface ExtraKeyActions {}
 
 type KeyAction =
 	| "sidebar.toggle" | "panel.toggle" | "focus.composer"
 	| "session.palette" | "command.palette" | "help" | "find"
 	| "overview" | "new" | "display" | "transcript.mode" | "zoom.in" | "zoom.out" | "zoom.reset"
-	| "history.back" | "history.forward";
+	| "history.back" | "history.forward"
+	| keyof ExtraKeyActions;
 
 export type KeyBinding = {
 	id: KeyAction;
@@ -32,7 +37,7 @@ export type KeyBinding = {
 /** Panels, later Find jumps, scroll and focus make no steps (D20). */
 const HISTORY_NOTE = "Steps are Sessions, pages, entry links and the first Find jump";
 
-/** Single source for global bindings, help rows, and command-palette actions. */
+/** Single source for global bindings, help rows, and command-palette actions; registered bindings come last. */
 export const KEYMAP: readonly KeyBinding[] = [
 	{ id: "sidebar.toggle", code: "KeyB", meta: true, label: "Toggle sidebar", region: "global", palette: true },
 	{ id: "panel.toggle", code: "KeyL", meta: true, label: "Toggle side panel", region: "global", palette: true, context: "in a Session" },
@@ -59,6 +64,7 @@ export const KEYMAP: readonly KeyBinding[] = [
 		{ id: "overview" as const, code: "KeyU", label: "Scroll half page up", region },
 		{ id: "overview" as const, code: "KeyG", label: "Scroll to top / bottom", region },
 	]),
+	...keyBindings,
 ];
 
 const handlers = new Map<KeyAction, (event: KeyboardEvent) => void>();

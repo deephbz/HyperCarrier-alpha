@@ -14,7 +14,12 @@
 .arc-drop { margin: 10px 0; }
 .arc-drop .btn { min-height: max(24px, var(--hit)); padding: 2px 8px; }
 .arc-status, .arc-actions, .arc-section-head { display: flex; gap: 8px; align-items: center; }
-.arc-status { align-items: flex-start; justify-content: space-between; }
+.arc-status { position: sticky; top: 0; z-index: 1; background: var(--bg-side); align-items: flex-start; justify-content: space-between; }
+.arc-status > .arc-status-meta { min-width: 0; }
+.arc-status-label { display: block; white-space: nowrap; }
+.arc-status-detail { display: flex; min-width: 0; overflow: hidden; white-space: nowrap; }
+.arc-status-through { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.arc-status-count { flex: 0 0 auto; white-space: nowrap; }
 .arc-status > span { flex: 1; }
 .arc-actions { flex-shrink: 0; }
 .arc-menu { position: relative; }

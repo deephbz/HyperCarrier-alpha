@@ -26,6 +26,7 @@ export function ThreadBadges({ t, compact = false, hideTeam = false }: { t: Thre
 					◆! {a.reason}
 				</span>
 			))}
+			{t.archived && <span className="badge">Archived</span>}
 			{!t.closed && t.lastError && (
 				<span className="badge err" title={t.lastError}>
 					× error

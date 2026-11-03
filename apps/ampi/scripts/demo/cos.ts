@@ -5,10 +5,12 @@ import WebSocket from "ws";
 import { applyImmutable } from "@earendil-works/chord/delta";
 import type { ArcValue } from "../../src/shared/protocol.ts";
 import { stamp } from "../../src/shared/build.ts";
+import { demoStressConfig } from "./data/stress.ts";
 
-/** DEMO_STRESS=200 adds real synthetic Session files, through the real reader and hub. */
-export function cosDemo({ dir, agentDir, now, sessions }: DemoContext) {
-	const count = Math.max(0, Math.min(1000, Number(process.env.DEMO_STRESS) || 0));
+/** DEMO_STRESS adds synthetic Sessions through the real reader and hub. */
+export function cosDemo({ dir, agentDir, now, sessions, dataMode, contentArcAnswer }: DemoContext) {
+	const stress = demoStressConfig(dataMode ?? "demo", process.env.DEMO_STRESS, process.env.DEMO_STRESS_ENTRIES_PER_SESSION);
+	const count = stress.sessions;
 	const root = join(agentDir, "sessions", "--work-stress--");
 	mkdirSync(root, { recursive: true });
 	for (let n = 0; n < count; n++) {
@@ -16,12 +18,14 @@ export function cosDemo({ dir, agentDir, now, sessions }: DemoContext) {
 		const id = `stress-${n}`;
 		const lines: unknown[] = [{ type: "session", version: 3, id, timestamp: new Date(start).toISOString(), cwd: "/work/synthetic" }];
 		let parent: string | null = null;
-		for (let i = 0; i < 48; i++) {
-			const t = start + i * (2 + n % 6) * 60_000;
-			const u = `${id}-u${i}`, a = `${id}-a${i}`;
-			lines.push({ type: "message", id: u, parentId: parent, timestamp: new Date(t).toISOString(), message: { role: "user", content: [{ type: "text", text: `Synthetic Session ${n}: 日本語 · Übersetzungen · step ${i}` }] } });
-			lines.push({ type: "message", id: a, parentId: u, timestamp: new Date(t + 30_000).toISOString(), message: { role: "assistant", content: [{ type: "text", text: "Synthetic evidence only." }], usage: { input: 130 + n * 3, output: 71 + i * 2, cacheRead: 450, cacheWrite: 23, cost: { total: (1 + n % 7) * (1 + i % 3) * .001 } } } });
-			parent = a;
+		for (let i = 0; i < stress.entriesPerSession; i++) {
+			const turn = Math.floor(i / 2), user = i % 2 === 0;
+			const t = start + turn * (2 + n % 6) * 60_000 + (user ? 0 : 30_000);
+			const entry = `${id}-${user ? "u" : "a"}${turn}`;
+			lines.push({ type: "message", id: entry, parentId: parent, timestamp: new Date(t).toISOString(), message: user
+				? { role: "user", content: [{ type: "text", text: `Synthetic Session ${n}: 日本語 · Übersetzungen · step ${turn}` }] }
+				: { role: "assistant", content: [{ type: "text", text: "Synthetic evidence only." }], usage: { input: 130 + n * 3, output: 71 + turn * 2, cacheRead: 450, cacheWrite: 23, cost: { total: (1 + n % 7) * (1 + turn % 3) * .001 } } } });
+			parent = entry;
 		}
 		writeFileSync(join(root, `${id}.jsonl`), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
 	}
@@ -67,6 +71,8 @@ export function cosDemo({ dir, agentDir, now, sessions }: DemoContext) {
 	}
  // Offline side-ask and Arc answers use the same subprocess transport.
  const model = join(dir, "cos-model.cjs");
+ const contentArcFile = join(dir, "content-arc.json");
+ writeFileSync(contentArcFile, JSON.stringify(contentArcAnswer ?? null));
  writeFileSync(model, `#!${process.execPath}
 const args = process.argv.slice(2), framed = args.includes('--mode');
 if (args[0] === 'auth') { const ready = args[args.indexOf('--model') + 1] === 'synthetic/model'; console.log(JSON.stringify({status:ready ? 'ready' : 'invalid'})); process.exit(ready ? 0 : 2); }
@@ -75,6 +81,8 @@ let input = ""; process.stdin.on("data", d => input += d).on("end", () => {
   require("node:fs").appendFileSync(${JSON.stringify(join(dir, "ask-calls.jsonl"))}, JSON.stringify({kind:"other"}) + "\\n");
   let p; try { p = JSON.parse(input.split("\\nAnswer rejected:")[0]); } catch { reply("Synthetic selected evidence answer."); return; }
   const items = p.rarebits || [], first = items[0], last = items.at(-1);
+  const contentAnswer = JSON.parse(require("node:fs").readFileSync(${JSON.stringify(contentArcFile)}, "utf8"));
+  if (contentAnswer && String(first?.id || "").startsWith("content-")) { reply(JSON.stringify(contentAnswer)); return; }
   if (!first) { reply("{}"); return; }
   const claim = (i, text) => ({text, cites:[{id:i.id, quote:i.text.slice(0,120)}]});
   const open = p.previous?.chapters.find(c => c.closed === false);

@@ -1,3 +1,5 @@
+// @ts-nocheck: plain JavaScript in a .ts file, so Pi's /reload runs new code (jiti transpiles only TypeScript). Typing
+// it is a separate change.
 // Per-Session unix socket and descriptor under <agentDir>/hc-control/.
 import { createHash, randomBytes } from "node:crypto";
 import {
@@ -161,6 +163,11 @@ export function listenUnix(path, handle) {
 /**
  * Open the Session's socket and write its descriptor. Returns `close()`,
  * which removes only what this instance owns (matching nonce).
+ * `close({ reloading: { targetStamp, deadline } })` is the close before a Pi
+ * reload: it removes the socket but rewrites the descriptor with
+ * `state: "reloading"`, so a client waits for the reloaded endpoint until
+ * `deadline` (epoch ms) instead of taking another route. `targetStamp` is the
+ * build the reload should load, or null when unknown.
  */
 export async function openEndpoint({
   agentDir = resolveAgentDir(),
@@ -201,9 +208,12 @@ export async function openEndpoint({
   renameSync(temporary, descriptorPath);
 
   let closed = false;
-  const removeOwned = () => {
+  const owned = () => {
     const current = readDescriptor(descriptorPath);
-    if (current && current.nonce !== nonce) return; // a newer process took this Session
+    return !current || current.nonce === nonce; // else a newer process took this Session
+  };
+  const removeOwned = () => {
+    if (!owned()) return;
     unlinkQuiet(descriptorPath);
     unlinkQuiet(socket.path);
   };
@@ -213,11 +223,16 @@ export async function openEndpoint({
     descriptor,
     descriptorPath,
     socketPath: socket.path,
-    async close() {
+    async close({ reloading = undefined } = {}) {
       if (closed) return;
       closed = true;
       process.off("exit", onExit);
-      removeOwned();
+      if (reloading && owned()) {
+        const held = { ...descriptor, state: "reloading", targetStamp: reloading.targetStamp ?? null, deadline: reloading.deadline };
+        writeFileSync(temporary, `${JSON.stringify(held)}\n`, { mode: 0o600 });
+        renameSync(temporary, descriptorPath);
+        unlinkQuiet(socket.path);
+      } else removeOwned();
       await server.close();
     },
   };

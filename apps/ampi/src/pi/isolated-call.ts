@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 export type PiCallRequest = { system: string; prompt: string; purpose?: string; model?: string; resolved?: boolean; timeoutMs?: number; cache?: "long" | "short"; maxOutputTokens?: number };
 export type PiCallUsage = { input: number; output: number; cacheRead: number; cacheWrite: number; cacheWrite1h?: number; cost: number | null };
 export type PiCallResult = { text: string; model?: string; usage?: PiCallUsage; truncated?: boolean };
-export type PiCallLifecycle = { env?: NodeJS.ProcessEnv; extensionPath?: string; started?(pid: number): void | Promise<void>; exited?(): void };
+export type PiCallLifecycle = { signal?: AbortSignal; env?: NodeJS.ProcessEnv; extensionPath?: string; started?(pid: number): void | Promise<void>; exited?(): void };
 const fail = (code: string, message: string) => Object.assign(new Error(message), { code });
 
 // Pi appends its cwd to the system text, and Anthropic caches the system text as one block. Every call therefore runs
@@ -61,6 +61,7 @@ function sameModel(requested: string, provider: string, model: string): boolean 
 }
 
 export function runPiCall(req: PiCallRequest, command?: string[], lifecycle: PiCallLifecycle = {}): Promise<PiCallResult> {
+ if (lifecycle.signal?.aborted) return Promise.reject(Object.assign(fail("cancelled", "Pi call cancelled before dispatch"), { dispatched: false }));
 	// A resolved helper model is Pi's exact provider/id; naming the provider apart keeps Pi from a fuzzy lookup.
 	const slash = req.model?.indexOf("/") ?? -1;
 	const modelArgs = !req.model ? [] : (req.purpose || req.resolved) && slash > 0 ? ["--provider", req.model.slice(0, slash), "--model", req.model.slice(slash + 1)] : ["--model", req.model];
@@ -84,13 +85,16 @@ export function runPiCall(req: PiCallRequest, command?: string[], lifecycle: PiC
 			];
 	return new Promise<PiCallResult>((resolve, reject) => {
 		let dispatched = false, closed = false;
-		let startupError: unknown;
+		let startupError: unknown, startup: Promise<void> | undefined;
 		const refuse = (e: Error) => reject(Object.assign(e, { dispatched }));
 		let stdout = "";
 		let stderr = "";
-		let timedOut = false;
+		let timedOut = false, aborted = false;
 		const env = { ...process.env, ...lifecycle.env, ...(req.maxOutputTokens ? { AMPI_ASK_OUTPUT_TOKENS: String(req.maxOutputTokens) } : {}), ...(command?.length ? { AMPI_ASK_SYSTEM_FILE: systemFile(), ...(req.model ? { AMPI_ASK_MODEL: req.model } : {}) } : {}), ...(req.cache === "long" ? { PI_CACHE_RETENTION: "long" } : {}) };
 		const child = spawn(argv[0]!, argv.slice(1), { cwd: askCwd() ?? scratch, env, stdio: ["pipe", "pipe", "pipe"] });
+		const abort = () => { aborted = true; if (!closed) child.kill("SIGKILL"); };
+		lifecycle.signal?.addEventListener("abort", abort, { once: true });
+		if (lifecycle.signal?.aborted) abort();
 		// SIGTERM first; a child that ignores it is killed 5 s later, so it cannot hold a slot forever.
 		const timer = setTimeout(() => {
 			timedOut = true;
@@ -105,11 +109,14 @@ export function runPiCall(req: PiCallRequest, command?: string[], lifecycle: PiC
 			clearTimeout(timer);
 			refuse(fail("no_model", `${who}cannot run ${argv[0]}: ${e.code ?? e.message}`));
 		});
-		child.on("close", (code) => {
+		child.on("close", async (code) => {
 			closed = true;
 			clearTimeout(timer);
+			lifecycle.signal?.removeEventListener("abort", abort);
+			await startup;
 			try { lifecycle.exited?.(); } catch (e) { return refuse(e as Error); }
 			if (startupError) return refuse(startupError as Error);
+			if (command?.length && aborted) return refuse(fail("cancelled", `${who}call cancelled`));
 			if (command?.length && timedOut) return refuse(fail("timeout", `${who}no answer within ${Math.round(timeoutMs / 1000)} s`));
 			if (command?.length) return code === 0 ? resolve({ text: stdout.trim(), ...(req.model ? { model: req.model } : {}) }) : refuse(fail("model_error", `${who}${lastLine() || `exit ${code}`}`));
 			let final: { stopReason?: string; errorMessage?: string; resetAt?: number | string; content?: { type: string; text?: string }[]; provider?: string; model?: string; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cacheWrite1h?: number; cost?: { total?: number } } } | undefined;
@@ -120,6 +127,7 @@ export function runPiCall(req: PiCallRequest, command?: string[], lifecycle: PiC
 				} catch {}
 			}
 			const usage = final?.usage ? { input: final.usage.input ?? 0, output: final.usage.output ?? 0, cacheRead: final.usage.cacheRead ?? 0, cacheWrite: final.usage.cacheWrite ?? 0, ...(final.usage.cacheWrite1h ? { cacheWrite1h: final.usage.cacheWrite1h } : {}), cost: final.usage.cost?.total ?? null } : undefined;
+			if (aborted) return refuse(Object.assign(fail("cancelled", `${who}call cancelled`), { usage }));
 			if (timedOut) return refuse(Object.assign(fail("timeout", `${who}no answer within ${Math.round(timeoutMs / 1000)} s`), { usage }));
 			if (!final) return refuse(fail("no_result", `${who}pi exited ${code} without an answer${lastLine() ? `: ${lastLine()}` : ""}`));
 			if (final.stopReason === "error" || final.stopReason === "aborted") return refuse(Object.assign(fail("model_error", `${who}${String(final.errorMessage ?? final.stopReason).slice(0, 300)}`), { usage, ...(final.resetAt !== undefined ? { resetAt: final.resetAt } : {}) }));
@@ -133,8 +141,8 @@ export function runPiCall(req: PiCallRequest, command?: string[], lifecycle: PiC
 		});
 		child.stdin.on("error", () => {});
 		child.once("spawn", () => {
-			Promise.resolve().then(() => lifecycle.started?.(child.pid!)).then(() => {
-				if (!closed && !timedOut && child.exitCode === null) { dispatched = true; child.stdin.end(req.prompt); }
+			startup = Promise.resolve().then(() => lifecycle.started?.(child.pid!)).then(() => {
+				if (!closed && !timedOut && !aborted && child.exitCode === null) { dispatched = true; child.stdin.end(req.prompt); }
 			}).catch(e => { startupError = e; child.kill("SIGKILL"); });
 		});
 	}).finally(() => {
