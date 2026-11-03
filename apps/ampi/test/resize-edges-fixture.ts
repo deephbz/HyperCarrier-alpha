@@ -45,6 +45,8 @@ async function appBundle() {
 let stopHub = async () => {};
 /** The demo hub's build: the stamp of this checkout, taken when the hub starts, as the hub takes its own. */
 let hubBuild = "";
+// Forced process.exit cannot await teardown. This handler only attempts synchronous SIGTERM;
+// the after hook owns the awaited process-group drain and resident stop.
 process.once("exit", () => { void stopHub().catch(() => {}); });
 
 async function startHub() {

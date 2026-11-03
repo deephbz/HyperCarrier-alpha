@@ -98,8 +98,12 @@ async function open(t: TestContext, engine: "chromium" | "webkit" = "chromium") 
 	await page.goto("http://localhost/");
 	await page.locator("[data-outline-version=\"v400\"]").waitFor();
 	await page.locator("[data-entry=\"e399\"]").waitFor();
-	/** Waits for the delayed reply, then for longer than a reveal settles. */
-	const afterReply = async () => { await landed; await page.waitForTimeout(800); };
+	/** Waits for the delayed reply, its browser paint, and its visible history cue to leave the transcript. */
+	const afterReply = async () => {
+		await landed;
+		await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+		await page.locator("[data-history-cue]").waitFor({ state: "detached" });
+	};
 	return { page, history, afterReply, threads, publish: (n: number) => publish(n) };
 }
 
@@ -192,7 +196,7 @@ test("reveal cancel: sending does not replace the pending history reveal", async
 test("reveal cancel: a Session switch and return before the history reply return to the reader's place", async (t) => {
 	const { page, history, afterReply, threads } = await open(t);
 	await reveal(page, history);
-	const before = await place(page);
+	const before = await anchor(page);
 	await page.evaluate(() => { location.hash = "#/h/devbox/t/pi%3As2"; });
 	await page.locator("[data-entry=\"e399\"]").waitFor();
 	assert.ok(threads.includes("pi:s2"), "B mounted");
@@ -200,7 +204,9 @@ test("reveal cancel: a Session switch and return before the history reply return
 	await page.locator("[data-entry=\"e399\"]").waitFor();
 	await afterReply();
 	assert.equal(await targetInView(page), false, "the late reply does not move the reader");
-	assert.ok(Math.abs((await place(page)).top - before.top) <= 2, "the reader is back at their place in the Session");
+	const after = await anchor(page);
+	assert.equal(after.id, before.id, "the same entry remains across the transcript's middle line");
+	assert.ok(Math.abs(after.top - before.top) <= 2, "the reader is back at their place in the Session");
 });
 
 test("reveal cancel: a lens toggle and a resize before the history reply keep the reveal", async (t) => {
