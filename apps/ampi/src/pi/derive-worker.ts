@@ -139,7 +139,7 @@ function derive(source: Source, reader: any, db: ReturnType<typeof openWorkingSe
   else if (e.kind === "assistant") open.add({ kind: "assistant", stop: e.stop, blocks: (e.blocks ?? []).map((b) => b.type === "toolCall" ? { type: "tool", callId: String(b.id) } : b) });
   else if (e.kind === "tool" && e.result) open.add({ kind: "tool-result", callId: e.result.callId });
   if (e.kind === "assistant") {
-   // Provider-qualified, as the pi-durable projection and hc-hud's alias keys name a model.
+   // Provider-qualified, as hc-hud's alias keys name a model.
    if (e.model) model = e.provider ? `${e.provider}/${e.model}` : e.model;
    // Aborted, failed and all-zero responses measure nothing, as Pi skips them.
    const usage = e.stop === "aborted" || e.stop === "error" ? undefined : e.usage;

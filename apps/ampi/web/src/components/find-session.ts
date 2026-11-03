@@ -60,6 +60,8 @@ export class FindSession {
 	#waiting?: () => void;
 	#generation = 0;
 	#timer?: ReturnType<typeof setTimeout>;
+	/** The first query starts at the entry read before opening the bar changes transcript geometry. */
+	#openingPlace?: { entry?: string };
 	#listeners = new Set<() => void>();
 
 	readonly io: FindIo;
@@ -68,8 +70,8 @@ export class FindSession {
 	get = () => this.#view;
 	subscribe = (listener: () => void) => { this.#listeners.add(listener); return () => { this.#listeners.delete(listener); }; };
 
-	show() { if (!this.#view.open) { this.#view = { ...this.#view, open: true }; this.#search(); } }
-	close() { this.#cancel(); this.#value = undefined; this.#error = undefined; this.#view = { ...this.#view, open: false, filter: false }; this.#emit(); }
+	show() { if (!this.#view.open) { this.#openingPlace = { entry: this.io.reading() }; this.#view = { ...this.#view, open: true }; this.#search(); } }
+	close() { this.#cancel(); this.#openingPlace = undefined; this.#value = undefined; this.#error = undefined; this.#view = { ...this.#view, open: false, filter: false }; this.#emit(); }
 	dispose() { this.#cancel(); this.#listeners.clear(); }
 	/** The Host announced an indexed copy of the Session: a request that waits for it asks again, once. */
 	indexed() { const again = this.#waiting; this.#waiting = undefined; again?.(); }
@@ -136,7 +138,8 @@ export class FindSession {
 		this.#pending = true;
 		this.#emit();
 		this.#timer = setTimeout(() => {
-			const from = this.io.reading();
+			const from = this.#openingPlace ? this.#openingPlace.entry : this.io.reading();
+			this.#openingPlace = undefined;
 			this.#ask(from ? { from } : {}, (result) => result.windows && result.anchored !== false ? this.#place(1) : this.#emit());
 		}, this.io.settleMs);
 	}

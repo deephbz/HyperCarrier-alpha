@@ -1,16 +1,14 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtempSync, writeFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ask, ASK_CONCURRENCY } from "../src/pi/ask.ts";
-import { arcSettings } from "../src/node/pi-config.ts";
-import { constructArc, fingerprint, storeAnswer, validateAnswer, type ArcSource } from "../src/pi/views/arc-build.ts";
-import { arcValue, arcView, buildArc, startArcs, closeArcs } from "../src/pi/views/arc.ts";
+import { ask } from "../src/pi/ask.ts";
+import { arcSettings } from "../src/shared/pi-config.ts";
+import { constructArc, fingerprint, storeAnswer, validateAnswer, type ArcSource } from "../src/arc/core/construct.ts";
 import type { ArcAnswer, BuildRecord } from "../src/shared/arc.ts";
-import type { PiViewContext, PiViewSession } from "../src/pi/views/types.ts";
 import { selectTierB } from "../src/pi/rarebit-selection.ts";
 const MODEL = "fixture/model";
 const command = [process.execPath, fileURLToPath(new URL("./fixtures/arc-model.cjs", import.meta.url))];
@@ -187,191 +185,8 @@ test("Arc settings: stamp reload applies edits and malformed settings fail befor
  writeFileSync(file, JSON.stringify({ ampi_arc: { retries: 6 } })); assert.throws(() => arcSettings(file), e => String(e).includes("ampi_arc.retries"));
  writeFileSync(file, JSON.stringify({ ampi_arc: { model: "bare" } })); assert.throws(() => arcSettings(file), e => String(e).includes(file) && String(e).includes("ampi_arc.model"));
 });
-test("Arc: stored head survives restart, read does not ask, failed Build retains good receipt", async t => {
- const dir = mkdtempSync(join(tmpdir(), "arc-store-")); t.after(() => rmSync(dir, { recursive: true, force: true }));
- const old = process.env.PI_CODING_AGENT_DIR; process.env.PI_CODING_AGENT_DIR = dir; t.after(() => { if (old === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = old; });
- writeFileSync(join(dir, "settings.json"), JSON.stringify({ ampi_arc: { model: MODEL, auto: false } }));
- const src = source(); let calls = 0, fail = false, empty = false;
- const session = { threadId: "pi:one", ref: src.session, sourceVersion: "v1", bytes: 1, sourceBytes: 1, data: { bytes: 1, asOf: 1, invalidLines: 0, rarebit: { count: 8, fingerprint: src.fingerprint, selector: src.selector }, timeline: { start: 0, end: 10, buckets: [], priced: true } }, arcSource: () => src } as unknown as PiViewSession;
- const ctx: PiViewContext = { sessions: () => [session], teams: () => [], teamsFrame: () => undefined, command: async () => ({}), model: async () => MODEL, host: "fixture", stateDir: () => dir, session: () => session, snapshot: <T>(read: () => T) => read(), lease: () => () => {}, invalidate() {}, ask: async req => { calls++; if (fail) throw new Error("quota"); if (empty) return { text: JSON.stringify(answer(src)), model: MODEL }; return ask(req, command); } };
- startArcs(ctx); await buildArc(ctx, session.threadId, { trigger: "manual" });
- const first = arcValue(ctx, session); assert.ok(first.receipt); assert.equal(calls, 1);
- assert.ok(first.receipt.builds.at(-1)!.timing!.storeMs > 0, "persisted telemetry includes merge and serialization");
- const restarted = { ...ctx }; startArcs(restarted); assert.equal(arcView.summarize!(restarted, session)!.arc!.stale, 0);
- arcValue(restarted, session); assert.equal(calls, 1);
- await buildArc(ctx, session.threadId, { trigger: "rebuild", rebuild: true });
- const rebuilt = arcValue(ctx, session).receipt!;
- assert.ok(Number(rebuilt.points[0]!.id.slice(1)) > Math.max(...first.receipt!.points.map(p => Number(p.id.slice(1)))), "full rebuild never reuses an assigned point ID");
- empty = true; await buildArc(ctx, session.threadId, { trigger: "rebuild", rebuild: true });
- assert.equal(arcValue(ctx, session).receipt!.points.length, 0);
- assert.equal(arcValue(ctx, session).receipt!.nextPointId, rebuilt.nextPointId);
- empty = false; await buildArc(ctx, session.threadId, { trigger: "rebuild", rebuild: true });
- assert.equal(arcValue(ctx, session).receipt!.points[0]!.id, `K${rebuilt.nextPointId}`);
- fail = true; await buildArc(ctx, session.threadId, { trigger: "rebuild", rebuild: true });
- const failed = arcValue(ctx, session); assert.equal(failed.status.state, "failed"); assert.deepEqual(failed.receipt!.chapters, first.receipt!.chapters);
- assert.equal(failed.receipt!.builds.at(-1)!.state, "failed"); closeArcs(ctx); closeArcs(restarted);
-});
-test("Arc: a second-window failure keeps the first receipt across restart and resumes its cursor", async t => {
- const dir = mkdtempSync(join(tmpdir(), "arc-checkpoint-")); t.after(() => rmSync(dir, { recursive: true, force: true }));
- const old = process.env.PI_CODING_AGENT_DIR; process.env.PI_CODING_AGENT_DIR = dir;
- t.after(() => { if (old === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = old; });
- writeFileSync(join(dir, "settings.json"), JSON.stringify({ ampi_arc: { model: MODEL, auto: false } }));
- const src = source(20); for (const item of src.items) item.text = item.text.padEnd(22_000, "x"); src.fingerprint = fingerprint(src.items);
- let calls = 0;
- const session = { threadId: "pi:one", ref: src.session, sourceVersion: "v1", bytes: 1, sourceBytes: 1, data: { bytes: 1, asOf: 1, invalidLines: 0, rarebit: { count: 20, fingerprint: src.fingerprint, selector: src.selector }, timeline: { start: 0, end: 10, buckets: [], priced: true } }, arcSource: () => src } as unknown as PiViewSession;
- const ctx: PiViewContext = { sessions: () => [session], teams: () => [], teamsFrame: () => undefined, command: async () => ({}), model: async () => MODEL, host: "fixture", stateDir: () => dir, session: () => session, snapshot: <T>(read: () => T) => read(), lease: () => () => {}, invalidate() {}, ask: async req => { if (++calls === 2) throw new Error("synthetic second-window timeout"); return ask(req, command); } };
- startArcs(ctx); t.after(() => closeArcs(ctx));
- await buildArc(ctx, session.threadId, { trigger: "manual" });
- const failed = arcValue(ctx, session);
- assert.equal(failed.status.state, "failed");
- assert.ok(failed.receipt, "accepted first window survives a later timeout");
- assert.equal(failed.receipt.asOfCount, 10); assert.equal(failed.receipt.asOf, "e9");
- assert.equal(failed.receipt.builds.length, 1); assert.equal(failed.receipt.builds[0]!.state, "failed");
- assert.equal(failed.receipt.builds[0]!.windows, 2); assert.equal(failed.receipt.builds[0]!.calls, 2);
- const restarted = { ...ctx, ask: async (req: Parameters<PiViewContext["ask"]>[0]) => {
-  calls++;
-  assert.ok(!req.prompt.includes("Synthetic evidence 0."), "retry does not send the accepted closed window again");
-  assert.ok(req.prompt.includes("Synthetic evidence 10."));
-  return ask(req, command);
- } };
- startArcs(restarted); t.after(() => closeArcs(restarted));
- assert.deepEqual(arcValue(restarted, session).receipt, failed.receipt, "checkpoint is on disk");
- await buildArc(restarted, session.threadId, { trigger: "manual" });
- const finished = arcValue(restarted, session);
- assert.equal(finished.status.state, "idle"); assert.equal(calls, 3);
- assert.equal(finished.receipt!.asOfCount, 20);
- assert.equal(finished.receipt!.chapters.length, 2); assert.equal(finished.receipt!.points.length, 2);
- assert.equal(new Set(finished.receipt!.points.map(p => p.id)).size, 2);
- assert.equal(finished.receipt!.nextPointId, failed.receipt.nextPointId + 1);
- assert.deepEqual(finished.receipt!.chapters[0], failed.receipt.chapters[0]);
- assert.equal(finished.receipt!.points[0]!.id, failed.receipt.points[0]!.id);
- assert.equal(finished.receipt!.points.at(-1)!.id, `K${failed.receipt.nextPointId}`);
- assert.deepEqual(finished.receipt!.builds.map(b => b.state), ["failed", "done"]);
- const full = finished.receipt!;
- let rebuildCalls = 0;
- const rebuilding = { ...ctx, ask: async (req: Parameters<PiViewContext["ask"]>[0]) => {
-  if (++rebuildCalls === 2) throw new Error("synthetic Rebuild window failure");
-  return ask(req, command);
- } };
- startArcs(rebuilding); t.after(() => closeArcs(rebuilding));
- await buildArc(rebuilding, session.threadId, { trigger: "rebuild", rebuild: true });
- const kept = arcValue(rebuilding, session);
- assert.equal(kept.status.state, "failed"); assert.equal(rebuildCalls, 2);
- assert.equal(kept.receipt!.asOfCount, full.asOfCount, "a failed Rebuild must not shrink stored coverage");
- assert.deepEqual(kept.receipt!.chapters, full.chapters);
- assert.deepEqual(kept.receipt!.points, full.points);
- assert.equal(kept.receipt!.nextPointId, full.nextPointId);
- assert.equal(kept.receipt!.builds.at(-1)!.state, "failed");
- src.selector = "test-2"; session.data.rarebit.selector = src.selector;
- rebuildCalls = 0;
- await buildArc(rebuilding, session.threadId, { trigger: "manual" });
- const changedSelection = arcValue(rebuilding, session);
- assert.equal(changedSelection.receipt!.asOfCount, full.asOfCount);
- assert.equal(changedSelection.receipt!.selector, full.selector);
- assert.equal(changedSelection.sourceCount, undefined, "a selection mismatch cannot report comparable coverage");
- assert.equal(changedSelection.branchChanged, true);
- src.selector = full.selector; session.data.rarebit.selector = full.selector;
- const receiptFile = join(dir, readdirSync(dir).find(name => /^[a-f0-9]{64}\.json$/.test(name))!);
- writeFileSync(receiptFile, JSON.stringify({ ...full, tier: "a" }));
- const changedTier = { ...rebuilding }; startArcs(changedTier); t.after(() => closeArcs(changedTier));
- rebuildCalls = 0;
- await buildArc(changedTier, session.threadId, { trigger: "manual" });
- assert.equal(arcValue(changedTier, session).receipt!.asOfCount, full.asOfCount);
- assert.equal(arcValue(changedTier, session).receipt!.tier, "a");
- assert.equal(arcValue(changedTier, session).sourceCount, undefined);
-});
-test("Arc: a second-window busy refusal keeps the accepted window and adds no Build record", async t => {
- const dir = mkdtempSync(join(tmpdir(), "arc-busy-checkpoint-")); t.after(() => rmSync(dir, { recursive: true, force: true }));
- const old = process.env.PI_CODING_AGENT_DIR; process.env.PI_CODING_AGENT_DIR = dir;
- t.after(() => { if (old === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = old; });
- writeFileSync(join(dir, "settings.json"), JSON.stringify({ ampi_arc: { model: MODEL, auto: false } }));
- const src = source(20); for (const item of src.items) item.text = item.text.padEnd(22_000, "x"); src.fingerprint = fingerprint(src.items);
- const prompts: string[] = [];
- const session = { threadId: "pi:one", ref: src.session, sourceVersion: "v1", bytes: 1, sourceBytes: 1, data: { bytes: 1, asOf: 1, invalidLines: 0, rarebit: { count: 20, fingerprint: src.fingerprint, selector: src.selector }, timeline: { start: 0, end: 10, buckets: [], priced: true } }, arcSource: () => src } as unknown as PiViewSession;
- const ctx: PiViewContext = { sessions: () => [session], teams: () => [], teamsFrame: () => undefined, command: async () => ({}), model: async () => MODEL, host: "fixture", stateDir: () => dir, session: () => session, snapshot: <T>(read: () => T) => read(), lease: () => () => {}, invalidate() {}, ask: async req => {
-  prompts.push(req.prompt);
-  if (prompts.length === 2) throw Object.assign(new Error("synthetic busy"), { code: "busy" });
-  return ask(req, command);
- } };
- startArcs(ctx); t.after(() => closeArcs(ctx));
- await buildArc(ctx, session.threadId, { trigger: "manual" });
- const queued = arcValue(ctx, session);
- assert.equal(queued.status.state, "queued");
- assert.equal(queued.receipt?.asOfCount, 10, "accepted first window is stored on busy");
- assert.deepEqual(queued.receipt!.builds, [], "busy adds no Build record");
- const deadline = Date.now() + 2000;
- while (arcValue(ctx, session).status.state !== "idle" && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
- const finished = arcValue(ctx, session);
- assert.equal(finished.status.state, "idle");
- assert.equal(prompts.length, 3, "the retry makes one call for the one remaining window");
- assert.ok(!prompts[2]!.includes("Synthetic evidence 0."), "retry does not resend the accepted window");
- assert.equal(finished.receipt!.asOfCount, 20);
- assert.deepEqual(finished.receipt!.chapters[0], queued.receipt!.chapters[0]);
- assert.deepEqual(finished.receipt!.builds.map(b => [b.state, b.calls]), [["done", 1]]);
-});
-// Contract: arc.md / Triggers: every Arc call is background admission with one wait; busy retries soon, without backoff.
-test("Arc: admission waits through short contention and busy refusals do not raise model backoff", async t => {
- const dir = mkdtempSync(join(tmpdir(), "arc-admission-")); t.after(() => rmSync(dir, { recursive: true, force: true }));
- const old = process.env.PI_CODING_AGENT_DIR; process.env.PI_CODING_AGENT_DIR = dir;
- t.after(() => { if (old === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = old; });
- writeFileSync(join(dir, "settings.json"), JSON.stringify({ ampi_arc: { model: MODEL, auto: true } }));
- const src = source(); let failure: "busy" | "busy-once" | "quota" | undefined;
- const session = { threadId: "pi:one", ref: src.session, sourceVersion: "v1", bytes: 1, sourceBytes: 1, data: { bytes: 1, asOf: 1, invalidLines: 0, rarebit: { count: 8, fingerprint: src.fingerprint, selector: src.selector }, timeline: { start: 0, end: 10, buckets: [], priced: true } }, arcSource: () => src } as unknown as PiViewSession;
- const ctx: PiViewContext = { sessions: () => [session], teams: () => [], teamsFrame: () => undefined, command: async () => ({}), model: async () => MODEL, host: "fixture", stateDir: () => dir, session: () => session, snapshot: <T>(read: () => T) => read(), lease: () => () => {}, invalidate() {}, ask: async req => {
-  if (failure === "busy") return ask({ ...req, waitMs: 0 }, command);
-  if (failure === "busy-once") { failure = undefined; throw Object.assign(new Error("synthetic busy"), { code: "busy" }); }
-  if (failure) throw Object.assign(new Error(`synthetic ${failure}`), { code: failure });
-  assert.equal(req.waitMs, 60_000);
-  return ask(req, command);
- } };
- startArcs(ctx); t.after(() => closeArcs(ctx));
- const helperCommand = [process.execPath, "-e", "process.stdin.resume(); process.stdin.on(\'end\',()=>setTimeout(()=>console.log(\'ok\'),100));"];
- const helpers = Array.from({ length: ASK_CONCURRENCY }, () => ask({ system: "Synthetic helper.", prompt: "Synthetic question." }, helperCommand));
- await buildArc(ctx, session.threadId, { trigger: "stop" }); await Promise.all(helpers);
- assert.equal(arcValue(ctx, session).status.state, "idle", "short contention waits within the Build");
- assert.equal(arcValue(ctx, session).receipt!.builds.at(-1)!.calls, 1);
- const beforeBusy = arcValue(ctx, session).receipt!.builds;
- const held = Array.from({ length: ASK_CONCURRENCY }, () => ask({ system: "Held helper.", prompt: "Synthetic question." }, helperCommand));
- failure = "busy";
- for (let i = 0; i < 2; i++) {
-  await buildArc(ctx, session.threadId, { trigger: "stop" });
-  const queued = arcValue(ctx, session);
-  assert.equal(queued.status.state, "queued");
-  assert.equal(queued.status.progress, "Waiting for a model slot");
-  assert.deepEqual(queued.receipt!.builds, beforeBusy, "held slots and Build add no busy records");
- }
- await Promise.all(held);
- failure = "quota"; const before = Date.now();
- await buildArc(ctx, session.threadId, { trigger: "manual" });
- const failed = arcValue(ctx, session);
- assert.equal(failed.status.state, "queued", "with automatic Builds on, a failure queues its retry");
- assert.equal(failed.status.error?.code, "model", "the queued retry keeps its cause visible");
- const delay = Date.parse(failed.status.nextAt!) - before;
- assert.ok(delay >= 60_000 && delay < 91_000, `first model failure has first backoff, got ${delay}`);
- // A busy refusal after a model failure asks again after one second; the failure backoff does not apply.
- failure = "busy-once";
- await buildArc(ctx, session.threadId, { trigger: "rebuild", rebuild: true });
- assert.equal(arcValue(ctx, session).status.progress, "Waiting for a model slot");
- // An owner event during the wait neither weakens the Rebuild nor brings back the backoff.
- const ownerEvent = (id: string) => { session.data.rarebit = { ...session.data.rarebit, fingerprint: `changed-${id}`, trigger: { id, kind: "user" } }; arcView.changed!(ctx, [session]); };
- ownerEvent("owner-1");
- const busyDeadline = Date.now() + 5000;
- while (arcValue(ctx, session).status.state !== "idle" && Date.now() < busyDeadline) await new Promise(resolve => setTimeout(resolve, 10));
- assert.equal(arcValue(ctx, session).status.state, "idle", `busy retry ignores the model-failure backoff: ${JSON.stringify(arcValue(ctx, session).status)}`);
- let manualAttempts = 0;
- const manualCtx = { ...ctx, ask: async (req: Parameters<PiViewContext["ask"]>[0]) => {
-  assert.equal(req.admission, "background"); assert.equal(req.waitMs, 60_000);
-  // Turning automatic Builds off while a manual Build waits for a slot must not cancel the manual Build.
-  if (++manualAttempts === 1) { session.data.rarebit = { ...session.data.rarebit, fingerprint: "changed-owner-2", trigger: { id: "owner-2", kind: "user" } }; arcView.changed!(manualCtx, [session]); writeFileSync(join(dir, "settings.json"), JSON.stringify({ ampi_arc: { model: MODEL, auto: false } })); throw Object.assign(new Error("synthetic busy"), { code: "busy" }); }
-  return ask(req, command);
- } };
- startArcs(manualCtx); t.after(() => closeArcs(manualCtx));
- await buildArc(manualCtx, session.threadId, { trigger: "rebuild", rebuild: true });
- const deadline = Date.now() + 5000;
- while (arcValue(manualCtx, session).status.state !== "idle" && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
- assert.equal(arcValue(manualCtx, session).status.state, "idle", "queued manual work retries after an admission refusal");
- assert.equal(manualAttempts, 2);
-});
+// Builder persistence, checkpoint recovery and admission now run at the Host.
+// arc-core.test.ts and arc-service-runtime.test.ts verify those owning boundaries.
 test("Tier-b selection excludes relay and injected user messages and retains direct owner provenance", () => {
  for (const text of ["[agent] Do work", "# Rarebit Recall\nRemember", "ptb.task-update: a task"]) {
   assert.equal(selectTierB({ type: "message", id: "u", message: { role: "user", content: text } }, { id: "u", kind: "human" } as any).item, null);

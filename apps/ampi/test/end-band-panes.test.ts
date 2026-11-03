@@ -33,7 +33,7 @@ async function componentBundle(): Promise<{ script: string; css: string }> {
 				import { RarebitView } from ${JSON.stringify(join(web, "src/views/rarebit/View.tsx"))};
 				const h = React.createElement;
 				const host = ${JSON.stringify(HOST)};
-				const threads = Array.from({ length: 30 }, (_, i) => ({ id: 'pi:q' + i, title: 'Quiet ' + i, createdAt: 0, updatedAt: Date.now() - (i + 1) * 60000, kind: 'thread', activity: 'idle', queued: 0, costUsd: 0 }));
+				const threads = Array.from({ length: 30 }, (_, i) => ({ id: 'pi:q' + i, title: 'Quiet ' + i, createdAt: 0, updatedAt: Date.now() - (i + 1) * 60000, kind: 'thread', activity: 'idle', queued: 0, costUsd: 0, spend: { usd: 0, covers: ['responses', 'failed'] } }));
 				const pane = window.PANE === 'overview'
 					? h(Overview, { data: [{ host, threads, stale: false }], onNew() {}, onHostSetup() {}, onHelp() {} })
 					: h(RarebitView, { host: 'devbox', threadId: ${JSON.stringify(THREAD)} });

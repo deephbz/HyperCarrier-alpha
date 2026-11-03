@@ -34,7 +34,7 @@ for (const [engine, type, path] of ENGINES) {
    },
   }) });
   await page.reload();
-  await page.getByTitle("Attach images (or paste or drop them)").waitFor();
+  await page.locator('.composer input[type="file"]').waitFor({state:"attached"});
   const input = page.getByRole("textbox", { name: "Message the agent" });
   const files = page.locator('.composer input[type="file"]');
   await files.setInputFiles({ name: "first.png", mimeType: "image/png", buffer: png });
@@ -63,7 +63,7 @@ for (const [engine, type, path] of ENGINES) {
    },
   }) });
   await page.reload();
-  await page.getByTitle("Attach images (or paste or drop them)").waitFor();
+  await page.locator('.composer input[type="file"]').waitFor({state:"attached"});
   const input = page.getByRole("textbox", { name: "Message the agent" });
   await page.locator('.composer input[type="file"]').setInputFiles({ name: "draft.png", mimeType: "image/png", buffer: png });
   await page.locator('.attachment[title="draft.png"]').waitFor();

@@ -96,14 +96,10 @@ export function closedState(t: ThreadSummary): string | undefined {
 }
 
 // route.ts is the canonical home for route helpers; this re-export is a temporary bridge until the Arc v2 freeze lifts.
-export { canonicalRoute, href, parseRef, parseRoute, type Route } from "./route.ts";
+export { href, parseRef, parseRoute, type Route } from "./route.ts";
 
 export function hashRoute(): Route {
 	return parseRoute(location.hash);
-}
-
-export function goTerm(host: string, termId: string): void {
-	navigate(`#/h/${encodeURIComponent(host)}/x/${encodeURIComponent(termId)}`);
 }
 
 export function go(host?: string, thread?: string, opts: { entry?: string; panel?: string } = {}): void {

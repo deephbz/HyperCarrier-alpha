@@ -1,12 +1,22 @@
 // Fixtures for the Pi backend tests: a fake Herdr CLI, synthetic Pi Session files, and a fake control socket.
 import { type ChildProcess, spawn } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { createServer, type Server } from "node:net";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { agentModules } from "../src/pi/agent-modules.ts";
+import { controlStamp, type Stamp } from "../src/shared/build.ts";
 import { tempHome } from "./helpers.ts";
+import { after } from "node:test";
+import { maintainHost } from "../src/arc/service/client.ts";
+const arcStores = new Set<string>();
+after(async () => {
+ for (const store of arcStores) {
+  const result = await maintainHost({ id: "synthetic", label: "Synthetic", kind: "pi-local", agentConfig: { agentDir: dirname(store) } }, { op: "stop", timeoutMs: 2000 });
+  if (result.state !== "stopped") throw new Error(`Synthetic Arc service did not stop: ${JSON.stringify(result)}`);
+ }
+});
 
 export const AGENT = fileURLToPath(new URL("../src/pi/remote-agent.cjs", import.meta.url));
 
@@ -146,6 +156,9 @@ export function fixture(): Fixture {
 	const agentDir = join(dir, "agent");
 	const sessions = join(agentDir, "sessions", "--work--");
 	mkdirSync(sessions, { recursive: true });
+ arcStores.add(join(realpathSync(agentDir), "ampi-arc"));
+ // Non-Arc fixtures never schedule model work and expire after their link closes.
+ writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ ampi_arc: { auto: false, serviceIdleHours: 0.0001 } }));
 	const sessionA = join(sessions, "a.jsonl");
 	const sessionB = join(sessions, "b.jsonl");
 	writeFileSync(sessionA, `${JSON.stringify({ type: "session", id: "sess-a", cwd: "/work" })}\n`);
@@ -205,7 +218,7 @@ export class Agent {
 		});
 	}
 	static start(f: Fixture, extra: Record<string, unknown> = {}): Agent {
-		const cfg = { ...agentModules(), agentDir: f.agentDir, pollMs: 30, discoverMs: 150, teams: false, controlStatusMs: 300, ...extra };
+		const cfg = { ...agentModules(), agentDir: f.agentDir, pollMs: 30, discoverMs: 150, teams: false, controlStatusMs: 300, controlStamp: controlStamp(), ...extra };
 		const child = spawn(process.execPath, [AGENT], {
 			stdio: ["pipe", "pipe", "inherit"],
 			env: {
@@ -242,7 +255,9 @@ export class Agent {
 
 // A tiny hc-control server (contract section 1) plus its descriptor.
 // With `queue`, it tracks submissions as pi-hc-control does: submit queues one, abort returns all to the editor.
-export async function control(f: Fixture, session: string, opts: { nonce?: string; descriptorNonce?: string; idle?: boolean; queue?: boolean; commands?: boolean; images?: boolean; trackPending?: boolean; settleOnAbort?: boolean } = {}) {
+// `stamp` is the build its status reports; default the one the hub expects (build.ts controlStamp).
+export async function control(f: Fixture, session: string, opts: { nonce?: string; descriptorNonce?: string; idle?: boolean; queue?: boolean; commands?: boolean; trackPending?: boolean; settleOnAbort?: boolean; stamp?: Stamp | null } = {}) {
+	const stamp = opts.stamp === undefined ? controlStamp() : opts.stamp;
 	const dir = join(f.agentDir, "hc-control");
 	mkdirSync(dir, { recursive: true, mode: 0o700 });
 	const nonce = opts.nonce ?? "n-live";
@@ -272,7 +287,7 @@ export async function control(f: Fixture, session: string, opts: { nonce?: strin
 				buf = buf.slice(i + 1);
 				requests.push(req);
 				const reply =
-					req.op === "status" ? { id: req.id, ok: true, value: { sessionId, sessionFile: session, nonce, idle, compacting: false, pending: opts.trackPending ? { steer: submissions.filter(s => s.state === "queued" && s.deliverAs === "steer").length, followUp: submissions.filter(s => s.state === "queued" && s.deliverAs === "followUp").length } : { steer: 0, followUp: 1 }, ...(opts.queue ? { submissions } : {}), ...(opts.commands ? { commands: 1 } : {}), ...(opts.images ? { images: 1 } : {}) } }
+					req.op === "status" ? { id: req.id, ok: true, value: { sessionId, sessionFile: session, nonce, idle, compacting: false, pending: opts.trackPending ? { steer: submissions.filter(s => s.state === "queued" && s.deliverAs === "steer").length, followUp: submissions.filter(s => s.state === "queued" && s.deliverAs === "followUp").length } : { steer: 0, followUp: 1 }, ...(opts.queue ? { submissions } : {}), stamp } }
 					: req.op === "commands" && opts.commands ? { id: req.id, ok: true, value: { commands: [{ name: "model", source: "builtin", supported: true }, { name: "reload", source: "builtin", supported: false }, { name: "review", source: "extension", supported: true }], models: [{ ref: "p/m2" }], model: "p/m1", thinkingLevels: ["off"], thinking: "off" } }
 					: req.op === "command" && opts.commands && req.name === "model" && req.args === "m2" ? { id: req.id, ok: true, disposition: "handled", notice: "Model: p/m2", effect: { model: "p/m2" } }
 					: req.op === "command" && opts.commands && req.name === "model" ? { id: req.id, ok: false, error: { code: "bad_args", message: "ambiguous", matches: ["p/x", "q/x"] } }

@@ -1,7 +1,6 @@
 // Pi's model registry for the hub's helper calls (helper-models.ts ModelRegistry): `pi --list-models`, which lists only
-// providers with usable authentication. The node's in-process list
-// (src/node/models.ts) holds only pi-ai's built-in providers; Pi's CLI also loads models.json providers (such as a
-// local gateway) and extension providers, so the hub asks Pi itself.
+// providers with usable authentication. Pi's CLI also loads models.json providers (such as a local gateway) and
+// extension providers, so the hub asks Pi itself.
 
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";

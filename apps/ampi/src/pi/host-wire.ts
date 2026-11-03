@@ -55,16 +55,15 @@ export function ackResult(ack: AgentAck): ActionAck {
 	});
 }
 
-/** A `thread.submit` request's images, text and delivery. Refuses an empty message, and slash text an older page sent. */
+/** A `thread.submit` request's images, text and delivery. Refuses an empty message, and slash text not marked as text. */
 export function submitArgs(args: HostOps["thread.submit"]["args"]): { images: { data: string; mimeType: string }[]; text: string; deliverAs: "steer" | "followUp" } {
 	const images = Array.isArray(args.images) ? args.images.map((i: { data?: unknown; mimeType?: unknown }) => ({ data: String(i?.data ?? ""), mimeType: String(i?.mimeType ?? "") })) : [];
 	const text = String(args.content ?? "");
 	if (!text.trim() && !images.length) throw Object.assign(new Error("Empty message"), { code: "invalid" });
-	// Pi runs plain slash text as a command. A page built before `asText` sends a command it could not type
-	// this way, so slash text goes as a message only when the owner chose it, before any route is chosen.
-	// `unsupported`: the code older pages already show as a final refusal (composer-outcomes FINAL_REFUSAL).
+	// Pi runs plain slash text as a command, so slash text goes as a message only with `asText` (the owner chose it),
+	// before any route is chosen. A command goes by `thread.command`.
 	if (!images.length && text.trim().startsWith("/") && args.asText !== true)
-		throw Object.assign(new Error("This page is older than the hub. Reload it."), { code: "unsupported" });
+		throw Object.assign(new Error("Slash text goes as a message only with asText; send a command with thread.command."), { code: "invalid" });
 	const deliverAs = args.whenBusy === "steer" ? "steer" : "followUp";
 	return { images, text, deliverAs };
 }

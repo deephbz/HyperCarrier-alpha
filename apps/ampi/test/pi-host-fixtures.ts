@@ -68,7 +68,7 @@ export async function setup(t: { after: (fn: () => unknown) => void }, { agent, 
 		browser.ws.close();
 		await hub.close();
 	});
-	return { f, hub, browser };
+	return { f, hub, browser, port };
 }
 
 /** A view outside the registry, for tests of the view machinery: its value is no declared wire value, so the cast stays here. */

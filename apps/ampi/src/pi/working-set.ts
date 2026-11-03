@@ -283,20 +283,6 @@ export class WorkingSet {
   const get = this.db.prepare("SELECT t FROM entries WHERE path=? AND id=?");
   return new Map(ids.map((id) => { const t = get.get(path, id)?.t; return [id, typeof t === "number" ? t : null]; }));
  }
- arcSource(path: string, session: string, version: string): import("./views/arc-build.ts").ArcSource {
-  return this.snapshot(() => {
-   const data = this.load(path);
-   if (!data || data.version !== version) throw Object.assign(new Error("Arc source changed; retry Build"), { code: "source" });
-   const items: RarebitItem[] = [], entries: import("./views/arc-build.ts").ArcEntry[] = [];
-   const positive = (n: unknown) => typeof n === "number" && Number.isFinite(n) && n > 0 ? n : 0;
-   for (const row of this.db.prepare("SELECT id, t, rarebit, feature FROM entries WHERE path=? ORDER BY position").iterate(path)) {
-    if (row.rarebit) items.push(JSON.parse(String(row.rarebit)));
-    const e = JSON.parse(String(row.feature)), u = e.kind === "assistant" ? e.usage : undefined;
-    entries.push({ id: String(row.id), at: row.t == null ? "" : new Date(Number(row.t)).toISOString(), tokens: positive(u?.input) + positive(u?.output) + positive(u?.cacheRead) + positive(u?.cacheWrite), cost: positive(typeof u?.cost === "number" ? u.cost : u?.cost?.total) });
-   }
-   return { session, selector: data.rarebit.selector, fingerprint: data.rarebit.fingerprint, items, entries };
-  });
- }
  // The full entry is decoded through the shared reader by its exact source offset in the
  // index and leaves the hub only as its projected, allow-listed view: JSON text in UTF-8
  // pages of ENTRY_PAGE_BYTES. The caller joins the pages of one version and parses them.

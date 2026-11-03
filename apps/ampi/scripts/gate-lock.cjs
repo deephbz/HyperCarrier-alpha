@@ -12,6 +12,15 @@ exports.acquireGateLock = async function acquireGateLock(label) {
 	}
 	const timeoutMs = minutes === 0 ? Infinity : minutes * 60_000;
 	const { acquireRunLock, PERF_HOME, lockHolder } = await import("./perf/lock.mjs");
+	// AMPI_GATE_SLOTS lets a large machine run several gates at once (heavy sets it on the remote gate host); the laptop keeps one.
+	const slots = Math.max(1, Math.floor(Number(process.env.AMPI_GATE_SLOTS ?? "1")) || 1);
+	for (let slot = 2; slot <= slots; slot++) {
+		try {
+			return { release: await acquireRunLock(label, { lock: join(PERF_HOME, `gate-${slot}.lock`) }), gateQueueMs: 0 };
+		} catch (error) {
+			if (!error.message.startsWith("perf run lock is held by ")) throw error;
+		}
+	}
 	const lock = join(PERF_HOME, "gate.lock");
 	const started = Date.now();
 	let queued = false, timer;

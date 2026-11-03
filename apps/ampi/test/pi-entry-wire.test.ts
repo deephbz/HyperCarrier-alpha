@@ -3,21 +3,15 @@ import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { test } from "node:test";
 import { iso, line, setup } from "./pi-host-fixtures.ts";
-import { projectEntry as projectNodeEntry } from "../src/node/projection.ts";
-import { projectEntry as projectPiEntry } from "../src/pi/projection.ts";
+import { projectEntry } from "../src/pi/projection.ts";
 
-test("both projections clip tool text only beyond 48,000 characters", () => {
+test("the Pi projection clips tool text only beyond 48,000 characters", () => {
 	for (const size of [47_999, 48_000, 48_001]) {
 		const text = "x".repeat(size);
-		const node = projectNodeEntry({ id: 1, conversationId: "thread", kind: "pi.tool-result", model: [{ role: "toolResult", content: [{ type: "text", text }] }] } as unknown as Parameters<typeof projectNodeEntry>[0]);
-		const pi = projectPiEntry({ ref: "result", id: "result", parent: null, t: null, kind: "tool", text });
-		const nodeText = size > 48_000 ? `${text.slice(0, 14_400)}\n… 1 characters omitted …\n${text.slice(-33_600)}` : text;
-		for (const [entry, expected] of [[node, nodeText], [pi, text.slice(0, 48_000)]] as const) {
-			assert.equal(entry?.kind, "tool-result");
-			assert.ok(entry?.kind === "tool-result");
-			assert.equal(entry.text, expected);
-			assert.equal(entry.truncated, size > 48_000);
-		}
+		const entry = projectEntry({ ref: "result", id: "result", parent: null, t: null, kind: "tool", text });
+		assert.ok(entry?.kind === "tool-result");
+		assert.equal(entry.text, text.slice(0, 48_000));
+		assert.equal(entry.truncated, size > 48_000);
 	}
 });
 

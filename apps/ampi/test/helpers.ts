@@ -1,13 +1,12 @@
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
-import { createConnection, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyImmutable } from "@earendil-works/chord/delta";
 import WebSocket from "ws";
 import { HubHome } from "../src/hub/home.ts";
-import { encodeFrame, lineReader } from "../src/shared/framing.ts";
-import type { NodeFrame, Topic } from "../src/shared/protocol.ts";
+import { stamp } from "../src/shared/build.ts";
+import type { Topic } from "../src/shared/protocol.ts";
 
 export function tempHome(): string {
 	return mkdtempSync(join(tmpdir(), "ampi-test-"));
@@ -20,93 +19,6 @@ export function ownHome(dir = tempHome()): HubHome {
 	return home;
 }
 
-/** A minimal ampi/1 client over the unix socket, for tests. */
-export class TestClient {
-	socket!: Socket;
-	hello?: Extract<NodeFrame, { t: "hello" }>;
-	#id = 1;
-	#waiters = new Map<number, (frame: NodeFrame) => void>();
-	values = new Map<number, unknown>();
-	seq = new Map<number, number>();
-	gaps: string[] = [];
-	#listeners = new Set<() => void>();
-
-	static async connect(path: string): Promise<TestClient> {
-		const client = new TestClient();
-		await new Promise<void>((resolve, reject) => {
-			client.socket = createConnection(path, () => resolve());
-			client.socket.once("error", reject);
-		});
-		const helloSeen = new Promise<void>((resolve) => {
-			client.socket.on(
-				"data",
-				lineReader((line) => {
-					const frame = JSON.parse(line) as NodeFrame;
-					if (frame.t === "hello") {
-						client.hello = frame;
-						resolve();
-					} else if (frame.t === "res") client.#waiters.get(frame.id)?.(frame);
-					else if (frame.t === "snap") {
-						client.values.set(frame.sid, frame.value);
-						client.seq.set(frame.sid, 0);
-					} else if (frame.t === "ops") {
-						const expected = (client.seq.get(frame.sid) ?? 0) + 1;
-						if (frame.n !== expected) client.gaps.push(`sid ${frame.sid}: got ops ${frame.n}, expected ${expected}`);
-						client.seq.set(frame.sid, frame.n);
-						client.values.set(frame.sid, applyImmutable(client.values.get(frame.sid), frame.ops as never));
-					}
-					for (const listener of client.#listeners) listener();
-				}),
-			);
-		});
-		await helloSeen;
-		return client;
-	}
-
-	async req<T = any>(op: string, args: unknown = {}): Promise<T> {
-		const id = this.#id++;
-		const result = new Promise<NodeFrame>((resolve) => this.#waiters.set(id, resolve));
-		this.socket.write(encodeFrame({ t: "req", id, op, args }));
-		const frame = (await result) as Extract<NodeFrame, { t: "res" }>;
-		if (!frame.ok) throw Object.assign(new Error(frame.error.message), { code: frame.error.code });
-		return frame.value as T;
-	}
-
-	sub(topic: Topic): number {
-		const sid = this.#id++;
-		this.socket.write(encodeFrame({ t: "sub", sid, topic }));
-		return sid;
-	}
-
-	/** Resolves when `predicate` holds for the subscription value. */
-	until<T = any>(sid: number, predicate: (value: T) => boolean, timeoutMs = 10_000): Promise<T> {
-		// Made here, so a timeout's stack names the waiting line, not the timer.
-		const failure = new Error("timeout");
-		return new Promise((resolve, reject) => {
-			const check = () => {
-				const value = this.values.get(sid) as T | undefined;
-				if (value !== undefined && predicate(value)) {
-					this.#listeners.delete(check);
-					clearTimeout(timer);
-					resolve(value);
-				}
-			};
-			const timer = setTimeout(() => {
-				this.#listeners.delete(check);
-				const last = JSON.stringify(this.values.get(sid)) ?? "";
-				failure.message = `timeout; last value: ${last.length > 3000 ? `${last.slice(0, 800)} … ${last.slice(-2200)}` : last}`;
-				reject(failure);
-			}, timeoutMs);
-			this.#listeners.add(check);
-			check();
-		});
-	}
-
-	close(): void {
-		this.socket.destroy();
-	}
-}
-
 /** A minimal browser-side replica client over the hub WebSocket, checking ops continuity like the web client. */
 export class Browser {
 	values = new Map<number, unknown>();
@@ -116,6 +28,10 @@ export class Browser {
 	hosts: any[] = [];
 	/** The hosts frame's `config`: the hub.json the hub read at start. */
 	config: string | undefined;
+	/** The hosts frame's `build`: the hub's build version. */
+	build: string | undefined;
+	/** The hosts frame's `skipped`: hub.json rows this hub does not serve. */
+	skipped: any[] | undefined;
 	stale = new Set<number>();
 	/** The last `end` or `pending` frame of each subscription. */
 	closing = new Map<number, { t: "end" | "pending"; reason: string }>();
@@ -128,7 +44,7 @@ export class Browser {
 		ws.on("message", (data) => {
 			const frame = JSON.parse(String(data));
 			if (frame.t === "res") this.#waiters.get(frame.id)?.(frame);
-			else if (frame.t === "hosts") (this.hosts = frame.hosts), (this.config = frame.config);
+			else if (frame.t === "hosts") (this.hosts = frame.hosts), (this.config = frame.config), (this.skipped = frame.skipped), (this.build = frame.build);
 			else if (frame.t === "stale") this.stale.add(frame.sid);
 			else if (frame.t === "end" || frame.t === "pending") this.closing.set(frame.sid, { t: frame.t, reason: frame.reason });
 			else if (frame.t === "snap") {
@@ -145,13 +61,17 @@ export class Browser {
 			for (const listener of this.#listeners) listener();
 		});
 	}
-	static open(port: number, origin: string | undefined = `http://127.0.0.1:${port}`, cookie?: string): Promise<Browser> {
+	/** `build`: what the page says in its first frame (null: no build); the default is a test hub's own stamp. */
+	static open(port: number, origin: string | undefined = `http://127.0.0.1:${port}`, cookie?: string, build: string | null = stamp().id): Promise<Browser> {
 		return new Promise((resolve, reject) => {
 			const headers: Record<string, string> = {};
 			if (origin !== undefined) headers.origin = origin;
 			if (cookie !== undefined) headers.cookie = cookie;
 			const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers });
-			ws.once("open", () => resolve(new Browser(ws)));
+			ws.once("open", () => {
+				ws.send(JSON.stringify({ t: "hello", ...(build === null ? {} : { build }) }));
+				resolve(new Browser(ws));
+			});
 			ws.once("error", reject);
 			ws.once("unexpected-response", (_req, res) => reject(new Error(`HTTP ${res.statusCode}`)));
 		});
@@ -161,6 +81,14 @@ export class Browser {
 		return new Promise((resolve, reject) => {
 			this.#waiters.set(id, (frame) => (frame.ok ? resolve(frame.value) : reject(Object.assign(new Error(frame.error.message), frame.error))));
 			this.ws.send(JSON.stringify({ t: "req", id, host, op, args }));
+		});
+	}
+	/** An op the hub serves itself (HubOps). */
+	hub(op: string, args: unknown = {}): Promise<any> {
+		const id = this.#id++;
+		return new Promise((resolve, reject) => {
+			this.#waiters.set(id, (frame) => (frame.ok ? resolve(frame.value) : reject(Object.assign(new Error(frame.error.message), frame.error))));
+			this.ws.send(JSON.stringify({ t: "hub", id, op, args }));
 		});
 	}
 	sub(host: string, topic: unknown, sid = this.#id++): number {

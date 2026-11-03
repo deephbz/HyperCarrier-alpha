@@ -3,16 +3,20 @@ import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createControl } from "./control.mjs";
 import { openEndpoint, resolveAgentDir } from "./endpoint.mjs";
+import { controlStamp } from "./stamp.mjs";
 
 export const VERSION = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
+/** This build, computed once at load; status reports it. */
+export const STAMP = controlStamp();
 
 /**
- * Options: `agentDir`, `listen` (transport override for tests), and the
+ * Options: `agentDir`, `listen` (transport override for tests), `stamp`
+ * (the build status reports; default STAMP), and the
  * control timings `holdWaitMs`, `admitTimeoutMs`, `abortTimeoutMs`.
  */
 export function createHcControlExtension(options = {}) {
   return function hcControl(pi) {
-    const control = createControl(pi, options);
+    const control = createControl(pi, { stamp: STAMP, ...options });
     let endpoint;
     let opening = Promise.resolve();
 

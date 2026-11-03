@@ -1,9 +1,10 @@
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { DemoContext } from "./index.ts";
 import WebSocket from "ws";
 import { applyImmutable } from "@earendil-works/chord/delta";
 import type { ArcValue } from "../../src/shared/protocol.ts";
+import { stamp } from "../../src/shared/build.ts";
 
 /** DEMO_STRESS=200 adds real synthetic Session files, through the real reader and hub. */
 export function cosDemo({ dir, agentDir, now, sessions }: DemoContext) {
@@ -65,36 +66,62 @@ export function cosDemo({ dir, agentDir, now, sessions }: DemoContext) {
 		appendFileSync(big, out);
 	}
  // Offline side-ask and Arc answers use the same subprocess transport.
- writeFileSync(join(dir, "cos-model.cjs"), `let input = ""; process.stdin.on("data", d => input += d).on("end", () => {
+ const model = join(dir, "cos-model.cjs");
+ writeFileSync(model, `#!${process.execPath}
+const args = process.argv.slice(2), framed = args.includes('--mode');
+if (args[0] === 'auth') { const ready = args[args.indexOf('--model') + 1] === 'synthetic/model'; console.log(JSON.stringify({status:ready ? 'ready' : 'invalid'})); process.exit(ready ? 0 : 2); }
+const reply = text => console.log(framed ? JSON.stringify({type:'message_end',message:{role:'assistant',provider:'synthetic',model:'model',stopReason:'stop',content:[{type:'text',text}],usage:{input:0,output:0,cost:{total:0}}}}) : text);
+let input = ""; process.stdin.on("data", d => input += d).on("end", () => {
   require("node:fs").appendFileSync(${JSON.stringify(join(dir, "ask-calls.jsonl"))}, JSON.stringify({kind:"other"}) + "\\n");
-  let p; try { p = JSON.parse(input.split("\\nAnswer rejected:")[0]); } catch { console.log("Synthetic selected evidence answer."); return; }
+  let p; try { p = JSON.parse(input.split("\\nAnswer rejected:")[0]); } catch { reply("Synthetic selected evidence answer."); return; }
   const items = p.rarebits || [], first = items[0], last = items.at(-1);
-  if (!first) { console.log("{}"); return; }
+  if (!first) { reply("{}"); return; }
   const claim = (i, text) => ({text, cites:[{id:i.id, quote:i.text.slice(0,120)}]});
   const open = p.previous?.chapters.find(c => c.closed === false);
-  console.log(JSON.stringify({goal:claim(first,"Continue the agreed work."),now:claim(last,"The agent reports progress."),chapters:[{firstId:open?.firstId || first.id,label:"Reviewing the reported progress",closed:false,summary:{scope:claim(first,"Review the current work."),bullets:[claim(last,"The agent reported new evidence.")]}}],points:[]}));
+  reply(JSON.stringify({goal:claim(first,"Continue the agreed work."),now:claim(last,"The agent reports progress."),chapters:[{firstId:open?.firstId || first.id,label:"Reviewing the reported progress",closed:false,summary:{scope:claim(first,"Review the current work."),bullets:[claim(last,"The agent reported new evidence.")]}}],points:[]}));
  });`);
+ chmodSync(model, 0o755);
  return "";
 }
 
 /** Seed through the public Build path. The demo disables automatic triggers; arc-v2-triggers owns their proof. */
 export async function seedDemoArcs(port: number, token: string, ids: string[]) {
- for (const threadId of ids) await new Promise<void>((resolve, reject) => {
+ for (const threadId of ids) await demoArc(port, token, threadId, true);
+}
+
+/** Arc-reading checks wait on the panel's public projection without starting another Build. */
+export function waitForDemoArc(port: number, token: string, threadId: string) {
+ return demoArc(port, token, threadId, false);
+}
+
+function demoArc(port: number, token: string, threadId: string, build: boolean) {
+ return new Promise<void>((resolve, reject) => {
   const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { authorization: `Bearer ${token}` } });
   let value: ArcValue | undefined, requested = false, ended = false;
   const finish = (error?: Error) => { if (ended) return; ended = true; clearTimeout(timer); ws.close(); error ? reject(error) : resolve(); };
   const timer = setTimeout(() => finish(new Error(`Demo Arc did not build: ${threadId}`)), 20_000);
   ws.on("error", finish);
-  ws.on("open", () => ws.send(JSON.stringify({ t: "sub", sid: 1, host: "devbox", topic: { kind: "view", view: "arc", threadId } })));
+  // The demo hub runs in this process, so this client says the hub's own build and may request Build.
+  ws.on("open", () => {
+   ws.send(JSON.stringify({ t: "hello", build: stamp().id }));
+   ws.send(JSON.stringify({ t: "sub", sid: 1, host: "devbox", topic: { kind: "view", view: "arc", threadId } }));
+  });
   ws.on("message", data => {
    const frame = JSON.parse(String(data));
    if (frame.t === "res" && !frame.ok) { finish(new Error(frame.error.message)); return; }
+   if (frame.t === "res" && frame.value?.outcome === "refused") { finish(new Error(frame.value.detail ?? "Demo Arc Build refused")); return; }
    if (frame.sid !== 1) return;
+   if (frame.t === "end") { finish(new Error(`Demo Arc subscription ended: ${frame.reason}`)); return; }
    if (frame.t === "snap") value = frame.value;
    else if (frame.t === "ops" && value) value = applyImmutable(value, frame.ops);
-   if (value?.receipt) { finish(); return; }
+   if (value?.receipt && value.status.state === "idle") { finish(); return; }
    if (value?.status?.state === "failed") { finish(new Error(value.status.error?.message ?? "Demo Arc failed")); return; }
-   if (!requested && value?.series?.end) {
+   const unavailable = value?.services?.find(s => ["fault", "error", "cannot-start", "no-sign-in", "invalid-settings", "not-configured"].includes(s.state));
+   if (unavailable) { finish(new Error(unavailable.text ?? `${unavailable.host}: Arc service ${unavailable.state}`)); return; }
+   if (value?.request?.outcome === "refused") { finish(new Error(value.request.detail ?? "Demo Arc Build refused")); return; }
+   // Match the panel's Build admission. Transcript derivation can finish before the resident starts.
+   const canBuild = value?.services?.some(s => s.host === "devbox" && !["stopped", "fault", "busy", "error", "cannot-start", "unreachable", "updating", "stopping"].includes(s.state));
+   if (build && !requested && value?.series?.end && canBuild) {
     requested = true;
     ws.send(JSON.stringify({ t: "req", id: 1, host: "devbox", op: "view.arc.build", args: { threadId } }));
    }

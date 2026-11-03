@@ -87,3 +87,13 @@ test("cli hub: a hub on another home that shares the running hub's hub.json dire
 		assert.throws(() => readFileSync(join(other, "hub.token")), /ENOENT/, "the refused hub wrote no key");
 	}, config);
 });
+
+test("cli: removed node commands are not commands; each prints the usage and exits 2", () => {
+	const home = tempHome();
+	for (const command of ["node", "bridge", "status", "stop"]) {
+		const run = spawnSync(process.execPath, [BIN, command], { env: hubEnv(home), encoding: "utf8", timeout: 20_000 });
+		assert.equal(run.status, 2, `${command}: ${run.stderr}`);
+		assert.match(run.stderr, /^usage: ampi \[command\]/, command);
+		assert.doesNotMatch(run.stderr, /\bnode\b/, "the usage names no node command");
+	}
+});

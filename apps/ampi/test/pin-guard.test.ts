@@ -27,9 +27,8 @@ function run(root: string, target: string, base: string, env: Record<string, str
 	return { status: r.status, out: r.stdout + r.stderr, ms: Date.now() - started };
 }
 
-const ENTRY = "apps/ampi/scripts/deploy-live.sh";
 let dir = "";
-const f = {} as Record<"root" | "origin" | "a0" | "a" | "a1" | "b" | "stale" | "good" | "bad" | "ff" | "rewind" | "declared", string>;
+const f = {} as Record<"root" | "origin" | "a0" | "a" | "a1" | "b" | "good" | "bad" | "ff" | "rewind" | "declared", string>;
 /** Pin lib at <pin> on top of <from> with <message>; returns the superproject commit. */
 function pinAt(from: string, pin: string, message: string) {
 	git(f.root, "checkout", "-q", "--detach", from);
@@ -50,11 +49,9 @@ before(() => {
 	f.a = commitFile(work, "a");
 	git(work, "push", "-q", "origin", "HEAD:main");
 	git(dir, "init", "-q", f.root);
-	f.stale = commitFile(f.root, ENTRY, "# an old deploy entry\n");
-	writeFileSync(join(f.root, ENTRY), "export AMPI_DEPLOY_LOGIC\n");
-	git(f.root, "add", ENTRY);
+	commitFile(f.root, "README", "a superproject\n");
 	git(f.root, "submodule", "add", "-q", f.origin, "lib");
-	git(f.root, "commit", "-qm", "current entry; pin lib at a");
+	git(f.root, "commit", "-qm", "pin lib at a");
 	f.good = head(f.root);
 	f.b = commitFile(join(f.root, "lib"), "b");
 	f.bad = pinAt(f.good, f.b, "pin a local-only lib commit");
@@ -86,12 +83,6 @@ test("pin guard change: a rewind is refused with the declaration to add; a fast-
 	assert.equal(ff.status, 0, ff.out);
 	const declared = run(f.root, f.declared, f.good);
 	assert.equal(declared.status, 0, declared.out);
-});
-
-test("pin guard entry: a commit whose deploy entry lacks the marker is refused with 'Merge dev/ampi-int first'", () => {
-	const stale = run(f.root, f.stale, f.stale);
-	assert.equal(stale.status, 1, stale.out);
-	assert.match(stale.out, new RegExp(`REFUSED \\(entry\\): ${f.stale.slice(0, 12)} has a stale deploy entry.*Merge dev/ampi-int first`));
 });
 
 // An unreachable or hanging origin, without touching the fixture: rewrite its URL to ssh and choose the ssh command.

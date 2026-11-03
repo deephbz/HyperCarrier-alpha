@@ -4,7 +4,6 @@ import { spawn, spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { test } from "node:test";
 import { homedir } from "node:os";
-import { socketPath } from "../src/node/daemon.ts";
 import { HubHome, RootOwned } from "../src/hub/home.ts";
 import { ampiHome } from "../src/shared/home.ts";
 import { Hub } from "../src/hub/hub.ts";
@@ -19,7 +18,6 @@ test("home defaults read AMPI_HOME at call time, including an empty override", (
 		if (override === undefined) delete process.env.AMPI_HOME; else process.env.AMPI_HOME = override;
 		const expected = override ?? join(homedir(), ".ampi");
 		assert.equal(ampiHome(), expected);
-		assert.equal(socketPath(), join(expected, "node.sock"));
 	}
 });
 

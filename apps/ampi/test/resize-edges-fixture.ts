@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,7 +9,9 @@ import { chromium, webkit, type Browser, type BrowserContextOptions, type Browse
 import { build } from "vite";
 // @ts-ignore: shared browser discovery is plain ESM.
 import { findChrome } from "../scripts/perf/browser.mjs";
+import { stamp } from "../src/shared/build.ts";
 import { engineSkip } from "./engines.ts";
+import { waitForDemoArc } from "../scripts/demo/cos.ts";
 
 // The owner's resize incident (ui-resize-edges): the real App and stylesheet, built in memory from web/src, on the
 // synthetic demo hub (scripts/pi-demo.ts). Real mouse down/move/up drive both edges in Chromium and in WebKit, the
@@ -38,21 +40,42 @@ async function appBundle() {
 	return new Map(output.output.map((item) => [`/${item.fileName}`, { body: item.code ?? item.source!, type: type(item.fileName) }]));
 }
 
-/** Kills the demo hub's process group and deletes its run directory, also when a hook times out before `after`. */
-let stopHub = () => {};
-process.once("exit", () => stopHub());
+/** Ends the demo hub's process group before the test file finishes; exit still sends the kill synchronously. */
+let stopHub = async () => {};
+/** The demo hub's build: the stamp of this checkout, taken when the hub starts, as the hub takes its own. */
+let hubBuild = "";
+process.once("exit", () => { void stopHub().catch(() => {}); });
 
 async function startHub() {
+	hubBuild = stamp().id;
 	const run = mkdtempSync(join(tmpdir(), "ampi-resize-"));
 	const home = join(run, "home"), demo = join(run, "demo"), log = join(run, "hub.log");
 	mkdirSync(join(home, ".ampi"), { recursive: true });
 	const env = { ...process.env, PATH: refusingPath(join(run, "bin"), process.env.PATH), HOME: home, AMPI_HOME: join(home, ".ampi"), AMPI_HUB_CONFIG: join(home, ".ampi/hub.json"), PI_CODING_AGENT_DIR: join(demo, "agent"), DEMO_DIR: demo, DEMO_WEB: "external", PORT: "0" };
 	const child = spawn(process.execPath, ["scripts/pi-demo.ts"], { cwd: app, detached: true, env, stdio: ["ignore", openSync(log, "a"), openSync(log, "a")] });
 	child.unref();
+	let stopping: Promise<void> | undefined;
 	stopHub = () => {
-		stopHub = () => {};
-		try { process.kill(-child.pid!, "SIGKILL"); } catch {}
-		rmSync(run, { recursive: true, force: true });
+		if (stopping) return stopping;
+		return stopping = (async () => {
+			if (child.exitCode === null && child.signalCode === null) {
+				await new Promise<void>((resolve) => {
+					const timer = setTimeout(() => { try { process.kill(-child.pid!, "SIGKILL"); } catch {} }, 7000);
+					child.once("close", () => { clearTimeout(timer); resolve(); });
+					try { process.kill(-child.pid!, "SIGTERM"); } catch { clearTimeout(timer); resolve(); }
+				});
+			}
+			rmSync(run, { recursive: true, force: true });
+			// Signal delivery does not prove every descendant has exited.
+			const deadline = Date.now() + 5000;
+			while (true) {
+				const pids = execFileSync("ps", ["-axo", "pid=,pgid=,stat="], { encoding: "utf8", timeout: 1000 }).trim().split("\n")
+					.map((line) => line.trim().split(/\s+/)).filter(([, group, state]) => Number(group) === child.pid && !state?.startsWith("Z")).map(([pid]) => pid);
+				if (!pids.length) return;
+				if (Date.now() >= deadline) assert.fail(`the demo hub process group ${child.pid} did not end within 5 s; pids: ${pids.join(", ")}`);
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			}
+		})();
 	};
 	const deadline = Date.now() + 50_000;
 	const wait = async <T>(phase: string, poll: () => Promise<T | undefined>): Promise<T> => {
@@ -78,8 +101,14 @@ before(async () => {
 });
 after(async () => {
 	for (const browser of browsers.values()) await (await browser).close().catch(() => {});
-	stopHub();
+	await stopHub();
 });
+
+/** Only checks that inspect seeded Arc content need this; layout and transcript checks do not. */
+export async function seededArc(threadId = "pi:sess-lead") {
+	assert.ok(hub, "the demo hub is ready");
+	await waitForDemoArc(Number(new URL(hub.origin).port), hub.key, threadId);
+}
 
 export const ENGINES: [string, BrowserType, () => string | undefined][] = [
 	["chromium", chromium, () => findChrome()],
@@ -119,7 +148,10 @@ export async function open(t: TestContext, engine: string, type: BrowserType, pa
 		const path = new URL(route.request().url()).pathname;
 		const file = files!.get(path === "/" ? "/index.html" : path)!;
 		const response = await route.fetch();
-		return route.fulfill({ response, status: 200, body: typeof file.body === "string" ? file.body : Buffer.from(file.body), contentType: file.type });
+		// The page carries the hub's build, so the hub serves this page's writes. The hub and this fixture run from one
+		// checkout and compute one stamp; a checkout without web/dist has no hub index.html to copy the meta from.
+		const body = file.type === "text/html" ? String(file.body).replace("</head>", `<meta name="ampi-build" content="${hubBuild}" />\n</head>`) : file.body;
+		return route.fulfill({ response, status: 200, body: typeof body === "string" ? body : Buffer.from(body), contentType: file.type });
 	});
 	await page.addInitScript((display) => {
 		if (sessionStorage.getItem("seeded")) return;

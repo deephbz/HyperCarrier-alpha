@@ -32,7 +32,7 @@ test("sidebar fold: only team/count fold, titles navigate, keys and Worker contr
  const script = output.output.find(x=>x.type === "chunk")!.code!;
  const browser = await chromium.launch({headless:true,executablePath:findChrome()});
  try {
-  for (const kind of ["pi-local", "local"]) {
+  for (const kind of ["pi-local", "pi-ssh"]) {
    const page = await browser.newPage();
    page.setDefaultTimeout(2000);
    loadBudget(page);

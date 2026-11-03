@@ -1,15 +1,13 @@
-// `ampi [hub] | open | doctor | status | stop | version | node | bridge`
+// `ampi [hub] | open | doctor | version`
 import { instant, nameProcess, span, spanAsync } from "./trace.ts";
 import { localTime, startLoopWatch } from "./loop-watch.ts";
-import { connectSocket, runBridge, runDaemon, socketPath } from "./node/daemon.ts";
-import { existsSync, fchmodSync, fstatSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { fchmodSync, fstatSync } from "node:fs";
 import { format } from "node:util";
 import { spawn } from "node:child_process";
 import { hubConfigPath, Hub, hubProof, loadHubConfig } from "./hub/hub.ts";
 import { HubHome, newHubToken, readHubToken, RootOwned } from "./hub/home.ts";
 import { ampiHome } from "./shared/home.ts";
-import { doctor, hubPort, versionLine } from "./doctor.ts";
+import { doctor, hubPort, versionLine, webBuild } from "./doctor.ts";
 
 const USAGE = `usage: ampi [command]
 
@@ -19,11 +17,12 @@ const USAGE = `usage: ampi [command]
                             --persistent-cookie keeps the login for a year (hub.json: "persistentCookie": true);
                             otherwise it ends with the browser session
   open [--open]             print the link to the running hub, with its access key
-  doctor                    check this machine and every host, and say how to fix problems
-  status                    show this machine's node
-  stop                      stop this machine's node (running work resumes on the next start)
-  version                   print the version and build
-  node | bridge             internal: the node daemon, and the SSH bridge to it`;
+  doctor                    check this machine and its hub, and say how to fix problems
+  arc status [--host ID] [--json] | stop (--host ID | --all)
+                            Stopping Arc drains Builds for every client. A linked hub restarts it within seconds.
+                            exit 0: success; 1: bad/unknown Host state; 2: usage
+                            --json: smoke checks each Host state; unreachable can be report-only
+  version                   print the version and build`;
 
 const [command = "hub", ...rest] = process.argv.slice(2);
 
@@ -33,23 +32,31 @@ function flag(name: string): string | undefined {
 }
 
 switch (command) {
-	case "node": {
-		const { hydrate } = await import("./plugins.ts");
-		process.env.AMPI_NODE_PROCESS = "1";
-		const tps = Number(process.env.AMPI_SIM_TPS);
-		const daemon = await runDaemon({ plugins: await hydrate(), ...(tps > 0 ? { simTokensPerSecond: tps } : {}) });
-		console.error(`[ampi node] ${daemon.runtime.info.nodeId} listening on ${daemon.socket} (pid ${process.pid})`);
-		const stop = async () => {
-			await daemon.stop();
-			process.exit(0);
-		};
-		process.on("SIGTERM", stop);
-		process.on("SIGINT", stop);
-		break;
-	}
-	case "bridge":
-		await runBridge();
-		break;
+ case "arc": {
+  const { parseArcArgs, maintainHost } = await import("./arc/service/client.ts");
+  const { serviceError, serviceText } = await import("./arc/service/status.ts");
+  let parsed = false;
+  try {
+   const args = parseArcArgs(rest); parsed = true;
+   const config = loadHubConfig(args.config ?? hubConfigPath());
+   const hosts = config.hosts.filter((host): host is import("./pi/host.ts").PiHostConfig => (host.kind === "pi-local" || host.kind === "pi-ssh") && (!args.host || host.id === args.host));
+   if (!hosts.length) {
+    parsed = false;
+    throw new Error(`No Pi Host matches ${args.host ?? "the configuration"}. Hosts: ${config.hosts.filter(h => h.kind === "pi-local" || h.kind === "pi-ssh").map(h => h.id).join(", ") || "(none)"}.`);
+   }
+   if (args.op === "stop" && !args.json) console.error("Stopping Arc drains Builds for every client. A linked hub restarts it within seconds.");
+   const results = await Promise.all(hosts.map(async host => {
+    try {
+     const result = await maintainHost(host, { op: args.op });
+     if (["error", "unreachable", "cannot-start", "fault", "busy", "invalid-settings", "no-sign-in"].includes(result.state)) process.exitCode = 1;
+     return { ...result, host: host.id };
+    } catch (error) { process.exitCode = 1; return serviceError(host.id, error); }
+   }));
+   if (args.json) console.log(JSON.stringify(results));
+   else for (const result of results) console.log(serviceText(result));
+  } catch (error) { console.error((error as Error).message); process.exitCode = parsed ? 1 : 2; }
+  break;
+ }
 	case "hub": {
 		nameProcess("hub");
 		instant("modules-loaded");
@@ -100,6 +107,8 @@ switch (command) {
 				? `AmPi is running. Open this link (it carries this machine's access key):\n\n  ${url}\n\nAgents keep working after you close the window or stop the hub. Stop with Ctrl-C.`
 				: `AmPi is running: http://127.0.0.1:${port}/?k=… (ampi open prints the full link). Agents keep working after the hub stops.`,
 		);
+		const web = webBuild();
+		if (!web.ok) console.warn(`The window this hub serves is stale: ${web.detail}`);
 		if (rest.includes("--open") || rest.includes("--launch")) launch(url);
 		const stop = async () => {
 			instant("stop-requested");
@@ -110,20 +119,6 @@ switch (command) {
 		};
 		process.on("SIGTERM", stop);
 		process.on("SIGINT", stop);
-		break;
-	}
-	case "status": {
-		// Reports the running node only; never starts one.
-		try {
-			const socket = await connectSocket(socketPath());
-			socket.once("data", (data) => {
-				console.log(String(data).split("\n")[0]);
-				socket.destroy();
-			});
-		} catch {
-			console.log(`no node at ${socketPath()}`);
-			process.exitCode = 1;
-		}
 		break;
 	}
 	case "open": {
@@ -153,22 +148,6 @@ switch (command) {
 	case "version":
 		console.log(versionLine());
 		break;
-	case "stop": {
-		// Stops this machine's node. Running work resumes when it starts again (the hub or an SSH connection starts it).
-		const pidFile = join(ampiHome(), "node.pid");
-		const pid = existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8").trim()) : 0;
-		if (!(pid > 0)) {
-			console.log("No node is running.");
-			break;
-		}
-		try {
-			process.kill(pid, "SIGTERM");
-			console.log(`Stopped the node (pid ${pid}). Running work resumes when it starts again.`);
-		} catch {
-			console.log("No node is running.");
-		}
-		break;
-	}
 	case "help":
 	case "--help":
 	case "-h":

@@ -2,12 +2,13 @@ import "./bound.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ThreadSummary } from "../src/shared/protocol.ts";
+import { historySpend } from "../src/shared/spend.ts";
 import { displayCwd, hudView } from "../web/src/hud.ts";
 
 const text = (line: { text: string }[]) => line.map((s) => s.text).join("");
 const summary = (over: Partial<ThreadSummary> = {}): ThreadSummary => ({
 	id: "s1", title: "billing", cwd: "/workspace/billing", createdAt: 0, updatedAt: 0, kind: "thread",
-	activity: "idle", queued: 0, costUsd: 1.234, model: "anthropic/claude-fable-5-1", contextTokens: 133_100, cacheHit: 97.8, ...over,
+	activity: "idle", queued: 0, costUsd: 1.234, spend: historySpend(1.234), model: "anthropic/claude-fable-5-1", contextTokens: 133_100, cacheHit: 97.8, ...over,
 });
 
 test("the card shows the Session's place and usage; the transcript header names the Session", () => {

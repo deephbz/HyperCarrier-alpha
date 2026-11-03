@@ -9,8 +9,8 @@ export const MAX_TEXT_BYTES = 1024 * 1024;
 export const MAX_IMAGES = 8;
 export const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
 /**
- * What submit takes as images in one message, in the units it counts (base64 characters). Status `images: 1`
- * names exactly these limits; a change to them is a new `images` version, so a client never guesses.
+ * What submit takes as images in one message, in the units it counts (base64 characters). A client of the same
+ * build (status `stamp`) knows exactly these limits.
  */
 export const IMAGE_LIMITS = Object.freeze({ count: MAX_IMAGES, totalBase64: MAX_IMAGE_BYTES, types: Object.freeze(["image/png", "image/jpeg", "image/gif", "image/webp"]) });
 const IMAGE_TYPES = new Set(IMAGE_LIMITS.types);
@@ -485,9 +485,8 @@ export function createControl(pi, options = {}) {
       held: holds.size > 0,
       pending: { steer: queue.steer.length, followUp: queue.followUp.length },
       submissions: submissions.map(view),
-      // Capabilities: this control serves the commands and command ops, and submit takes images.
-      commands: 1,
-      images: 1,
+      // This control's build. AmPi serves only a control of its own build, so no op needs a capability flag.
+      stamp: options.stamp ?? null,
     };
   };
 

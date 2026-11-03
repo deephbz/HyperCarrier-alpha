@@ -5,12 +5,12 @@ import { ENGINES, open } from "./resize-edges-fixture.ts";
 import { engineSkip } from "./engines.ts";
 
 // One Session has one route, `#/h/<Host ID>/t/<thread>`, whichever surface opens it. The demo Host's link key is
-// `devbox#pi`; an older link names the Session by it, and arrives in place as the one route.
+// `devbox#pi`; a thread link by the link key names no Host and says so.
 const THREAD = "pi:sess-big";
 const ROUTE = `#/h/devbox/t/${encodeURIComponent(THREAD)}`;
 const OLD = `#/h/devbox%23pi/t/${encodeURIComponent(THREAD)}`;
 
-for (const [engine, type, path] of ENGINES) test(`session route ${engine}: an old link, ⌘K, the sidebar and a notification open one route with no new entry`, { skip: engineSkip(engine) }, async (t) => {
+for (const [engine, type, path] of ENGINES) test(`session route ${engine}: a pasted link, ⌘K, the sidebar and a notification open one route with no new entry; a link-key link names no Host`, { skip: engineSkip(engine) }, async (t) => {
 	const page = await open(t, engine, type, path());
 	const before = await page.evaluate(() => location.hash);
 	const row = page.locator(`.side .row[data-thread="${THREAD}"] a.title`).first();
@@ -26,9 +26,8 @@ for (const [engine, type, path] of ENGINES) test(`session route ${engine}: an ol
 		return { hash: location.hash, entries: history.length, mounted: el?.dataset.probe === "kept", place: row && `${row.dataset.entry}@${Math.round(row.getBoundingClientRect().top - top)}` };
 	});
 
-	// A pasted older link: the paste is the browser's own step; the arrival rewrites it in place.
-	await page.evaluate((old) => { location.hash = old; }, OLD);
-	await page.waitForFunction((route) => location.hash === route, ROUTE);
+	// A pasted link: the paste is the browser's own step.
+	await page.evaluate((route) => { location.hash = route; }, ROUTE);
 	await page.locator('[data-region="transcript"] [data-entry]').first().waitFor({ state: "attached" });
 	await page.waitForTimeout(400);
 	await page.evaluate(() => {
@@ -55,7 +54,7 @@ for (const [engine, type, path] of ENGINES) test(`session route ${engine}: an ol
 			await page.keyboard.press("Enter");
 		}],
 		["sidebar row", () => row.click()],
-		["notification", () => page.evaluate((old) => (window as unknown as { ampiOpen(route: string): void }).ampiOpen(old), OLD)],
+		["notification", () => page.evaluate((route) => (window as unknown as { ampiOpen(route: string): void }).ampiOpen(route), ROUTE)],
 	];
 	for (const [name, go] of paths) {
 		await go();
@@ -66,4 +65,9 @@ for (const [engine, type, path] of ENGINES) test(`session route ${engine}: an ol
 	await page.evaluate(() => history.back());
 	await page.waitForFunction((before) => location.hash === before, before);
 	assert.equal(await page.evaluate(() => history.length), start + 1, "Back left the Session in one step");
+
+	await page.evaluate((old) => { location.hash = old; }, OLD);
+	await page.locator("[data-session-unresolved]").filter({ hasText: "This Host is not listed: devbox#pi." }).waitFor();
+	assert.equal(await page.evaluate(() => location.hash), OLD, "the link stays as typed");
+	assert.equal(await page.locator('[data-region="transcript"]').count(), 0, "no Session view mounts");
 });

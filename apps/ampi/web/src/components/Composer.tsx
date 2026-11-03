@@ -6,23 +6,17 @@ import { composerHint, composerSubmission } from "../composer-keys.ts";
 import { type Custody, type Draft, type Outcome, appendDraftQuote, editDraft, giveBack, isEmpty, outcomeText, restoreReturned, takeDraft } from "../composer-drafts.ts";
 import { hostErrorMessage, refusalText, sendOutcome } from "../composer-outcomes.ts";
 import { toCss, touchFields } from "../display.ts";
-import { openAccounts } from "./Accounts.tsx";
+import { useHoverCard } from "./hover-card.tsx";
 import { ModelHudCard } from "./ModelHudCard.tsx";
 import { Popover, hoverIntent } from "./Popover.tsx";
-import { MOD, go, tokens } from "../util.ts";
+import { tokens } from "../util.ts";
 import { hostLabelFor } from "./host-label.ts";
-import type { ModelChoice } from "./ThreadView.tsx";
 import { newId } from "../ids.ts";
 
 // biome-ignore lint: live and inbox docs are loosely typed JSON
 type Any = any;
 
-export const THINKING = ["off", "minimal", "low", "medium", "high", "xhigh"];
-
 type Image = { data: string; mimeType: string; name: string };
-
-/** `follow`: the owner's own send goes to the newest end of the transcript and ends a pending reveal. */
-type ComposerActions = { openPanel: (name: string) => void; follow: () => void };
 
 /** `disabled`: listed but not runnable from here. A Pi command has no `run`: the composer sends it as a typed op. */
 type Command = { name: string; args?: string; help: string; disabled?: boolean; run?: (arg: string) => Promise<void> | void };
@@ -42,113 +36,12 @@ function OutcomeLine({ outcome, keyed, held }: { outcome: Outcome; keyed: boolea
 	);
 }
 
-type Extras = { prompts: { name: string; description: string; body: string }[]; skills: { name: string; description: string; path: string }[] };
 /** How the composer names a queued Pi message that left Pi's queue without delivery. */
 const OUTCOMES: Record<string, { badge: string; tone: string; note: string }> = {
 	returned: { badge: "not sent", tone: "attn", note: "returned to Pi's input box" },
 	dropped: { badge: "not sent", tone: "err", note: "dropped by Pi" },
 	unknown: { badge: "unknown", tone: "", note: "Pi stopped reporting this message" },
 };
-
-const extrasCache = new Map<string, Promise<Extras>>();
-
-/** pi's template arguments: $1…$9, $@ and $ARGUMENTS; arguments are appended when the template names none. */
-export function expandTemplate(body: string, arg: string): string {
-	const words = arg.trim() ? arg.trim().split(/\s+/) : [];
-	let used = false;
-	const out = body
-		.replace(/\$ARGUMENTS|\$@/g, () => ((used = true), arg.trim()))
-		.replace(/\$([1-9])/g, (_, n: string) => ((used = true), words[Number(n) - 1] ?? ""));
-	return used || !arg.trim() ? out.trim() : `${out.trim()}\n\n${arg.trim()}`;
-}
-
-/**
- * Commands the composer runs itself. Any other `/word` goes to the agent unchanged, so prompt conventions that
- * start with a slash keep working.
- */
-function commands(ctx: {
-	host: string;
-	threadId: string;
-	view: PiThreadView;
-	summary?: ThreadSummary;
-	models: ModelChoice[];
-	actions: ComposerActions;
-	say: (text: string) => void;
-}): Command[] {
-	const { host, threadId } = ctx;
-	return [
-		{ name: "compact", help: "Compact the context now", run: () => hub.request(host, "thread.compact", { threadId }).then(() => {}) },
-		{
-			name: "model",
-			args: "<name>",
-			help: "Switch this thread's model",
-			run: async (arg) => {
-				const q = arg.trim().toLowerCase();
-				const match = ctx.models.find((m) => `${m.provider}/${m.id}`.toLowerCase() === q) ?? ctx.models.find((m) => `${m.provider}/${m.id} ${m.name}`.toLowerCase().includes(q));
-				if (!q || !match) throw new Error(q ? `No model matches “${arg.trim()}”` : `Models: ${ctx.models.map((m) => `${m.provider}/${m.id}`).join(", ")}`);
-				await hub.request(host, "thread.configure", { threadId, model: { provider: match.provider, modelId: match.id } });
-				ctx.say(`Model: ${match.provider}/${match.id}`);
-			},
-		},
-		{
-			name: "thinking",
-			args: "<level>",
-			help: "Set the thinking level",
-			run: async (arg) => {
-				const level = arg.trim();
-				if (!THINKING.includes(level)) throw new Error(`Thinking levels: ${THINKING.join(", ")}`);
-				await hub.request(host, "thread.configure", { threadId, thinkingLevel: level });
-				ctx.say(`Thinking: ${level}`);
-			},
-		},
-		{
-			name: "fork",
-			help: "Fork a new thread from the latest message",
-			run: async () => {
-				const last = ctx.view.entries.at(-1);
-				if (!last) throw new Error("Nothing to fork yet");
-				const { threadId: forked } = await hub.request(host, "thread.fork", { threadId, entryId: last.id });
-				go(host, forked);
-			},
-		},
-		{
-			name: "new",
-			args: "[prompt]",
-			help: "Start a new thread in this directory with this model",
-			run: async (arg) => {
-				const agent = ctx.view.agent as Any;
-				const { threadId: created } = await hub.request(host, "thread.create", {
-					cwd: agent?.cwd ?? ctx.summary?.cwd,
-					...(agent?.model ? { model: agent.model } : {}),
-					requestId: newId(),
-					...(arg.trim() ? { prompt: arg.trim() } : {}),
-				});
-				go(host, created);
-			},
-		},
-		{
-			name: "rename",
-			args: "<title>",
-			help: "Rename this thread",
-			run: async (arg) => {
-				if (!arg.trim()) throw new Error("Give a title");
-				await hub.request(host, "thread.rename", { threadId, title: arg.trim() });
-			},
-		},
-		{ name: "shell", help: `Open the shell beside this thread (${MOD}J)`, run: () => ctx.actions.openPanel("shell") },
-		{ name: "changes", help: "Show the files this thread changed", run: () => ctx.actions.openPanel("changes") },
-		{ name: "team", help: "Show the Team and its Task graph", run: () => ctx.actions.openPanel("team") },
-		{ name: "stop", help: "Interrupt the current run (Esc)", run: () => hub.request(host, "thread.abort", { threadId }).then(() => {}) },
-		{
-			name: "context",
-			help: "Show context use",
-			run: () => {
-				const s = ctx.summary;
-				ctx.say(s?.contextTokens ? `Context: ${tokens(s.contextTokens)} of a ${tokens(s.workingBudget ?? s.contextWindow)} working budget (window ${tokens(s.contextWindow)})` : "No model response yet");
-			},
-		},
-	];
-}
 
 function readImage(file: File): Promise<Image> {
 	return new Promise((resolve, reject) => {
@@ -159,18 +52,30 @@ function readImage(file: File): Promise<Image> {
 	});
 }
 
-function ContextMeter({ summary, budget }: { summary?: ThreadSummary; budget?: number }) {
-	if (!summary?.contextTokens || !summary.contextWindow) return null;
-	const limit = budget ?? summary.workingBudget ?? summary.contextWindow;
-	const ratio = summary.contextTokens / limit;
-	return (
-		<span className="meter" title={`${summary.contextTokens} tokens of a ${limit}-token working budget (model window ${summary.contextWindow})`}>
-			<span className={`bar ${ratio >= 1 ? "err" : ratio >= 0.85 ? "warn" : ""}`}>
-				<div style={{ width: `${Math.min(100, ratio * 100)}%` }} />
-			</span>
-			{tokens(summary.contextTokens)}/{tokens(limit)}
-		</span>
-	);
+function ContextMeter({ summary }: { summary?: ThreadSummary }) {
+	const { id, open, setOpen, anchorProps, render } = useHoverCard<HTMLSpanElement>({ prefer: "above" });
+	const window = summary?.contextWindow, used = summary?.contextTokens;
+	const limit = summary?.workingBudget ?? window;
+	const ratio = limit && used !== undefined ? used / limit : 0;
+	return <span className="meter" {...anchorProps}>
+		<button type="button" className="composer-card-trigger" tabIndex={0} aria-label="Context details" aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => setOpen(true)}>
+			<span className={`bar ${ratio >= 1 ? "err" : ratio >= 0.85 ? "warn" : ""}`} aria-hidden="true"><div style={{ width: `${Math.max(0, Math.min(100, ratio * 100))}%`, minWidth: ratio > 0 ? 2 : 0 }} /></span>
+			<span>{limit ? tokens(limit) : "—"}</span>
+		</button>
+		{render("Context details", <>
+			<p>{used === undefined ? "Usage is not available." : `${used.toLocaleString()} tokens used${limit ? ` · ${Math.round(100 * ratio)}%` : ""}`}</p>
+			{window && <p>Model window: {window.toLocaleString()} tokens</p>}
+			{summary?.workingBudget !== undefined && <p>Working budget: {summary.workingBudget.toLocaleString()} tokens</p>}
+		</>)}
+	</span>;
+}
+
+function ComposerHelp({ hint, capability, choose }: { hint: string; capability: ImageLimits | string; choose: () => void }) {
+	const { id, open, setOpen, anchorProps, render } = useHoverCard<HTMLSpanElement>({ prefer: "above" });
+	return <span className="composer-help" {...anchorProps}>
+		<button type="button" className="composer-card-trigger" tabIndex={0} aria-label="Composer help" aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => setOpen(true)}>?</button>
+		{render("Composer help", <><p>{hint}</p><p>{typeof capability === "string" ? `Images unavailable: ${capability}` : "This model accepts images. Paste, drop or choose images."}</p>{typeof capability !== "string" && <button type="button" className="btn small" tabIndex={0} onClick={choose}>Choose images…</button>}</>)}
+	</span>;
 }
 
 /**
@@ -203,7 +108,7 @@ const subscribeDrafts = (listener: () => void) => {
 };
 
 /** Appends a transcript quote, and an optional note, to a Session's draft, whether or not its composer is mounted. */
-function quoteDraft(host: string, threadId: string, selection: string, note: string) {
+export function quoteDraft(host: string, threadId: string, selection: string, note: string) {
 	updateDraft(`${host}/${threadId}`, (text) => appendDraftQuote({ text }, selection, note).text);
 }
 
@@ -214,19 +119,12 @@ export function Composer({
 	threadId,
 	view,
 	summary,
-	models,
-	actions,
-	pi = false,
 	composerRef,
 }: {
 	host: string;
 	threadId: string;
 	view: PiThreadView;
 	summary?: ThreadSummary;
-	models: ModelChoice[];
-	actions: ComposerActions;
-	/** A Pi Session (D15): only messages, images through its live control, steer, queue, and interrupt; no node commands. */
-	pi?: boolean;
 	/** ThreadView's handle: a transcript quote lands in this draft and focuses it. */
 	composerRef?: Ref<ComposerHandle>;
 }) {
@@ -254,7 +152,7 @@ export function Composer({
 	};
 	const label = hostLabelFor(host, useHosts().hosts);
 	/** A failed request's outcome: only a FINAL_REFUSAL code proves a refusal (composer-outcomes.ts). */
-	const failed = (e: unknown): Outcome => sendOutcome(e as { code?: string; message: string }, label, pi);
+	const failed = (e: unknown): Outcome => sendOutcome(e as { code?: string; message: string }, label);
 	const refused = (message: string): Outcome => ({ uncertain: false, text: refusalText(message) });
 	/**
 	 * A submission that failed comes back with its outcome: into an empty draft on screen, otherwise held beside it.
@@ -299,55 +197,23 @@ export function Composer({
 	}), [host, threadId]);
 	const fileInput = useRef<HTMLInputElement>(null);
 	const busy = Boolean((view.live as Any)?.run);
-	const agent = view.agent as Any;
-	const model = agent?.model ? `${agent.model.provider}/${agent.model.modelId}` : "";
-	const realDefault = models.find((m) => m.default && m.provider !== "ampi-sim") ?? models.find((m) => m.provider !== "ampi-sim");
 	const queue = ((view.inbox as Any)?.items ?? []) as Any[];
-	const [extras, setExtras] = useState<Extras>({ prompts: [], skills: [] });
-	const cwd = (view.agent as Any)?.cwd ?? summary?.cwd;
-	/** This cwd's templates and skills: the request in flight or done, or a new one after a failure. */
-	const loadExtras = (): Promise<Extras> => {
-		const key = `${host}|${cwd}`;
-		let request = extrasCache.get(key);
-		if (!request) {
-			request = hub.request(host, "prompts.list", { cwd });
-			extrasCache.set(key, request);
-			request.catch(() => extrasCache.delete(key));
-		}
-		return request;
-	};
-	useEffect(() => {
-		if (pi) return;
-		let live = true;
-		loadExtras().then((r) => live && setExtras(r), () => {});
-		return () => {
-			live = false;
-		};
-	}, [host, cwd]);
-	const submitText = (content: string) => {
-		actions.follow();
-		return hub.request(host, "thread.submit", { threadId, content, whenBusy: "followUp", requestId: newId() }).then(() => {});
-	};
-	const extraCommands = (loaded: Extras): Command[] => [
-		...loaded.prompts.map((p) => ({ name: p.name, args: "[args]", help: `${p.description} (template)`, run: (arg: string) => submitText(expandTemplate(p.body, arg)) })),
-		...loaded.skills.map((k) => ({
-			name: `skill:${k.name}`,
-			args: "[task]",
-			help: k.description.length > 70 ? `${k.description.slice(0, 70)}…` : k.description,
-			run: (arg: string) => submitText(`Use the ${k.name} skill (read ${k.path} first).${arg.trim() ? `\n\n${arg.trim()}` : ""}`),
-		})),
-	];
 	// A Pi Session's commands come from its live control; reload when the Session or its control changes.
-	const commandsFor = `${host}|${threadId}|${summary?.control ? "control" : "keys"}`;
+	const commandsFor = `${host}|${threadId}|${summary?.control ? "control" : "keys"}|${summary?.model ?? ""}`;
 	const loaded = piCommands?.for === commandsFor ? piCommands : undefined;
+	const known = useRef<{ model: string; value: SlashCommands }>(undefined);
+	const modelFor = `${host}|${threadId}|${summary?.model ?? ""}`;
+	if (known.current?.model !== modelFor) known.current = undefined;
+	if (loaded?.state === "ready") known.current = { model: modelFor, value: loaded.value };
+	const metadata = known.current?.value;
 	const loadedRef = useRef(loaded);
 	loadedRef.current = loaded;
-	const wantsCommands = pi && text.startsWith("/") && !text.startsWith("//");
+	const wantsCommands = text.startsWith("/") && !text.startsWith("//");
 	const commandsRequest = useRef<{ for: string; promise: Promise<PiCommands> }>(undefined);
 	/** The list for this Session: the request in flight, or a new one after a failure. */
-	const loadCommands = (): Promise<PiCommands> => {
+	const loadCommands = (refresh = false): Promise<PiCommands> => {
 		const key = commandsFor;
-		if (commandsRequest.current?.for === key && loadedRef.current?.state !== "failed") return commandsRequest.current.promise;
+		if (!refresh && commandsRequest.current?.for === key && loadedRef.current?.state !== "failed") return commandsRequest.current.promise;
 		const promise = hub.request(host, "thread.commands", { threadId }).then(
 			(value): PiCommands => ({ for: key, state: "ready", value }),
 			(e: Error & { code?: string }): PiCommands => ({ for: key, state: "failed", code: e.code ?? "error", message: e.message }),
@@ -355,33 +221,34 @@ export function Composer({
 		commandsRequest.current = { for: key, promise };
 		setPiCommands({ for: key, state: "loading" });
 		void promise.then((result) => {
+			if (commandsRequest.current?.promise !== promise) return;
 			loadedRef.current = result;
 			setPiCommands(result);
 		});
 		return promise;
 	};
 	useEffect(() => {
-		if (wantsCommands && (!loadedRef.current || loadedRef.current.state === "failed")) void loadCommands();
+		if ((wantsCommands || summary?.control) && (!loadedRef.current || loadedRef.current.state === "failed")) void loadCommands();
 	}, [wantsCommands, commandsFor]);
+	const wasBusy = useRef(false);
+	useEffect(() => {
+		if (busy && !wasBusy.current && summary?.control) void loadCommands(true);
+		wasBusy.current = busy;
+	}, [busy]);
 	// Without a control the draft is typed into the pane, where Pi's TUI runs the command itself.
 	const commandsHint = !wantsCommands || loaded?.state === "ready" ? undefined
 		: !loaded || loaded.state === "loading" ? "Commands unavailable: loading the list from Pi…"
 		: loaded.code === "no_control" ? "No control socket: Enter types a Pi command into the Pi pane's empty input box, and Pi runs it there"
-		: loaded.code === "commands_unsupported" ? loaded.message
+		: loaded.code === "version_skew" ? loaded.message
 		: `Commands unavailable: ${loaded.message}`;
-	const list: Command[] = pi
-		? [
-				{ name: "stop", help: "Interrupt the current run (Esc)", run: () => abort() },
-				...(loaded?.state === "ready"
-					? loaded.value.commands
-							.filter((c) => c.name !== "stop")
-							.map((c) => ({ name: c.name, args: c.argsHint, help: c.supported ? (c.description ?? c.source) : "Only in the Pi pane", disabled: !c.supported }))
-					: []),
-			]
-		: [
-		...commands({ host, threadId, view, summary, models, actions, say: setNote }),
-		...extraCommands(extras),
-			];
+	const list: Command[] = [
+		{ name: "stop", help: "Interrupt the current run (Esc)", run: () => abort() },
+		...(loaded?.state === "ready"
+			? loaded.value.commands
+					.filter((c) => c.name !== "stop")
+					.map((c) => ({ name: c.name, args: c.argsHint, help: c.supported ? (c.description ?? c.source) : "Only in the Pi pane", disabled: !c.supported }))
+			: []),
+	];
 	// After `/model `, complete from the models this Pi can use and mark the current one.
 	const modelRefs = loaded?.state === "ready" && /^\/model \S*$/.test(text)
 		? loaded.value.models.map((m) => ({ name: `model ${m.ref}`, help: m.ref === loaded.value.model ? "current" : (m.name ?? "") }))
@@ -413,8 +280,7 @@ export function Composer({
 	}, [text]);
 	// The Session's image capability, or why it has none. admitImages decides every offered file against it.
 	const capability: ImageLimits | string = summary?.images
-		?? (!pi ? "this AmPi node is too old to take images; restart it"
-			: summary?.control ? "this Pi Session cannot take images from AmPi yet: update pi-hc-control and /reload in the Pi pane"
+		?? (summary?.control ? "this model does not accept images"
 			: "this Session has no live control socket, so AmPi cannot send images; paste them in the Pi pane");
 	const takesImages = typeof capability !== "string";
 	// --touch-fields is the one definition; read it again after mount and when the pointer media changes.
@@ -440,33 +306,6 @@ export function Composer({
 		const failed = read.flatMap((r, i) => (r.status === "rejected" ? [accepted[i]!.name] : []));
 		if (failed.length) setError([rejectionLine(rejected), `${failed.join(", ")} could not be read`].filter(Boolean).join(" · "));
 	};
-	/**
-	 * A non-Pi submission that starts with `/`: true when a composer command ran or the submission came back, false
-	 * to send it to the agent unchanged. A name that is not built in waits for this cwd's templates and skills, so
-	 * a `/template` typed before they arrive never goes out as text; without them the owner chooses.
-	 */
-	const runCommand = async (submission: Draft<Image>, content: string, whenBusy: "followUp" | "steer"): Promise<boolean> => {
-		const match = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(content);
-		if (!match) return false;
-		const name = match[1]!.toLowerCase();
-		let command = list.find((c) => c.name === name);
-		if (!command) {
-			const loaded = await loadExtras().catch((e: Error) => e);
-			if (loaded instanceof Error) {
-				const message = `Templates and skills did not load (${loaded.message})`;
-				offerText(content, message, whenBusy, reclaim(returnSubmission(submission, refused(message), false)));
-				return true;
-			}
-			command = extraCommands(loaded).find((c) => c.name === name);
-		}
-		if (!command?.run) return false;
-		try {
-			await command.run(match![2] ?? "");
-		} catch (e) {
-			returnSubmission(submission, failed(e));
-		}
-		return true;
-	};
 	const offerText = (content: string, message: string, whenBusy: "followUp" | "steer", claim: () => Draft<Image> | undefined) =>
 		setChoice({
 			message: `${message}. Nothing was sent.`,
@@ -479,17 +318,18 @@ export function Composer({
 	const runTyped = async (submission: Draft<Image>, content: string, name: string, args: string, whenBusy: "followUp" | "steer", abortTurn = false): Promise<void> => {
 		try {
 			const ack = await hub.request(host, "thread.command", { threadId, name, ...(args ? { args } : {}), key: submission.key, whenBusy, ...(abortTurn ? { abort: true } : {}) });
-			// A command can change the list or the current model: load it again at the next `/`.
+			// A typed command can change the model or effort. Read current metadata before the chip shows it.
 			commandsRequest.current = undefined;
 			loadedRef.current = undefined;
 			setPiCommands(undefined);
+			if (summary?.control) void loadCommands(true);
 			// Say what the acknowledgement proves (D15): keys show only that the command was typed into the pane.
 			setNote(ack.evidence === "sent" ? `Typed /${name} into the Pi pane (no receipt; its result shows there)` : ack.notice ?? (ack.disposition === "started" ? "Started a turn" : ack.disposition === "queued" ? "Queued" : `Sent /${name} to Pi`));
 		} catch (e) {
 			const { code, message } = e as Error & { code?: string };
 			// A typed refusal is a final reply under this key; only an unknown outcome keeps the key for a retry.
 			// A choice names the refusal itself; every other refusal says its reason beside the returned draft.
-			const offer = code === "commands_unsupported" || code === "unknown_command";
+			const offer = code === "unknown_command";
 			const claim = reclaim(returnSubmission(submission, failed(e), !(offer || (code === "busy" && name === "compact"))));
 			if (code === "busy" && name === "compact")
 				return setChoice({
@@ -528,7 +368,8 @@ export function Composer({
 			return true;
 		}
 		if (current.state !== "ready") {
-			if (current.state === "failed" && current.code === "commands_unsupported") offer(current.message.replace(/\.$/, ""));
+			// A control of another build takes no op, so there is no text to offer either.
+			if (current.state === "failed" && current.code === "version_skew") returnSubmission(submission, refused(current.message));
 			else returnSubmission(submission, refused(`Commands unavailable: ${current.state === "failed" ? current.message : "the list did not load from Pi"}`));
 			return true;
 		}
@@ -549,19 +390,16 @@ export function Composer({
 		setError(undefined);
 		setChoice(undefined);
 		const plain = submission.images.length === 0;
-		if (plain && pi && content.startsWith("//")) return deliver(submission, content.slice(1), whenBusy, true);
-		if (plain && pi && content.startsWith("/") && (await piCommand(submission, content, whenBusy))) return;
-		if (plain && !pi && (await runCommand(submission, content, whenBusy))) return;
+		if (plain && content.startsWith("//")) return deliver(submission, content.slice(1), whenBusy, true);
+		if (plain && content.startsWith("/") && (await piCommand(submission, content, whenBusy))) return;
 		return deliver(submission, content, whenBusy);
 	};
 	/**
 	 * Sends `content` with the submission's images under its key. A failure gives the submission back as typed, so an
-	 * escaped `//text` stays escaped. It keeps its key only when the outcome is uncertain: a retry after a lost response
-	 * is then placed once on the durable node. `asText` marks slash text that the owner chose to send as a message.
+	 * escaped `//text` stays escaped. It keeps its key only when the outcome is uncertain. `asText` marks slash text that the owner chose to send as a message.
 	 */
 	const deliver = async (submission: Draft<Image>, content: string, whenBusy: "followUp" | "steer", asText = false) => {
 		setError(undefined);
-		actions.follow();
 		const sent = submission.images;
 		try {
 			const ack = await hub.request(host, "thread.submit", {
@@ -573,7 +411,7 @@ export function Composer({
 				...(sent.length ? { images: sent.map(({ data, mimeType }) => ({ data, mimeType })) } : {}),
 			});
 			// Say what the acknowledgement proves (D15): typed keys prove less than the control extension's admission.
-			if (pi && ack?.evidence) setNote(ack.evidence === "sent" ? "Typed into the pane (no admission receipt)" : ack.evidence === "started" ? "Started a turn" : whenBusy === "steer" ? "Steer admitted" : "Queued");
+			if (ack?.evidence) setNote(ack.evidence === "sent" ? "Typed into the pane (no admission receipt)" : ack.evidence === "started" ? "Started a turn" : whenBusy === "steer" ? "Steer admitted" : "Queued");
 		} catch (e) {
 			returnSubmission(submission, failed(e));
 		}
@@ -641,7 +479,7 @@ export function Composer({
 										Edit here
 									</button>
 								)}
-								{!(pi && item.state === "queued") && (
+								{item.state !== "queued" && (
 									<button className="btn ghost small" title={outcome ? "Dismiss" : "Withdraw"} onClick={() => void hub.request(host, "thread.withdraw", { threadId, submissionId: String(item.id) }).catch((e) => setError(hostErrorMessage(e, label)))}>
 										×
 									</button>
@@ -675,29 +513,9 @@ export function Composer({
 						</div>
 					))}
 					<div className="hint slash-foot" data-commands-hint={commandsHint ? "" : undefined}>
-						{commandsHint ?? (pi ? "Tab completes · //text sends /text as a message" : "Tab completes · other /words go to the agent as written")}
+						{commandsHint ?? "Tab completes · //text sends /text as a message"}
 					</div>
 				</Popover>
-			)}
-			{/* Keyed on this thread's model: a thread started before sign-in stays on the simulator until switched. */}
-			{!pi && model.startsWith("ampi-sim/") && models.length > 0 && (
-				<div className="model-banner attn-box" data-no-model>
-					{realDefault ? (
-						<>
-							<span style={{ flex: 1 }}>This thread runs on the offline simulator, which only demonstrates the interface.</span>
-							<button className="btn small primary" onClick={() => void hub.request(host, "thread.configure", { threadId, model: { provider: realDefault.provider, modelId: realDefault.id } })}>
-								Switch to {realDefault.name}
-							</button>
-						</>
-					) : (
-						<>
-							<span style={{ flex: 1 }}>No model is signed in on this host. Replies come from the offline simulator, which only demonstrates the interface.</span>
-							<button className="btn small primary" onClick={() => openAccounts(host)}>
-								Set up models
-							</button>
-						</>
-					)}
-				</div>
 			)}
 			<div className="composer" ref={box} data-region="composer" tabIndex={-1}>
 				{custody.returned.map((held) => (
@@ -735,7 +553,7 @@ export function Composer({
 					value={text}
 					rows={1}
 					aria-label="Message the agent"
-					placeholder={composerHint({ busy, pi, control: Boolean(summary?.control), images: takesImages, touch })}
+					placeholder="Message the agent…"
 					onChange={(e) => {
 						setText(e.target.value);
 						setChoice(undefined);
@@ -790,12 +608,9 @@ export function Composer({
 						))}
 					</div>
 				)}
+				{/* Help and battery keep fixed slots across run states. Draft attachments own their preview row. */}
 				<div className="composer-bar">
-					{takesImages && (
-					<button className="btn ghost small" title="Attach images (or paste or drop them)" onClick={() => fileInput.current?.click()}>
-						＋ Image
-					</button>
-					)}
+					<ComposerHelp hint={composerHint({ busy, control: Boolean(summary?.control), images: takesImages, touch })} capability={capability} choose={() => fileInput.current?.click()} />
 					<input
 						ref={fileInput}
 						type="file"
@@ -807,56 +622,24 @@ export function Composer({
 							e.target.value = "";
 						}}
 					/>
-					{pi ? (
-						summary?.model && <ModelHudCard summary={summary} />
-					) : (
-					<>
-					<select
-						value={model}
-						title="Model"
-						onChange={(e) => {
-							const [provider, ...id] = e.target.value.split("/");
-							void hub.request(host, "thread.configure", { threadId, model: { provider, modelId: id.join("/") } });
-						}}
-					>
-						{!models.some((m) => `${m.provider}/${m.id}` === model) && model && <option value={model}>{model}</option>}
-						{models.map((m) => (
-							<option key={`${m.provider}/${m.id}`} value={`${m.provider}/${m.id}`}>
-								{m.provider}/{m.id}
-							</option>
-						))}
-					</select>
-					<select
-						value={agent?.thinkingLevel ?? "medium"}
-						title="Thinking level"
-						onChange={(e) => void hub.request(host, "thread.configure", { threadId, thinkingLevel: e.target.value })}
-					>
-						{THINKING.map((level) => (
-							<option key={level} value={level}>
-								thinking: {level}
-							</option>
-						))}
-					</select>
-					</>
-					)}
-					<span className="grow" />
-					{summary && <ContextMeter summary={summary} />}
+					<ContextMeter summary={summary} />
+					<ModelHudCard summary={summary} thinking={metadata?.thinking} thinkingLevels={metadata?.thinkingLevels} onOpen={() => void loadCommands(true)} />
 					<div className="composer-actions">
 					{busy ? (
 						<>
-							<button className="btn small" onClick={() => void send("followUp")} disabled={!text.trim() && images.length === 0} title="Queue a follow-up for when the agent finishes (Alt+Enter)">
-								Queue
+							<button className="btn small" aria-label="Queue" onClick={() => void send("followUp")} disabled={!text.trim() && images.length === 0} title="Queue a follow-up for when the agent finishes (Alt+Enter)">
+								<span className="action-label">Queue</span>
 							</button>
-							<button className="btn small" onClick={() => void send("steer")} disabled={!text.trim() && images.length === 0} title="Steer: deliver after the current tool round (Enter)">
-								Steer ↵
+							<button className="btn small" aria-label="Steer ↵" onClick={() => void send("steer")} disabled={!text.trim() && images.length === 0} title="Steer: deliver after the current tool round (Enter)">
+								<span className="action-label">Steer</span>
 							</button>
-							<button className="btn small danger" onClick={abort} title="Interrupt (Esc)">
-								■ Stop
+							<button className="btn small danger" aria-label="■ Stop" onClick={abort} title="Interrupt (Esc)">
+								<span className="action-label">Stop</span>
 							</button>
 						</>
 					) : (
-						<button className="btn primary small" onClick={() => void send("steer")} disabled={!text.trim() && images.length === 0}>
-							Send ↵
+						<button className="btn primary small" aria-label="Send ↵" onClick={() => void send("steer")} disabled={!text.trim() && images.length === 0}>
+							<span className="action-label">Send</span>
 						</button>
 					)}
 					</div>

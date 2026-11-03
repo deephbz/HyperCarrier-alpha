@@ -6,7 +6,7 @@
  */
 import type { Target } from "./focus.ts";
 import { native } from "./native.ts";
-import { canonicalRoute, parseRoute } from "./route.ts";
+import { parseRoute } from "./route.ts";
 
 /** `nav`: depth from the first AmPi entry; null when unknown (an entry written before this code). */
 /** `revealed`: the entry's linked entry (`?e=`) was revealed; a return to the entry keeps its place instead. */
@@ -140,9 +140,8 @@ export const revealStore = {
  * it is already the route; `reveal: false` keeps the current request (a panel change that keeps the linked entry).
  */
 export function navigate(to: string, hint?: "replace", { reveal: ask = true }: { reveal?: boolean } = {}): boolean {
-	to = canonicalRoute(to);
 	if (ask) requestReveal(to);
-	if (to === canonicalRoute(location.hash)) return false;
+	if (to === location.hash) return false;
 	flushEntry();
 	const was = entryState();
 	if (entryKind(location.hash, to, hint) === "push") {
@@ -162,9 +161,7 @@ export type Arrival = { kind: "same" } | { kind: "new" } | { kind: "traverse"; f
 
 /**
  * Call after each route change renders, and once at boot. Back, Forward and a reload return the focus target the entry
- * held. An unstamped entry is new: the boot entry of a fresh tab gets depth 0, an external hash edit gets depth + 1,
- * and an entry with older AmPi state gets an unknown depth. Known error, once per tab after deploy: an older entry
- * written by `location.hash =` also has null state, so reloading it stamps depth 0 and the app's Back stops there.
+ * held. An unstamped entry is new: the boot entry of a fresh tab gets depth 0 and an external hash edit gets depth + 1.
  */
 export function arriveEntry(): Arrival {
 	const s = state();
@@ -173,15 +170,13 @@ export function arriveEntry(): Arrival {
 		current = { id: s.id, nav: s.nav ?? null };
 		if (unwritten.has(s.id)) timer ??= setTimeout(flushEntry, FLUSH_MS);
 		// Back, Forward and a reload return to the place the entry held (D20); only an entry never revealed reveals its link.
-		if (canonicalRoute(location.hash) !== location.hash) history.replaceState(s, "", canonicalRoute(location.hash));
 		requestReveal(entryState().place || entryState().revealed ? "" : location.hash);
 		return { kind: "traverse", focus: entryState().focus };
 	}
 	const boot = current.id === undefined;
-	const nav = boot ? (history.state === null ? 0 : null) : current.nav === null ? null : current.nav + 1;
+	const nav = boot ? 0 : current.nav === null ? null : current.nav + 1;
 	current = { id: newId(), nav };
-	// An older link-key link (a bookmark, a pasted URL) arrives in place as the Session's one route: no new entry.
-	history.replaceState({ ...s, id: current.id, nav }, "", canonicalRoute(location.hash));
+	history.replaceState({ ...s, id: current.id, nav }, "", location.hash);
 	// A boot or an external hash edit arrives without navigate: its linked entry is a request too.
 	requestReveal(location.hash);
 	return { kind: "new" };

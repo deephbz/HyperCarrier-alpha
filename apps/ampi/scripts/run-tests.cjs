@@ -226,7 +226,7 @@ function runFile(file) {
 				else times[name(file)] = Math.round(times[name(file)] ? (times[name(file)] + ms) / 2 : ms);
 			}
 			for (const proc of left)
-				console.log(`STRAY ${name(file)}: pid ${proc.pid} had not ended when the file did, outside its process group; the runner ended it. Usual causes: a test started a detached process and did not stop it, or did not await its exit.${/ampi\.mjs node(\s|$)/.test(proc.command) ? ' A Hub with a `kind: "local"` Host and no running node autostarts one.' : ""} Command: ${proc.command}`);
+				console.log(`STRAY ${name(file)}: pid ${proc.pid} had not ended when the file did, outside its process group; the runner ended it. Usual causes: a test started a detached process and did not stop it, or did not await its exit. Command: ${proc.command}`);
 			console.log(`▸ ${timeout ? "timeout" : code === 0 && !left.length ? "pass" : "fail"} ${name(file)} ${(ms / 1000).toFixed(1)} s`);
 			done();
 		});

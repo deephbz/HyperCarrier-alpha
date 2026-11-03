@@ -16,10 +16,10 @@ import { engineSkip } from "./engines.ts";
 
 const web = fileURLToPath(new URL("../web", import.meta.url));
 const ORIGIN = "http://ampi-lan.test";
-const HOST = { id: "devbox", link: "devbox#durable", label: "devbox", kind: "durable", status: "connected" };
-const THREAD = "c1";
+const HOST = { id: "devbox", link: "devbox#pi", label: "devbox", kind: "pi-local", status: "connected" };
+const THREAD = "pi:c1";
 const V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const view = { conversationId: THREAD, hiddenBefore: false, entries: [], live: {}, inbox: {}, agent: { cwd: "/work" }, usage: { costUsd: 0 } };
+const view = { conversationId: "c1", hiddenBefore: false, entries: [], live: {}, inbox: {}, agent: { cwd: "/work" }, usage: { costUsd: 0 } };
 const thread = { id: THREAD, title: "Insecure origin", createdAt: 0, updatedAt: 0, kind: "thread", activity: "idle", queued: 0, costUsd: 0 };
 
 async function appFiles() {
@@ -62,7 +62,7 @@ for (const engine of ["chromium", "webkit"] as const) {
 				} else if (frame.t === "req" || frame.t === "hub") send({ t: "res", id: frame.id, ok: false, error: { code: "unsupported", message: "not in this test" } });
 			});
 		});
-		await page.goto(`${ORIGIN}/#/h/${encodeURIComponent(HOST.link)}/t/${THREAD}`);
+		await page.goto(`${ORIGIN}/#/h/${HOST.id}/t/${THREAD}`);
 		assert.deepEqual(await page.evaluate(() => ({ secure: window.isSecureContext, uuid: typeof (crypto as { randomUUID?: unknown }).randomUUID })), { secure: false, uuid: "undefined" }, "the page runs in an insecure context");
 		const input = page.getByRole("textbox", { name: "Message the agent" });
 		// A missing secure-context API throws while rendering; report that error, not the wait's timeout.

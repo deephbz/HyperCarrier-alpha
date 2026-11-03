@@ -1,7 +1,8 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { CAP, frames, newButton, open, view } from "./thread-scroll-fixture.ts";
+import { engineSkip } from "./engines.ts";
+import { CAP, ENGINES, frames, newButton, open, view } from "./thread-scroll-fixture.ts";
 
 // A split entry's fragment in a frozen window (see thread-scroll-frozen.test.ts) keeps its place across downward
 // extensions and trims, with and without the conversation-only lens.
@@ -15,10 +16,10 @@ const splitWindow = (n: number, from: number) => ({ ...view(n, "", from), hidden
 		{ type: "text", text: `After tool ${id}. ${"More details. ".repeat(4 + (k % 3) * 6)}` },
 	] };
 }) });
-for (const [backend, lens] of [["pi", false], ["pi", true]] as const) {
+for (const engine of ENGINES) for (const [backend, lens] of [["pi", false], ["pi", true]] as const) {
 	for (const place of ["at the clamped bottom", "inside the extension band"] as const) {
-		test(`scroll hold: ${backend}${lens ? " conversation-only" : ""}, a downward extension keeps a read after-tool fragment ${place} in place`, async (t) => {
-			const { page, send } = await open(t, CAP, backend);
+		test(`scroll hold: ${backend}${lens ? " conversation-only" : ""}, a downward extension keeps a read after-tool fragment ${place} in place (${engine})`, { skip: engineSkip(engine) }, async (t) => {
+			const { page, send } = await open(t, CAP, backend, engine);
 			send(splitWindow(CAP, 0));
 			await page.locator("[data-region=transcript] .md", { hasText: `After tool e${CAP - 1}.` }).waitFor({ state: "attached" });
 			await frames(page);
@@ -59,9 +60,9 @@ for (const [backend, lens] of [["pi", false], ["pi", true]] as const) {
 		});
 	}
 }
-for (const [backend, lens] of [["pi", false], ["pi", true]] as const) {
-	test(`scroll hold: ${backend}${lens ? " conversation-only" : ""}, a trim that drops the whole first segment keeps the read fragment`, async (t) => {
-		const { page, send } = await open(t, CAP, backend);
+for (const engine of ENGINES) for (const [backend, lens] of [["pi", false], ["pi", true]] as const) {
+	test(`scroll hold: ${backend}${lens ? " conversation-only" : ""}, a trim that drops the whole first segment keeps the read fragment (${engine})`, { skip: engineSkip(engine) }, async (t) => {
+		const { page, send } = await open(t, CAP, backend, engine);
 		send(splitWindow(CAP, 0));
 		await page.locator("[data-region=transcript] .md", { hasText: `After tool e${CAP - 1}.` }).waitFor({ state: "attached" });
 		await frames(page);

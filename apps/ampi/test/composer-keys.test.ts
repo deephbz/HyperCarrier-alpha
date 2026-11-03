@@ -3,7 +3,24 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import ts from "typescript";
+import { modelLabel } from "../web/src/model-label.ts";
 import { COMPOSER_BUSY_HINT, COMPOSER_SHORTCUTS, composerHint, composerSubmission, freshPress } from "../web/src/composer-keys.ts";
+
+test("compact model labels preserve the HUD identity and omit unsupported effort", () => {
+ for (const [model, expected] of [
+  ["anthropic/claude-opus-5-5", "opus-5.5"],
+  ["anthropic/claude-3-5-sonnet-20241022", "sonnet-3.5"],
+  ["anthropic/claude-sonnet-4-5-20250929", "sonnet-4.5"],
+  ["provider/claude-haiku-3-5-2025-09-29", "haiku-3.5"],
+  ["provider/claude-opus-5-5-latest", "opus-5.5"],
+  ["openai/gpt-5", "gpt-5"],
+  ["provider/abcdefghijklmnopqrst", "abcdefghijklmnopqr…"],
+ ]) {
+  assert.equal(modelLabel(model!), expected);
+  assert.equal(modelLabel(model!, "high", ["off", "high"]), expected + " · high");
+  assert.equal(modelLabel(model!, "high", ["off"]), expected);
+ }
+});
 
 function source(name: string, dir = "components") {
 	return ts.createSourceFile(name, readFileSync(new URL(`../web/src/${dir}/${name}.tsx`, import.meta.url), "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -33,10 +50,10 @@ test("composer help and busy hint match submission keys; newline and IME input n
 	assert.deepEqual(COMPOSER_SHORTCUTS.filter(([key]) => key.includes("Enter")), [
 		["Enter", "Send, or steer while the agent works"], ["Alt+Enter", "Queue a follow-up"], ["Shift+Enter", "New line"],
 	]);
-	const hint = (touch: boolean) => evaluate(attribute("placeholder"), { busy: true, pi: true, summary: {}, takesImages: false, touch, composerHint });
+	const placeholder = textarea.attributes.properties.find((n) => ts.isJsxAttribute(n) && n.name.getText() === "placeholder") as ts.JsxAttribute;
+	assert.equal((placeholder.initializer as ts.StringLiteral).text,"Message the agent…","the default field shows no instructions");
+	assert.match(composer.text,/ComposerHelp hint=\{composerHint\(/,"the help control owns the full hint");
 	assert.equal(COMPOSER_BUSY_HINT, "Steer now (Enter) or queue a follow-up (Alt+Enter). Esc interrupts.");
-	assert.equal(hint(false), COMPOSER_BUSY_HINT);
-	assert.equal(hint(true), "Message · Enter steers");
 	for (const [modifiers, expected] of [
 		[{}, "steer"], [{ altKey: true }, "followUp"], [{ shiftKey: true }, null],
 		[{ altKey: true, shiftKey: true }, null], [{ isComposing: true }, null],
@@ -62,7 +79,6 @@ test("every field that sends on a key sends only on a fresh press", () => {
 	};
 	const fields = [
 		{ name: "Composer", handler: keyDown(source("Composer")), call: "send", chord: {} },
-		{ name: "new Session (Dialogs)", handler: keyDown(source("Dialogs"), "First message"), call: "create", chord: { metaKey: true } },
 		{ name: "new Pi agent (PiDialogs)", handler: keyDown(source("PiDialogs"), "First message"), call: "create", chord: { ctrlKey: true } },
 		{ name: "Rarebit ask", handler: keyDown(source("View", "views/rarebit")), call: "ask", chord: {} },
 	];
@@ -76,18 +92,16 @@ test("every field that sends on a key sends only on a fresh press", () => {
 });
 
 test("the empty composer's hint: a desktop keeps the full text; a touch device gets a short one that names the box", () => {
-	const hint = (touch: boolean, busy: boolean, pi: boolean, control: boolean, images = false) => composerHint({ busy, pi, control, images, touch });
-	assert.equal(hint(false, true, true, true), COMPOSER_BUSY_HINT);
-	assert.equal(hint(false, false, true, true, true), "Message the agent… (Enter starts a turn, Shift+Enter adds a line, / for commands, paste or drop images)");
-	assert.equal(hint(false, false, true, true), "Message the agent… (Enter starts a turn, Shift+Enter adds a line, / for commands)");
-	assert.equal(hint(false, false, true, false), "Message the agent… (Enter types it into the Herdr pane, Shift+Enter adds a line)");
-	assert.equal(hint(false, false, false, false), "Message the agent… (Enter sends, Shift+Enter adds a line, / for commands, paste or drop images)");
-	assert.equal(hint(true, true, true, true), "Message · Enter steers");
-	assert.equal(hint(true, false, true, true, true), "Message · Enter starts a turn");
-	assert.equal(hint(true, false, true, false), "Message · Enter types in Herdr");
-	assert.equal(hint(true, false, false, false), "Message · Enter sends");
+	const hint = (touch: boolean, busy: boolean, control: boolean, images = false) => composerHint({ busy, control, images, touch });
+	assert.equal(hint(false, true, true), COMPOSER_BUSY_HINT);
+	assert.equal(hint(false, false, true, true), "Message the agent… (Enter starts a turn, Shift+Enter adds a line, / for commands, paste or drop images)");
+	assert.equal(hint(false, false, true), "Message the agent… (Enter starts a turn, Shift+Enter adds a line, / for commands)");
+	assert.equal(hint(false, false, false), "Message the agent… (Enter types it into the Herdr pane, Shift+Enter adds a line)");
+	assert.equal(hint(true, true, true), "Message · Enter steers");
+	assert.equal(hint(true, false, true, true), "Message · Enter starts a turn");
+	assert.equal(hint(true, false, false), "Message · Enter types in Herdr");
 	// A phone keyboard has Enter but no modifier keys: no touch hint names one.
-	const touchHints = [true, false].flatMap(busy => [true, false].flatMap(pi => [true, false].flatMap(control => hint(true, busy, pi, control))));
+	const touchHints = [true, false].flatMap(busy => [true, false].flatMap(control => hint(true, busy, control)));
 	for (const text of touchHints) assert.doesNotMatch(text, /Alt|Shift|Ctrl|Esc|⌘|⌥/, `a touch hint names a key a phone lacks: ${text}`);
 });
 

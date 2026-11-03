@@ -58,7 +58,6 @@ export type PiViewSession = {
 	/** One page of Rarebit items before `before`; texts cut at 8 KiB unless `fullText`. */
 	rarebits(before?: string, fullText?: boolean, around?: string): RarebitValue;
 	rarebitSnapshot(maxChars: number): { context: string; evidenceHash: string; count: number; included: number; omittedChars: number; entry?: string };
-	arcSource(): import("./arc-build.ts").ArcSource;
 	nearest(at: number): string | undefined;
 	/** Entry timestamps (ms) by ID; null when the entry has none or is unknown. */
 	entryTimes(ids: string[]): Map<string, number | null>;
@@ -86,6 +85,8 @@ export type PiTeamsFrame = {
 export type PiViewContext = {
 	/** The Host ID (SSH alias, or the hub machine's hostname). */
 	host: string;
+	/** Host-authoritative Arc read copy and durable command route. */
+	arc?: import("../../hub/arc-replica.ts").ArcReplica;
 	/** A private, rebuildable directory for this view on this Host (created on first use). */
 	stateDir(view: string): string;
 	sessions(): PiViewSession[];
@@ -105,12 +106,12 @@ export type PiViewContext = {
 	command(cmd: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown>>;
 	/**
 	 * One isolated model call on the hub (`src/pi/ask.ts`): no Session, tools, or extensions; the hub's Pi credentials.
-	 * D16 permits Arc sidecar triggers. `purpose` picks the hub helper model; Arc supplies its resolved Pi setting.
+	 * `purpose` picks the hub helper model. Arc construction uses the Host service instead.
 	 * The answer names the model that answered. Rejects with `code`: no_model, no_result, model_error, timeout, busy.
 	 */
 	ask(req: AskRequest): Promise<AskResult>;
 	/** The exact `provider/id` that `ask` would use for `purpose` and `override`; rejects like `ask` with `no_model`. A
-	 * Build checks its models with it before its first call, so a missing model costs nothing. */
+	 * caller checks its model before its first call, so a missing model costs nothing. */
 	model(purpose: ModelPurpose, override?: string): Promise<string>;
 	/** Ask the host to recompute this view's subscriptions (for state that changed outside Session bytes). */
 	invalidate(view: string): void;

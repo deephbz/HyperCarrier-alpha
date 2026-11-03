@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
+import { quoteDraftOf, setQuoteDraft, subscribeQuoteDrafts } from "../composer-drafts.ts";
 import { Popover, at } from "./Popover.tsx";
 
 /** The selection end (`right`, `bottom`) is screen px from rects. */
 type Anchor = { right: number; bottom: number };
 /** `entry` and `fragment` name the selected entry part, so the anchor survives a re-render of that part. */
-type Pick = Anchor & { text: string; range: Range; entry: string; fragment: string };
+type Pick = Anchor & { text: string; range?: Range; entry: string; fragment: string };
 
 const BODIES = '[data-quote-body], .md, .thinking .body, .tool-body pre, .tool-body .diff';
 
@@ -61,7 +62,7 @@ function placement(root: HTMLElement, range: Range): Anchor | undefined {
  */
 function anchorRange(root: HTMLElement, pick: Pick): Range | undefined {
  const {range} = pick;
- if (!range.collapsed && range.startContainer.isConnected && range.endContainer.isConnected && root.contains(range.commonAncestorContainer)) return range;
+ if (range && !range.collapsed && range.startContainer.isConnected && range.endContainer.isConnected && root.contains(range.commonAncestorContainer)) return range;
  const entry = [...root.querySelectorAll(`[data-entry="${CSS.escape(pick.entry)}"]`)].find(el => (el.getAttribute('data-fragment') ?? '') === pick.fragment);
  if (!entry) return;
  const nodes: Text[] = [];
@@ -91,57 +92,77 @@ function held(root: HTMLElement, {right,bottom}: Anchor): Anchor {
 }
 
 /**
- * A selection stays local until Enter adds it to the Session draft. An open note follows its anchor through scroll,
- * resize, display zoom and transcript reflow, and keeps its draft and focus. The pill is a Popover below the selection's
- * end, inside the transcript.
+ * Quote custody lives outside this view. Only Enter or explicit cancel ends an open note.
+ * An open note follows its anchor through scroll, resize, display zoom and transcript reflow.
+ * It keeps its draft and focus. A missing anchor leaves the note pinned with its original quote.
+ * The pill is a Popover below the selection end, inside the transcript.
  */
-export function QuoteSelection({onQuote,transcript}: {onQuote:(text:string,note:string)=>void;transcript:RefObject<HTMLDivElement | null>}) {
- const [pick,setPick] = useState<Pick>();
- const [editing,setEditing] = useState(false);
- const [note,setNote] = useState("");
+export function QuoteSelection({onQuote,transcript,draftKey,enabled}: {onQuote:(text:string,note:string)=>void;transcript:RefObject<HTMLDivElement | null>;draftKey:string;enabled:boolean}) {
+ const quote = useSyncExternalStore(subscribeQuoteDrafts,()=>quoteDraftOf(draftKey));
+ const editing = !!quote;
+ const [pick,setPick] = useState<Pick | undefined>(()=>quote);
+ const [visible,setVisible] = useState(true);
+ const [pinned,setPinned] = useState(false);
+ const note = quote?.note ?? "";
  const input = useRef<HTMLInputElement>(null);
  const pill = useRef<HTMLDivElement>(null);
  const current = useRef(pick);current.current = pick;
- const cancel = () => {setEditing(false);setPick(undefined);setNote("");window.getSelection()?.removeAllRanges();};
+ const cancel = () => {setQuoteDraft(draftKey,undefined);setPick(undefined);window.getSelection()?.removeAllRanges();};
+ const open = (next: Pick) => {
+  const {text,entry,fragment,right,bottom} = next;
+  setPick(next);setVisible(true);
+  setQuoteDraft(draftKey,{text,entry,fragment,right,bottom,note:""});
+ };
  useEffect(() => {
   const root = transcript.current;
   if (!root) return;
-  const update = () => {if (!editing) setPick(selected(root));};
-  const key = (event: KeyboardEvent) => {
-   if (event.key === "Escape" && current.current && event.target instanceof Node && (root.contains(event.target) || pill.current?.contains(event.target))) {event.preventDefault();event.stopPropagation();cancel();return;}
-   if (event.key !== "q" || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || !(event.target instanceof Node) || !root.contains(event.target)) return;
-   if (event.target instanceof Element && event.target.closest("input, textarea, [contenteditable=true]")) return;
+  const update = () => {
+   if (editing || !enabled) return;
    const next = selected(root);
+   // DOM replacement can collapse the browser selection. It does not revoke the last pick.
+   if (next) {setPick(next);setVisible(true);}
+   else if (!window.getSelection()?.isCollapsed && window.getSelection()?.rangeCount) setPick(undefined);
+  };
+  const key = (event: KeyboardEvent) => {
+   if (event.isComposing || event.keyCode === 229) return;
+   const ownsEscape = event.target instanceof Node && (editing ? pill.current?.contains(event.target) : root.contains(event.target) || pill.current?.contains(event.target));
+   if (event.key === "Escape" && current.current && ownsEscape) {event.preventDefault();event.stopPropagation();cancel();return;}
+   if (editing || !enabled || event.key !== "q" || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || !(event.target instanceof Node) || !root.contains(event.target)) return;
+   if (event.target instanceof Element && event.target.closest("input, textarea, [contenteditable=true]")) return;
+   const next = selected(root) ?? (window.getSelection()?.isCollapsed ? current.current : undefined);
    if (!next) return;
-   event.preventDefault();event.stopPropagation();setPick(next);setEditing(true);
+   event.preventDefault();event.stopPropagation();open(next);
   };
   const follow = () => {
    const last = current.current;
    if (!last) return;
    const range = anchorRange(root,last), position = range && placement(root,range);
+   setVisible(editing || !!position);
+   setPinned(!position);
    const next = position ? {...last,...position,range} : {...last,...held(root,last)};
    if (next.range !== last.range || next.right !== last.right || next.bottom !== last.bottom) {current.current = next;setPick(next);}
   };
-  const reposition = () => {if (editing) follow();else setPick(selected(root));};
+  const reposition = follow;
   // Transcript reflow (a new message, a streamed delta, a grown row) fires no scroll or resize; coalesce it per frame.
   let frame = 0;
-  const reflow = () => {if (editing && !frame) frame = requestAnimationFrame(() => {frame = 0;follow();});};
+  const reflow = () => {if (!frame) frame = requestAnimationFrame(() => {frame = 0;follow();});};
   const mutations = new MutationObserver(reflow), sizes = new ResizeObserver(reflow);
-  if (editing) {mutations.observe(root,{childList:true,characterData:true,subtree:true});sizes.observe(root);}
+  mutations.observe(root,{childList:true,characterData:true,subtree:true});sizes.observe(root);
+  follow();
   document.addEventListener("selectionchange",update);
   document.addEventListener("keydown",key,true);
   root.addEventListener("scroll",reposition);
   for (const name of ["resize","ampi:display"]) window.addEventListener(name,reposition);
   return () => {mutations.disconnect();sizes.disconnect();cancelAnimationFrame(frame);document.removeEventListener("selectionchange",update);document.removeEventListener("keydown",key,true);root.removeEventListener("scroll",reposition);for (const name of ["resize","ampi:display"]) window.removeEventListener(name,reposition);};
- },[transcript,editing]);
+ },[transcript,editing,enabled,draftKey]);
  useEffect(() => {if (editing) input.current?.focus({preventScroll:true});},[editing]);
- if (!pick) return null;
+ if (!pick || (!editing && (!enabled || !visible))) return null;
  return <Popover ref={pill} className="quote-selection" anchor={() => current.current && at(current.current.right,current.current.bottom)} gap={4} bounds={() => transcript.current?.getBoundingClientRect()}>
   {editing ? <form onSubmit={event => {
    event.preventDefault();
    onQuote(pick.text,note);
    cancel();
-  }}><input ref={input} aria-label="Quote note (optional)" placeholder="Reply note (optional) · Enter adds quote to draft" value={note} onChange={event=>setNote(event.target.value)} /></form>
-   : <button className="btn small" onMouseDown={event=>event.preventDefault()} onClick={()=>setEditing(true)}>Quote <kbd>q</kbd></button>}
+  }}>{pinned && <blockquote className="quiet-scroll">{pick.text}</blockquote>}<input ref={input} onKeyDown={event => { if (event.key === "Enter" && (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)) event.preventDefault(); }} aria-label="Quote note (optional)" placeholder="Reply note (optional) · Enter adds quote to draft" value={note} onChange={event=>{if (quote) setQuoteDraft(draftKey,{...quote,note:event.target.value});}} /><button type="button" className="btn small" onClick={cancel}>Cancel</button></form>
+   : <button className="btn small" onMouseDown={event=>event.preventDefault()} onClick={()=>open(pick)}>Quote <kbd>q</kbd></button>}
  </Popover>;
 }

@@ -11,7 +11,6 @@ const hostFoldKey = (id: string) => `ampi.sidebar.hostCollapsed.${id}`;
 
 export function readHostFold(id: string): HostFold {
 	try {
-		// A fold saved by an older build also carries its away record; only `collapsed` is read.
 		const saved = JSON.parse(localStorage.getItem(hostFoldKey(id)) ?? "null") as Partial<HostFold> | null;
 		if (saved && typeof saved.collapsed === "boolean") return { collapsed: saved.collapsed };
 	} catch { /* Open by default if storage is unavailable or invalid. */ }

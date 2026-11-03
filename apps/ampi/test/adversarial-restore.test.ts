@@ -29,7 +29,7 @@ for (const [engine, type, path] of ENGINES) for (const heldEnter of [false, true
     },
   }) });
   await page.reload();
-  await page.getByTitle("Attach images (or paste or drop them)").waitFor();
+  await page.locator('.composer input[type="file"]').waitFor({state:"attached"});
   if (await page.getByTitle("Close panel", { exact: true }).isVisible()) await page.getByTitle("Close panel", { exact: true }).click();
   await page.setViewportSize({ width: 390, height: 720 });
   await sidesSettled(page);

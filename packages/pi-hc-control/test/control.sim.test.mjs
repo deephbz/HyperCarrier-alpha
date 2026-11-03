@@ -9,7 +9,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { SimWorld } from "@hypercarrier/pi-sim";
 import { socketPathFor } from "../src/endpoint.mjs";
-import { VERSION, createHcControlExtension } from "../src/extension.mjs";
+import { STAMP, VERSION, createHcControlExtension } from "../src/extension.mjs";
+import { controlStamp } from "../src/stamp.mjs";
 
 const tick = (ms = 1) => new Promise((resolve) => setTimeout(resolve, ms));
 async function until(predicate, label, limit = 2000) {
@@ -239,8 +240,6 @@ test("submit with images starts or queues one user entry that holds text and ima
     },
     async ({ world, ctl }) => {
       await world.run(async () => {
-        const status = await ctl({ id: "q", op: "status" });
-        assert.equal(status.value.images, 1);
         const started = await ctl({ id: "i", op: "submit", text: "SYN with image", images: [PNG], deliverAs: "followUp" });
         assert.equal(started.evidence, "started", JSON.stringify(started));
         assert.equal(world.sessionManager.getEntry(started.entryId).message.content[0].text, "SYN with image");
@@ -341,6 +340,11 @@ test("descriptor names the live Session; shutdown removes it and closes the sock
     const status = await world.run(() => ctl({ id: 1, op: "status" }));
     assert.equal(status.value.nonce, descriptor.nonce);
     assert.equal(status.value.sessionId, sessionId);
+    // The build stamp replaces capability flags: AmPi serves only a control of its own build.
+    assert.deepEqual(status.value.stamp, STAMP);
+    assert.match(STAMP.id, /^[0-9a-f]{12}$/);
+    assert.ok(Number.isInteger(STAMP.order) && STAMP.order > 0);
+    assert.equal("commands" in status.value || "images" in status.value, false);
 
     await world.run(() => world.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }));
     assert.equal(existsSync(path), false);
@@ -367,8 +371,6 @@ const entriesOf = (world, type) => world.sessionManager.getEntries().filter((e) 
 
 test("command /model changes the model and adds no user entry", async () => {
   await scenario({ replies: [{ text: "on the new model" }], ...altModels }, async ({ world, ctl }) => {
-    const status = await world.run(() => ctl({ id: "s", op: "status" }));
-    assert.equal(status.value.commands, 1, "status advertises the commands capability");
     const listed = await world.run(() => ctl({ id: "l", op: "commands" }));
     assert.ok(listed.value.models.some((m) => m.ref === "sim-alt/sim-alt-model"), JSON.stringify(listed.value.models));
     assert.equal(listed.value.model, "sim-provider/sim-model");
@@ -552,4 +554,18 @@ test("command /compact while busy is refused unless abort is explicit; a repeate
       assert.equal(entriesOf(world, "compaction").length, 1, "the repeated key did not compact twice");
     },
   );
+});
+
+test("a checkout without git metadata reports no stamp, so AmPi refuses the control", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "hc-stamp-"));
+  try {
+    writeFileSync(join(dir, "control.mjs"), "export {};\n");
+    assert.equal(controlStamp(dir), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  await scenario({ replies: [], control: { stamp: null } }, async ({ world, ctl }) => {
+    const status = await world.run(() => ctl({ id: 1, op: "status" }));
+    assert.equal(status.value.stamp, null);
+  });
 });

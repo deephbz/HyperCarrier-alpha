@@ -19,7 +19,7 @@ import { engineSkip } from "./engines.ts";
 const web = fileURLToPath(new URL("../web", import.meta.url));
 const ORIGIN = "http://localhost";
 const THREAD = "pi:s1";
-const HOST = { id: "devbox", link: "devbox", label: "devbox", kind: "local", status: "connected" };
+const HOST = { id: "devbox", link: "devbox", label: "devbox", kind: "pi-local", status: "connected" };
 
 async function componentBundle(): Promise<{ script: string; css: string }> {
 	const entry = join(web, "display-units-test-entry.js");

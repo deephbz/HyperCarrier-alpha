@@ -74,7 +74,7 @@ try {
   await check('layout shift seed (late banner)', shift(false), 'a', 'a');
   await check('layout shift fix (reserved slot)', shift(true), 'a', '');
   // The real sidebar uses AMPI selectors; keep this test on the same contract.
-  assert.equal(AMPI.childSelector, '[data-row-level="2"], .row.child');
+  assert.equal(AMPI.childSelector, '[data-row-level="2"]');
 } finally {
   await browser.close();
   for (const c of cases) console.log(`${c.got === c.expect ? 'ok  ' : 'FAIL'} ${c.name}: expected ${c.expect}, got ${c.got}${c.findings.length ? '\n      ' + c.findings.join('\n      ') : ''}`);

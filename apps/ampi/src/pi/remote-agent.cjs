@@ -5,7 +5,7 @@
 //
 // Out: hello, reset/chunk (Session bytes), agents {agents, panes, layout}, teams, limits, ack, live, beat, status.
 // In:  {t:'submit', id, session, pane?, text, deliverAs: 'steer'|'followUp', images?: [{data, mimeType}]}
-//        images go only through a live control that announces them (status.images); text may then be empty
+//        images go only through a live control; text may then be empty
 //      {t:'submit', id, pane, expectSession, text, deliverAs}   a spawned Session with no file yet (pane from the ledger)
 //      {t:'abort', id, session, pane?}
 //      {t:'commands', id, session}           slash commands, models and thinking levels from the live control
@@ -43,6 +43,9 @@ const path = require('path');
 const os = require('os');
 
 const cfg = JSON.parse(Buffer.from(process.env.HCM_CFG || 'e30=', 'base64').toString());
+// Consume transport payload before any child starts. The Arc bundle can exceed
+// Linux's 128 KiB limit for one environment or argv string.
+delete process.env.HCM_CFG;
 
 // ---- perf trace ----
 // With AMPI_TRACE=<runDir> the agent records Chrome Trace Event spans on the Unix-epoch µs clock: frames sent, Herdr
@@ -67,8 +70,7 @@ function traceFlush() {
 }
 if (tracing) {
   process.on('exit', traceFlush);
-  // The hub stops a local agent with SIGTERM; exit through the handler so the trace is written.
-  for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => process.exit(0));
+  // quit() exits after Arc launch work drains; the exit hook writes the trace.
 }
 const offsets = cfg.offsets || {};
 const tailBytes = cfg.tailBytes || 0;
@@ -100,15 +102,19 @@ let outBytes = 0, outBusy = false, outRetry = 0;
 const outHigh = 8 << 20; // pump() waits above this backlog
 const outMax = 1 << 30; // the hub stopped reading
 const transient = new Set(['EAGAIN', 'EWOULDBLOCK', 'ENOBUFS', 'ENOMEM', 'EINTR']);
-function quit(code, reason) {
+let arcRelay, quitting = false;
+async function quit(code, reason) {
+  if (quitting) return;
+  quitting = true;
   try { fs.writeSync(2, `remote-agent exit ${code}: ${reason}\n`); } catch {}
-  process.exit(code);
+  try { await (await arcRelay)?.close(); } finally { process.exit(code); }
 }
 for (const [sig, n] of [['SIGTERM', 15], ['SIGHUP', 1], ['SIGINT', 2]]) process.on(sig, () => quit(128 + n, sig));
 function out(o) {
+  if (quitting) return;
   const ts = tracing ? traceNow() : 0;
   const b = Buffer.from(JSON.stringify(o) + '\n');
-  (o.t === 'ack' ? ackQ : outQ).push(b); outBytes += b.length;
+  (o.t === 'ack' || o.t === 'arc.ack' || o.t === 'arc.status' || o.t === 'arc.hello' ? ackQ : outQ).push(b); outBytes += b.length;
   if (outBytes > outMax) quit(1, `stdout backlog ${outBytes} bytes; the hub stopped reading`);
   flush();
   // The span covers serialize and enqueue; the write itself is asynchronous.
@@ -397,14 +403,9 @@ async function liveControlFor(session) {
   return null;
 }
 const controlView = (r) => r ? {
-  live: true, idle: !!r.value.idle, compacting: !!r.value.compacting,
-  // The control serves typed slash commands (pi-hc-control `commands`/`command`).
-  ...(r.value.commands === 1 ? { commands: true } : {}),
-  // Its submit carries images (pi-hc-control status.images).
-  ...(r.value.images === 1 ? { images: true } : {}),
+  live: true, idle: !!r.value.idle, compacting: !!r.value.compacting, stamp: r.value.stamp ?? null,
   pending: { steer: r.value.pending?.steer ?? 0, followUp: r.value.pending?.followUp ?? 0 },
-  // An older control extension tracks no submissions: leave the key out, so absence proves nothing.
-  ...(Array.isArray(r.value.submissions) ? { submissions: r.value.submissions.map(submissionView) } : {}),
+  submissions: Array.isArray(r.value.submissions) ? r.value.submissions.map(submissionView) : [],
 } : null;
 // The endpoint's start: a Session with no file yet has no other age.
 const startedOf = (r) => { const at = Date.parse(r.descriptor.startedAt); return at ? { startedAt: at } : {}; };
@@ -543,6 +544,13 @@ function ackOf(msg, via, r) {
   out({ t: 'ack', id: msg.id, via, at: Date.now(), ...r });
 }
 const fail = (msg, via, code, message) => ackOf(msg, via, { ok: false, error: { code, message } });
+// AmPi serves only a control of its own build (P1): the hub sends the build it expects (cfg.controlStamp). A control
+// of another build, or of none, gets no op; the refusal carries its stamp, and the hub words it (build.ts controlSkew).
+function skewed(msg, r) {
+  if (r.value.stamp?.id === cfg.controlStamp?.id) return false;
+  ackOf(msg, 'control', { ok: false, error: { code: 'version_skew', message: 'pi-hc-control runs another build', control: r.value.stamp ?? null } });
+  return true;
+}
 
 // Exact pane<->Session binding on the named Herdr server. Never inferred from a pane ID alone.
 async function boundPane(msg) {
@@ -575,6 +583,7 @@ const fill = (argv, vars) => argv.map((x) => x.replace(/\{(pane|text)\}/g, (_, k
 async function viaControl(msg, req, r) {
   r ??= await liveControlFor(msg.session);
   if (!r) return false;
+  if (skewed(msg, r)) return true;
   try {
     const rep = await controlRequest(r.descriptor.socket, { id: `c${++controlSeq}`, ...req }, controlSubmitMs);
     if (rep.ok) ackOf(msg, 'control', {
@@ -597,7 +606,7 @@ async function viaCommandControl(msg, req, typed) {
   const r = msg.session ? await liveControlFor(msg.session) : null;
   if (!r && typed) return commandKeys(msg, typed);
   if (!r) return fail(msg, 'control', 'no_control', 'This Session has no live control socket, so AmPi cannot run slash commands; use the Pi pane');
-  if (r.value.commands !== 1) return fail(msg, 'control', 'commands_unsupported', "This Pi's control is too old for slash commands: update pi-hc-control and /reload in the Pi pane");
+  if (skewed(msg, r)) return;
   try {
     const rep = await controlRequest(r.descriptor.socket, { id: `c${++controlSeq}`, ...req }, controlSubmitMs);
     if (rep.ok) {
@@ -662,11 +671,10 @@ async function submit(msg) {
   const images = Array.isArray(msg.images) && msg.images.length ? msg.images : null;
   if (typeof msg.text !== 'string' || (!msg.text && !images)) return fail(msg, null, 'bad_request', 'text required');
   const deliverAs = msg.deliverAs === 'followUp' ? 'followUp' : 'steer';
-  // Keys cannot carry an image, and an older control drops the field: never send the text without its images.
+  // Keys cannot carry an image: never send the text without its images.
   if (images) {
     const r = msg.session ? await liveControlFor(msg.session) : null;
     if (!r) return fail(msg, 'control', 'no_control', 'This Session has no live control socket, so AmPi cannot send images; paste them in the Pi pane');
-    if (r.value.images !== 1) return fail(msg, 'control', 'images_unsupported', "This Pi's control is too old for images: update pi-hc-control and /reload in the Pi pane");
     return void await viaControl(msg, { op: 'submit', text: msg.text, deliverAs, images: images.map(({ data, mimeType }) => ({ data, mimeType })) }, r);
   }
   if (msg.session && await viaControl(msg, { op: 'submit', text: msg.text, deliverAs })) return;
@@ -873,7 +881,16 @@ async function closePane(msg) {
   ackOf(msg, 'herdr', { ok: true, evidence: 'closed' });
 }
 
+// The self-contained bundle owns service discovery; this agent only relays frames.
+function loadArc(bundle, known) {
+  if (quitting) return;
+  if (arcRelay) return arcRelay;
+  return arcRelay = import('data:text/javascript;base64,' + Buffer.from(bundle).toString('base64')).then(m => quitting ? null : m.relay(bundle, { host: cfg.host || os.hostname(), agentDir, known: known || {}, emit: out })).catch(e => { out({ t: 'arc.error', detail: String(e?.message || e) }); return null; });
+}
+if (cfg.arcBundle) loadArc(cfg.arcBundle, cfg.arcKnown);
 async function command(msg) {
+  if (msg.t === 'arc.bundle') { if (typeof msg.bundle === 'string') await loadArc(msg.bundle, msg.known); return; }
+  if (msg.t === 'arc.request') { const relay = await arcRelay; if (relay) return relay.command(msg); out({ t: 'arc.ack', requestId: msg.requestId, result: { outcome: 'unknown' } }); return; }
   if (msg.t === 'forget') {
     const p = msg.path;
     if (typeof p !== 'string' || !tracked.has(p) && !forgotten.has(p)) return fail(msg, null, 'source_unknown', 'Source is not tracked; keep the local copy');
@@ -1048,7 +1065,7 @@ function readLimits() {
 }
 
 if (tracing) traceEvents.push({ ph: 'i', s: 'p', name: 'hello', cat: 'startup', ts: traceNow(), pid: process.pid, tid: 0 });
-out({ t: 'hello', host: cfg.host || os.hostname(), pid: process.pid, herdr: !!herdr, herdrSession, controlOps: ['commands', 'command', 'command.keys', 'submit.images'], control: (() => { try { return fs.readdirSync(controlDir).some((f) => f.endsWith('.json')); } catch { return false; } })(), at: Date.now() });
+out({ t: 'hello', host: cfg.host || os.hostname(), pid: process.pid, herdr: !!herdr, herdrSession, control: (() => { try { return fs.readdirSync(controlDir).some((f) => f.endsWith('.json')); } catch { return false; } })(), at: Date.now() });
 for (const p of Object.keys(offsets)) track(p);
 discover();
 setInterval(discover, discoverMs);

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } fro
 import type { ThreadOutline } from "../../../src/shared/protocol.ts";
 import { hub } from "../client.ts";
 import { centerInList, href } from "../util.ts";
+import { readingLine } from "../keep-place.ts";
 import { Popover, hoverIntent } from "./Popover.tsx";
 import { railLayout, type RailLayout } from "./rail-layout.ts";
 
@@ -37,9 +38,6 @@ export function useThreadOutline(host: string, threadId: string, version?: strin
  */
 type PromptPlace = { inView: ReadonlySet<string>; current?: { id: string; text: string }; scrolledPast: boolean };
 export const NO_PLACE: PromptPlace = { inView: new Set(), scrolledPast: false };
-
-/** The reading line: the transcript's middle, where a reveal (Find, a link, a step) puts its target. */
-const readingLine = (box: DOMRect) => box.top + box.height / 2;
 
 /**
  * The reader's place as one entry: the first transcript entry whose bottom lies past the reading line. A folded group's

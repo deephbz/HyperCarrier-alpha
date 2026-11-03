@@ -5,8 +5,8 @@
   Full UX acceptance remains open.
 - Arc cache, boundary, model, command, and performance work remains open in
   AmPi.
-- AmPi's pi-durable node backend remains deferred. Its current live Session
-  path uses the Pi backend.
+- AmPi on main serves Pi Hosts only. See the [README](../README.md) for the
+  durable release.
 - Live Session discovery depends on the local operating system, Pi, and
   optional Herdr configuration. Remote access also depends on SSH setup.
 - Trace Viewer shows evidence present in Pi Session JSONL. It cannot recover

@@ -7,20 +7,13 @@ import { join } from "node:path";
 import { helperModel, ModelNotFound, resolveHelperModel, type CarrierModel } from "../src/hub/helper-models.ts";
 import { parsePiModels, piModelRegistry, setListTimeout } from "../src/pi/model-registry.ts";
 import { Hub, hubProof, loadHubConfig } from "../src/hub/hub.ts";
-import { runDaemon } from "../src/node/daemon.ts";
-import { hydrate } from "../src/plugins.ts";
-import { Browser, ownHome, tempHome } from "./helpers.ts";
+import { Browser, ownHome } from "./helpers.ts";
 
-const SIM = { provider: "ampi-sim", modelId: "sim-1" };
 const TOKEN = "a".repeat(64);
 
 
-test("hub: replicas stay exact through compaction, a repeated sub never doubles a stream, foreign origins are refused", async () => {
-	process.env.AMPI_WORKING_BUDGET = "2500";
-	process.env.AMPI_COMPACT_KEEP_RECENT = "200";
-	const home = tempHome();
-	const daemon = await runDaemon({ home, simTokensPerSecond: 50000, plugins: await hydrate() });
-	const hub = new Hub({ hosts: [{ id: "local", label: "Local", kind: "local", home }] }, { token: TOKEN });
+test("hub: foreign origins and missing or wrong keys are refused; the page learns the key once into an HttpOnly cookie", async () => {
+	const hub = new Hub({ hosts: [] }, { token: TOKEN });
 	const port = await hub.listen(0);
 	try {
 		const KEY = (p: number) => `ampi_k_${p}=${TOKEN}`;
@@ -37,63 +30,28 @@ test("hub: replicas stay exact through compaction, a repeated sub never doubles 
 		assert.match(login.headers.get("set-cookie") ?? "", new RegExp(`^${KEY(port)}; HttpOnly; SameSite=Strict`));
 		assert.deepEqual(await (await fetch(`http://127.0.0.1:${port}/api/health`)).json(), { ok: true, proof: hubProof(TOKEN) }, "health reveals nothing but a proof");
 		const browser = await Browser.open(port, undefined, KEY(port));
-		const threads = browser.sub("local", { kind: "threads" });
-		await browser.until(threads, () => true);
-		const create = { cwd: home, model: SIM, prompt: "first\n/sim long 4", requestId: "create-once" };
-		const { threadId } = await browser.req("local", "thread.create", create);
-		// A retried create (lost response, double submit) finds the same thread and does not resubmit its prompt.
-		const again = await Promise.all([browser.req("local", "thread.create", create), browser.req("local", "thread.create", create)]);
-		assert.deepEqual(again.map((r) => r.threadId), [threadId, threadId]);
-		// The same sid subscribed twice (a reconnect replay): the hub must keep exactly one node stream for it.
-		const view = browser.sub("local", { kind: "thread", threadId }, 9001);
-		browser.sub("local", { kind: "thread", threadId }, 9001);
-		for (const content of ["two\n/sim long 4", "three\n/sim long 4", "four\n/sim long 4"]) {
-			await browser.until<any>(threads, (v) => v.threads[threadId]?.activity === "idle" && v.threads[threadId]?.queued === 0);
-			await browser.req("local", "thread.submit", { threadId, content });
-			await new Promise((r) => setTimeout(r, 300));
-		}
-		const compacted = await browser.until<any>(view, (v) => v.entries.some((e: any) => e.kind === "compaction"), 20_000);
-		await browser.until<any>(threads, (v) => v.threads[threadId]?.activity === "idle" && v.threads[threadId]?.queued === 0);
-		await new Promise((r) => setTimeout(r, 500));
-		const replica = browser.values.get(view) as any;
-		const fresh = await browser.until<any>(browser.sub("local", { kind: "thread", threadId }), () => true);
-		assert.deepEqual(
-			replica.entries.map((e: any) => e.id),
-			fresh.entries.map((e: any) => e.id),
-			"the replica matches a fresh snapshot after compaction",
-		);
-		assert.ok(compacted.entries.length < 12);
-		assert.deepEqual(new Set(replica.entries.map((e: any) => e.id)).size, replica.entries.length, "no duplicated entries");
-		assert.deepEqual(browser.gaps, []);
-		const index = browser.values.get(threads) as any;
-		assert.equal(Object.values(index.threads).filter((t: any) => t.kind === "thread").length, 1, "one thread, not three");
-		const history = await browser.req("local", "thread.history", { threadId, before: "1000000", limit: 500 });
-		assert.equal(history.entries.filter((e: any) => e.kind === "user" && e.text.startsWith("first")).length, 1, "the prompt ran once");
+		await browser.when(() => browser.hosts !== undefined, 5000, "hosts frame");
 		browser.ws.close();
 	} finally {
 		await hub.close();
-		await daemon.stop();
-		delete process.env.AMPI_WORKING_BUDGET;
-		delete process.env.AMPI_COMPACT_KEEP_RECENT;
 	}
 });
 
-test("hub helper models: the per-call model, else hub.json models.<purpose>, else none; no env var or default; a bad entry names the file; unread keys and env vars are named; loading keeps models (failure: a built-in default or AMPI_RAREBIT_ASK_MODEL chose the model)", () => {
+test("hub helper models: the per-call model, else hub.json models.<purpose>, else none; no default; a bad entry names the file; an unknown key is named once; loading keeps models (failure: a built-in default chose the model)", () => {
 	const dir = mkdtempSync(join(tmpdir(), "ampi-models-")), file = join(dir, "hub.json"), none = join(dir, "missing.json");
 	const write = (body: unknown) => writeFileSync(file, typeof body === "string" ? body : JSON.stringify(body));
-	const saved = process.env.AMPI_RAREBIT_ASK_MODEL, warn = console.warn, warned: string[] = [];
+	const warn = console.warn, warned: string[] = [];
 	console.warn = (m: string) => { warned.push(m); };
 	try {
-		write({ hosts: [], models: { rarebitAsk: "p/hub" } });
-		process.env.AMPI_RAREBIT_ASK_MODEL = "p/env";
+		write({ hosts: [], models: { rarebitAsk: "p/hub", askModel: "p/typo" } });
 		assert.equal(helperModel("rarebitAsk", "p/arg", file), "p/arg");
 		assert.equal(helperModel("rarebitAsk", "", file), "p/hub", "an empty per-call model is no choice");
-		assert.equal(helperModel("rarebitAsk", undefined, none), null, "the env var is not read");
-		assert.deepEqual(warned, [`ampi hub: AMPI_RAREBIT_ASK_MODEL is ignored; set models.rarebitAsk in ${file}.`, `ampi hub: AMPI_RAREBIT_ASK_MODEL is ignored; set models.rarebitAsk in ${none}.`]);
-		helperModel("rarebitAsk", undefined, none);
-		assert.equal(warned.length, 2, "a note is logged once until the notes change");
-		delete process.env.AMPI_RAREBIT_ASK_MODEL;
+		assert.equal(warned.length, 1, warned.join("\n"));
+		assert.match(warned[0]!, /^ampi hub: models\.askModel is not a model key; use models\.rarebitAsk/);
+		helperModel("rarebitAsk", undefined, file);
+		assert.equal(warned.length, 1, "a note is logged once until the notes change");
 		assert.equal(helperModel("rarebitAsk", undefined, none), null);
+		write({ hosts: [], models: { rarebitAsk: "p/hub" } });
 		assert.deepEqual(loadHubConfig(file).models, { rarebitAsk: "p/hub" });
 		write({ hosts: [], models: { rarebitAsk: 5 } });
 		assert.throws(() => helperModel("rarebitAsk", undefined, file), /models.rarebitAsk/);
@@ -101,7 +59,6 @@ test("hub helper models: the per-call model, else hub.json models.<purpose>, els
 		assert.throws(() => helperModel("rarebitAsk", undefined, file), (e: Error) => e.message.includes(file));
 	} finally {
 		console.warn = warn;
-		if (saved === undefined) delete process.env.AMPI_RAREBIT_ASK_MODEL; else process.env.AMPI_RAREBIT_ASK_MODEL = saved;
 	}
 });
 

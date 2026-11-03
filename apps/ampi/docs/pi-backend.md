@@ -1,9 +1,9 @@
 # Pi backend for AmPi
 
 AmPi provides one GUI for Pi coding-agent Sessions running in Herdr panes on
-local and remote Hosts. The pi-durable node backend remains deferred. This
-file fixes the interfaces between the four parts so that each can be built and
-tested alone.
+local and remote Hosts. It serves Pi Hosts only; the [README](../../../README.md)
+names the durable release. This file fixes the interfaces between the four
+parts so that each can be built and tested alone.
 
 ```diagram
  Remote or local Host (SSH alias)                       Desktop (hub process)
@@ -12,6 +12,7 @@ tested alone.
 │   pi-hc-control extension                │          │   cache: append-only copy per Session file    │
 │   └ unix socket per Session              │◄─────────┤   reader: trace-analytics bounded ranges     │
 │ ~/.pi/agent/sessions/**.jsonl            │  actions │   topics: threads, thread, team               │
+│ Arc service · Builder · durable receipts │          │ Arc read copy · durable command outbox       │
 │ remote agent (src/pi/remote-agent.cjs),  ├─────────►│   ops: thread.submit, thread.abort            │
 │   sent inline over `ssh <alias>`         │  bytes,  │ Hub ── WebSocket ── React GUI                 │
 │   herdr CLI (layout, status, keys)       │  layout  └──────────────────────────────────────────────┘
@@ -49,7 +50,10 @@ socket and writes a descriptor; on shutdown it removes both.
   live Session.
 - Frames: one JSON object per line.
   - `{ id, op: "status" }` →
-    `{ id, ok: true, value: { sessionId, sessionFile, nonce, idle, compacting, pending: { steer, followUp }, submissions? } }`
+    `{ id, ok: true, value: { sessionId, sessionFile, nonce, idle, compacting, pending: { steer, followUp }, submissions, stamp } }`.
+    `stamp` is the control's build (`src/stamp.mjs`), null without git. The
+    remote agent refuses every op to a control whose stamp differs from the
+    hub's expected one with `version_skew` (P1).
   - `{ id, op: "submit", text, deliverAs: "steer" | "followUp" }` →
     `{ id, ok: true, evidence: "admitted" | "started", entryId?, submission? }` or
     `{ id, ok: false, error: { code, message } }`.
@@ -72,8 +76,7 @@ socket and writes a descriptor; on shutdown it removes both.
   Pi's editor draft holds it), or `dropped` (left undelivered, draft does not
   hold it). Pi's interactive abort and dequeue move queued input into the
   editor draft; Pi never sends it. An abort reply lists the submissions that
-  were queued when it began, with their outcome. An older extension sends no
-  `submissions`; absence proves nothing.
+  were queued when it began, with their outcome.
 - Input from this path is the owner's input; Pi records it as a user message.
 
 ## 2. Remote agent v2 (`apps/ampi/src/pi/remote-agent.cjs`)
@@ -225,6 +228,24 @@ and `thread.abort` go to its socket. The thread id is `pi:<descriptor
 sessionId>`, so the copy replaces the entry under the same id once the
 file arrives. A descriptor whose pid is dead, or whose socket does not answer
 with its nonce and file, is not presence.
+
+## 4a. Arc service link
+
+One Arc service per Host user and Pi agent directory serves every client.
+The hub link starts or updates it from its streamed bundle. Only matching
+builds exchange snapshots and commands. The service reads original Session
+JSONL through the published reader and Rarebit selector. It uses the Host's
+model, settings and sign-in.
+
+`src/arc/link.ts` owns the `arc.hello`, `arc.receipt`, `arc.status`,
+`arc.request` and `arc.ack` frames. The hub keeps its read copy and durable
+command outbox in each Host cache's `arc-replica/` namespace. It replays the
+same request ID and payload after reconnect or restart. Dismiss goes to the
+service; the hub never edits warning state. First replica use deletes old
+v2 hub receipts once.
+
+The [Arc contract](arc.md) owns build matching, lifecycle, maintenance and
+provisional Q1–Q3 limits. Panel reads stay local and do not start model calls.
 
 ## 5. Herdr control (stage 2)
 

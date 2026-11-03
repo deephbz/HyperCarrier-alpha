@@ -27,7 +27,7 @@ test("a fixed box in a component is an off-screen measuring copy, and the styles
 	assert.deepEqual(only(where(/position:\s*"?fixed/), ["components/Composer.tsx", "components/QuoteSelection.tsx"]), []);
 	const css = readFileSync(join(src, "styles.css"), "utf8");
 	const fixed = [...css.matchAll(/([^{}]+)\{[^}]*position:\s*fixed/g)].map((m) => m[1]!.trim().split("\n").at(-1)!.trim());
-	assert.deepEqual(fixed, [".popover", ".modal-back", ".toast"]);
+	assert.deepEqual(fixed, [".popover", ".modal-back", ".toast", ".skew-banner"]);
 });
 
 // Popover narrows each popover to the room the viewport leaves beside its anchor. A member that sizes its own width

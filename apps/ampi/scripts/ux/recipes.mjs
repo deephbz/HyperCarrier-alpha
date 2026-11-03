@@ -1,5 +1,5 @@
 // Exploration capture inventory. IDs are permanent; add variants instead of renumbering.
-// Only synthetic WebSocket projections are used for node-only and failure states.
+// Only synthetic WebSocket projections are used for failure states.
 export const thread = (name = 'lead', panel = '') => `#/h/devbox/t/pi%3Asess-${name}${panel ? `?p=${panel}` : ''}`;
 export const timeline = '#/v/timeline';
 export const arc = thread('big', 'arc');
@@ -22,7 +22,6 @@ add('S01.g', 'Timeline · focused moment', 'Timeline', timeline + '?focus=devbox
 add('S02.a', 'Overview · attention and Teams', 'Overview', '#/v/overview');
 add('S02.b', 'Overview · no Sessions', 'Overview', '#/v/overview', { variant: 'empty' });
 add('S02.c', 'Overview · loading', 'Overview', '#/v/overview', { variant: 'loading' });
-add('S02.d', 'Overview · setup checklist (frozen node UI)', 'Overview', '#/v/overview', { node: true, variant: 'empty' });
 add('S03.a', 'Session · idle composer', 'Session', thread('worker-gui'));
 add('S03.b', 'Session · live composer draft', 'Session', thread(), { setup: 'draft' });
 add('S03.c', 'Session · empty transcript', 'Session', thread('rarebit-empty'));
@@ -85,21 +84,6 @@ add('S08.a', 'Remote host · setup prompt', 'Global dialogs', timeline, { setup:
 add('S08.c', 'Jump palette · results', 'Global dialogs', timeline, { setup: 'palette' });
 add('S08.d', 'Jump palette · no match', 'Global dialogs', timeline, { setup: 'palette-empty' });
 add('S08.e', 'Keyboard help', 'Global dialogs', timeline, { setup: 'help' });
-add('S09.a', 'Models · provider settings', 'Settings', '#/v/overview', { setup: 'accounts', node: true });
-add('S09.b', 'Models · loading', 'Settings', '#/v/overview', { setup: 'accounts', node: true, pending: true });
-add('S09.c', 'Models · load failure', 'Settings', '#/v/overview', { setup: 'accounts', node: true, reject: true });
-add('S09.d', 'Models · API-key prompt (synthetic)', 'Settings', '#/v/overview', { setup: 'login', node: true });
-add('S09.e', 'Models · OAuth prompt (synthetic)', 'Settings', '#/v/overview', { setup: 'oauth', node: true });
-add('S10.a', 'Node UI · Info panel', 'Frozen node UI', thread('worker-gui', 'info'), { node: true });
-add('S10.b', 'Node UI · Changes panel', 'Frozen node UI', thread('worker-gui', 'changes'), { node: true });
-add('S10.c', 'Node UI · Changes error', 'Frozen node UI', thread('worker-gui', 'changes'), { node: true, reject: true });
-add('S10.d', 'Node UI · Shell panel', 'Frozen node UI', thread('worker-gui', 'shell'), { node: true });
-add('S10.e', 'Node UI · Rarebit panel', 'Frozen node UI', thread('worker-gui', 'rarebit'), { node: true });
-add('S10.f', 'Node UI · Team panel', 'Frozen node UI', thread('lead', 'team'), { node: true });
-add('S10.g', 'Node UI · new thread dialog', 'Frozen node UI', '#/v/overview', { node: true, setup: 'new-agent' });
-add('S10.h', 'Node UI · composer slash menu', 'Frozen node UI', thread('worker-gui'), { node: true, setup: 'slash' });
-add('S10.i', 'Node UI · image attachment', 'Frozen node UI', thread('worker-gui'), { node: true, setup: 'image' });
-add('S10.j', 'Node UI · full terminal', 'Frozen node UI', '#/h/devbox/x/ux-terminal', { node: true });
 add('S11.a', 'Unknown page · recovery', 'Recovery', '#/v/unknown-synthetic-page');
 add('S01.h', 'Timeline · zoomed range', 'Timeline', timeline, { setup: 'zoom' });
 add('S01.i', 'Timeline · stream inspector', 'Timeline', timeline, { setup: 'hover-stream' });
@@ -109,7 +93,6 @@ add('S03.w', 'Session · earlier transcript', 'Session', thread('big'), { read: 
 add('S04.p', 'Rarebit · earlier conversation window', 'Rarebit', thread('big', 'rarebit'), { setup: 'rb-top' });
 add('S05.n', 'Team · next Task page', 'Team', thread('lead', 'team'), { variant: 'large-team', setup: 'task-next' });
 add('S05.o', 'Team · read diagnostics', 'Team', thread('lead', 'team'), { variant: 'reader-missing', setup: 'team-diagnostics' });
-add('S10.k', 'Node UI · collapsed Host', 'Frozen node UI', thread('worker-gui'), { node: true, setup: 'host-collapse' });
 add('S04.q', 'Rarebit · previous user message', 'Rarebit', thread('worker-gui', 'rarebit'), { setup: 'rb-prev' });
 add('S04.r', 'Rarebit · next user message', 'Rarebit', thread('worker-gui', 'rarebit'), { setup: 'rb-next' });
 add('S04.u', 'Conversation lens · expanded tool run', 'Rarebit', thread('worker-gui', 'rarebit'), { setup: 'lens-tools' });

@@ -48,13 +48,6 @@ try {
 			return;
 		}
 	}
-	try {
-		const packageDir = path.dirname(path.dirname(require.resolve("node-pty")));
-		const helper = path.join(packageDir, "prebuilds", `${process.platform}-${process.arch}`, "spawn-helper");
-		if (fs.existsSync(helper) && (fs.statSync(helper).mode & 0o111) === 0) fs.chmodSync(helper, 0o755);
-	} catch {
-		// node-pty is optional; its platform support is checked by terminal tests.
-	}
 } catch (error) {
 	console.error(`AmPi test preflight failed: ${error.message}`);
 	process.exitCode = 1;

@@ -4,7 +4,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, test, type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
-import { chromium, type Page } from "playwright";
+import { chromium, webkit, type Page } from "playwright";
+import { engineSkip } from "./engines.ts";
 import { build } from "vite";
 import react from "@vitejs/plugin-react";
 // @ts-ignore: shared browser discovery is plain ESM.
@@ -14,9 +15,6 @@ import { findChrome } from "../scripts/perf/browser.mjs";
 // served tail, so the reveal waits for thread.history; the reply comes 2 s later, after the reader's move or after a
 // change the reader did not start. Real ThreadView, stylesheet and hash navigation; synthetic hub frames.
 // Known gap: a text-selection drag that autoscrolls the transcript is not a reader move here, and does not end the request.
-// Known gap: the history cue ("Loading entry…") above the transcript stays until the reply, after the reader's move ended
-// the request. Its 37 px row moves a reader away from the end on screen. The scroll tests below compare scrollTop until
-// that is fixed (docs/current/now.md, Deferred).
 const web = fileURLToPath(new URL("../web", import.meta.url));
 const THREAD = "pi:s1";
 const DELAY = 2000;
@@ -61,12 +59,13 @@ const found = { hits: [{ entry: TARGET, ref: TARGET, threadId: THREAD, snippet: 
 
 let bundle: Promise<string> | undefined;
 let chrome: ReturnType<typeof chromium.launch> | undefined;
-after(async () => { await (await chrome)?.close(); });
+let safari: ReturnType<typeof webkit.launch> | undefined;
+after(async () => { await (await chrome)?.close(); await (await safari)?.close(); });
 
 /** A page whose thread.history replies arrive DELAY ms after their request; `asked` resolves at the request. */
-async function open(t: TestContext) {
+async function open(t: TestContext, engine: "chromium" | "webkit" = "chromium") {
 	const script = await (bundle ??= componentScript());
-	const browser = await (chrome ??= chromium.launch({ headless: true, executablePath: findChrome() }));
+	const browser = engine === "webkit" ? await (safari ??= webkit.launch({ headless: true })) : await (chrome ??= chromium.launch({ headless: true, executablePath: findChrome() }));
 	const page = await browser.newPage({ viewport: { width: 1000, height: 700 } });
 	t.after(() => page.context().close());
 	page.setDefaultTimeout(5000);
@@ -163,29 +162,31 @@ const scrolls: [string, (page: Page) => Promise<void>][] = [
 	}],
 	["PageUp", async (page) => { await page.locator(".scroll").focus(); await page.keyboard.press("PageUp"); }],
 ];
-for (const [name, scroll] of scrolls) test(`reveal cancel: ${name} before the history reply leaves the reader in place`, async (t) => {
-	const { page, history, afterReply } = await open(t);
+for (const engine of ["chromium", "webkit"] as const) for (const [name, scroll] of scrolls) test(`reveal cancel: ${name} before the history reply leaves the reader in place (${engine})`, { skip: engineSkip(engine) }, async (t) => {
+	const { page, history, afterReply } = await open(t, engine);
 	await reveal(page, history);
 	await scroll(page);
 	// On a slow runner the scroll lands later than 300 ms after the move: wait for it to leave the end, then to settle.
 	await page.waitForFunction(() => { const el = document.querySelector(".scroll")!; return el.scrollHeight - el.scrollTop - el.clientHeight > 2; });
 	await page.waitForTimeout(300);
-	const before = await place(page);
+	const before = await place(page), row = await anchor(page);
 	assert.equal(before.end, false);
 	await afterReply();
 	assert.equal(await targetInView(page), false, "the late reply does not move the reader");
-	assert.ok(Math.abs((await place(page)).top - before.top) <= 2, "the reader stays where they scrolled");
+	const after = await place(page), rowAfter = await screenTop(page, row.id);
+	t.diagnostic(JSON.stringify({ engine, input: name, rowDrift: rowAfter - row.top, scrollTopChange: after.top - before.top }));
+	assert.ok(Math.abs(rowAfter - row.top) <= 2, "the row the reader scrolled to keeps its screen position");
 });
 
-test("reveal cancel: the reader's send before the history reply goes to the newest end", async (t) => {
+test("reveal cancel: sending does not replace the pending history reveal", async (t) => {
 	const { page, history, afterReply } = await open(t);
 	await reveal(page, history);
 	const composer = page.getByRole("textbox", { name: "Message the agent", exact: true });
 	await composer.fill("hello");
 	await composer.press("Enter");
 	await afterReply();
-	assert.equal(await targetInView(page), false, "the late reply does not move the reader");
-	assert.equal((await place(page)).end, true);
+	assert.equal(await targetInView(page), true, "the requested reveal still owns navigation");
+	assert.equal((await place(page)).end, false);
 });
 
 test("reveal cancel: a Session switch and return before the history reply return to the reader's place", async (t) => {

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { existsSync } from 'node:fs';
 import { Readable } from 'node:stream';
 import { Entropy, Scheduler, wallNow } from './scheduler.mjs';
 import { ScriptedProvider } from './provider.mjs';
@@ -74,7 +75,10 @@ export class SimWorld {
     globalThis.fetch = this.provider.fetch.bind(this.provider);
     this.restores.push(() => { globalThis.fetch = oldFetch; });
     // Eagerly load provider modules before virtual time. Their algorithms remain unmodified.
-    const apiFile = join(this.piRoot, 'pi-ai', 'dist', 'api', `${APIs[this.family]}.js`);
+    // Load the pi-ai that pi-coding-agent itself resolves; a nested copy shadows the sibling.
+    const nested = join(this.piRoot, 'pi-coding-agent', 'node_modules', '@earendil-works', 'pi-ai');
+    const piAi = existsSync(nested) ? nested : join(this.piRoot, 'pi-ai');
+    const apiFile = join(piAi, 'dist', 'api', `${APIs[this.family]}.js`);
     await import(pathToFileURL(apiFile).href);
     if (this.family === 'bedrock') {
       // AWS uses a Node HTTP handler, not fetch. Intercept its serialized HTTP boundary.

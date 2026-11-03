@@ -11,9 +11,14 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { thread, timeline, arc } from '../ux/recipes.mjs';
 import { threadsSnapshot, topicSnapshot, paneCoverage, agentWatch } from './live-rows.mjs';
-import { app, checkout, settled as settleHub } from './hub.mjs';
+import { app, checkout, keyOf, settled as settleHub } from './hub.mjs';
+import { waitForDemoArc } from '../demo/cos.ts';
 import { timelineTeams } from './timeline-teams.mjs';
 import { navAnchors } from './nav-anchors.mjs';
+import { controlStamp } from '../../../../packages/pi-hc-control/src/stamp.mjs';
+
+/** A pi-hc-control build older than this checkout's: the Host's agent refuses it every op. */
+const OLDER_CONTROL = { id: '0ld000000000', order: 1, line: 'stable' };
 
 const num = text => Number(String(text).replace(/[^\d]/g, ''));
 const sideScroll = p => p.locator('.side-scroll');
@@ -503,8 +508,8 @@ function a21Rows(state) {
  * Session file, descriptor and pane sit in the disposable demo dir; the socket sits under /tmp for the short path a
  * Unix socket needs. Nothing reaches a real agent.
  */
-// `old` serves a control from before A27: status has no commands or images capability and the command ops are unknown.
-async function addCommandSession(state, { id = 'sess-verify-a27', pane = 'w1:p27', old = false } = {}) {
+// Its status reports this checkout's pi-hc-control build. `older` reports an older build: the Host's agent sends it no op.
+async function addCommandSession(state, { id = 'sess-verify-a27', pane = 'w1:p27', older = false } = {}) {
   const t = new Date().toISOString(), ms = Date.parse(t);
   const dir = join(state.demo, `agent/sessions/--work-${id}--`);
   mkdirSync(dir, { recursive: true });
@@ -520,8 +525,7 @@ async function addCommandSession(state, { id = 'sess-verify-a27', pane = 'w1:p27
   let model = models[0].ref, n = 0;
   const nonce = `n-a27-${process.pid}`, socket = `/tmp/ampi-a27-${process.pid}-${Date.now() % 1e6}.sock`, requests = [];
   const reply = req => {
-    if (req.op === 'status') return { ok: true, value: { sessionId: id, sessionFile: file, nonce, idle: true, compacting: false, pending: { steer: 0, followUp: 0 }, ...(old ? {} : { commands: 1, images: 1 }) } };
-    if (old && (req.op === 'commands' || req.op === 'command')) return { ok: false, error: { code: 'unknown_op', message: `unknown op ${req.op}` } };
+    if (req.op === 'status') return { ok: true, value: { sessionId: id, sessionFile: file, nonce, idle: true, compacting: false, pending: { steer: 0, followUp: 0 }, stamp: older ? OLDER_CONTROL : controlStamp() } };
     if (req.op === 'commands') return { ok: true, value: {
       commands: [
         { name: 'model', description: 'Select model', argsHint: '<provider/id>', source: 'builtin', supported: true },
@@ -538,7 +542,7 @@ async function addCommandSession(state, { id = 'sess-verify-a27', pane = 'w1:p27
     }
     if (req.op === 'submit') {
       const entry = `${id}-u${++n}`;
-      const images = (old ? [] : req.images ?? []).map(({ data, mimeType }) => ({ type: 'image', data, mimeType }));
+      const images = (req.images ?? []).map(({ data, mimeType }) => ({ type: 'image', data, mimeType }));
       append({ type: 'message', id: entry, message: { role: 'user', content: [{ type: 'text', text: req.text }, ...images], timestamp: Date.now() } });
       return { ok: true, evidence: 'started', entryId: entry };
     }
@@ -568,8 +572,8 @@ async function addCommandSession(state, { id = 'sess-verify-a27', pane = 'w1:p27
   writeFileSync(path, JSON.stringify(herdr));
   const userTexts = () => readFileSync(file, 'utf8').trim().split('\n').map(l => JSON.parse(l)).filter(r => r.type === 'message' && r.message.role === 'user').map(r => r.message.content[0].text);
   const close = () => { server.close(); rmSync(socket, { force: true }); };
-  // `upgrade` stands for the owner updating pi-hc-control and running /reload: the same socket now serves commands.
-  return { thread: `pi:${id}`, file, requests, userTexts, model: () => model, close, upgrade: () => { old = false; } };
+  // `upgrade` stands for the owner updating pi-hc-control and running /reload: the same socket now reports this build.
+  return { thread: `pi:${id}`, file, requests, userTexts, model: () => model, close, upgrade: () => { older = false; } };
 }
 
 export const journeys = [
@@ -1277,7 +1281,6 @@ export const journeys = [
     async run(j) {
       const p = j.page, box = p.getByRole('textbox', { name: 'Message the agent' });
       const s = await addFixture(j, () => addCommandSession(j.state), r => [r.thread]);
-      let old;
       // A synthetic 1x1 PNG pasted as the clipboard file a screenshot paste gives.
       const pastePng = () => box.evaluate(el => {
         const bytes = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAwS2OUAAAAABJRU5ErkJggg=='), c => c.charCodeAt(0));
@@ -1369,47 +1372,8 @@ export const journeys = [
           assert.equal(await p.locator('.attachments .attachment').count(), 0, 'the attachment stayed after a send');
           return { text: sent[0].text, images: sent[0].images.length, row: await row.count() };
         });
-        await j.step('old-control', 'Open a Session whose control predates A27, type /model anthropic/claude-opus-5-5 and press Enter; AmPi says the control is too old, nothing reaches Pi, and the draft stays', async () => {
-          old ??= await addFixture(j, () => addCommandSession(j.state, { id: 'sess-verify-a27-old', pane: 'w1:p28', old: true }), r => [r.thread]);
-          await j.goto(`#/h/devbox/t/${encodeURIComponent(old.thread)}`);
-          await assertEventually(async () => (await threadsOf(j.state)).some(t => t.id === old.thread && t.control === true), 'the Host never lists the old-control Session with a live control', 20_000);
-          await box.fill('/model anthropic/claude-opus-5-5');
-          await box.press('Enter');
-          const choice = p.locator('[data-command-choice]');
-          await choice.waitFor({ timeout: 10_000 }).catch(() => {});
-          const text = await choice.innerText().catch(() => '');
-          assert.deepEqual(old.userTexts().filter(t => t.startsWith('/model')), [], 'the /model command became a user message in the old-control Session');
-          assert.equal(old.requests.filter(r => r.op === 'submit').length, 0, 'the /model command reached the old control as text');
-          assert.match(text, /too old for slash commands.*Nothing was sent\./s, `the composer shows no too-old notice: "${text}"`);
-          assert.equal(await box.inputValue(), '/model anthropic/claude-opus-5-5', 'the draft was not kept');
-          return { choice: text, ops: old.requests.map(r => r.op) };
-        });
-        await j.step('old-control-image', 'Paste a PNG into the old-control Session; AmPi says to update pi-hc-control at once, attaches nothing, and keeps the draft', async () => {
-          await pastePng();
-          const alert = p.locator('.composer-feedback.error');
-          await alert.waitFor({ timeout: 10_000 });
-          const text = await alert.innerText();
-          assert.match(text, /cannot take images from AmPi yet: update pi-hc-control/, `the composer shows no update notice: "${text}"`);
-          assert.equal(await p.locator('.attachments .attachment').count(), 0, 'the old-control Session took an attachment');
-          assert.equal(await box.inputValue(), '/model anthropic/claude-opus-5-5', 'the draft was not kept');
-          assert.equal(old.requests.filter(r => r.op === 'submit').length, 0, 'the paste reached the old control');
-          return { alert: text };
-        });
-        await j.step('old-control-updated', 'Update the old control in place, then press Enter on the kept draft; the command runs, the model card shows Opus, and nothing reaches Pi as text', async () => {
-          old.upgrade();
-          // Two status probes after the update: the Host has listed the new capability at least once.
-          const probes = old.requests.filter(r => r.op === 'status').length;
-          await assertEventually(async () => old.requests.filter(r => r.op === 'status').length >= probes + 2, 'the Host never probed the updated control', 20_000);
-          await box.press('Enter');
-          await assertEventually(async () => old.model() === 'anthropic/claude-opus-5-5', `Enter on the kept draft did not run /model; the composer shows "${await p.locator('[data-command-choice]').innerText().catch(() => '')}"`, 10_000);
-          await assertEventually(async () => /claude-opus-5-5/.test(await p.locator('.model-hud-trigger').innerText().catch(() => '')), 'the model card does not show Opus after the update', 10_000);
-          assert.deepEqual(old.userTexts().filter(t => t.startsWith('/model')), [], 'the /model command became a user message');
-          assert.equal(old.requests.filter(r => r.op === 'submit').length, 0, 'the /model command reached Pi as text');
-          return { model: await p.locator('.model-hud-trigger').innerText(), ops: old.requests.filter(r => r.op !== 'status').map(r => r.op) };
-        });
       } finally {
         s.close();
-        old?.close();
       }
     },
   },
@@ -1840,11 +1804,13 @@ export const journeys = [
       /** One hub op over a fresh socket of `pg`; resolves the reply and the last pins frame. */
       const hubOp = (pg, op, args) => pg.evaluate(([op, args]) => new Promise((done, fail) => {
         const ws = new WebSocket(`ws://${location.host}/ws`); let pins;
-        ws.onopen = () => ws.send(JSON.stringify({ t: 'hub', id: 1, op, args }));
+        // The hub serves a hub op only to a page of its build, so the socket says the page's build first.
+        const build = document.querySelector('meta[name="ampi-build"]')?.content;
+        ws.onopen = () => { ws.send(JSON.stringify({ t: 'hello', build })); ws.send(JSON.stringify({ t: 'hub', id: 1, op, args })); };
         ws.onmessage = e => { const f = JSON.parse(e.data); if (f.t === 'pins') pins = f.pins; if (f.t === 'res') { ws.close(); done({ ok: f.ok, error: f.error, pins }); } };
         ws.onerror = () => fail(new Error('hub socket failed'));
       }), [op, args]);
-      // A pin is keyed by threadId alone, so an unpin with any host removes it; older hubs refuse an unpin with no host.
+      // A pin is keyed by threadId alone, so an unpin with any host removes it.
       const unpin = async id => { const r = await hubOp(p, 'pins.set', { host: 'verify', threadId: id, pinned: false }); assert(r.ok, `unpin ${id}: ${r.error}`); return r.pins ?? []; };
       const pinsNow = () => unpin('verify:none');
       /** A second window of the same browser profile: it shares the hub cookie, so it sees the same hub. */
@@ -1862,7 +1828,8 @@ export const journeys = [
       // The Host route key (HostState `link`, such as devbox#pi), as the row's href encodes it.
       // The link key of the Host section that lists the Session. A Session href names the Host by Host ID; a pin hint
       // keeps the link key.
-      const linkOf = id => p.locator(`.side-scroll .row[data-thread="${id}"]`).first().evaluate(row => { const s = row.closest('.side-section'); return `${s.dataset.host}#${s.dataset.backend === 'pi' ? 'pi' : 'durable'}`; });
+      const linkOf = id => p.locator(`.side-scroll .row[data-thread="${id}"]`).first().evaluate(row => { const s = row.closest('.side-section'); return `${s.dataset.host}#pi`; });
+      const hostOf = async id => (await linkOf(id)).replace(/#pi$/, '');
       await j.step('menu-pins-everywhere', 'Right-click a Session row and choose Pin to top; a second window shows the pin', async () => {
         await rows.first().click({ button: 'right' });
         const label = await p.locator('.row-menu button').innerText();
@@ -1878,7 +1845,7 @@ export const journeys = [
       await j.step('star-unpins-elsewhere', 'In a second window, open the pinned Session and clear its star; the first window drops the pin', async () => {
         const w = await window2();
         try {
-          await w.page.goto(`${j.state.origin}/#/h/${encodeURIComponent(await linkOf(a))}/t/${encodeURIComponent(a)}`);
+          await w.page.goto(`${j.state.origin}/#/h/${encodeURIComponent(await hostOf(a))}/t/${encodeURIComponent(a)}`);
           const star = w.page.locator('.pin-star');
           await assertEventually(async () => (await star.getAttribute('aria-pressed')) === 'true', 'the star does not show the pin', 15_000);
           await star.click();
@@ -1887,8 +1854,8 @@ export const journeys = [
         } finally { await w.close(); }
       });
       await j.step('one-row-per-session', 'Pin two Sessions; keys still visit each Session once and one row is current', async () => {
-        await hubOp(p, 'pins.set', { host: await linkOf(a), threadId: a, pinned: true, intent: 'owner', title: '' });
-        await hubOp(p, 'pins.set', { host: await linkOf(b), threadId: b, pinned: true, intent: 'owner', title: '' });
+        await hubOp(p, 'pins.set', { host: await linkOf(a), threadId: a, pinned: true, title: '' });
+        await hubOp(p, 'pins.set', { host: await linkOf(b), threadId: b, pinned: true, title: '' });
         try {
           await rows.first().locator('a.title').click();
           await assertEventually(async () => (await pinned(p).count()) >= 2, 'the two pins did not show');
@@ -1904,17 +1871,17 @@ export const journeys = [
       });
       await j.step('stale-hint', 'Pin a listed Session under an old Host id; the row opens it on the Host that lists it and the hint moves', async () => {
         const real = await linkOf(a);
-        await hubOp(p, 'pins.set', { host: 'verify-old-host', threadId: a, pinned: true, intent: 'owner', title: '' });
+        await hubOp(p, 'pins.set', { host: 'verify-old-host', threadId: a, pinned: true, title: '' });
         try {
           const link = pinRow(p, a).locator('a.title');
-          await assertEventually(async () => ((await link.getAttribute('href')) ?? '').includes(`/h/${encodeURIComponent(real.replace(/#(pi|durable)$/, ''))}/t/`), 'the pin does not open on the listing Host');
+          await assertEventually(async () => ((await link.getAttribute('href')) ?? '').includes(`/h/${encodeURIComponent(real.replace(/#pi$/, ''))}/t/`), 'the pin does not open on the listing Host');
           await assertEventually(async () => (await pinsNow()).find(x => x.threadId === a)?.host === real, 'the hub kept the old host hint');
           return { href: await link.getAttribute('href'), hint: real };
         } finally { await unpin(a); }
       });
       await j.step('gone', 'Pin a Session no Host lists; the row is dimmed "Not found on <host>" and × removes it', async () => {
         const id = 'pi:verify-gone';
-        await hubOp(p, 'pins.set', { host: 'verify-removed-host', threadId: id, pinned: true, intent: 'owner', title: 'old migration run' });
+        await hubOp(p, 'pins.set', { host: 'verify-removed-host', threadId: id, pinned: true, title: 'old migration run' });
         try {
           const row = pinRow(p, id);
           await assertEventually(async () => (await row.getAttribute('class') ?? '').includes('gone'), 'the pin is not dimmed as gone', 15_000);
@@ -1930,7 +1897,7 @@ export const journeys = [
       await j.step('touch', 'On a phone viewport the star pins the open Session and each pin row shows its × without hover', async () => {
         const w = await window2({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
         try {
-          await w.page.goto(`${j.state.origin}/#/h/${encodeURIComponent(await linkOf(a))}/t/${encodeURIComponent(a)}`);
+          await w.page.goto(`${j.state.origin}/#/h/${encodeURIComponent(await hostOf(a))}/t/${encodeURIComponent(a)}`);
           // A phone opens on the Session with its sidebar drawer closed (App.tsx oneSide), so the star is in reach.
           const star = w.page.locator('.pin-star');
           await star.waitFor();
@@ -2040,27 +2007,6 @@ export const journeys = [
         }
         return { rounds: 20 };
       });
-      await j.step('shell-unavailable', 'In a Pi Session (no shell panel), help names where Toggle shell works, the command palette omits it, and ⌘J opens nothing', async () => {
-        await focusTranscript();
-        await p.keyboard.press('Shift+Slash');
-        const help = p.getByRole('dialog', { name: 'Keys and help' });
-        await help.waitFor({ timeout: 10_000 });
-        assert.match(await help.innerText(), /Toggle shell · on a Host page/, 'help does not name the context of Toggle shell in a Pi Session');
-        await p.keyboard.press('Escape');
-        await help.waitFor({ state: 'detached', timeout: 10_000 });
-        await p.keyboard.press('ControlOrMeta+Shift+k');
-        const palette = p.getByRole('dialog', { name: 'Go to or run' });
-        await palette.waitFor({ timeout: 10_000 });
-        assert.equal(await palette.locator('.palette-item', { hasText: 'Toggle shell' }).count(), 0, 'the command palette lists Toggle shell in a Pi Session');
-        await p.keyboard.press('Escape');
-        await palette.waitFor({ state: 'detached', timeout: 10_000 });
-        await focusTranscript();
-        await p.keyboard.press('ControlOrMeta+j');
-        await p.waitForTimeout(300);
-        assert.equal(await p.locator('[data-region="panel"]').count(), 0, '⌘J opened a panel in a Pi Session');
-        await regionIs('transcript', '⌘J moved focus');
-        return { help: 'Toggle shell with context', palette: 'no Toggle shell' };
-      });
       await j.step('panel', 'From the transcript press ⌘L twice: open and focus the Arc panel, then close it and return', async () => {
         await focusTranscript();
         await p.keyboard.press('ControlOrMeta+l');
@@ -2133,6 +2079,7 @@ export const journeys = [
         return { listed: true };
       });
       await j.step('vim-scroll', 'Press k and u in the transcript, then open the panel and press j and d in it', async () => {
+        await waitForDemoArc(j.state.port, keyOf(j.state), 'pi:sess-big');
         await focusTranscript();
         const start = await scrollOf(transcript);
         await p.keyboard.press('k');
@@ -2490,6 +2437,106 @@ export const journeys = [
         await regionIs('sidebar', '⌘B on the Overview did not show and focus the sidebar');
         return { ring: page.ring, scrollable: page.scrollable };
       });
+    },
+  },
+  {
+    id: 'V', feature: 'v-version-skew.md', title: 'A page of another build reads, says so once, and acts on nothing',
+    async run(j) {
+      const p = j.page, OTHER = 'verify-other-build';
+      // The page's socket runs through this route, so a step can make the hub look like another build without a second hub.
+      let other = false; const sockets = new Set(), sent = [];
+      await p.routeWebSocket(/\/ws(\?|$)/, ws => {
+        const server = ws.connectToServer();
+        sockets.add(ws);
+        ws.onClose(() => sockets.delete(ws));
+        ws.onMessage(m => { try { sent.push(JSON.parse(String(m))); } catch {} server.send(m); });
+        server.onMessage(m => {
+          if (!other) return ws.send(m);
+          const f = JSON.parse(String(m));
+          ws.send(f.t === 'hosts' ? JSON.stringify({ ...f, build: OTHER }) : m);
+        });
+      });
+      const banner = p.locator('[data-version-skew]');
+      await j.goto('#/v/overview');
+      const rows = p.locator('.side-scroll .row[data-thread]');
+      await assertEventually(async () => (await rows.count()) >= 1, 'the sidebar lists no Session', 20_000);
+      const id = await rows.first().getAttribute('data-thread');
+      await j.step('same-build', 'Open AmPi from the hub; the page says its build in hello and shows no skew banner', async () => {
+        await assertEventually(async () => sent.some(f => f.t === 'hello' && f.build), 'the page sent no hello with its build', 10_000);
+        assert.equal(await banner.count(), 0, 'a page of the hub build shows the skew banner');
+        return { hello: sent.find(f => f.t === 'hello') };
+      });
+      await j.step('page-older', 'The hub moves to another build and the socket reconnects; the page shows one banner with Reload, still lists Sessions, and a star click sends no hub op', async () => {
+        other = true;
+        for (const ws of sockets) await ws.close();
+        await banner.waitFor({ timeout: 15_000 });
+        const text = await banner.innerText();
+        assert.match(text, /Reload/, 'the banner offers no Reload');
+        assert.equal(await banner.count(), 1, 'the page shows more than one skew banner');
+        await rows.first().locator('a.title').click();
+        const star = p.locator('.pin-star');
+        await star.waitFor({ timeout: 10_000 });
+        const before = sent.filter(f => f.t === 'hub').length;
+        await star.click();
+        await p.waitForTimeout(500);
+        assert.equal(sent.filter(f => f.t === 'hub').length, before, 'a page of another build sent a hub op');
+        assert.ok((await rows.count()) >= 1, 'the page stopped listing Sessions');
+        return { banner: text, thread: id };
+      });
+      await j.step('hub-refuses', 'A raw socket says another build in hello and asks pins.set; the hub refuses it with version_skew and keeps no pin', async () => {
+        // Journeys share the hub and P pins sidebar Sessions, so the refused pin names a thread no other journey pins.
+        const id = 'pi:sess-verify-skew-pin';
+        const r = await p.evaluate(([other, id]) => new Promise((done, fail) => {
+          const ws = new WebSocket(`ws://${location.host}/ws`); let pins;
+          ws.onopen = () => { ws.send(JSON.stringify({ t: 'hello', build: other })); ws.send(JSON.stringify({ t: 'hub', id: 1, op: 'pins.set', args: { host: 'devbox#pi', threadId: id, pinned: true, title: '' } })); };
+          ws.onmessage = e => { const f = JSON.parse(e.data); if (f.t === 'pins') pins = f.pins; if (f.t === 'res') { ws.close(); done({ ok: f.ok, error: f.error, pins }); } };
+          ws.onerror = () => fail(new Error('hub socket failed'));
+        }), [OTHER, id]);
+        assert.equal(r.ok, false, 'the hub served a hub op to another build');
+        assert.equal(r.error?.code, 'version_skew', `the refusal has another code: ${JSON.stringify(r.error)}`);
+        assert.ok(!(r.pins ?? []).some(x => x.threadId === id), 'the refused pin is kept');
+        return { error: r.error };
+      });
+      await j.step('reload', 'Reload while the hub is another build keeps the banner; the hub returns to this build and the socket reconnects, and the banner goes', async () => {
+        const hellos = sent.filter(f => f.t === 'hello').length;
+        await banner.locator('button').click();
+        await assertEventually(async () => sent.filter(f => f.t === 'hello').length > hellos, 'the reloaded page sent no hello', 15_000);
+        await banner.waitFor({ timeout: 15_000 });
+        other = false;
+        for (const ws of sockets) await ws.close();
+        await banner.waitFor({ state: 'detached', timeout: 15_000 });
+        return {};
+      });
+      const box = p.getByRole('textbox', { name: 'Message the agent' });
+      const old = await addFixture(j, () => addCommandSession(j.state, { id: 'sess-verify-skew', pane: 'w1:p28', older: true }), r => [r.thread]);
+      try {
+        await j.step('control-older', 'Open a Session whose pi-hc-control is an older build, type /model anthropic/claude-opus-5-5 and press Enter; AmPi shows the two-line refusal, nothing reaches Pi, and the draft stays', async () => {
+          await j.goto(`#/h/devbox/t/${encodeURIComponent(old.thread)}`);
+          await assertEventually(async () => (await threadsOf(j.state)).some(t => t.id === old.thread && t.control === true), 'the Host never lists the older-control Session with a live control', 20_000);
+          await box.fill('/model anthropic/claude-opus-5-5');
+          await box.press('Enter');
+          const refusal = p.locator('.composer-feedback[data-outcome="refused"]');
+          await refusal.waitFor({ timeout: 10_000 });
+          const text = await refusal.innerText();
+          assert.match(text, /devbox runs an older pi-hc-control\. Update it\.\nPull pi-hc-control on devbox, then run \/reload in each Pi pane there/, `the composer shows no skew refusal: "${text}"`);
+          assert.equal(await p.locator('[data-command-choice]').count(), 0, 'the refusal offers a text send');
+          assert.deepEqual(old.requests.filter(r => r.op !== 'status'), [], 'an op reached the older control');
+          assert.deepEqual(old.userTexts().filter(t => t.startsWith('/model')), [], 'the /model command became a user message');
+          assert.equal(await box.inputValue(), '/model anthropic/claude-opus-5-5', 'the draft was not kept');
+          return { refusal: text };
+        });
+        await j.step('control-updated', 'Update the control in place, then press Enter on the kept draft; the command runs and the model card shows Opus', async () => {
+          old.upgrade();
+          // Two status probes after the update: the Host's agent has seen the new build at least once.
+          const probes = old.requests.filter(r => r.op === 'status').length;
+          await assertEventually(async () => old.requests.filter(r => r.op === 'status').length >= probes + 2, 'the Host never probed the updated control', 20_000);
+          await box.press('Enter');
+          await assertEventually(async () => old.model() === 'anthropic/claude-opus-5-5', 'Enter on the kept draft did not run /model', 10_000);
+          await assertEventually(async () => /claude-opus-5-5/.test(await p.locator('.model-hud-trigger').innerText().catch(() => '')), 'the model card does not show Opus after the update', 10_000);
+          assert.equal(old.requests.filter(r => r.op === 'submit').length, 0, 'the /model command reached Pi as text');
+          return { ops: old.requests.filter(r => r.op !== 'status').map(r => r.op) };
+        });
+      } finally { old.close(); }
     },
   },
 ];

@@ -1,3 +1,23 @@
+/**
+ * An open quote note is Session draft input, keyed by host/thread outside the view.
+ * Only Enter (append to the draft) or explicit Escape/cancel ends it. Transcript updates,
+ * scroll, reflow, re-render, view reload, control flicker and Session switch-and-back never discard it.
+ * Like Composer custody, this store lasts for the page lifetime; it holds no DOM nodes.
+ */
+export type QuoteDraft = { text: string; note: string; entry: string; fragment: string; right: number; bottom: number };
+const quoteDrafts = new Map<string, QuoteDraft>();
+const quoteListeners = new Set<() => void>();
+export const quoteDraftOf = (key: string): QuoteDraft | undefined => quoteDrafts.get(key);
+export const subscribeQuoteDrafts = (listener: () => void) => {
+	quoteListeners.add(listener);
+	return () => void quoteListeners.delete(listener);
+};
+export function setQuoteDraft(key: string, value: QuoteDraft | undefined): void {
+	if (value) quoteDrafts.set(key, value);
+	else quoteDrafts.delete(key);
+	for (const listener of quoteListeners) listener();
+}
+
 /** Quotes are free draft text; appending leaves the rest of the draft unchanged. */
 export function appendDraftQuote<D extends { text: string }>(draft: D, selection: string, note: string): D {
 	if (!selection.trim()) return draft;
@@ -21,8 +41,7 @@ export function appendDraftQuote<D extends { text: string }>(draft: D, selection
  * Keys: a request key names exactly one unchanged payload whose outcome is uncertain. Only an uncertain outcome keeps
  * its key, so the key and the shown outcome cannot disagree: a held message carries it as `retry`, a draft as its key with `retry: true`. A final
  * refusal carries no key. Any change of payload (an edit, a merge, a partial restore) takes a fresh key, so a key never
- * names two payloads. The durable node places a key at most once. Pi hosts do not deduplicate keys, so a same-key
- * retry on Pi can still be placed twice. Fresh keys come in as arguments; the module stays pure.
+ * names two payloads. Pi hosts do not deduplicate keys, so a same-key retry can still be placed twice. Fresh keys come in as arguments; the module stays pure.
  */
 /**
  * Why a submission came back. `uncertain`: no reply proves a refusal, so it may already have arrived. `text` is the

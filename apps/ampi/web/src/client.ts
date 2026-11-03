@@ -5,7 +5,8 @@ import { native } from "./native.ts";
 import { applyImmutable, type Op } from "@earendil-works/chord/delta";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import type { HostState as HubHostState } from "../../src/shared/hosts.ts";
-import { STALE_VERSION, type BrowserFrame, type ClientOps, type HubOps, type Pin, type Topic, type TopicValue } from "../../src/shared/protocol.ts";
+import { STALE_VERSION, type BrowserFrame, type ClientOps, type HubOps, type Pin, type SkippedHost, type Topic, type TopicValue } from "../../src/shared/protocol.ts";
+import { READ_OPS, skewText, VERSION_SKEW } from "../../src/shared/skew.ts";
 import { perfMark, perfMarkOnce } from "./perf.ts";
 
 export type HostState = HubHostState & { link: string };
@@ -52,6 +53,10 @@ type Sub = {
 
 type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void };
 
+/** The build of the hub that served this page (src/hub/hub.ts puts it into index.html); none in a page from elsewhere. */
+const PAGE_BUILD = typeof document === "undefined" ? undefined : document.querySelector<HTMLMetaElement>('meta[name="ampi-build"]')?.content;
+const skewError = () => Object.assign(new Error(skewText.page), { code: VERSION_SKEW });
+
 class HubClient {
 	#ws?: WebSocket;
 	#id = 1;
@@ -64,9 +69,16 @@ class HubClient {
 	hostsListed = false;
 	/** The hub.json the hub read at start (hosts frame). */
 	config: string | undefined;
+	/** The hub.json rows this hub skips (hosts frame): they need the durable release. */
+	skipped: SkippedHost[] = [];
 	/** The hub's pinned Sessions (src/hub/pins.ts); replaced whole by each `pins` frame. */
 	pins: Pin[] = [];
 	connected = false;
+	/**
+	 * The hub runs another build than this page (P1): its hosts frame names another build, or it refused an action with
+	 * VERSION_SKEW for the page. The page then only reads; it refuses every other request before it sends, and shows the reload banner.
+	 */
+	skew = false;
 	#retry = 0;
 
 	constructor(readonly url: string) {
@@ -82,6 +94,8 @@ class HubClient {
 			perfMark("ws-open");
 			this.connected = true;
 			this.#retry = 0;
+			// The first frame: the hub serves writes only to a page of its own build.
+			ws.send(JSON.stringify({ t: "hello", ...(PAGE_BUILD ? { build: PAGE_BUILD } : {}) } satisfies BrowserFrame));
 			for (const sub of this.subsByKey.values()) ws.send(JSON.stringify({ t: "sub", sid: sub.sid, host: sub.host, topic: sub.topic }));
 			this.#emit();
 		};
@@ -119,6 +133,8 @@ class HubClient {
 				this.hosts = (frame.hosts as HubHostState[]).map((h) => ({ ...h, link: h.link ?? h.id }));
 				this.hostsListed = true;
 				this.config = frame.config as string | undefined;
+				this.skipped = (frame.skipped as SkippedHost[] | undefined) ?? [];
+				this.skew = frame.build !== PAGE_BUILD;
 				this.#emit();
 				return;
 			case "pins":
@@ -130,7 +146,14 @@ class HubClient {
 				if (!pending) return;
 				this.#pending.delete(frame.id);
 				if (frame.ok) pending.resolve(frame.value);
-				else pending.reject(Object.assign(new Error(frame.error.message), { code: frame.error.code }));
+				else {
+					// A pi-hc-control of another build refuses with VERSION_SKEW too; only the page refusal says `skew: "page"`.
+					if (frame.error.skew === "page" && !this.skew) {
+						this.skew = true;
+						this.#emit();
+					}
+					pending.reject(Object.assign(new Error(frame.error.message), { code: frame.error.code }));
+				}
 				return;
 			}
 			case "snap": {
@@ -203,6 +226,7 @@ class HubClient {
 
 	/** Requests an op of a host. `ClientOps` types its arguments and result; ops whose arguments are all optional may omit them. */
 	request<K extends keyof ClientOps>(host: string, op: K, ...[args = {}]: Args<ClientOps[K]["args"]>): Promise<ClientOps[K]["result"]> {
+		if (this.skew && !READ_OPS.has(op)) return Promise.reject(skewError());
 		const id = this.#id++;
 		return new Promise<ClientOps[K]["result"]>((resolve, reject) => {
 			this.#pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
@@ -216,6 +240,7 @@ class HubClient {
 
 	/** Requests an op the hub serves itself (`HubOps`). */
 	hub<K extends keyof HubOps>(op: K, args: HubOps[K]["args"]): Promise<HubOps[K]["result"]> {
+		if (this.skew) return Promise.reject(skewError());
 		const id = this.#id++;
 		return new Promise<HubOps[K]["result"]>((resolve, reject) => {
 			this.#pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
@@ -294,6 +319,16 @@ export function useHosts(): { hosts: HostState[]; connected: boolean; listed: bo
 	return { hosts, connected, listed };
 }
 
+/** Whether the hub runs another build than this page: the page then shows the reload banner and only reads. */
+export function useVersionSkew(): boolean {
+	return useSyncExternalStore(subscribeHosts, () => hub.skew);
+}
+
+/** The hub.json rows the hub skips: they need the durable release. */
+export function useSkippedHosts(): SkippedHost[] {
+	return useSyncExternalStore(subscribeHosts, () => hub.skipped);
+}
+
 /** The hub's pinned Sessions, in pin order. */
 export function usePins(): Pin[] {
 	return useSyncExternalStore(subscribeHosts, () => hub.pins);
@@ -309,10 +344,13 @@ export function hintPin(host: string, threadId: string): void {
 
 /**
  * Sends the owner's intent for one Session, pinned or not, as the clicked control offered it; every window gets the new
- * list. Only the star, the row menu and the × call it. A refusal reaches the owner as an alert.
+ * list. Only the star, the row menu and the × call it. A refusal reaches the owner as an alert; a version skew
+ * refusal shows as the reload banner instead.
  */
 export function setPin(host: string, threadId: string, pinned: boolean, title?: string): void {
-	void hub.hub("pins.set", { host, threadId, pinned, intent: "owner", ...(title ? { title } : {}) }).catch((error) => alert(`Could not ${pinned ? "pin" : "unpin"}: ${(error as Error).message}`));
+	void hub.hub("pins.set", { host, threadId, pinned, ...(title ? { title } : {}) }).catch((error) => {
+		if (refusal(error) !== VERSION_SKEW) alert(`Could not ${pinned ? "pin" : "unpin"}: ${(error as Error).message}`);
+	});
 }
 
 const EMPTY = { value: undefined, stale: true } as const;

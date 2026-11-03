@@ -37,7 +37,7 @@ for (const [engine, type, path] of ENGINES) {
 			},
 		}) });
 		await page.reload();
-		await page.getByTitle("Attach images (or paste or drop them)").waitFor();
+		await page.locator('.composer input[type="file"]').waitFor({state:"attached"});
 		const input = page.getByRole("textbox", { name: "Message the agent" });
 		const files = page.locator('.composer input[type="file"]');
 		const attached = () => page.locator(".attachment").evaluateAll((els) => els.map((el) => el.getAttribute("title")));

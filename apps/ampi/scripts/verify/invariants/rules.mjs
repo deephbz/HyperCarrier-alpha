@@ -2,8 +2,7 @@
 // Each check runs inside the page through page.evaluate(check, options) and returns findings:
 //   { row, rule, at, detail }   where `at` is a short, stable element descriptor.
 // Checks are self-contained functions: they may not close over module scope.
-// Selectors prefer the hc-lenses data-* contract and fall back to the classes of earlier builds, so a seed can
-// be checked on its pre-fix commit.
+// Selectors follow the hc-lenses data-* contract.
 
 /** Row a, part 1: record layout shifts that no user input caused. Install with context.addInitScript. */
 export function observeLayoutShifts() {
@@ -87,7 +86,7 @@ const textStart = String.raw`(el => {
 
 /**
  * Hierarchy pairs: each child row with its parent row. The contract is [data-row-level="2"] with
- * [data-parent-leader]; earlier builds mark children with `.row.child` after their parent row.
+ * [data-parent-leader] after its parent row.
  */
 function hierarchyPairs({ rowSelector, childSelector, labelSelector }) {
   const rows = [...document.querySelectorAll(rowSelector)].filter(r => r.getBoundingClientRect().width > 0);
@@ -260,10 +259,10 @@ export function textOverlap({ overlaySelector, minArea = 4, minShare = 0.15, lim
 const textStartSource = textStart;
 const pairsSource = `(${hierarchyPairs.toString()})`;
 
-/** The AmPi selector contract. data-* first (hc-lenses sidebar), then the classes of earlier builds. */
+/** The AmPi selector contract: the hc-lenses sidebar's data-* attributes. */
 export const AMPI = {
-  rowSelector: '[data-row-level], .side-scroll .row[data-thread]',
-  childSelector: '[data-row-level="2"], .row.child',
+  rowSelector: '[data-row-level]',
+  childSelector: '[data-row-level="2"]',
   labelSelector: '.title',
   groupSelector: '.side-scroll .group',
   groupLabelSelector: '.group-label',

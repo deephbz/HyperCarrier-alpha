@@ -14,15 +14,16 @@ source commit for technical testing.
   JSONL remains the source authority.
 - [HC Control](packages/pi-hc-control/README.md) gives each Pi Session a local
   socket for owner input, abort, and status.
-- The durable Team, Rarebit, and Compact packages adapt existing HyperCarrier
-  behavior to pi-durable. The independent [Rarebit](packages/hc-rarebit/README.md)
-  package owns sparse conversational selection and derived receipts.
+- The independent [Rarebit](packages/hc-rarebit/README.md) package owns sparse
+  conversational selection and derived receipts.
 - Auto Compact, Cache Goblin, and System Prompt Audit are separate Pi packages.
   See [Architecture](docs/ARCHITECTURE.md) for ownership boundaries.
 
 AmPi is an experimental midway snapshot with live Herdr integration paths.
 Full UX acceptance remains open. Arc cache, boundary, model, command, and
-performance work remains open. The pi-durable node backend remains deferred.
+performance work remains open.
+
+AmPi on main serves Pi Hosts only. The pi-durable node ships on Alpha `release/durable` (v0.2.0-durable.N).
 
 ## Install and verify
 

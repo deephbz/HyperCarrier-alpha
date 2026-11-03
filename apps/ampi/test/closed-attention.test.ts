@@ -34,7 +34,7 @@ const ERROR = "R2_FAILED_REASON: 529 overloaded";
 const open = (over: Partial<ThreadSummary> = {}): ThreadSummary => ({ id: "tree-a.7", title: "Lead", updatedAt: 1, activity: "idle", queued: 0, control: true, live: true, ...over }) as ThreadSummary;
 const flagged = (over: Partial<ThreadSummary> = {}) => open({ attention: [{ source: "node", reason: PARKED }], lastError: ERROR, rarebit: { status: "needs_attention", fresh: true, reason: "blocked on review" } as ThreadSummary["rarebit"], ...over });
 const closed = (over: Partial<ThreadSummary> = {}) => flagged({ live: false, closed: { at: 2, by: "owner" }, ...over });
-const host = { id: "devbox", link: "devbox", kind: "durable" } as unknown as HostState;
+const host = { id: "devbox", link: "devbox", kind: "pi-ssh" } as unknown as HostState;
 const html = (t: ThreadSummary, compact: boolean) => renderToStaticMarkup(createElement(badges as never, { t, compact }));
 
 test("closed attention: a closed thread has no Needs-you signal from attention, lastError or Rarebit; an open control keeps error and node signals", () => {

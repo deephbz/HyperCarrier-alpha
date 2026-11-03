@@ -1,21 +1,15 @@
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import type { ThreadsState, ThreadSummary } from "../../src/shared/protocol.ts";
-import { findHost, type HostState, useHosts, useTopic } from "./client.ts";
-import { AccountsDialog } from "./components/Accounts.tsx";
-import { CommandPalette, DisplayDialog, HelpDialog, HostSetupDialog, NewThreadDialog, Palette } from "./components/Dialogs.tsx";
-import { useModels } from "./models.ts";
+import { findHost, type HostState, useHosts, useTopic, useVersionSkew } from "./client.ts";
+import { skewText } from "../../src/shared/skew.ts";
+import { CommandPalette, DisplayDialog, HelpDialog, HostSetupDialog, Palette } from "./components/Dialogs.tsx";
 import { Overview } from "./components/Overview.tsx";
 import { NewAgentDialog } from "./components/PiDialogs.tsx";
 import { PiPanel, piPanels } from "./views/PiPanel.tsx";
 import { PAGES } from "./views/registry.ts";
-import { Panel } from "./components/Panel.tsx";
 import { type HostThreads, Sidebar, SidebarIcon } from "./components/Sidebar.tsx";
 import { SessionUnresolved } from "./components/SessionUnresolved.tsx";
-import { type ModelChoice, ThreadView } from "./components/ThreadView.tsx";
-// xterm is most of the bundle; it loads the first time a terminal is shown.
-const TerminalView = lazy(() => import("./components/TerminalView.tsx").then((m) => ({ default: m.TerminalView })));
-import { openTerminal } from "./components/Sidebar.tsx";
-import { hostLabelFor, isPiHost } from "./components/host-label.ts";
+import { ThreadView } from "./components/ThreadView.tsx";
 import { hashRoute, href, MOD, type Route } from "./util.ts";
 import { FeedsContext, FocusIntentContext } from "./context.ts";
 import { requestNotificationPermission, useAttention } from "./attention.ts";
@@ -157,6 +151,7 @@ function linkRoute(route: Route, hosts: HostState[]): { route: Route; resolved: 
 
 export function App() {
 	const { hosts, connected, listed: hostsListed } = useHosts();
+	const skew = useVersionSkew();
 	const hash = useRoute();
 	const { route, resolved } = linkRoute(hashRoute(), hosts);
 	const [feeds, setFeeds] = useState<Record<string, HostThreads>>({});
@@ -211,7 +206,7 @@ export function App() {
 		setFocusRequest(pendingFocus.current);
 		return true;
 	}).current;
-	const sessionView = Boolean(route.host && route.thread && !route.term && !route.page);
+	const sessionView = Boolean(route.host && route.thread && !route.page);
 	useKeyAction("sidebar.toggle", () => { focusIntent("sidebar.toggle"); });
 	useKeyAction("panel.toggle", sessionView ? () => { focusIntent("panel.toggle"); } : undefined);
 	useKeyAction("focus.composer", sessionView ? () => { focusIntent("composer.toggle"); } : undefined);
@@ -364,9 +359,6 @@ export function App() {
 		window.addEventListener("pointerdown", requestNotificationPermission, { once: true });
 	}, []);
 	// An unresolved route names no source, so nothing below acts on its bare Host ID.
-	const routeHost = resolved ? findHost(hosts, route.host) : undefined;
-	const hostConnected = routeHost?.status === "connected";
-	const piHere = isPiHost(routeHost);
 	// A link can open a panel (`?p=`); after that the choice is the owner's and is remembered.
 	useEffect(() => {
 		if (!route.panel) return;
@@ -376,18 +368,11 @@ export function App() {
 	}, [route.panel]);
 	// A route arrival from any source (a palette pick, a new Session, Back) closes a phone's drawer (focus.ts navigate).
 	// By design this includes a route change the app starts (a redirect): the drawer then shows a page the owner left.
-	useEffect(() => { focusIntent("navigate"); }, [route.host, route.thread, route.term, route.page]);
-	const models: ModelChoice[] = useModels(route.host, hostConnected) ?? [];
-	const [accounts, setAccounts] = useState<string>();
+	useEffect(() => { focusIntent("navigate"); }, [route.host, route.thread, route.page]);
 	useEffect(() => {
 		const open = () => setDialog("new");
 		window.addEventListener("ampi:new", open);
 		return () => window.removeEventListener("ampi:new", open);
-	}, []);
-	useEffect(() => {
-		const open = (e: Event) => setAccounts((e as CustomEvent).detail as string);
-		window.addEventListener("ampi:accounts", open);
-		return () => window.removeEventListener("ampi:accounts", open);
 	}, []);
 	useEffect(() => {
 		const key = (e: KeyboardEvent) => {
@@ -395,7 +380,7 @@ export function App() {
 			if (e.key === "Escape" && overlayRef.current && (e.target as HTMLElement)?.closest?.(".panel-slot") && !e.defaultPrevented) {
 				// An overlaid panel closes on Escape, as a sheet should; focus returns to `last`.
 				focusIntent("panel.close");
-			} else if (e.altKey && !mod && (e.key === "ArrowUp" || e.key === "ArrowDown") && !(e.target as HTMLElement)?.closest?.("select, [contenteditable], .xterm") && !((e.target as HTMLInputElement)?.value ?? "")) {
+			} else if (e.altKey && !mod && (e.key === "ArrowUp" || e.key === "ArrowDown") && !(e.target as HTMLElement)?.closest?.("select, [contenteditable]") && !((e.target as HTMLInputElement)?.value ?? "")) {
 				// Works from an empty composer (a Session opens in it); never while a draft or another field has text.
 				// Alt+↑/↓: the previous or next Session in the sidebar's order.
 				const rows = [...document.querySelectorAll<HTMLElement>(".side-scroll .row[data-thread]")];
@@ -411,15 +396,15 @@ export function App() {
 		return () => window.removeEventListener("keydown", key);
 	}, []);
 	const summary = route.host && route.thread ? feeds[route.host]?.threads.find((t) => t.id === route.thread) : undefined;
-	// Pi Sessions get the registered panel views (views/registry.ts); node threads keep the node's panels.
-	const panelAvailable = (name: string) => !piHere || piPanels(summary).some((p) => p.name === name);
+	// A Session gets the registered panel views (views/registry.ts).
+	const panelAvailable = (name: string) => piPanels(summary).some((p) => p.name === name);
 	const showPanel = Boolean(resolved && route.thread && panel && panelAvailable(panel));
 	// Every panel writer (✕, tabs, ⌘J, links) reports a view change; focus moves only if it was lost (R11).
 	const setPanelTracked = useCallback((next?: string) => { setPanel(next); focusIntent("panel.set", undefined, { panelShown: Boolean(next && availableRef.current(next)) }); }, []);
 	availableRef.current = (name) => Boolean(route.thread) && panelAvailable(name);
 	const defaultPanel = () => {
 		const saved = localStorage.getItem(PANEL_DEFAULT_KEY) || "arc";
-		return panelAvailable(saved) ? saved : panelAvailable("arc") ? "arc" : piHere ? piPanels(summary)[0]?.name : "arc";
+		return panelAvailable(saved) ? saved : panelAvailable("arc") ? "arc" : piPanels(summary)[0]?.name;
 	};
 	applyView.current = {
 		// The one sidebar writer: the phone's drawer, the squeezed sidebar's peek, or the saved desktop choice.
@@ -430,12 +415,6 @@ export function App() {
 			if (!open && r.panel && r.host && r.thread) navigate(href.thread(r.host, r.thread, r.entry ? { entry: r.entry } : {}), "replace", { reveal: false });
 		},
 	};
-	// Where no shell panel exists (a Pi Session), ⌘J is unavailable: it does nothing and help names its context.
-	useKeyAction("shell", route.host && (!route.thread || panelAvailable("shell")) ? () => {
-		const { route: r, resolved } = linkRoute(hashRoute(), hosts);
-		if (r.host && r.thread) { if (resolved) setPanelTracked(panel === "shell" ? undefined : "shell"); }
-		else if (r.host) void openTerminal(r.host).catch(() => {});
-	} : undefined);
 	const page = PAGES.find((p) => p.name === (route.page ?? (!route.host ? "timeline" : undefined)));
 	// A phone's swipe drives the same commands as ☰, the hide button, ⌘L and the panel's ✕.
 	const appRef = useRef<HTMLDivElement>(null);
@@ -446,7 +425,7 @@ export function App() {
 		commit: (side, open) => { focusIntent(side === "sidebar" ? (open ? "sidebar.show" : "sidebar.hide") : open ? "panel.toggle" : "panel.close"); },
 	}), []);
 	// While a swipe opens the panel, an empty sheet with the default panel's title follows the finger.
-	const sheet = oneSide && !page && route.host && route.thread && !showPanel ? (piHere ? piPanels(summary).find((p) => p.name === defaultPanel())?.label : defaultPanel()) : undefined;
+	const sheet = oneSide && !page && route.host && route.thread && !showPanel ? piPanels(summary).find((p) => p.name === defaultPanel())?.label : undefined;
 	// When a panel would squeeze the main below a usable width, the sidebar gives way first (not saved; ☰ peeks it back),
 	// and only then does the panel overlay the main.
 	const squeezed = !oneSide && showPanel && !sidebarHidden && windowWidth - sidebarWidth - panelWidth < MAIN_MIN;
@@ -462,6 +441,7 @@ export function App() {
 		<FocusIntentContext.Provider value={focusIntent}>
 		<div ref={appRef} className={`app ${sideHidden ? "sidebar-hidden" : ""} ${showPanel ? "has-panel" : ""} ${overlayPanel ? "panel-overlay" : ""} ${oneSide ? "side-overlay" : ""}`} style={{ "--side-w": `${sidebarWidth}px`, "--side-visible": sideHidden ? "0px" : "var(--side-w)", "--panel-w": `${panelWidth}px` } as CSSProperties}>
 			{zoomToast && <div className="toast" role="status" aria-live="polite">{zoomToast}</div>}
+			{skew && <div className="skew-banner" role="alert" data-version-skew>{skewText.page} <button className="btn small" onClick={() => location.reload()}>Reload</button></div>}
 			{hosts.map((host) => (
 				<HostFeed key={host.link} host={host} onData={onData} />
 			))}
@@ -478,40 +458,27 @@ export function App() {
 				<div className="main">
 					<div className="empty">No page “{route.page}”.</div>
 				</div>
-			) : route.host && route.term ? (
-				<Suspense fallback={<div className="main"><div className="empty">Loading the terminal…</div></div>}>
-					<TerminalView key={`${route.host}|${route.term}`} host={route.host} termId={route.term} />
-				</Suspense>
 			) : route.host && route.thread && !resolved ? (
-				<SessionUnresolved host={route.host} hosts={hosts} connected={connected} listed={hostsListed} />
+				<SessionUnresolved host={route.host} thread={route.thread} hosts={hosts} connected={connected} listed={hostsListed} />
 			) : route.host && route.thread ? (
-				<ThreadView key={`${route.host}|${route.thread}`} host={route.host} threadId={route.thread} summary={summary} models={models} panel={panel} setPanel={setPanelTracked} entry={route.entry} />
+				<ThreadView key={`${route.host}|${route.thread}`} host={route.host} threadId={route.thread} summary={summary} panel={panel} setPanel={setPanelTracked} entry={route.entry} />
 			) : (
-				<Overview data={data} onNew={() => setDialog("new")} onHostSetup={() => setDialog("host")} onHelp={() => setDialog("help")} />
+				<Overview data={data} onNew={() => setDialog("new")} />
 			)}
 			</div>
 			{sheet && <div className="drawer-sheet" aria-hidden="true" inert><div className="panel-tabs"><span className="drawer-sheet-title">{sheet}</span></div></div>}
 			{!page && route.host && route.thread && panel && showPanel && <div className="panel-slot" data-region="panel" tabIndex={-1} onKeyDown={handleRegionScrollKey}>
 				<ResizeEdge side="panel" width={panelWidth} onChange={setPanelWidth} />
-				{(piHere ? (
-					<PiPanel name={panel} host={route.host} threadId={route.thread} summary={summary} entry={route.entry} setPanel={setPanelTracked} />
-				) : (
-					<Panel name={panel} host={route.host} threadId={route.thread} summary={summary} setPanel={setPanelTracked} />
-				))}
+				<PiPanel name={panel} host={route.host} threadId={route.thread} summary={summary} entry={route.entry} setPanel={setPanelTracked} />
 			</div>}
 			{dialog === "new" &&
-				// On a Pi Host (or when every Host is one) a new agent is started in Herdr (D15 stage 2).
-				(isPiHost(routeHost) || (hosts.length > 0 && hosts.every(isPiHost)) ? (
-					<NewAgentDialog hosts={hosts.filter(isPiHost)} defaultHost={route.host} beside={summary} onClose={closeDialog} />
-				) : (
-					<NewThreadDialog hosts={hosts} defaultHost={route.host} onClose={closeDialog} />
-				))}
+				// A new agent starts in Herdr (D15 stage 2).
+				<NewAgentDialog hosts={hosts} defaultHost={route.host} beside={summary} onClose={closeDialog} />}
 			{dialog === "host" && <HostSetupDialog onClose={() => setDialog(undefined)} />}
 			{dialog === "palette" && <Palette data={data} query={paletteQuery.current} onQuery={(query) => { paletteQuery.current = query; }} onClose={() => setDialog(undefined)} />}
 			{dialog === "commands" && <CommandPalette query={paletteQuery.current} onQuery={(query) => { paletteQuery.current = query; }} onClose={() => setDialog(undefined)} />}
 			{dialog === "display" && <DisplayDialog onClose={() => setDialog(undefined)} />}
 			{dialog === "help" && <HelpDialog onClose={() => setDialog(undefined)} />}
-			{accounts && <AccountsDialog host={accounts} hostLabel={hostLabelFor(accounts, hosts)} onClose={() => setAccounts(undefined)} />}
 		</div>
 		</FocusIntentContext.Provider>
 		</FeedsContext.Provider>

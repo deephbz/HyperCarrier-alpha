@@ -5,7 +5,7 @@ import { carrier } from "./nav.ts";
 type KeyAction =
 	| "sidebar.toggle" | "panel.toggle" | "focus.composer"
 	| "session.palette" | "command.palette" | "help" | "find"
-	| "overview" | "new" | "shell" | "display" | "transcript.mode" | "zoom.in" | "zoom.out" | "zoom.reset"
+	| "overview" | "new" | "display" | "transcript.mode" | "zoom.in" | "zoom.out" | "zoom.reset"
 	| "history.back" | "history.forward";
 
 export type KeyBinding = {
@@ -46,7 +46,6 @@ export const KEYMAP: readonly KeyBinding[] = [
 	{ id: "transcript.mode", code: "KeyT", meta: true, label: "Toggle conversation-only transcript", region: "global", palette: true, note: "⌘T (Ctrl+T in a browser), L outside an input", appNote: "⌘T switches transcript mode in AmPi.app" },
 	{ id: "history.back", code: "BracketLeft", meta: true, label: "Back", region: "global", palette: true, browserOwned: true, note: HISTORY_NOTE, appNote: "does nothing at the first AmPi page" },
 	{ id: "history.forward", code: "BracketRight", meta: true, label: "Forward", region: "global", palette: true, browserOwned: true },
-	{ id: "shell", code: "KeyJ", meta: true, label: "Toggle shell", region: "global", palette: true, context: "on a Host page, or in a Session with a shell" },
 	{ id: "zoom.in", code: "Equal", meta: true, shift: true, label: "Increase display size", region: "global", palette: true },
 	{ id: "zoom.out", code: "Minus", meta: true, shift: true, label: "Decrease display size", region: "global", palette: true },
 	{ id: "zoom.reset", code: "Digit0", meta: true, shift: true, label: "Reset display size", region: "global", palette: true },
@@ -130,7 +129,7 @@ export function installKeymapDispatcher(target: Window = window) {
 
 /** Editable controls suppress unmodified region keys; modifier bindings remain active there. */
 export function isEditableTarget(target: EventTarget | null): boolean {
-	return target instanceof HTMLElement && Boolean(target.closest("input, textarea, select, [contenteditable], .xterm"));
+	return target instanceof HTMLElement && Boolean(target.closest("input, textarea, select, [contenteditable]"));
 }
 
 /** Focus the region root when no navigable row exists. */

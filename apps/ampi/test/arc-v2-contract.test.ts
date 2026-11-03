@@ -7,7 +7,7 @@ import { answer, chapter, cite, claim, DEFAULT_MODEL, done, evidence, initial, p
 
 // Contract: arc.md / Build / Incremental by default, First Build; Receipt.
 // Detect lost windows, oversized calls, early partial publication, and missing receipt custody.
-test("Arc v2: first Build folds two message-boundary windows and stores only the final result", async t => {
+test("Arc service: first Build publishes accepted windows and stores a replicated final result", async t => {
 	const entries = Array.from({ length: 20 }, (_, i) => { const e = evidence(`${i % 2 ? "a" : "u"}${Math.floor(i / 2) + 1}`, i % 2 ? "assistant" : "user"); return { ...e, text: e.text.padEnd(22_000, "x") }; });
 	const first = answer({ chapters: [chapter("u1", true)], points: [point()] });
 	const second = answer({ now: claim("The second window completed.", "u6"), chapters: [chapter("u6")], points: [] });
@@ -16,8 +16,10 @@ test("Arc v2: first Build folds two message-boundary windows and stores only the
 	const gate = h.gate("last-window-release");
 	h.plan([{ answer: first }, { answer: second, gate }]);
 	const building = h.build();
+	void building.catch(() => {}); // Cleanup can end the Build after an earlier assertion fails.
 	await waitFor(() => h.starts().length === 2, "second window held");
-	assert.equal(h.value().receipt, undefined, "an intermediate window is not published as a receipt");
+ const partial = await h.browser.until<any>(h.sid, v => v.receipt?.asOfCount === 10);
+ assert.equal(partial.receipt.asOf, "a5", "the accepted prefix is visible while the next call waits");
 	h.release(gate);
 	const r = done(await building);
 	assert.equal(h.starts().length, 2);
@@ -35,10 +37,13 @@ test("Arc v2: first Build folds two message-boundary windows and stores only the
 	assert.equal(r.builds.length, 1); assert.equal(r.builds[0].windows, 2); assert.equal(r.builds[0].calls, 2);
 	assert.equal(r.builds[0].trigger, "manual");
 	const files: string[] = [];
-	function walk(dir: string) { for (const e of readdirSync(dir, { withFileTypes: true })) { const p = join(dir, e.name); if (e.isDirectory()) walk(p); else if (e.name.endsWith(".json") && dir.endsWith("/arc")) files.push(p); } }
+	function walk(dir: string) { for (const e of readdirSync(dir, { withFileTypes: true })) { const p = join(dir, e.name); if (e.isDirectory()) walk(p); else if (e.name === "replica.json" && dir.endsWith("/arc-replica")) files.push(p); } }
 	walk(h.f.dir);
-	assert.equal(files.length, 1, "one private receipt per Session");
-	assert.deepEqual(JSON.parse(readFileSync(files[0]!, "utf8")), r);
+	assert.equal(files.length, 1, "one read copy per Host");
+ const copy = Object.values(JSON.parse(readFileSync(files[0]!, "utf8")).receipts)[0] as any;
+ assert.equal(copy.asOfCount, r.asOfCount); assert.equal(copy.needsYou, r.points.filter((p: any) => p.needsYou).length);
+ const authoritative = JSON.parse(readFileSync(join(h.f.agentDir, "ampi-arc", "builder.json"), "utf8"));
+ assert.deepEqual({ ...authoritative.sessions["pi:sess-a"].receipt.receipt, session: r.session }, r);
 });
 
 // Contract: arc.md / Build / Closed chapters are frozen; Key points carry across versions; Full rebuild.
@@ -80,7 +85,7 @@ test("Arc v2: invalid citations and unsupported points are removed; normalized v
 	const h = await setup(t, { entries, steps: [{ answer: a }] });
 	h.writeSession("foreign-session", [evidence("foreign")]);
 	const r = done(await h.build());
-	assert.equal(h.starts().length, 1, "repair does not require an answer retry");
+	assert.equal(h.starts().length, 2, "dropped owner-directed points share one bounded retry");
 	assert.equal(r.points.length, 1); assert.deepEqual(r.points[0].cites, [good]);
 	assert.equal(r.chapters[0].summary.bullets.length, 1);
 	assert.deepEqual(r.chapters[0].summary.bullets[0].cites, [good]);
@@ -104,18 +109,17 @@ for (const [name, mutate, check] of [
 		(r: any) => assert.equal(r.chapters[0].summary.bullets[0].children[0].children[0].children, undefined)],
 	["bullet above 600 characters", (a: any) => { a.chapters[0].summary.bullets[0].text = "word ".repeat(130); },
 		(r: any) => assert.equal(r.chapters[0].summary.bullets.length, 0)],
-	["point text above 600 characters", (a: any) => { a.points[0].text = "word ".repeat(130); }, (r: any) => assert.equal(r.points.length, 0)],
+	["point text above 600 characters", (a: any) => { a.points[0].text = "word ".repeat(130); }, (r: any) => assert.equal(r.points[0].text, "word ".repeat(130))],
 	["invalid state", (a: any) => { a.points[0].state = "imaginary"; }, (r: any) => assert.equal(r.points.length, 0)],
 	["four cites on one claim", (a: any) => { a.goal.cites = [cite("u1"), cite("u2"), cite("a1"), cite("a2")]; }, (r: any) => assert.equal(r.goal.cites.length, 3)],
-	["thirteen-word title", (a: any) => { a.points[0].title = "word ".repeat(13); }, (r: any) => assert.equal(r.points.length, 0)],
+	["thirteen-word title", (a: any) => { a.points[0].title = "word ".repeat(13); }, (r: any) => assert.equal(r.points[0].title, "word ".repeat(13).trim())],
 	["thirteen-word chapter label", (a: any) => { a.chapters = [chapter("u1", true), { ...chapter("u2"), label: "word ".repeat(13) }]; },
 		(r: any) => assert.deepEqual(r.chapters.map((c: any) => [c.firstId, c.closed]), [["u1", true]])],
 	["reversed chapter order", (a: any) => { a.chapters = [chapter("u2", true), chapter("u1")]; },
 		(r: any) => assert.deepEqual(r.chapters.map((c: any) => c.firstId), ["u1"])],
 ] as const) {
-	// Contract: arc.md / Validation and retry: code repairs a local defect at its item; only an unusable answer retries.
-	// Detect local defects that cost a model call, or invalid items reaching storage.
-	test(`Arc v2: ${name} is repaired by code without a retry`, async t => {
+	// Item repair keeps invalid items out of storage. Identifiable owner-directed losses get one bounded retry.
+	test(`Arc: ${name} uses the bounded item-repair policy`, async t => {
 		const invalid = answer(); mutate(invalid);
 		const h = await setup(t, { steps: [{ answer: invalid }] });
 		const r = done(await h.build());
@@ -173,11 +177,12 @@ test("Arc v2: default and literal model settings apply at each Build; invalid se
 	assert.equal(h.starts()[1]!.model, "synthetic/provider/model");
 	for (const invalid of [{ model: 12 }, { model: "missing-provider" }, { auto: "yes" }]) {
 		h.setSettings(invalid);
-		const v = await h.build();
-		assert.equal(v.status.state, "failed"); assert.equal(v.status.error?.code, "settings");
-		assert.ok(v.status.error!.message.includes("settings.json")); assert.ok(v.status.error!.message.includes("ampi_arc"));
-		assert.equal(h.starts().length, 2);
-		assert.deepEqual(v.receipt.chapters, r.chapters);
+  const result = await h.browser.req("devbox", "view.arc.build", { threadId: "pi:sess-a" });
+  assert.equal(result.outcome, "refused"); assert.equal(result.code, "settings");
+  const v = await h.browser.until<any>(h.sid, v => v.services?.[0]?.state === "invalid-settings");
+  assert.ok(v.services[0].path.endsWith("settings.json")); assert.match(v.services[0].key, /ampi_arc/);
+  assert.equal(h.starts().length, 2);
+  assert.deepEqual(v.receipt.chapters, r.chapters);
 	}
 });
 

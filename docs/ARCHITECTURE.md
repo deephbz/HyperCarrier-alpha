@@ -9,10 +9,9 @@ Pi Session JSONL ──► Trace Viewer local parser ──► Trace Viewer
         │                                         /view-trace
         └──► trace-analytics reader ──► AmPi hub ──► AmPi GUI
                                              │
-                                             ├── HC Control socket
-                                             └── durable Team, Rarebit, and Compact packages
+                                             └── HC Control socket
 
-Pi Team Bright graph ──► Team package ──► derived AmPi views
+Pi Team Bright graph ──► AmPi Team view ──► derived AmPi views
 Rarebit package ───────────────────────► derived summaries and selection
 ```
 
@@ -27,8 +26,7 @@ Rarebit package ─────────────────────�
 - Trace Viewer reads one exact Session branch with its local parser and offers
   the corresponding source JSONL for download. Consolidation onto
   `trace-analytics` remains deferred.
-- Pi Team Bright owns Team and Task graph state. The durable Team package
-  adapts those semantics for AmPi.
+- Pi Team Bright owns Team and Task graph state. AmPi reads its Task graph.
 - Rarebit selects conversational evidence and writes derived Summary and Title
   receipts outside native history.
 
@@ -38,8 +36,8 @@ Rarebit package ─────────────────────�
 
 AmPi is a local GUI and hub for Pi Sessions. Its Timeline and Arc views show
 bounded session activity and derived summaries. It uses HC Control for a
-per-Session socket and pi-durable packages for experimental Team, Rarebit, and
-Compact behavior. The pi-durable node backend remains deferred.
+per-Session socket. It serves Pi Hosts only; the [README](../README.md) names
+the durable release.
 
 AmPi is an experimental midway snapshot with live Herdr integration paths.
 Full UX acceptance remains open. Arc cache, boundary, model, command, and
@@ -56,11 +54,6 @@ consolidation remains deferred. It does not write to Session history.
 ## Supporting packages
 
 - HC Control owns the local Session socket and evidence-backed acknowledgments.
-- `@hypercarrier/durable-team` adapts Pi Team Bright Task graph semantics to
-  pi-durable.
-- `@hypercarrier/durable-rarebit` uses Rarebit selection on durable entries.
-- `@hypercarrier/durable-compact` maps the Auto Compact budget and summary to
-  pi-durable.
 - Auto Compact, Cache Goblin, and System Prompt Audit remain independent Pi
   packages.
 - Pi Team Bright and Rarebit remain independent package authorities.

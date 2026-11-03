@@ -28,7 +28,7 @@ let timelineStream: (props: object) => unknown;
 
 before(async () => {
 	// client.ts opens its hub WebSocket at import; this stub never connects. attention.ts installs window.ampiOpen.
-	Object.assign(globalThis, { location: { protocol: "http:", host: "127.0.0.1:1", hash: "" }, WebSocket: class { send() {} close() {} }, window: globalThis, localStorage: { getItem: () => null, setItem() {}, removeItem() {} }, document: { activeElement: null } });
+	Object.assign(globalThis, { location: { protocol: "http:", host: "127.0.0.1:1", hash: "" }, WebSocket: class { send() {} close() {} }, window: globalThis, localStorage: { getItem: () => null, setItem() {}, removeItem() {} }, document: { activeElement: null, querySelector: () => null } });
 	vite = await createServer({ configFile: `${web}vite.config.ts`, root: web, logLevel: "silent", server: { middlewareMode: true, hmr: false } });
 	util = (await vite.ssrLoadModule("/src/util.ts")) as typeof util;
 	({ notices, notify, needsYouCount } = await vite.ssrLoadModule("/src/attention.ts"));

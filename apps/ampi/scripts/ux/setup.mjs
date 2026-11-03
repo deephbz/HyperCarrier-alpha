@@ -35,13 +35,6 @@ const phone = async p => {
   await p.mouse.move(195, 450);
 };
 const newDialog = async p => { await p.keyboard.press('Control+n'); await p.getByRole('dialog').waitFor(); };
-const accounts = async (p, r, s) => {
-  // A real app event opens the existing dialog; all account RPCs stay in the browser fixture.
-  await p.evaluate(() => window.dispatchEvent(new CustomEvent('ampi:accounts', { detail: 'devbox' })));
-  await p.locator('[data-accounts]').waitFor();
-  if (s === 'login' || s === 'oauth') { await button(p, s === 'login' ? 'Add API key' : 'Sign in (subscription)').click(); await p.locator('.login-flow').waitFor(); }
-  if (s === 'accounts' && !r.pending) await p.locator(r.reject ? '.accounts .err-box' : '.provider').waitFor();
-};
 const lens = async p => { await p.getByRole('button', { name: 'Chat', exact: true }).click(); await p.locator('.rb-tools summary').first().waitFor(); };
 
 /**
@@ -110,22 +103,15 @@ export const STEPS = {
   palette: p => p.keyboard.press('Control+k'),
   'palette-empty': async p => { await p.keyboard.press('Control+k'); await p.getByLabel('Find a Session').fill('synthetic-no-match'); },
   help: async p => { await p.locator('body').click({ position: { x: 1000, y: 10 } }); await p.keyboard.press('?'); },
-  accounts: (p, r) => accounts(p, r, 'accounts'),
-  login: (p, r) => accounts(p, r, 'login'),
-  oauth: (p, r) => accounts(p, r, 'oauth'),
 };
 STEPS['send-error'] = STEPS.send;
 
 /**
- * Waits until a Session page holds the focus it takes on open: the Composer, or the docked shell when the page opens
- * with it. The Composer and the shell each take the focus when they mount, and their mount order depends on two hub
- * replies; the scene clicks the shell so the shell holds the focus on every run.
+ * Waits until a Session page holds the focus it takes on open: the Composer.
  */
 const openFocus = async p => {
   if (!await p.locator('.composer textarea').count()) return;
-  const shell = /[?&]p=shell\b/.test(new URL(p.url()).hash);
-  if (shell) { await p.locator('.term-dock .xterm').waitFor(); await p.locator('.term-dock .term-box').click(); }
-  await p.waitForFunction(sel => document.activeElement?.closest(sel), shell ? '.term-dock .term-box' : '.composer textarea');
+  await p.waitForFunction(sel => document.activeElement?.closest(sel), '.composer textarea');
 };
 
 /**

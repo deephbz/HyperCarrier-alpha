@@ -1,4 +1,4 @@
-import type { JsonValue } from "../node/durable-types.ts";
+import type { JsonValue } from "../shared/json.ts";
 import { injectedMessage, toolArgsPreview } from "../shared/entry-shapes.ts";
 import type { PiBlock, PiEntry } from "../shared/protocol.ts";
 import { TOOL_TEXT_LIMIT } from "../shared/tool-text-limit.ts";

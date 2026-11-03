@@ -44,7 +44,6 @@ test("working set: tail limits cannot truncate full-branch statistics, Rarebit s
  assert.equal(data.rarebit.stats.user + data.rarebit.stats.stop, 650);
  const snapshot = store.rarebitSnapshot(source.path, 100_000);
  assert.equal(snapshot.count, 650); assert.ok(snapshot.omittedChars > 0); assert.equal(snapshot.context.length, 100_000);
- assert.ok(store.arcSource(source.path, "test/pi:long", data.version).items.some(i => i.id === "e0"));
 });
 
 test("working set: an around page always holds its target, and the Rarebit page of a linked entry holds its item", async (t) => {

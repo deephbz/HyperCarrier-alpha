@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { DURABLE_RELEASE, isPiThreadId } from "../../../src/shared/protocol.ts";
 import type { HostState } from "../client.ts";
 import { href } from "../util.ts";
 import { HubNotConnected } from "./Sidebar.tsx";
@@ -18,9 +19,10 @@ function useWaited(): 0 | 1 | 2 {
 
 /**
  * The main view of a Session route that names no listed Host source (App's linkRoute): it says why, and what to do.
- * A fast boot shows an empty view for `QUIET_MS`, so a hub that answers at once causes no flash.
+ * A fast boot shows an empty view for `QUIET_MS`, so a hub that answers at once causes no flash. A durable thread, from an
+ * old pin or link, names the release that serves it.
  */
-export function SessionUnresolved({ host, hosts, connected, listed }: { host: string; hosts: readonly HostState[]; connected: boolean; listed: boolean }) {
+export function SessionUnresolved({ host, thread, hosts, connected, listed }: { host: string; thread: string; hosts: readonly HostState[]; connected: boolean; listed: boolean }) {
 	const waited = useWaited();
 	const sources = hosts.filter((h) => h.id === host);
 	return (
@@ -34,7 +36,9 @@ export function SessionUnresolved({ host, hosts, connected, listed }: { host: st
 					</>
 				) : (
 					<>
-						{sources.length === 0
+						{!isPiThreadId(thread)
+							? `This thread belongs to the durable node. ${DURABLE_RELEASE}`
+							: sources.length === 0
 							? `This Host is not listed: ${host}.`
 							: `This Session's agent type is not on Host ${sources[0]!.label}.`}{" "}
 						<a href={href.page("overview")}>Open the Overview</a>

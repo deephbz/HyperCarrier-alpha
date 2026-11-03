@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ENGINES, open } from "./resize-edges-fixture.ts";
 import { engineSkip } from "./engines.ts";
+import { skewText } from "../src/shared/skew.ts";
 import type { WebSocketRoute } from "playwright";
 // @ts-ignore: browser fixture adapter is plain ESM.
 import { routeFixture } from "../scripts/ux/fixtures.mjs";
@@ -18,7 +19,7 @@ for (const [engine, type, path] of ENGINES) {
 		let listError = noControl;
 		const refusals: Record<string, { code: string; message: string }> = {
 			no_control: noControl,
-			commands_unsupported: { code: "commands_unsupported", message: "The AmPi agent is too old for slash commands" },
+			version_skew: { code: "version_skew", message: skewText.controlOlder("devbox") },
 			editor_not_empty: { code: "editor_not_empty", message: "The Pi pane's input box is not empty" },
 			unknown_command: { code: "unknown_command", message: "Pi has no /modle command that AmPi can type without a control socket" },
 		};
@@ -83,22 +84,23 @@ for (const [engine, type, path] of ENGINES) {
 		await page.waitForTimeout(300);
 		assert.deepEqual(sent, [{ op: "thread.submit", content: "/model is a word", asText: true }]);
 
-		// An old agent can refuse the list, or the command after a no-control list. Neither refusal sends text.
+		// A control of another build can refuse the list, or the command after a no-control list. The composer shows the
+		// two-line refusal, offers no text send, and keeps the draft.
 		for (const tier of ["list", "command"]) {
-			listError = tier === "list" ? refusals.commands_unsupported! : noControl;
-			command = "commands_unsupported";
+			listError = tier === "list" ? refusals.version_skew! : noControl;
+			command = "version_skew";
 			sent.length = 0;
 			await page.reload();
 			await input.waitFor();
 			await input.fill("/model m4");
 			await input.press("Enter");
-			await choice.waitFor();
-			assert.match(await choice.innerText(), /too old.*Nothing was sent/);
+			const refusal = page.locator('.composer-feedback[data-outcome="refused"]');
+			await refusal.waitFor();
+			assert.match(await refusal.innerText(), /runs an older pi-hc-control\. Update it\.\nPull pi-hc-control on devbox, then run \/reload in each Pi pane there/);
+			assert.equal(await choice.count(), 0, "a skew refusal offers no text send");
 			assert.deepEqual(sent, tier === "list" ? [] : [{ op: "thread.command", name: "model" }]);
-			assert.equal(await input.inputValue(), "/model m4", "old-agent refusal returns the draft");
-			await choice.getByRole("button", { name: "Edit", exact: true }).click();
-			assert.equal(await input.inputValue(), "/model m4");
-			assert.ok(sent.every(f => f.op !== "thread.submit"), "Edit never sends slash text");
+			assert.equal(await input.inputValue(), "/model m4", "the skew refusal returns the draft");
+			assert.ok(sent.every(f => f.op !== "thread.submit"), "a skew refusal never sends slash text");
 		}
 	});
 }

@@ -3,19 +3,18 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { ALL_COVERS, historySpend, spendLabel, sumSpend, summarySpend, unreadSpend } from "../src/shared/spend.ts";
+import { ALL_COVERS, historySpend, spendLabel, sumSpend, unreadSpend } from "../src/shared/spend.ts";
 import { activeSpend, laneSpend } from "../web/src/views/cos/totals.ts";
 import { money } from "../web/src/util.ts";
 
 const pi = (usd: number | null) => ({ costUsd: usd ?? 0, spend: historySpend(usd) });
 const durable = (usd: number | null) => ({ costUsd: usd ?? 0, spend: { usd, covers: [...ALL_COVERS] } });
-const total = (rows: { costUsd: number; spend?: any }[]) => spendLabel(sumSpend(rows.map(summarySpend)));
+const total = (rows: { costUsd: number; spend: any }[]) => spendLabel(sumSpend(rows.map((r) => r.spend)));
 
 test("spend label: a total that mixes backends names what some of its Sessions leave out", () => {
 	assert.equal(total([pi(0.75), durable(0.75)]), "$1.50 (some Sessions exclude compaction, tool model calls)");
 	assert.equal(total([pi(0.75), pi(0.75)]), "$1.50 (excludes compaction, tool model calls)");
 	assert.equal(total([durable(0.75), durable(0.75)]), money(1.5), "a durable-only total is the bare amount");
-	assert.equal(total([{ costUsd: 0.25 }]), money(0.25), "an older Host's summary without spend shows its bare amount");
 	assert.equal(total([]), "$0");
 });
 

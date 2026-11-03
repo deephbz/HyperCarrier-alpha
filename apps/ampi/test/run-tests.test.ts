@@ -31,7 +31,7 @@ for (const mode of ["queued", "inherited", "focused", "SIGTERM", "SIGINT", "SIGH
 		const timeout = mode === "timeout";
 		const release = await acquireRunLock("synthetic holder", { lock });
 		const child = spawn(process.execPath, [join(app, "scripts", "run-tests.cjs"), "fast", ...(mode === "focused" ? ["ok.test.cjs"] : [])], {
-			env: { ...process.env, HOME: home, AMPI_PERF_HOME: perf, AMPI_PREFLIGHT_DONE: "1", AMPI_GATE_LOCK_HELD: mode === "inherited" ? "1" : "", AMPI_GATE_LOCK_TIMEOUT_MIN: timeout ? "0.01" : invalid ? ({ invalid: "oops", negative: "-1", empty: "", infinite: "Infinity" }[mode]) : "0", AMPI_TEST_FILE_TIMEOUT_MS: "10000" },
+			env: { ...process.env, HOME: home, AMPI_PERF_HOME: perf, AMPI_GATE_SLOTS: "1", AMPI_PREFLIGHT_DONE: "1", AMPI_GATE_LOCK_HELD: mode === "inherited" ? "1" : "", AMPI_GATE_LOCK_TIMEOUT_MIN: timeout ? "0.01" : invalid ? ({ invalid: "oops", negative: "-1", empty: "", infinite: "Infinity" }[mode]) : "0", AMPI_TEST_FILE_TIMEOUT_MS: "10000" },
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 		const exit = once(child, "close");

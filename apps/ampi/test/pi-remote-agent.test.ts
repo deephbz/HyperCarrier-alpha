@@ -6,7 +6,35 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { test } from "node:test";
+import { controlStamp } from "../src/shared/build.ts";
 import { AGENT, Agent, control, type Fixture, fixture, type Frame } from "./pi-fixtures.ts";
+import { agentLaunch } from "../src/pi/host.ts";
+import { agentModules } from "../src/pi/agent-modules.ts";
+
+test("pi remote agent: oversized stdin config never reaches child env or exec arguments", async (t) => {
+ for (const kind of ["pi-local", "pi-ssh"] as const) await t.test(kind, async (t) => {
+  const f = fixture(), childFacts = join(f.dir, "child-env.jsonl"), herdr = join(f.dir, "herdr");
+  const original = readFileSync(herdr, "utf8"), firstLine = original.indexOf("\n") + 1;
+  writeFileSync(herdr, original.slice(0, firstLine) + `require("node:fs").appendFileSync(${JSON.stringify(childFacts)}, JSON.stringify({hasConfig:Object.hasOwn(process.env,"HCM_CFG"),maxArgBytes:Math.max(...process.argv.map(a=>Buffer.byteLength(a))),maxEnvBytes:Math.max(...Object.entries(process.env).map(([k,v])=>Buffer.byteLength(k+"="+v)))})+"\\n");\n` + original.slice(firstLine));
+  const cfg = Buffer.from(JSON.stringify({ ...agentModules(), agentDir: f.agentDir, pollMs: 30, discoverMs: 150, teams: false, padding: "x".repeat(256 * 1024) })).toString("base64");
+  assert.ok(Buffer.byteLength(cfg) > 128 * 1024, "payload exceeds Linux MAX_ARG_STRLEN");
+  const launch = agentLaunch({ id: "synthetic", label: "synthetic", kind, remoteNode: process.execPath });
+  assert.ok(launch.args.every(arg => Buffer.byteLength(arg) < 128 * 1024), "SSH and local exec arguments stay bounded");
+  // Execute the exact remote shell command without a network or credentials.
+  const child = kind === "pi-local" ? spawn(launch.command, launch.args, { stdio: ["pipe", "pipe", "inherit"], env: { ...process.env, HOME: f.dir, HERDR_BIN: herdr, FAKE_HERDR_STATE: join(f.dir, "state.json"), FAKE_HERDR_LOG: join(f.dir, "calls.jsonl") } })
+   : spawn("sh", ["-c", launch.args.at(-1)!], { stdio: ["pipe", "pipe", "inherit"], env: { ...process.env, HOME: f.dir, HERDR_BIN: herdr, FAKE_HERDR_STATE: join(f.dir, "state.json"), FAKE_HERDR_LOG: join(f.dir, "calls.jsonl") } });
+  const agent = new Agent(child); t.after(() => agent.stop());
+  child.stdin!.write(JSON.stringify({ cfg, code: readFileSync(AGENT).toString("base64") }) + "\n");
+  await agent.wait(frame => frame.t === "agents" && frame.agents.length > 0, "oversized config still lists Sessions");
+  const facts = readFileSync(childFacts, "utf8").trim().split("\n").map(row => JSON.parse(row));
+  assert.ok(facts.length > 0, "the real agent launched Herdr children");
+  for (const fact of facts) {
+   assert.equal(fact.hasConfig, false, "transport payload must not reach any child");
+   assert.ok(fact.maxArgBytes < 128 * 1024);
+   assert.ok(fact.maxEnvBytes < 128 * 1024);
+  }
+ });
+});
 
 test("pi remote agent: layout in Herdr order, agents carry ids, sessionId from header", async (t) => {
 	const f = fixture();
@@ -88,7 +116,7 @@ test("pi remote agent: submit and abort go to a live control socket and forward 
 
 	const frame = await agent.wait((x) => x.t === "agents" && x.agents.length === 3, "agents with control");
 	const a = frame.agents.find((x: Frame) => x.session === f.sessionA);
-	assert.deepEqual(a.control, { live: true, idle: false, compacting: false, pending: { steer: 0, followUp: 1 } });
+	assert.deepEqual(a.control, { live: true, idle: false, compacting: false, stamp: controlStamp(), pending: { steer: 0, followUp: 1 }, submissions: [] });
 	const c = frame.agents.find((x: Frame) => x.session === orphan);
 	assert.equal(c.pane, null);
 	assert.equal(c.sessionId, "sess-c");

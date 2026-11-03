@@ -1,6 +1,6 @@
 # AmPi
 
-AmPi is an experimental, single-user GUI and local hub for Pi Sessions. This export is a midway snapshot for technical testing. It combines Timeline, Arcs, Rarebit, Team views, and HC Control. The node backend remains deferred.
+AmPi is an experimental, single-user GUI and local hub for Pi Sessions. This export is a midway snapshot for technical testing. It combines Timeline, Arcs, Rarebit, Team views, and HC Control. It serves Pi Hosts only; the [Alpha README](../../README.md) names the durable release.
 
 AmPi has live Herdr integration paths, but full UX acceptance remains open. Open work remains in Arc cache, boundaries, model behavior, commands, and performance.
 
@@ -46,7 +46,5 @@ The shell uses the same local hub as the CLI. It owns the window, menu bar, noti
 ## Architecture
 
 - [Pi backend and control contract](docs/pi-backend.md)
+- [Arc service, build matching and operations](docs/arc.md)
 - [HC Control package](../../packages/pi-hc-control/README.md)
-- [Durable Team package](../../packages/durable-team/README.md)
-- [Durable Rarebit package](../../packages/durable-rarebit/README.md)
-- [Durable Compact package](../../packages/durable-compact/README.md)

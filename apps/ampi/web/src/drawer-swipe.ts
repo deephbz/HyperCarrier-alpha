@@ -19,8 +19,8 @@ const LONG_PRESS_MS = 400;
 const SETTLE_MS = 200;
 const FADE_MS = 120;
 
-/** A drag that starts here keeps its own meaning: fields, the prompt rail, resize edges, terminals, dialogs. */
-const KEEPS_DRAG = "input, textarea, select, [contenteditable]:not([contenteditable='false']), .prompt-rail, .companion-scrollbar, .resize-edge, .xterm, [role='dialog']";
+/** A drag that starts here keeps its own meaning: fields, the prompt rail, resize edges, dialogs. */
+const KEEPS_DRAG = "input, textarea, select, [contenteditable]:not([contenteditable='false']), .prompt-rail, .companion-scrollbar, .resize-edge, [role='dialog']";
 
 /** The start keeps its own drag: a field, a rail, an element that scrolls sideways (even at its end), a selection. */
 function keepsDrag(target: Element, app: HTMLElement): boolean {

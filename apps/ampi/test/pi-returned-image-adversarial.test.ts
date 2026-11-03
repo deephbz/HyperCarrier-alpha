@@ -8,7 +8,7 @@ import { setup } from "./pi-host-fixtures.ts";
 // so the owner knows to attach the lost images again. Exercise the real agent projection and Host together.
 test("Pi returned images retain their count through the remote agent, Stop reply, and queue view", async (t) => {
  const { f, browser } = await setup(t);
- const ctl = await control(f, f.sessionA, { images: true, queue: true });
+ const ctl = await control(f, f.sessionA, { queue: true });
  t.after(() => ctl.close());
  const threads = browser.sub("devbox", { kind: "threads" });
  await browser.until<any>(threads, v => v.threads["pi:sess-a"]?.images);

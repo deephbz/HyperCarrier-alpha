@@ -1,6 +1,4 @@
 // Refuse a commit at the integration interface (the merge gate and deploy:live) when it is not safe to deploy:
-//   entry  The commit carries the current deploy entry: apps/ampi/scripts/deploy-live.sh names ENTRY_MARKER. An older
-//          checkout runs its own stale deploy copy, which cannot be patched, so it must merge dev/ampi-int first.
 //   reach  Every submodule gitlink is on that submodule's origin. A fresh clone fetches a gitlink from origin, so a pin
 //          that exists only in a local module store breaks every other checkout.
 //   change A gitlink that differs from the base must fast-forward from the base pin. Otherwise a commit in
@@ -20,9 +18,6 @@ import { existsSync, realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-/** deploy-live.sh names this variable since it began to run the dev/ampi-int tip's deploy logic. */
-const ENTRY_MARKER = 'AMPI_DEPLOY_LOGIC';
-const ENTRY = 'apps/ampi/scripts/deploy-live.sh';
 const INT = 'refs/heads/dev/ampi-int';
 
 const gitSync = (args, cwd) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 << 20 }).trim();
@@ -83,9 +78,8 @@ async function checkPins(root, target, { base, timeoutMs = Number(process.env.AM
   const lines = [];
   // One round of independent reads; each names the target (and a given base), so none waits for their resolution.
   // Without --base, the base tree and log wait for the merge base below.
-  const [commit, entry, from, commonDir, config, tree, givenBaseTree, givenLog] = await Promise.all([
+  const [commit, from, commonDir, config, tree, givenBaseTree, givenLog] = await Promise.all([
     tryGit(['rev-parse', '--verify', `${target}^{commit}`], root),
-    tryGit(['show', `${target}:${ENTRY}`], root),
     base ? tryGit(['rev-parse', '--verify', `${base}^{commit}`], root) : tryGit(['merge-base', target, INT], root),
     tryGit(['rev-parse', '--git-common-dir'], root),
     tryGit(['config', '--blob', `${target}:.gitmodules`, '--get-regexp', '^submodule\\..*\\.path$'], root),
@@ -94,9 +88,6 @@ async function checkPins(root, target, { base, timeoutMs = Number(process.env.AM
     base && tryGit(['log', '--format=%B', `${base}..${target}`], root),
   ]);
   if (!commit) return { ok: false, lines: [`REFUSED: ${target} is not a commit in ${root}`] };
-  if (!(entry ?? '').includes(ENTRY_MARKER)) {
-    lines.push(`REFUSED (entry): ${short(commit)} has a stale deploy entry (${ENTRY} lacks ${ENTRY_MARKER}). Merge dev/ampi-int first`);
-  }
   if (base && !from) return { ok: false, lines: [...lines, `REFUSED: base ${base} is not a commit in ${root}`] };
   if (tree === undefined || commonDir === undefined) return { ok: false, lines: [...lines, `REFUSED: cannot read the tree of ${short(commit)} in ${root}`] };
   const store = stores(root, commonDir, config);

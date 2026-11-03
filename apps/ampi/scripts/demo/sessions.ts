@@ -1,6 +1,5 @@
 // The base synthetic Pi Sessions of the demo hub (scripts/pi-demo.ts): two Teams, a 600-turn Session,
-// compactions, a terminal error, and long and non-Latin titles. The same agentDir and now give byte-identical files,
-// so a golden check (scripts/durable/derive-golden.ts) can rebuild them without a hub.
+// compactions, a terminal error, and long and non-Latin titles. The same agentDir and now give byte-identical files.
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

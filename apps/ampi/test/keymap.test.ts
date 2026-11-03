@@ -36,21 +36,21 @@ test("Cmd+L opens the configured default panel", () => {
 });
 
 test("a global binding without a handler is unavailable: it does not fire, the palette omits it, help names its context", () => {
-	const shell = KEYMAP.find((binding) => binding.id === "shell")!;
+	const find = KEYMAP.find((binding) => binding.id === "find")!;
 	const key = () => {
-		const event = { code: "KeyJ", metaKey: true, ctrlKey: false, shiftKey: false, altKey: false, defaultPrevented: false, target: null, preventDefault() { event.defaultPrevented = true; } };
+		const event = { code: "KeyF", metaKey: true, ctrlKey: false, shiftKey: false, altKey: false, defaultPrevented: false, target: null, preventDefault() { event.defaultPrevented = true; } };
 		dispatchGlobalKey(event as unknown as KeyboardEvent);
 		return event.defaultPrevented;
 	};
-	assert.equal(keyAvailable(shell), false);
+	assert.equal(keyAvailable(find), false);
 	assert.equal(key(), false);
 	let fired = 0;
-	const unregister = registerKeyAction("shell", () => { fired += 1; });
-	assert.equal(keyAvailable(shell), true);
+	const unregister = registerKeyAction("find", () => { fired += 1; });
+	assert.equal(keyAvailable(find), true);
 	assert.equal(key(), true);
 	assert.equal(fired, 1);
 	unregister();
-	assert.equal(keyAvailable(shell), false);
+	assert.equal(keyAvailable(find), false);
 	assert.equal(keyAvailable(KEYMAP.find((binding) => binding.region === "transcript")!), true);
 });
 

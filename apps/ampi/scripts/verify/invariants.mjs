@@ -51,16 +51,11 @@ const states = all
 const selected = only ? states.filter(s => only.some(o => s.id === o || s.id.startsWith(o + '@'))) : states;
 if (!selected.length) throw new Error('No matching state');
 
-/**
- * Frame rewrites before the page reads them:
- * - seed data the demo lacks: Session titles in `threads` snapshots (`titles: 'team-lens'`);
- * - `--web` only: older builds read tool `args.command` unguarded, and this hub sends `args: null` for elided
- *   arguments. Rows a–f do not read tool arguments, so `null` becomes `{}`.
- */
+/** Frame rewrites before the page reads them: seed data the demo lacks, Session titles in `threads` snapshots (`titles: 'team-lens'`). */
 function relabel(ws, s) {
-  if (s.titles !== 'team-lens' && !web) return ws;
+  if (s.titles !== 'team-lens') return ws;
   const rewrite = raw => {
-    const f = JSON.parse(String(raw), web ? (k, v) => k === 'args' && v === null ? {} : v : undefined);
+    const f = JSON.parse(String(raw));
     if (s.titles === 'team-lens' && f.t === 'snap' && f.value?.threads) for (const t of Object.values(f.value.threads)) if (t.team) t.title = t.team.role === 'worker' ? `team/lens ${t.team.worker ?? 'worker'}` : 'team/lens lead';
     return JSON.stringify(f);
   };
@@ -200,7 +195,7 @@ try {
     if (chrome.exitCode === null && chrome.signalCode === null) chrome.kill('SIGKILL');
   }));
   const receipt = {
-    schema: 'ampi-ui-invariants/1', lane: all ? 'all' : 'fast', rows, web: web ?? 'checkout web/dist', webHits, webShim: web ? 'tool args null → {}' : undefined, revision: state.revision,
+    schema: 'ampi-ui-invariants/1', lane: all ? 'all' : 'fast', rows, web: web ?? 'checkout web/dist', webHits, revision: state.revision,
     seconds: Math.round((Date.now() - started) / 100) / 10, phases, load: { min: Math.min(...load), max: Math.max(...load) },
     states: results.length, red: results.filter(r => r.error || r.findings.some(f => !f.allowed)).map(r => r.state),
     unusedAllow: ALLOW.filter(a => !a.used).map(a => `${a.row}/${a.rule}${a.state ? ' ' + a.state : ''}`),

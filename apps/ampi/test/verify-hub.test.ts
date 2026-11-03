@@ -5,12 +5,53 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
+import { WebSocketServer } from "ws";
+import { seedDemoArcs, waitForDemoArc } from "../scripts/demo/cos.ts";
 
 // The script is untyped .mjs; a URL specifier keeps it out of the TypeScript project.
 const hub = new URL("../scripts/verify/hub.mjs", import.meta.url).href;
 const { refusingPath } = (await import(hub)) as { refusingPath(dir: string, path?: string): string };
 const dir = mkdtempSync(join(tmpdir(), "verify-hub-"));
 after(() => rmSync(dir, { recursive: true, force: true }));
+
+test("demo Arc: source readiness cannot submit before the resident; Arc readers wait without building", async t => {
+	const server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+	await new Promise<void>(resolve => server.once("listening", resolve));
+	t.after(() => { for (const ws of server.clients) ws.terminate(); server.close(); });
+	const port = (server.address() as { port: number }).port;
+	let builds = 0, ready = false;
+	server.on("connection", ws => ws.on("message", bytes => {
+		const frame = JSON.parse(String(bytes));
+		if (frame.t === "sub") {
+			ws.send(JSON.stringify({ t: "snap", sid: 1, value: { status: { state: "idle" }, services: [{ host: "devbox", state: "unreachable" }], series: { end: 1 } } }));
+			setTimeout(() => {
+				if (!ready) assert.equal(builds, 0, "the first source snapshot cannot submit to an unready resident");
+				ready = true;
+				ws.send(JSON.stringify({ t: "ops", sid: 1, ops: [["s", ["services", 0, "state"], "running"]] }));
+			}, 50);
+		} else if (frame.t === "req") {
+			builds++;
+			for (const client of server.clients) client.send(JSON.stringify({ t: "ops", sid: 1, ops: [["s", ["receipt"], { v: 1 }]] }));
+		}
+	}));
+	await Promise.all([seedDemoArcs(port, "synthetic", ["pi:demo"]), waitForDemoArc(port, "synthetic", "pi:demo")]);
+	assert.equal(builds, 1, "the reader does not submit another Build");
+});
+
+for (const failure of ["service", "response", "request"] as const) test(`demo Arc: ${failure} failure ends the wait with its text`, async t => {
+	const server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+	await new Promise<void>(resolve => server.once("listening", resolve));
+	t.after(() => { for (const ws of server.clients) ws.terminate(); server.close(); });
+	const text = `Synthetic ${failure} failure`;
+	server.on("connection", ws => ws.once("message", () => {
+		const frame = failure === "response" ? { t: "res", id: 1, ok: true, value: { outcome: "refused", detail: text } }
+			: { t: "snap", sid: 1, value: { status: { state: "idle" }, ...(failure === "service" ? { services: [{ host: "devbox", state: "error", text }] } : { request: { outcome: "refused", detail: text } }) } };
+		ws.send(JSON.stringify(frame));
+	}));
+	const start = Date.now();
+	await assert.rejects(waitForDemoArc((server.address() as { port: number }).port, "synthetic", "pi:demo"), { message: text });
+	assert.ok(Date.now() - start < 2000, "failure is reported without the 20 s seed deadline");
+});
 
 const gone = (pid: number) => { try { process.kill(-pid, 0); return false; } catch { return true; } };
 

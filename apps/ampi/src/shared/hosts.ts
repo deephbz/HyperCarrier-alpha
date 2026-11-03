@@ -5,26 +5,15 @@ import type { NodeInfo } from "./protocol.ts";
 export type HostConfig = {
 	id: string;
 	label: string;
-	kind: "local" | "ssh" | "pi-local" | "pi-ssh";
+	kind: "pi-local" | "pi-ssh";
 	/** ssh destination, for example `me@devbox` or a Host alias from ~/.ssh/config. */
 	target?: string;
-	/** Remote command that runs the bridge. Default: `ampi bridge`. */
-	command?: string;
 	/** Extra ssh arguments, for example ["-p", "2222"]. */
 	sshArgs?: string[];
-	/** AMPI_HOME of a local node (tests run several). */
-	home?: string;
 };
 
-/** What a negotiating link waits for: its transport (node socket, ssh, agent process), then the hello. */
+/** What a negotiating link waits for: its transport (ssh, agent process), then the hello. */
 export type LinkPhase = "transport" | "hello";
-
-/**
- * Why a link failed. A build failure needs an update or `npm run prepare`, because the hub or the node runs the wrong
- * build or protocol; a retry cannot fix it. A reachability failure (the Host, ssh, the node process) can end with a
- * retry. A status without a class, as from an older hub, counts as reachability.
- */
-export type ErrorClass = "build" | "reachability";
 
 /**
  * A link's status. Every status but connected carries since when it holds, a hint that says what the link does or
@@ -32,13 +21,12 @@ export type ErrorClass = "build" | "reachability";
  * names its phase, and disconnected names its failure. So no view can show a bare "connecting" without its reason.
  */
 export type LinkStatus =
-	| { status: "connected"; connectedAt: number; since?: never; phase?: never; hint?: never; error?: never; errorClass?: never; retryAt?: never }
-	| { status: "connecting"; phase: LinkPhase; since: number; hint: string; error?: string; errorClass?: ErrorClass; connectedAt?: never; retryAt?: never }
+	| { status: "connected"; connectedAt: number; since?: never; phase?: never; hint?: never; error?: never; retryAt?: never }
+	| { status: "connecting"; phase: LinkPhase; since: number; hint: string; error?: string; connectedAt?: never; retryAt?: never }
 	| {
 			status: "disconnected";
 			since: number;
 			error: string;
-			errorClass?: ErrorClass;
 			hint: string;
 			/** When the next attempt starts; absent when the link stopped. */
 			retryAt?: number;
@@ -54,9 +42,6 @@ export type HostBase = {
 	node?: NodeInfo;
 	lastSeen?: number;
 	attempts: number;
-	latencyMs?: number;
-	/** The node runs a different AmPi build than this hub (it predates an update); restart it to pick up the new one. */
-	buildMismatch?: boolean;
 	/** A Pi Host's working-set init failed: the Host serves no copies until the hub restarts; `error` says why. */
 	cacheFailed?: true;
 	/**
@@ -88,7 +73,7 @@ export type HostBase = {
 	 */
 	frameErrors?: number;
 	lastFrameError?: string;
-	/** The hub's route to this Host's source, `<id>#pi` or `<id>#durable`. Set by the hub; the web names a link by it. */
+	/** The hub's route to this Host's source, `<id>#pi`. Set by the hub; the web names a link by it. */
 	link?: string;
 };
 

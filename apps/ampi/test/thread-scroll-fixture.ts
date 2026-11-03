@@ -31,7 +31,7 @@ export async function componentScript(): Promise<string> {
 				installKeymapDispatcher();
 				installNavLinks(); arriveEntry(); window.addEventListener('hashchange', arriveEntry);
 				const threadId = window.THREAD;
-				const summary = { id: threadId, title: 'Scroll hold', createdAt: 0, updatedAt: 0, kind: 'thread', activity: 'idle', queued: 0, costUsd: 0 };
+				const summary = { control: window.CONTROL, id: threadId, title: 'Scroll hold', createdAt: 0, updatedAt: 0, kind: 'thread', activity: 'idle', queued: 0, costUsd: 0 };
 				const root = createRoot(document.getElementById('root'));
 				// Like App: a linked entry arrives as a route, which requests its reveal (nav.ts).
 				let routed;
@@ -72,8 +72,8 @@ export type Engine = "chromium" | "webkit";
 export const ENGINES: Engine[] = ["chromium", "webkit"];
 
 export type Publish = (n: number, tail?: string, from?: number) => Promise<void>;
-export const HOSTS = { pi: { id: "devbox", link: "devbox#pi", label: "devbox", kind: "pi-local", status: "connected" }, durable: { id: "devbox", link: "devbox#durable", label: "devbox", kind: "durable", status: "connected" } };
-export const THREADS = { pi: THREAD, durable: "tree-a.8" };
+export const HOSTS = { pi: { id: "devbox", link: "devbox#pi", label: "devbox", kind: "pi-local", status: "connected" } };
+export const THREADS = { pi: THREAD };
 /**
  * `zoom`: the overall display size, html `zoom` as App.tsx sets it; the viewport scales with it, so the layout keeps its
  * CSS px. `region`: the transcript's own display size, on every load. `size`: the viewport in CSS px; the thread view
@@ -81,7 +81,7 @@ export const THREADS = { pi: THREAD, durable: "tree-a.8" };
  */
 /** Answers one request frame with `reply` and returns true, or returns false to refuse it as unsupported. */
 export type Answer = (frame: { op: string; args: Record<string, unknown> }, reply: (result: { ok: true; value: unknown } | { ok: false; error: { code: string; message: string } }) => void) => boolean;
-export async function open(t: TestContext, count: number, backend: keyof typeof HOSTS = "pi", engine: Engine = "chromium", zoom = 1, region = 1, size = { width: 1000, height: 700 }): Promise<{ page: Page; publish: Publish; send: (value: unknown) => void; answer: (handler: Answer) => void; hold: (value: unknown) => void; subs: () => number }> {
+export async function open(t: TestContext, count: number, backend: keyof typeof HOSTS = "pi", engine: Engine = "chromium", zoom = 1, region = 1, size = { width: 1000, height: 700 }, control = false): Promise<{ page: Page; publish: Publish; send: (value: unknown) => void; answer: (handler: Answer) => void; hold: (value: unknown) => void; subs: () => number }> {
 	const script = await (bundle ??= componentScript());
 	const browser = await (engine === "webkit" ? (safari ??= webkit.launch({ headless: true })) : (chrome ??= chromium.launch({ headless: true, executablePath: findChrome() })));
 	const page = await browser.newPage({ viewport: { width: Math.round(size.width * zoom), height: Math.round(size.height * zoom) } });
@@ -93,7 +93,7 @@ export async function open(t: TestContext, count: number, backend: keyof typeof 
 		const url = new URL(route.request().url());
 		if (url.origin !== ORIGIN) return route.abort();
 		if (url.pathname === "/component.js") return route.fulfill({ contentType: "text/javascript; charset=utf-8", body: script });
-		if (url.pathname === "/") return route.fulfill({ contentType: "text/html; charset=utf-8", body: `<meta charset="utf-8"><style>${css}${region === 1 ? "" : `[data-region=transcript]{zoom:${region}}`}</style><div id="root"></div><script>document.documentElement.style.zoom = ${JSON.stringify(String(zoom))}; window.THREAD = ${JSON.stringify(THREADS[backend])}; window.SLOT = ${size.height - 100}</script><script src="/component.js"></script>` });
+		if (url.pathname === "/") return route.fulfill({ contentType: "text/html; charset=utf-8", body: `<meta charset="utf-8"><style>${css}${region === 1 ? "" : `[data-region=transcript]{zoom:${region}}`}</style><div id="root"></div><script>document.documentElement.style.zoom = ${JSON.stringify(String(zoom))}; window.THREAD = ${JSON.stringify(THREADS[backend])}; window.SLOT = ${size.height - 100}; window.CONTROL = ${JSON.stringify(control)}</script><script src="/component.js"></script>` });
 		return route.abort();
 	});
 	let send: ((frame: unknown) => void) | undefined;

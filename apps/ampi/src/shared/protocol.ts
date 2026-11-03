@@ -1,6 +1,5 @@
-// ampi/1: the wire protocol between an AmPi node (owner of one pi-durable Harness on one host), the hub, and
-// render-only clients. Frames are JSON objects, one per line on byte streams (unix socket, SSH stdio) and one per
-// message on WebSockets. The node is the only authority; clients send requests and apply view deltas.
+// ampi/1: the wire protocol between the hub's Pi Hosts and render-only clients. Frames are JSON objects, one per
+// message on WebSockets. The Host is the only authority; clients send requests and apply view deltas.
 
 import type { Spend } from "./spend.ts";
 import type { Op } from "@earendil-works/chord/delta";
@@ -18,6 +17,8 @@ export const PROTOCOL = "ampi/1";
 
 /** Browser → hub frames: node frames addressed to one host, plus hub operations. */
 export type BrowserFrame =
+	/** The page's first frame: the build of the hub that served it (`<meta name="ampi-build">`). */
+	| { t: "hello"; build?: string }
 	| { t: "req"; id: number; host: string; op: string; args?: unknown }
 	| { t: "sub"; sid: number; host: string; topic: Topic }
 	| { t: "unsub"; sid: number }
@@ -25,12 +26,12 @@ export type BrowserFrame =
 
 /**
  * Request from a client. `id` is unique per connection; the response echoes it. On the wire `op` is any string: the
- * receiver declares what it serves (`Ops`, `NodeOps`, `HubOps`) and refuses the rest with `unsupported`.
+ * receiver declares what it serves (`Ops`, `HubOps`) and refuses the rest with `unsupported`.
  */
 export type RequestFrame = { t: "req"; id: number; op: string; args?: unknown };
 export type ResponseFrame<V = unknown> =
 	| { t: "res"; id: number; ok: true; value?: V }
-	| { t: "res"; id: number; ok: false; error: { code: string; message: string; pane?: string; matches?: string[] } };
+	| { t: "res"; id: number; ok: false; error: { code: string; message: string; pane?: string; matches?: string[]; skew?: "page" } };
 
 /** Open a subscription to a topic; the node answers with one `snap` and then `ops` frames until `unsub`. */
 export type SubscribeFrame = { t: "sub"; sid: number; topic: Topic };
@@ -46,17 +47,9 @@ export type SubscriptionEndFrame = { t: "end"; sid: number; reason: string };
  */
 export type SubscriptionPendingFrame = { t: "pending"; sid: number; reason: string };
 
-/** Sent by the node first on every connection. */
-export type HelloFrame = { t: "hello"; protocol: string; node: NodeInfo };
-
 export type Topic =
 	| { kind: "threads" }
 	| { kind: "thread"; threadId: string }
-	| { kind: "team"; teamId: string }
-	| { kind: "rarebit"; threadId: string }
-	| { kind: "terms" }
-	| { kind: "term"; termId: string }
-	| { kind: "login"; loginId: string }
 	| { kind: "node" }
 	/** A hub-side view of a Pi Host (src/pi/views): `view` names it; `threadId` scopes it to one Session. */
 	| ViewTopic;
@@ -64,15 +57,12 @@ export type Topic =
 export type ClientFrame = RequestFrame | SubscribeFrame | UnsubscribeFrame | { t: "ping" };
 /** What a host link emits, with its op results `R` and topic values `V`. */
 export type HostFrame<R = unknown, V = unknown> =
-	| HelloFrame
 	| ResponseFrame<R>
 	| SnapshotFrame<V>
 	| OpsFrame
 	| SubscriptionEndFrame
 	| SubscriptionPendingFrame
 	| { t: "pong" };
-/** The frozen node backend's frames: outside the typed contract (docs/wire-boundary.md). */
-export type NodeFrame = HostFrame;
 /** A Pi Host's frames: every value is a declared op result or topic value. */
 export type PiHostFrame = HostFrame<OpResult, PiTopicValue>;
 
@@ -84,8 +74,6 @@ export type NodeInfo = {
 	user: string;
 	home: string;
 	version: string;
-	/** Source fingerprint; differs from the hub's when the host runs an older or newer build. */
-	build: string;
 	pid: number;
 	startedAt: number;
 	storage: string;
@@ -122,7 +110,7 @@ export type ThreadSummary = {
 	/** The cost figure with what it leaves out under the one spend rule (trace-analytics spend.mjs spendLabel). */
 	spendLabel?: string;
 	/** The figure behind `spendLabel` and the classes it counts, so a view can sum Sessions across backends. */
-	spend?: Spend;
+	spend: Spend;
 	contextTokens?: number;
 	contextWindow?: number;
 	workingBudget?: number;
@@ -162,12 +150,6 @@ export type HerdrLayout = { workspaces: { id: string; label?: string; tabs: { id
 /** A Pi Session's thread id: `pi:` and the Session id. The threads map declares its keys with it. */
 export type PiThreadId = `pi:${string}`;
 export const isPiThreadId = (id: string): id is PiThreadId => id.startsWith("pi:");
-/**
- * The Host source a thread id names, when one Host ID serves a Pi source and a durable source: a `pi:` id is Pi, every
- * other id is durable. The node writes store ids as `t…` or `r…` (node/runtime.ts), so the two never collide. The hub's
- * Hub.route and the GUI's findHost and routes read the source here, and nowhere else.
- */
-export const threadSource = (id: string): "pi" | "durable" => (isPiThreadId(id) ? "pi" : "durable");
 /**
  * What a Pi Host's list does not know yet. `indexing`: the working set has not initialized, so the list holds saved
  * state only and an empty list proves no absence. `listing`: no agents list since the Host connected, so no row has
@@ -322,7 +304,8 @@ export type PromptList = { prompts: { name: string; description: string; body: s
 export type HostOps = {
 	/**
 	 * `asText: true` marks plain text that starts with `/` as the owner's choice to send it as a message (the composer's
-	 * `//` escape or "Send as text"). The Host refuses an unmarked one with "This page is older than the hub. Reload it."
+	 * `//` escape or "Send as text"). The Host refuses an unmarked one with "Slash text goes as a message only with
+	 * asText; send a command with thread.command."
 	 */
 	"thread.submit": OpSpec<{ threadId: string; content: string; whenBusy?: "steer" | "followUp"; requestId?: string; images?: { data: string; mimeType: string }[]; asText?: true }, ActionAck>;
 	"thread.abort": OpSpec<{ threadId: string }, ActionAck>;
@@ -367,7 +350,7 @@ export type ViewTopics = {
 	};
 	team: { params: { threadId?: string }; value: TeamValue; ops: None };
 	"cos.timeline": { params: None; value: TimelineValue; ops: { locate: OpSpec<{ threadId: string; at: number }, { entry?: string; ref: string }> } };
-	arc: { params: { threadId: string }; value: ArcValue; ops: { build: OpSpec<{ threadId: string; rebuild?: boolean }, { started: true }> } };
+	arc: { params: { threadId: string }; value: ArcValue; ops: { build: OpSpec<{ threadId: string; rebuild?: boolean; requestId?: string }, import("./arc.ts").RequestOutcome>; dismiss: OpSpec<{ threadId: string; dropId: string; toPosition: number }, import("./arc.ts").DismissResult> } };
 };
 export type ViewName = keyof ViewTopics;
 /** A topic of one view; the default is the union over every view. */
@@ -394,49 +377,12 @@ export type OpRequest<K extends OpName = OpName> = { [P in K]: { op: P; args: Op
 export type PiTopicValues = { threads: ThreadsState; thread: PiThreadView; node: { backend: "pi"; host: string } };
 export type PiTopicValue = PiTopicValues[keyof PiTopicValues] | ViewValue;
 
-/**
- * The frozen pi-durable node backend (src/node/server.ts) declares no wire types: it is outside rule 1 until its
- * revival adopts this contract (docs/wire-boundary.md). The browser reads its values as it always has.
- */
-// biome-ignore lint: the frozen node backend has no declared wire types
-export type NodeUntyped = any;
-/** Topics only the node backend serves. */
-export type NodeTopicValues = { terms: NodeUntyped; term: NodeUntyped; team: NodeUntyped; login: NodeUntyped; rarebit: NodeUntyped };
-/** Ops only the node backend serves, and node arguments of ops both serve (results stay the Pi Host's). */
-export type NodeOps = {
-	"thread.create": OpSpec<{ requestId: string; cwd: string; model?: { provider: string; modelId: string }; prompt?: string }, { threadId: string }>;
-	"thread.compact": OpSpec<{ threadId: string }, NodeUntyped>;
-	"thread.configure": OpSpec<{ threadId: string; model?: { provider: string; modelId: string }; thinkingLevel?: string }, NodeUntyped>;
-	"thread.rename": OpSpec<{ threadId: string; title: string }, NodeUntyped>;
-	"thread.fork": OpSpec<{ threadId: string; entryId: string }, { threadId: string }>;
-	"thread.images": OpSpec<{ threadId: string; entryId: string; index: number }, { image?: { data: string; mimeType: string } }>;
-	"compact.records": OpSpec<{ threadId: string }, { records: NodeUntyped[] }>;
-	"rarebit.summarize": OpSpec<{ threadId: string }, NodeUntyped>;
-	"git.changes": OpSpec<{ cwd?: string }, NodeUntyped>;
-	"fs.dirs": OpSpec<{ path: string; hidden?: boolean }, { path: string; parent: string; dirs: string[] }>;
-	"node.restart": OpSpec<Done, NodeUntyped>;
-	"accounts.list": OpSpec<Done, NodeUntyped[]>;
-	"accounts.login": OpSpec<{ providerId: string; type: string }, { id: string }>;
-	"accounts.answer": OpSpec<{ loginId: string; promptId: string; value: string }, NodeUntyped>;
-	"accounts.cancel": OpSpec<{ loginId: string }, NodeUntyped>;
-	"accounts.logout": OpSpec<{ providerId: string }, NodeUntyped>;
-	"term.open": OpSpec<{ cwd?: string; cols?: number; rows?: number; title?: string }, { id: string }>;
-	"term.input": OpSpec<{ termId: string; data: string }, NodeUntyped>;
-	"term.resize": OpSpec<{ termId: string; cols: number; rows: number }, NodeUntyped>;
-	"term.close": OpSpec<{ termId: string }, NodeUntyped>;
-};
-
-/** What the browser may request of a host: the Pi Host's ops and the node backend's, merged by name. */
-export type ClientOps = {
-	[K in OpName | keyof NodeOps]: K extends OpName
-		? OpSpec<Ops[K]["args"] | (K extends keyof NodeOps ? NodeOps[K]["args"] : never), Ops[K]["result"]>
-		: K extends keyof NodeOps ? NodeOps[K] : never;
-};
+/** What the browser may request of a host: the Pi Host's ops. */
+export type ClientOps = Ops;
 /** The value the browser gets for a topic. */
 export type TopicValue<T extends Topic> = T extends { kind: "view"; view: infer N extends ViewName }
 	? ViewValue<N>
 	: T extends { kind: infer K extends keyof PiTopicValues } ? PiTopicValues[K]
-	: T extends { kind: infer K extends keyof NodeTopicValues } ? NodeTopicValues[K]
 	: never;
 
 /** Ops the hub serves itself (src/hub/hub.ts), on its own `hub` channel. */
@@ -447,10 +393,9 @@ export type HubOps = {
 	 * The owner's intent for one Session by threadId: pinned or not. The hub applies it idempotently: a repeated
 	 * intent keeps membership, the place and the host. `host`, the pin's first host hint, goes in only when the pin is
 	 * created, and a new pin needs one; `pins.hint` moves it later. `title` is saved so the pin still reads when the
-	 * Session is gone; a repeated pin with a new title renames in place. `intent: "owner"` marks an owner click; the hub
-	 * creates a pin only with it, and refuses an unmarked create with "This page is older than the hub. Reload it."
+	 * Session is gone; a repeated pin with a new title renames in place.
 	 */
-	"pins.set": OpSpec<{ threadId: string; pinned: boolean; intent?: "owner"; host?: string; title?: string }, Done>;
+	"pins.set": OpSpec<{ threadId: string; pinned: boolean; host?: string; title?: string }, Done>;
 	/**
 	 * Moves an existing pin's host hint to the Host that now lists the Session. It never creates or removes a pin: only
 	 * `pins.set`, an owner action, changes which Sessions are pinned. A hint for an unpinned Session does nothing.
@@ -458,8 +403,15 @@ export type HubOps = {
 	"pins.hint": OpSpec<{ host: string; threadId: string }, Done>;
 };
 /** The hub's broadcast of every host link's state, after any change. */
-/** `config`: the hub.json this hub read at start, for the Host setup prompt. */
-export type HostsFrame = { t: "hosts"; hosts: HostState[]; config?: string };
+/**
+ * `build`: this hub's build version; a page whose own differs shows the reload banner. `config`: the hub.json this hub read at start, for the Host setup prompt. `skipped`: hub.json rows this hub does not
+ * serve, because only the durable release runs their node.
+ */
+export type HostsFrame = { t: "hosts"; build: string; hosts: HostState[]; config?: string; skipped?: SkippedHost[] };
+/** A hub.json Host row of a kind this hub does not serve (`local` or `ssh`, a durable node). */
+export type SkippedHost = { id: string; label: string; kind: string };
+/** Where durable Hosts and threads live now; the window and `ampi doctor` say it in these words. */
+export const DURABLE_RELEASE = "The durable node, with its threads, Teams, terminals and accounts, ships in AmPi's durable release (Alpha release/durable). To keep using those threads, install release/durable with the same AMPI_HOME.";
 /** One pinned Session (src/hub/pins.ts): threadId is the key, `host` the Host that last listed it. */
 export type Pin = { host: string; threadId: string; title: string };
 /** The hub's pin list, sent on connect and to every browser after a change. */

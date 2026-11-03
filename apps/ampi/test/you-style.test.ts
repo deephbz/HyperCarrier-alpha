@@ -16,8 +16,8 @@ import { findChrome } from "../scripts/perf/browser.mjs";
 
 const web = fileURLToPath(new URL("../web", import.meta.url));
 const ORIGIN = "http://localhost";
-const HOSTS = { pi: { id: "devbox", link: "devbox#pi", label: "devbox", kind: "pi-local", status: "connected" }, durable: { id: "devbox", link: "devbox#durable", label: "devbox", kind: "durable", status: "connected" } };
-const THREADS = { pi: "pi:s1", durable: "tree-a.8" };
+const HOST = { id: "devbox", link: "devbox#pi", label: "devbox", kind: "pi-local", status: "connected" };
+const THREAD = "pi:s1";
 
 async function componentBundle(): Promise<{ script: string; css: string }> {
 	const entry = join(web, "you-style-test-entry.js");
@@ -63,7 +63,7 @@ after(async () => { await (await chrome)?.close(); });
 
 const side = { id: "side-1", at: "2026-10-25T00:00:02.000Z", count: 2, included: 2, omittedChars: 0, revision: 1, model: "test/model", turns: [{ question: "Side question", answer: "Side answer." }] };
 
-for (const backend of ["pi", "durable"] as const) test(`You style (${backend}): a user message has the same colors in the transcript and the Rarebit messages panel`, async (t) => {
+test("You style: a user message has the same colors in the transcript and the Rarebit messages panel", async (t) => {
 	const { script, css: bundled } = await (bundle ??= componentBundle());
 	const browser = await (chrome ??= chromium.launch({ headless: true, executablePath: findChrome() }));
 	const page = await browser.newPage({ viewport: { width: 1400, height: 700 } });
@@ -74,12 +74,12 @@ for (const backend of ["pi", "durable"] as const) test(`You style (${backend}): 
 		const url = new URL(route.request().url());
 		if (url.origin !== ORIGIN) return route.abort();
 		if (url.pathname === "/component.js") return route.fulfill({ contentType: "text/javascript; charset=utf-8", body: script });
-		if (url.pathname === "/") return route.fulfill({ contentType: "text/html; charset=utf-8", body: `<meta charset="utf-8"><style>${css}\n${bundled}</style><div id="root"></div><script>window.THREAD = ${JSON.stringify(THREADS[backend])}</script><script src="/component.js"></script>` });
+		if (url.pathname === "/") return route.fulfill({ contentType: "text/html; charset=utf-8", body: `<meta charset="utf-8"><style>${css}\n${bundled}</style><div id="root"></div><script>window.THREAD = ${JSON.stringify(THREAD)}</script><script src="/component.js"></script>` });
 		return route.abort();
 	});
 	await page.routeWebSocket("**/ws", (client) => {
 		const send = (frame: unknown) => client.send(JSON.stringify(frame));
-		send({ t: "hosts", hosts: [HOSTS[backend]] });
+		send({ t: "hosts", hosts: [HOST] });
 		client.onMessage((message) => {
 			const frame = JSON.parse(String(message));
 			if (frame.t === "sub") {
@@ -92,11 +92,9 @@ for (const backend of ["pi", "durable"] as const) test(`You style (${backend}): 
 	await page.goto(`${ORIGIN}/`);
 	await page.locator(".msg.user[data-entry=e0]").waitFor();
 	await page.locator(".rb-message[data-rarebit=e0]").waitFor();
-	// A durable thread renders the durable transcript: its user entry offers Fork, a Pi Session's does not.
-	assert.equal(await page.locator(".msg.user[data-entry=e0] button", { hasText: "Fork" }).count(), backend === "durable" ? 1 : 0, `${backend}: the transcript renders the ${backend} path`);
 	// Only user messages carry the shared class: never an assistant entry, a stop, or a side answer.
 	const shared = () => page.evaluate(() => [...document.querySelectorAll(".you")].map((n) => (n as HTMLElement).dataset.entry ?? (n as HTMLElement).dataset.rarebit ?? (n.closest(".rb-side") ? "side" : n.className)));
-	assert.deepEqual(await shared(), ["e0", "e0"], `${backend}: the shared "you" class marks the transcript and Rarebit user messages only`);
+	assert.deepEqual(await shared(), ["e0", "e0"], "the shared \"you\" class marks the transcript and Rarebit user messages only");
 	const look = (selector: string, label: string) => page.evaluate(([selector, label]) => {
 		const box = document.querySelector<HTMLElement>(selector)!;
 		const head = getComputedStyle(box.querySelector<HTMLElement>(label)!);
@@ -117,7 +115,7 @@ for (const backend of ["pi", "durable"] as const) test(`You style (${backend}): 
 	await page.getByRole("textbox", { name: "Ask on the side" }).fill("Side question");
 	await page.getByRole("textbox", { name: "Ask on the side" }).press("Enter");
 	await page.locator(".rb-side .rb-message.rb-stop").waitFor();
-	assert.deepEqual(await shared(), ["e0", "side"], `${backend}: the shared "you" class marks the transcript user entry and the side-ask question only`);
+	assert.deepEqual(await shared(), ["e0", "side"], "the shared \"you\" class marks the transcript user entry and the side-ask question only");
 	for (const scheme of ["light", "dark"] as const) {
 		await page.emulateMedia({ colorScheme: scheme });
 		assert.deepEqual(await look(".rb-side .rb-message.rb-user", ".rb-message-heading"), looks[scheme], `${scheme}: the side-ask question differs from the transcript user message`);

@@ -10,6 +10,9 @@
 .arc-nowrap { white-space: nowrap; }
 .arc-kept { margin: 2px 0 0; color: var(--text-3); font-size: var(--font-ui); line-height: var(--line-ui); font-style: italic; }
 .arc-error { color: var(--err); }
+.arc-service, .arc-drop, .arc-panel > details { overflow-wrap: anywhere; }
+.arc-drop { margin: 10px 0; }
+.arc-drop .btn { min-height: max(24px, var(--hit)); padding: 2px 8px; }
 .arc-status, .arc-actions, .arc-section-head { display: flex; gap: 8px; align-items: center; }
 .arc-status { align-items: flex-start; justify-content: space-between; }
 .arc-status > span { flex: 1; }
@@ -21,7 +24,7 @@
 .arc-now { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; background: var(--bg-elev); }
 .arc-now-label { font-weight: 600; }
 .arc-now > p { color: var(--text-2); }
-.arc-goal { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); font-size: var(--font-ui); line-height: var(--line-ui); color: var(--text-3); }
+.arc-goal { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); font-size: var(--font-body); line-height: var(--line-body); color: var(--text-2); }
 .arc-needs { margin-top: 12px; border-left: 3px solid var(--attn); padding-left: 10px; }
 .panel .arc-needs h3 { color: var(--attn); }
 .arc-point { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 10px; padding: 7px 0; border-top: 1px solid var(--border); overflow-wrap: anywhere; }

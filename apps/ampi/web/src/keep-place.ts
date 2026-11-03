@@ -9,7 +9,11 @@ import { touchAxis } from "./touch-axis.ts";
 // display size can change (a zoom step) between capture and restore; the CSS offset from its own top still holds.
 type Anchor = { id: string; offset: number; node?: HTMLElement; unique?: boolean; fragment?: string };
 export type ReadingPlace = { bottom: boolean; anchors: Anchor[] };
-type Options = { anchor?: HTMLElement | null; accept?: (node: HTMLElement) => boolean };
+type AnchorPolicy = "first-visible" | "reading-line";
+type Options = { anchor?: HTMLElement | null; accept?: (node: HTMLElement) => boolean; policy?: AnchorPolicy };
+
+/** The transcript reading line shared by anchor capture, the prompt rail and Find. */
+export const readingLine = (box: Pick<DOMRect, "top" | "height">) => box.top + box.height / 2;
 
 /** The attribute that names one rendered part of an entry; the entry ID attribute keeps naming the entry. */
 const FRAGMENT = "data-fragment";
@@ -22,7 +26,9 @@ export function capturePlace(el: HTMLElement, selector: string, attribute: strin
 	const counts = new Map<string | null, number>();
 	for (const node of visible) { const id = node.getAttribute(attribute); counts.set(id, (counts.get(id) ?? 0) + 1); }
 	const nodes = visible.filter((node) => !options.accept || options.accept(node));
-	const first = nodes.findIndex((node) => node.getBoundingClientRect().bottom > bounds.top);
+	// Lists and reader-started transitions keep the first visible fragment. Autonomous transcript changes use its reading line.
+	const line = options.policy === "reading-line" ? readingLine(bounds) : bounds.top;
+	const first = nodes.findIndex((node) => node.getBoundingClientRect().bottom > line);
 	const ordered = first < 0 ? nodes.slice().reverse() : [...nodes.slice(first), ...nodes.slice(0, first).reverse()];
 	if (options.anchor) ordered.unshift(options.anchor);
 	return { bottom, anchors: ordered.flatMap((node) => {
@@ -31,22 +37,40 @@ export function capturePlace(el: HTMLElement, selector: string, attribute: strin
 	}) };
 }
 
+function survivingAnchor(nodes: HTMLElement[], attribute: string, anchor: Anchor) {
+	const matches = nodes.filter((node) => node.getAttribute(attribute) === anchor.id && node.getBoundingClientRect().height > 0);
+	const named = anchor.fragment === undefined ? [] : matches.filter((node) => node.getAttribute(FRAGMENT) === anchor.fragment);
+	return anchor.node && matches.includes(anchor.node) ? anchor.node
+		: named.length === 1 ? named[0]
+		: anchor.unique !== false && matches.length === 1 ? matches[0] : undefined;
+}
+
+/** A nominal bottom can exceed the browser's rounded, realizable scroll offset at display zoom. */
+const bottoms = new WeakMap<HTMLElement, { end: number; scale: number; ratio: number; actual: number }>();
+
+/** Every follow path shares the measured bottom and ignores less than half a device pixel. */
+function followBottom(el: HTMLElement) {
+	const end = Math.max(0, el.scrollHeight - el.clientHeight), scale = scaleOf(el);
+	const ratio = typeof devicePixelRatio === "number" ? devicePixelRatio : 1;
+	const measured = bottoms.get(el);
+	const target = measured?.end === end && measured.scale === scale && measured.ratio === ratio ? measured.actual : end;
+	if (Math.abs(el.scrollTop - target) * scale * ratio > 0.5) el.scrollTop = end;
+	bottoms.set(el, { end, scale, ratio, actual: el.scrollTop });
+}
+
 /**
  * `shift`: how far the reader scrolled down since the capture, in scrollTop's CSS px; the anchor lands that much higher,
  * so the scroll stays. Rects are screen px; the anchor's CSS offset converts at `el`'s display size now.
+ * Returns whether the requested place was reached. A successful restore replaces the old clamp coordinate.
  */
 export function restorePlace(el: HTMLElement, selector: string, attribute: string, place: ReadingPlace, shift = 0) {
-	if (place.bottom) { el.scrollTop = el.scrollHeight; return; }
+	if (place.bottom) { followBottom(el); return true; }
 	const nodes = [...el.querySelectorAll<HTMLElement>(selector)];
 	for (const anchor of place.anchors) {
-		const matches = nodes.filter((node) => node.getAttribute(attribute) === anchor.id && node.getBoundingClientRect().height > 0);
 		// One source entry can render as several prose and fold fragments. Preserve the measured fragment; after a
 		// remount, only its fragment key names it, and then the entry ID if it is unique in both projections. A
 		// fragment's place among its entry's fragments names nothing. Otherwise try the next surviving anchor.
-		const named = anchor.fragment === undefined ? [] : matches.filter((node) => node.getAttribute(FRAGMENT) === anchor.fragment);
-		const node = anchor.node && matches.includes(anchor.node) ? anchor.node
-			: named.length === 1 ? named[0]
-			: anchor.unique !== false && matches.length === 1 ? matches[0] : undefined;
+		const node = survivingAnchor(nodes, attribute, anchor);
 		if (!node) continue;
 		const target = el.getBoundingClientRect().top + (anchor.offset - shift) * scaleOf(el);
 		const off = () => node.getBoundingClientRect().top - target;
@@ -68,8 +92,9 @@ export function restorePlace(el: HTMLElement, selector: string, attribute: strin
 			if (best === undefined) el.scrollTop = kept;
 			else if (best !== last) el.scrollTop = best;
 		}
-		return;
+		return Math.abs(off()) <= 0.5;
 	}
+	return false;
 }
 
 /**
@@ -159,13 +184,18 @@ export function useKeepPlace(
 	band = 2,
 	/** Whether the painted bottom is the newest end. A windowed view whose bottom is not keeps the reader away there. */
 	tail: () => boolean = () => true,
+	/** The anchor for changes the reader did not start. Explicit captures keep the first visible fragment. */
+	policy: AnchorPolicy = "first-visible",
 ) {
 	const saved = useRef<ReadingPlace | undefined>(undefined);
+	// Lists keep the first visible row. A transcript keeps an explicit action\'s anchor until the next reader scroll;
+	// otherwise it keeps the reading line. Later updates retain that action anchor through fragment remounts.
+	const actionPlace = useRef<ReadingPlace | undefined>(undefined);
 	/** Whether the view places the reader itself (a step, a toggle): the hook restores nothing until its `record`. */
 	const placing = useRef(false);
 	/** A place captured before a render that changes rows, with scrollTop then and the capture's options. */
 	const pending = useRef<{ place: ReadingPlace; top: number; options?: Options } | undefined>(undefined);
-	const size = useRef({ width: 0, height: 0 });
+	const size = useRef({ width: 0, height: 0, screenTop: 0 });
 	const top = useRef(0);
 	/** The scroller's display scale (scaleOf) at the record. */
 	const scale = useRef(1);
@@ -190,15 +220,22 @@ export function useKeepPlace(
 	const remember = useCallback(() => {
 		const el = scroller.current;
 		if (!el) return;
-		saved.current = capturePlace(el, selector, attribute, pinned.current);
-		size.current = { width: el.clientWidth, height: el.clientHeight };
+		const nodes = [...el.querySelectorAll<HTMLElement>(selector)];
+		let anchor: HTMLElement | undefined;
+		for (const item of actionPlace.current?.anchors ?? []) {
+			anchor = survivingAnchor(nodes, attribute, item);
+			if (anchor) break;
+		}
+		saved.current = capturePlace(el, selector, attribute, pinned.current, { policy, anchor });
+		if (actionPlace.current) actionPlace.current = anchor ? saved.current : undefined;
+		size.current = { width: el.clientWidth, height: el.clientHeight, screenTop: el.getBoundingClientRect().top };
 		top.current = el.scrollTop;
 		scale.current = scaleOf(el);
 		pinTop.current = !pinned.current ? undefined : pinTop.current === undefined || el.scrollTop > pinTop.current || atEnd(el) ? el.scrollTop : pinTop.current;
 		// Mutations before this record are measured in it.
 		mutations.current?.takeRecords();
 		low.current = el.scrollHeight;
-	}, [scroller, selector, attribute, pinned]);
+	}, [scroller, selector, attribute, pinned, policy]);
 	// The one reader of "follow the bottom": a pinned reader who moved up since the pin began has left the bottom at once,
 	// whatever the step (a trackpad sends a few px, an animated wheel steps), even if their scroll event (a frame after
 	// the scroll) has not arrived yet. Every snap and capture asks this, so the answer does not depend on which layout
@@ -208,23 +245,28 @@ export function useKeepPlace(
 		if (el && pinned.current && leftBottom(el, pinTop.current ?? top.current) && !clamp()) {
 			pinned.current = false;
 			pinTop.current = undefined;
-			saved.current = capturePlace(el, selector, attribute, false);
+			saved.current = capturePlace(el, selector, attribute, false, { policy });
 		}
 		return pinned.current;
-	}, [scroller, selector, attribute, pinned, clamp]);
+	}, [scroller, selector, attribute, pinned, clamp, policy]);
 	// The one writer of "go to the newest end": the record moves with scrollTop. The browser sends that scroll's event a
 	// frame later and coalesces it with a reader's scroll in the same frame; measured from a stale record, the reader's
 	// scroll up would look like a move down and keep them pinned.
 	const follow = useCallback(() => {
 		const el = scroller.current;
 		if (!el) return;
-		el.scrollTop = el.scrollHeight;
+		followBottom(el);
 		remember();
 	}, [scroller, remember]);
 	// The one record of a place the view wrote itself (Back's restore, a reveal): it is the reader's place at once. Until
 	// that write's scroll event arrives, a resize (the prompt rail mounts) or a render restores the record, and the place
 	// from before the write would undo it.
-	const record = useCallback(() => { placing.current = false; remember(); }, [remember]);
+	const record = useCallback(() => {
+		placing.current = false;
+		const el = scroller.current;
+		if (el) actionPlace.current = capturePlace(el, selector, attribute, following());
+		remember();
+	}, [scroller, selector, attribute, following, remember]);
 	/** The current hand-off's number. The reader's own scroll input takes the place back and moves it on (`holds`). */
 	const handOffs = useRef(0);
 	// The view takes the place over: it writes scrollTop once, in a later layout effect, and then calls `record`. Until
@@ -265,12 +307,13 @@ export function useKeepPlace(
 		for (let node = up === undefined || !(target instanceof Element) ? null : target; node && node !== el; node = node.parentElement) {
 			if ((up ? node.scrollTop > 0 : node.scrollTop + node.clientHeight < node.scrollHeight - 1) && /auto|scroll/.test(getComputedStyle(node).overflowY)) return;
 		}
+		actionPlace.current = undefined;
 		if (placing.current) { placing.current = false; handOffs.current++; }
 		if (!up || !pinned.current) return;
 		pinned.current = false;
 		pinTop.current = undefined;
-		saved.current = capturePlace(el, selector, attribute, false);
-	}, [selector, attribute, pinned]);
+		saved.current = capturePlace(el, selector, attribute, false, { policy });
+	}, [selector, attribute, pinned, policy]);
 	// The hook listens on its scroller itself, so every scroller it keeps gets every input: a vertical wheel (a pinch zoom
 	// is ctrl+wheel), a key the browser scrolls, a shared scroll key wherever focus is (READER_SCROLL), a touch drag, a
 	// press on the scroller's own bar. A remounted scroller gets the listeners again.
@@ -288,6 +331,7 @@ export function useKeepPlace(
 		// After a clamp, the reader's place is the record, not the clamped screen.
 		const place = !following() && clamp() && saved.current && !options ? saved.current : capturePlace(el, selector, attribute, following(), options);
 		pending.current = { place, top: el.scrollTop, options };
+		actionPlace.current = place;
 		return place.anchors[0];
 	}, [scroller, selector, attribute, following, clamp]);
 	// Only the reader or a clamp moves scrollTop. A scrollTop moved since the record is the reader's own scroll, and its
@@ -305,18 +349,22 @@ export function useKeepPlace(
 	const took = useCallback(() => {
 		const el = scroller.current;
 		if (!el) return;
+		if (moved()) actionPlace.current = undefined;
 		if (following()) pinned.current = tail();
 		else if (el.scrollTop > top.current && atEnd(el, band) && tail()) pinned.current = true;
 		remember();
-	}, [scroller, following, pinned, band, tail, remember]);
+	}, [scroller, following, pinned, band, tail, remember, moved]);
 	const resized = useCallback(() => {
 		const el = scroller.current;
-		if (!el || (el.clientWidth === size.current.width && el.clientHeight === size.current.height)) return false;
+		if (!el || (el.clientWidth === size.current.width && el.clientHeight === size.current.height && el.getBoundingClientRect().top === size.current.screenTop)) return false;
 		if (moved()) { took(); return true; }
-		if (saved.current) restorePlace(el, selector, attribute, saved.current);
+		// Away readers keep the first surviving row at the same screen height when sibling chrome moves the viewport.
+		// A display zoom keeps the relative CSS place instead, as capturePlace promises.
+		const shift = Math.abs(scaleOf(el) - scale.current) < 0.001 ? toCss(el.getBoundingClientRect().top - size.current.screenTop, el) : 0;
+		const restored = saved.current && restorePlace(el, selector, attribute, saved.current, shift);
 		// One render can resize the scroller and shrink its content (a run ends: the Composer shrinks while the live reply
 		// gives way to its entry). The restore then cannot reach the place, and a clamped reader keeps the record.
-		if (clamp()) size.current = { width: el.clientWidth, height: el.clientHeight };
+		if (!restored && clamp()) size.current = { width: el.clientWidth, height: el.clientHeight, screenTop: el.getBoundingClientRect().top };
 		else remember();
 		return true;
 	}, [scroller, selector, attribute, remember, clamp, moved, took]);
@@ -350,10 +398,11 @@ export function useKeepPlace(
 	useLayoutEffect(() => {
 		const el = scroller.current;
 		if (!el || placing.current) return;
+		let restored = false;
 		if (pending.current) {
 			// A scroll whose event has not arrived yet is the reader's too. A clamp lands at the bottom and is no scroll.
-			const shift = atEnd(el, 0) ? 0 : el.scrollTop - pending.current.top;
-			restorePlace(el, selector, attribute, pending.current.place, shift);
+			const shift = atEnd(el, 0) || clamp() ? 0 : el.scrollTop - pending.current.top;
+			restored = restorePlace(el, selector, attribute, pending.current.place, shift);
 			pending.current = undefined;
 		} else if (!resized()) {
 			// A render that adds or drops rows above a reader away from the bottom (a paint window that slides as entries
@@ -361,25 +410,25 @@ export function useKeepPlace(
 			// reader and clamped scrollTop. Any other moved scrollTop is the reader's own scroll. In the middle of a smooth
 			// scroll, the render takes the scroll so far; each later scroll event takes the rest from that record (`took`).
 			if (moved()) took();
-			else if (!following() && saved.current) restorePlace(el, selector, attribute, saved.current);
+			else if (!following() && saved.current) restored = restorePlace(el, selector, attribute, saved.current);
 		}
-		// Until the content grows back, a clamped reader keeps the record, so a later render restores the place.
-		if (!clamp()) remember();
+		// A successful restore records its new coordinate. Only an unreachable place keeps the pre-clamp record.
+		if (restored || !clamp()) remember();
 	});
 	useLayoutEffect(() => {
 		const el = scroller.current;
 		if (!el) return;
-		// Content can also change in a render this hook does not see (one child only). A following reader follows it; a
-		// reader away keeps the place a clamp took.
+		// Child layout and delayed assets can resize content without a parent render. Keep an away anchor through that
+		// geometry change too, unless the reader has already scrolled since its record.
 		const observer = new ResizeObserver(() => {
 			if (placing.current || resized() || pending.current) return;
+			if (moved()) { took(); return; }
 			if (!following()) {
-				if (saved.current && clamp()) { restorePlace(el, selector, attribute, saved.current); if (!clamp()) remember(); }
+				if (saved.current) { const restored = restorePlace(el, selector, attribute, saved.current); if (restored || !clamp()) remember(); }
 				return;
 			}
 			if (!tail() || atEnd(el)) return;
-			el.scrollTop = el.scrollHeight;
-			remember();
+			follow();
 		});
 		observer.observe(el);
 		if (el.firstElementChild) observer.observe(el.firstElementChild);
@@ -393,6 +442,13 @@ export function useKeepPlace(
 			shrink.disconnect();
 			mutations.current = undefined;
 		};
-	}, [scroller, selector, attribute, resized, following, tail, remember, clamp]);
-	return { capture, measure, handOff, holds, onScroll, following, follow, record };
+	}, [scroller, selector, attribute, resized, following, tail, remember, clamp, follow, moved, took]);
+	// A native fold can resize only a child, without a parent render to consume a pending capture.
+	const action = useCallback(() => {
+		const el = scroller.current;
+		if (!el) return;
+		actionPlace.current = capturePlace(el, selector, attribute, following());
+		remember();
+	}, [scroller, selector, attribute, following, remember]);
+	return { capture, action, measure, handOff, holds, onScroll, following, follow, record };
 }

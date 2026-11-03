@@ -8,10 +8,25 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { Hub } from "../src/hub/hub.ts";
 import { Browser } from "./helpers.ts";
-import { control, fixture, replaceFile } from "./pi-fixtures.ts";
+import { Agent, control, fixture, replaceFile } from "./pi-fixtures.ts";
 import { PI_VIEWS } from "../src/pi/views/index.ts";
 import { BOOTSTRAP, PiHost, agentLaunch, modelLimits } from "../src/pi/host.ts";
+import { controlStamp, skewText, stamp, VERSION_SKEW } from "../src/shared/build.ts";
 import { TOKEN, iso, line, user, assistant, toolResult, setup } from "./pi-host-fixtures.ts";
+
+test("Pi agent: stop during Arc import refuses late relay startup", async t => {
+ const f = fixture(), marker = join(f.dir, "late-relay");
+ const bundle = `import { writeFileSync } from "node:fs";
+ process.stdout.write(JSON.stringify({ t: "fixture.arc-import" }) + "\\n");
+ await new Promise(resolve => process.once("SIGTERM", () => setImmediate(resolve)));
+ export function relay() { writeFileSync(${JSON.stringify(marker)}, "started"); return { close() {} }; }`;
+ const agent = Agent.start(f, { arcBundle: bundle });
+ const closed = new Promise<void>(resolve => agent.child.once("close", () => resolve()));
+ t.after(async () => { agent.stop(); await closed; });
+ await agent.wait(frame => frame.t === "fixture.arc-import", "Arc module import entered");
+ agent.stop(); await closed;
+ assert.equal(existsSync(marker), false, "shutdown must not initialize a relay after its import completes");
+});
 
 test("pi host: unreadable latest activity cannot expire an old copy", async (t) => {
  const { f, browser } = await setup(t);
@@ -109,7 +124,7 @@ async function bareControl(f: { agentDir: string }, sessionId: string, sessionFi
 				buf = buf.slice(i + 1);
 				requests.push(req);
 				const reply = req.op === "status"
-					? { id: req.id, ok: true, value: { sessionId, sessionFile, nonce: `n-${sessionId}`, idle: true, compacting: false, pending: { steer: 0, followUp: 0 } } }
+					? { id: req.id, ok: true, value: { sessionId, sessionFile, nonce: `n-${sessionId}`, idle: true, compacting: false, pending: { steer: 0, followUp: 0 }, stamp: controlStamp() } }
 					: { id: req.id, ok: true, evidence: "started", entryId: "e-first" };
 				c.write(`${JSON.stringify(reply)}\n`);
 			}
@@ -292,7 +307,7 @@ test("pi host: slash text is a message only when the page marks it, before any r
 	const submit = (threadId: string, asText?: true) => browser.req("devbox", "thread.submit", { threadId, content: "/model x", whenBusy: "steer", ...(asText ? { asText } : {}) });
 	const before = f.herdrCalls().length;
 	for (const threadId of ["pi:sess-a", "pi:sess-b"])
-		await assert.rejects(submit(threadId), (e: any) => e.code === "unsupported" && e.message === "This page is older than the hub. Reload it.");
+		await assert.rejects(submit(threadId), (e: any) => e.code === "invalid" && e.message === "Slash text goes as a message only with asText; send a command with thread.command.");
 	assert.equal(ctl.requests.filter((r) => r.op === "submit").length, 0, "an unmarked slash submit reached the control");
 	assert.equal(f.herdrCalls().length, before, "an unmarked slash submit reached Herdr");
 	await submit("pi:sess-a", true);
@@ -339,56 +354,51 @@ test("pi host: the agent splits Pi's built-ins exactly as pi-hc-control does", (
 	assert.deepEqual(names(agent, "PANE_ONLY"), names(control, "PANE_ONLY"));
 });
 
-/** An old remote agent: the same agent with its hello stripped of controlOps. */
-function oldAgent() {
-	const wrapper = join(fixture().dir, "old-agent.cjs");
-	writeFileSync(wrapper, `#!${process.execPath}
-const agent = require("child_process").spawn(process.execPath, process.argv.slice(2), { stdio: ["inherit", "pipe", "inherit"] });
-let buf = "";
-agent.stdout.setEncoding("utf8");
-agent.stdout.on("data", (d) => {
-  buf += d;
-  let i;
-  while ((i = buf.indexOf("\\n")) >= 0) {
-    const line = buf.slice(0, i); buf = buf.slice(i + 1);
-    process.stdout.write((line.includes('"t":"hello"') ? JSON.stringify({ ...JSON.parse(line), controlOps: undefined }) : line) + "\\n");
-  }
-});
-agent.on("exit", (code) => process.exit(code ?? 1));
-process.on("SIGTERM", () => { agent.kill(); process.exit(143); });
-`);
-	chmodSync(wrapper, 0o755);
-	return wrapper;
-}
+/** The pi-hc-control build these hubs expect, and a control older, newer, and with no stamp. */
+const EXPECTED = { id: "c0ffee000000", order: 20, line: "stable" } as const;
+const SKEWED = [
+	["older", { id: "0ld000000000", order: 10, line: "stable" }, skewText.controlOlder("devbox")],
+	["newer", { id: "0ew000000000", order: 30, line: "durable" }, skewText.controlNewer("devbox")],
+	["unstamped", null, skewText.controlUnstamped("devbox")],
+] as const;
 
-test("pi host: an old control or an old remote agent answers commands_unsupported without sending the command", async (t) => {
-	const wrapper = oldAgent();
-	for (const [label, host, commands] of [["old remote agent", { remoteNode: wrapper }, true], ["old control", {}, false]] as const) {
-		const { f, browser } = await setup(t, host);
-		const ctl = await control(f, f.sessionA, { commands });
+test("pi host: a control of another build takes no op; each refusal names the part to update, and nothing reaches Pi", async (t) => {
+	for (const [label, stamp, text] of SKEWED) {
+		const { f, browser } = await setup(t, { controlStamp: EXPECTED });
+		const ctl = await control(f, f.sessionA, { commands: true, stamp });
 		t.after(() => ctl.close());
 		const threads = browser.sub("devbox", { kind: "threads" });
 		await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.control === true);
-		const started = Date.now();
-		await assert.rejects(browser.req("devbox", "thread.command", { threadId: "pi:sess-a", name: "model", args: "m2" }), /too old for slash commands/, label);
-		assert.ok(Date.now() - started < 2000, `${label}: answered in ${Date.now() - started} ms`);
+		const skew = (e: any) => e.code === VERSION_SKEW && e.message === text;
+		await assert.rejects(browser.req("devbox", "thread.commands", { threadId: "pi:sess-a" }), skew, `${label}: the command list`);
+		await assert.rejects(browser.req("devbox", "thread.command", { threadId: "pi:sess-a", name: "model", args: "m2" }), skew, `${label}: a command`);
+		await assert.rejects(browser.req("devbox", "thread.submit", { threadId: "pi:sess-a", content: "hello", whenBusy: "steer" }), skew, `${label}: a message`);
+		await assert.rejects(browser.req("devbox", "thread.submit", { threadId: "pi:sess-a", content: "see this", images: [PNG], whenBusy: "steer" }), skew, `${label}: images`);
+		await assert.rejects(browser.req("devbox", "thread.abort", { threadId: "pi:sess-a" }), skew, `${label}: abort`);
 		assert.deepEqual(ctl.requests.filter((r) => r.op !== "status"), [], `${label}: nothing reached the control`);
-		// A Session without a control: an old agent cannot type a command into the pane, so it is too old at once.
-		await browser.until<any>(threads, (v) => v.threads["pi:sess-b"]?.live === true);
-		const old = label === "old remote agent";
-		await assert.rejects(browser.req("devbox", "thread.commands", { threadId: "pi:sess-b" }), (e: any) => e.code === (old ? "commands_unsupported" : "no_control"), `${label}: a list without a control`);
-		const asked = Date.now();
-		if (old) await assert.rejects(browser.req("devbox", "thread.command", { threadId: "pi:sess-b", name: "model", args: "m2" }), /too old/, `${label}: a command without a control`);
-		assert.ok(Date.now() - asked < 2000, `${label}: answered in ${Date.now() - asked} ms`);
-		assert.ok(!f.herdrCalls().some((c) => c.some((a) => a.startsWith("/model"))), `${label}: no command reached a pane`);
+		assert.ok(!f.herdrCalls().some((c) => c.some((a) => a.includes("hello") || a.includes("see this") || a.startsWith("/model"))), `${label}: nothing reached the pane as keys`);
+	}
+});
+
+test("pi host: /api/health names the hub's stamp and the control build of each Host", async (t) => {
+	const { f, hub } = await setup(t, { controlStamp: EXPECTED });
+	const health = async () => (await (await fetch(`http://127.0.0.1:${hub.port}/api/health`, { headers: { cookie: `ampi_k_${hub.port}=${TOKEN}` } })).json());
+	const first = await health();
+	assert.deepEqual(first.stamp, stamp());
+	assert.equal(first.hosts[0].controlStamp, null, "no live control: unknown");
+	const ctl = await control(f, f.sessionA, { stamp: SKEWED[0][1] });
+	t.after(() => ctl.close());
+	for (let i = 0; (await health()).hosts[0].controlStamp?.id !== SKEWED[0][1].id; i++) {
+		assert.ok(i < 100, "health never named the live control's build");
+		await new Promise((r) => setTimeout(r, 50));
 	}
 });
 
 const PNG = { data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAwS2OUAAAAABJRU5ErkJggg==", mimeType: "image/png" };
 
-test("pi host: images go only to a control that takes them; keys, an older tier, or too large a set refuse at once", async (t) => {
+test("pi host: images go only through a live control; keys or too large a set refuse at once", async (t) => {
 	const { f, browser } = await setup(t);
-	const ctl = await control(f, f.sessionA, { images: true });
+	const ctl = await control(f, f.sessionA);
 	t.after(() => ctl.close());
 	const threads = browser.sub("devbox", { kind: "threads" });
 	await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.control === true && v.threads["pi:sess-b"]?.live === true);
@@ -408,19 +418,6 @@ test("pi host: images go only to a control that takes them; keys, an older tier,
 	await assert.rejects(browser.req("devbox", "thread.submit", { threadId: "pi:sess-b", content: "see this", images: [PNG], whenBusy: "steer" }), (e: any) => e.code === "no_control");
 	assert.ok(!f.herdrCalls().some((c) => c.includes("see this")), "no text reached a pane as keys");
 	assert.equal(ctl.requests.filter((r) => r.op === "submit").length, 2);
-});
-
-test("pi host: an old control or an old remote agent answers images_unsupported without sending the text", async (t) => {
-	for (const [label, host, images, message] of [["old remote agent", { remoteNode: oldAgent() }, true, /AmPi agent .* too old to send images/], ["old control", {}, false, /update pi-hc-control/]] as const) {
-		const { f, browser } = await setup(t, host);
-		const ctl = await control(f, f.sessionA, { images });
-		t.after(() => ctl.close());
-		const threads = browser.sub("devbox", { kind: "threads" });
-		await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.control === true);
-		assert.equal((await browser.until<any>(threads, (v) => v.threads["pi:sess-a"])).threads["pi:sess-a"].images, undefined, `${label}: the summary offers images`);
-		await assert.rejects(browser.req("devbox", "thread.submit", { threadId: "pi:sess-a", content: "see this", images: [PNG], whenBusy: "steer" }), (e: any) => e.code === "images_unsupported" && message.test(e.message), label);
-		assert.deepEqual(ctl.requests.filter((r) => r.op !== "status"), [], `${label}: nothing reached the control`);
-	}
 });
 
 test("pi host: a model_change entry names the Session's model before any turn uses it (A27 /model)", async (t) => {

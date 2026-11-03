@@ -1,24 +1,21 @@
 import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { hostSetupPrompt } from "../../../src/shared/host-setup.ts";
-import { findHost, hub, type HostState } from "../client.ts";
+import { hub, type HostState } from "../client.ts";
 import { applyDisplay, scaleOf } from "../display.ts";
 import { MOD, go } from "../util.ts";
-import { COMPOSER_KEYS, freshPress } from "../composer-keys.ts";
+import { COMPOSER_KEYS } from "../composer-keys.ts";
 import { dispatchKeyAction, keyAvailable, KEYMAP, registerOverlay, type KeyBinding } from "../keymap.ts";
 import type { Overlay } from "../focus.ts";
 import { PAGES } from "../views/registry.ts";
 import { carrier, navigate } from "../nav.ts";
 import { href } from "../util.ts";
 import type { HostThreads } from "./Sidebar.tsx";
-import { isPiHost } from "./host-label.ts";
 import { FormRow } from "./FormRow.tsx";
 import { hoverIntent } from "./Popover.tsx";
 import { Segmented } from "./Segmented.tsx";
 import { paletteSessions } from "./palette-sessions.ts";
 import { proseRows, type HostProse, type ProseRow } from "./palette-prose.ts";
-import type { ModelChoice } from "./ThreadView.tsx";
-import { newId } from "../ids.ts";
 
 /** The opener of the open Modal. A Modal opened from inside another (palette switching) inherits it. */
 let modalOpener: HTMLElement | null = null;
@@ -86,129 +83,6 @@ function reveal(modal: HTMLElement, item: HTMLElement) {
 	if (by) modal.scrollTop += by / scaleOf(modal);
 }
 
-const LAST_KEY = "ampi.newThread";
-
-export function NewThreadDialog({
-	hosts,
-	defaultHost,
-	onClose,
-}: {
-	hosts: HostState[];
-	defaultHost?: string;
-	onClose: () => void;
-}) {
-	const last = JSON.parse(localStorage.getItem(LAST_KEY) ?? "{}") as { host?: string; cwd?: Record<string, string>; model?: Record<string, string> };
-	const connected = hosts.filter((h) => h.status === "connected");
-	const [host, setHost] = useState(defaultHost ?? last.host ?? connected[0]?.id ?? "local");
-	const [cwd, setCwd] = useState(last.cwd?.[host] ?? "");
-	const [dirs, setDirs] = useState<{ path: string; parent: string; dirs: string[] }>();
-	const [models, setModels] = useState<ModelChoice[]>([]);
-	const [model, setModel] = useState(last.model?.[host] ?? "");
-	const [prompt, setPrompt] = useState("");
-	const [error, setError] = useState<string>();
-	const [busy, setBusy] = useState(false);
-	// One ID per dialog: a double submit or a retry after a lost response finds the same thread.
-	const [requestId] = useState(() => newId());
-	useEffect(() => {
-		setCwd(last.cwd?.[host] ?? "");
-		setModel(last.model?.[host] ?? "");
-		hub.request(host, "models.list").then(setModels, () => setModels([]));
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [host]);
-	useEffect(() => {
-		const timer = setTimeout(() => {
-			hub.request(host, "fs.dirs", { path: cwd }).then(setDirs, () => setDirs(undefined));
-		}, 150);
-		return () => clearTimeout(timer);
-	}, [host, cwd]);
-	const create = async () => {
-		setBusy(true);
-		setError(undefined);
-		try {
-			const [provider, ...id] = model.split("/");
-			const { threadId } = await hub.request(host, "thread.create", {
-				cwd: dirs?.path ?? cwd,
-				...(model ? { model: { provider, modelId: id.join("/") } } : {}),
-				requestId,
-				...(prompt.trim() ? { prompt: prompt.trim() } : {}),
-			});
-			localStorage.setItem(
-				LAST_KEY,
-				JSON.stringify({ host, cwd: { ...last.cwd, [host]: dirs?.path ?? cwd }, model: { ...last.model, [host]: model } }),
-			);
-			onClose();
-			go(host, threadId);
-		} catch (e) {
-			setError((e as Error).message);
-			setBusy(false);
-		}
-	};
-	return (
-		<Modal onClose={onClose}>
-			<h2>New thread</h2>
-			<div className="field">
-				Host
-				<select value={host} onChange={(e) => setHost(e.target.value)} aria-label="Host">
-					{hosts.map((h) => (
-						<option key={h.link} value={h.link} disabled={h.status !== "connected"}>
-							{h.label} {h.node ? `(${h.node.hostname})` : `— ${h.status}`}
-						</option>
-					))}
-				</select>
-			</div>
-			<div className="field">
-				Working directory
-				<input value={cwd} placeholder={dirs?.path ?? "~"} onChange={(e) => setCwd(e.target.value)} aria-label="Working directory" />
-				{dirs && (
-					<div className="dirlist quiet-scroll">
-						<button onClick={() => setCwd(dirs.parent)}>..</button>
-						{dirs.dirs.map((d) => (
-							<button key={d} onClick={() => setCwd(`${dirs.path.replace(/\/$/, "")}/${d}`)}>
-								{d}/
-							</button>
-						))}
-					</div>
-				)}
-			</div>
-			<div className="field">
-				Model
-				<select value={model} onChange={(e) => setModel(e.target.value)} aria-label="Model">
-					<option value="">Host default</option>
-					{models.map((m) => (
-						<option key={`${m.provider}/${m.id}`} value={`${m.provider}/${m.id}`}>
-							{m.provider}/{m.id} {m.name !== m.id ? `— ${m.name}` : ""}
-						</option>
-					))}
-				</select>
-			</div>
-			<div className="field">
-				First message (optional)
-				<textarea
-					rows={3}
-					value={prompt}
-					onChange={(e) => setPrompt(e.target.value)}
-					aria-label="First message"
-					onKeyDown={(e) => {
-						if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && freshPress(e.nativeEvent)) void create();
-					}}
-				/>
-			</div>
-			{error && <div className="err-box" role="alert">{error} Check the Host and directory, then retry. Your message is kept here.</div>}
-			<div className="actions">
-				<span className="hint" style={{ marginRight: "auto" }}>
-					Runs on {findHost(hosts, host)?.node?.hostname ?? host}; nothing leaves that host but the view.
-				</span>
-				<button className="btn" onClick={onClose}>
-					Cancel
-				</button>
-				<button className="btn primary" disabled={busy} onClick={() => void create()}>
-					{busy ? "Creating…" : <>Create {MOD}↵</>}
-				</button>
-			</div>
-		</Modal>
-	);
-}
-
 /** "Remote host (?)": the copyable prompt an agent follows to add a remote Host. The window adds no Host itself. */
 export function HostSetupDialog({ onClose }: { onClose: () => void }) {
 	const [copied, setCopied] = useState<"ok" | "failed">();
@@ -251,7 +125,7 @@ export function Palette({ data, onClose, query = "", onQuery }: { data: HostThre
 	const setScope = (next: PaletteScope) => { lastScope = next; setScopeState(next); setIndex(0); };
 	const [index, setIndex] = useState(0);
 	const sessions = useMemo(() => paletteSessions(data, q), [data, q]);
-	const piHosts = useMemo(() => data.filter((d) => isPiHost(d.host)).map((d) => d.host), [data]);
+	const piHosts = useMemo(() => data.map((d) => d.host), [data]);
 	const prose = useProseSearch(scope === "prose" ? q : "", piHosts);
 	// The hub's hit title can be a raw thread id; the loaded Session list holds the title the sidebar shows.
 	const titles = useMemo(() => new Map(data.flatMap((d) => d.threads.map((t) => [`${d.host.link}|${t.id}`, t.title] as const))), [data]);
@@ -350,7 +224,6 @@ function appOnly(binding: KeyBinding) {
 	return binding.id === "panel.toggle" || binding.id === "session.palette" || binding.id.startsWith("zoom.");
 }
 
-export const ONBOARDING_KEY = "ampi.onboarding.dismissed";
 
 export function DisplayDialog({ onClose }: { onClose: () => void }) {
 	const defaults = { overall: 1, sidebar: 1, transcript: 1, composer: 1, panel: 1 };
@@ -391,20 +264,10 @@ export function HelpDialog({ onClose }: { onClose: () => void }) {
 				{(["global", "sidebar", "transcript", "composer", "panel"] as const).map((region) => <section key={region}><h3>{region[0]!.toUpperCase() + region.slice(1)}</h3><div className="kbd-grid">{KEYMAP.filter((binding) => binding.region === region && (keyAvailable(binding) || binding.context)).map((binding, i) => <Fragment key={`${binding.id}:${binding.code}:${i}`}><span className="kbd">{bindingLabel(binding)}{appOnly(binding) ? " · app only" : ""}</span><span>{binding.label}{binding.note ? ` · ${binding.note}` : ""}{binding.appNote && carrier() === "app" ? ` · ${binding.appNote}` : ""}{keyAvailable(binding) ? "" : ` · ${binding.context}`}</span></Fragment>)}{region === "composer" && COMPOSER_KEYS.map(({ key, help }) => <Fragment key={key}><span className="kbd">{key}</span><span>{help}</span></Fragment>)}{region === "global" && <><Fragment><span className="kbd">Alt+↑ / Alt+↓</span><span>Previous or next Session</span></Fragment><Fragment><span className="kbd">Esc</span><span>Interrupt or close the current popup</span></Fragment></>}</div></section>)}
 			</div>
 			<p className="hint">
-				In a terminal: <code>ampi doctor</code> checks this machine and every host and says how to fix what is missing;{" "}
+				In a terminal: <code>ampi doctor</code> checks this machine and every Pi Host and says how to fix what is missing;{" "}
 				<code>ampi open</code> prints the link to this window with its access key.
 			</p>
 			<div className="actions">
-				<button
-					className="btn"
-					onClick={() => {
-						localStorage.removeItem(ONBOARDING_KEY);
-						onClose();
-						go();
-					}}
-				>
-					Show the setup checklist
-				</button>
 				<button className="btn primary" onClick={onClose}>
 					Close
 				</button>

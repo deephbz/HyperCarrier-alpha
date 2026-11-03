@@ -26,7 +26,7 @@ for (const [engine, type, path] of ENGINES) {
    },
   }) });
   await page.reload();
-  await page.getByTitle("Attach images (or paste or drop them)").waitFor();
+  await page.locator('.composer input[type="file"]').waitFor({state:"attached"});
   await page.locator(".composer-wrap").evaluate(el => {
    const transfer = new DataTransfer();
    const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="), c => c.charCodeAt(0));

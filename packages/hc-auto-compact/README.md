@@ -63,7 +63,7 @@ turns supersede it. The record is clipped to 4,000 tokens and counted in
 A rejected plan leaves no record. The record lives only in Session context;
 Auto Compact writes no handoff file. A later compaction keeps it only if that
 compaction summarizes it. A race-free durable file record and crash recovery
-are deferred to the pi-durable harness migration.
+are deferred to the pi-durable harness migration (D14).
 Background supports `anthropic-messages`, `openai-responses` and
 `openai-codex-responses`. It rejects other model APIs, such as
 `openai-completions`, before starting; use foreground there. An
@@ -151,8 +151,8 @@ planning shows the model output ceiling. Session request settings can lower it.
 - [`./command`](src/command.mjs) owns command parsing and completion.
 - [`./settings`](src/settings.mjs) owns settings files: reading and persistence.
 - [`./resolve`](src/resolve.mjs) owns settings resolution: defaults, merge
-  and validation, with no file access. Other hosts, such as the AmPi durable
-  node, call it so one file means the same in both.
+  and validation, with no file access. Other hosts, such as the AmPi node on
+  the durable line, call it so one file means the same in both.
 
 [`src/presentation.mjs`](src/presentation.mjs) renders human projections, and
 [`src/threshold.mjs`](src/threshold.mjs) owns threshold validity. They are

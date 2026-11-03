@@ -4,7 +4,6 @@ import { test } from "node:test";
 // @ts-ignore: pi-hc-control is plain ESM.
 import { IMAGE_LIMITS } from "@hypercarrier/pi-hc-control/control";
 import { admitImages, base64Length, rejectionLine, type Offered } from "../src/shared/image-admission.ts";
-import { NODE_IMAGE_LIMITS } from "../src/node/images.ts";
 import type { ImageLimits } from "../src/shared/protocol.ts";
 
 const png = (name: string, base64 = 100): Offered => ({ name, type: "image/png", base64 });
@@ -64,12 +63,9 @@ test("a Session that takes no images refuses every file with the reason it gives
 	assert.equal(rejectionLine(result.rejected), "2 files not added: this Session has no live control");
 });
 
-test("the carriers' limits are well formed and stated in the units the wire carries", () => {
-	for (const limits of [pi, NODE_IMAGE_LIMITS]) {
-		assert.ok(limits.count > 0 && limits.types.length > 0);
-		assert.ok(limits.perImageBase64 !== undefined || limits.totalBase64 !== undefined, "a carrier bounds bytes");
-	}
-	assert.equal(base64Length(5 * 1024 * 1024), NODE_IMAGE_LIMITS.perImageBase64);
+test("Pi's limits are well formed and stated in the units the wire carries", () => {
+	assert.ok(pi.count > 0 && pi.types.length > 0);
+	assert.ok(pi.perImageBase64 !== undefined || pi.totalBase64 !== undefined, "Pi bounds bytes");
 	assert.equal(base64Length(3), 4);
 	assert.equal(base64Length(4), 8);
 });

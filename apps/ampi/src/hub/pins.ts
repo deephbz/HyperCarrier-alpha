@@ -1,9 +1,9 @@
 // Pinned Sessions: the owner's short list of Sessions to keep at the top of the sidebar. The hub owns the list, so the
 // desktop app and a phone see the same pins, and clearing browser storage keeps them.
-// A pin names one Session by its threadId, which is unique across Hosts (Pi "pi:<uuid>", durable
-// "<storeId>.<conversationId>"). The same Session seen on two Host routes, such as a pi-local and a pi-ssh route to one
-// machine, is one pin. `host` is only a hint: the Host that last listed the Session. The sidebar uses it to choose a
-// Host and to say "Not found on <host>". The order of the list is the order of pinning.
+// A pin names one Session by its threadId, which is unique across Hosts (Pi "pi:<uuid>"). The same Session seen on two
+// Host routes, such as a pi-local and a pi-ssh route to one machine, is one pin. `host` is only a hint: the Host that
+// last listed the Session. The sidebar uses it to choose a Host and to say "Not found on <host>". The order of the list
+// is the order of pinning.
 // Only an owner action (`pins.set`: the star, the row menu, the ×) changes which Sessions are pinned. A window that
 // sees the Session on another Host sends `pins.hint`, which moves the hint of a pin that still exists and nothing else.
 
@@ -37,14 +37,12 @@ export class Pins {
 	 * Applies the owner's intent for one Session: pinned or not pinned. A repeated intent keeps membership and the place,
 	 * so a click in a window that has not yet seen the last change still ends in the state the owner clicked. `host` goes
 	 * in only when the pin is created, and `hint` moves it later; a repeated pin with a new title renames in place.
-	 * Only a marked owner click (`owner`) creates a pin: a page built before `pins.hint` sends its hint repair as an
-	 * unmarked pin, and that must not bring back a pin the owner removed. An unmarked unpin or repeated pin applies. The write is synchronous: two calls cannot interleave in
-	 * the hub process, and a refused write leaves the list unchanged.
+	 * The write is synchronous: two calls cannot interleave in the hub process, and a refused write leaves the list
+	 * unchanged.
 	 */
-	set(threadId: string, pinned: boolean, host = "", title = "", owner = false): Pin[] {
+	set(threadId: string, pinned: boolean, host = "", title = ""): Pin[] {
 		if (this.#refuse) throw new Error(this.#refuse);
 		const at = this.#pins.findIndex((pin) => pin.threadId === threadId);
-		if (pinned && at < 0 && !owner) throw new Error("This page is older than the hub. Reload it.");
 		if (pinned && at < 0 && !host) throw new Error("A new pin needs a host");
 		let next = this.#pins;
 		if (!pinned && at >= 0) next = this.#pins.filter((_, i) => i !== at);
@@ -101,8 +99,8 @@ export class Pins {
 }
 
 /**
- * One pin per threadId: the first place in the list, the newest host hint and title. Older hubs wrote an `at` field
- * and may have pinned one Session under two Host ids; both forms read here.
+ * One pin per threadId, a file invariant: the first place in the list, the newest host hint and title. A pre-b12 hub
+ * may have pinned one Session under two Host ids. Fields other than host, threadId and title are dropped.
  */
 function dedup(stored: unknown[]): Pin[] {
 	const pins: Pin[] = [];

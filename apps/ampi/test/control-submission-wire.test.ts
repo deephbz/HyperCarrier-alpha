@@ -10,7 +10,7 @@ import { setup } from "./pi-host-fixtures.ts";
 // a projection that drops it fails the comparison.
 test("a control submission keeps every field through the remote agent on the status and Stop paths", async (t) => {
 	const { f, browser } = await setup(t);
-	const ctl = await control(f, f.sessionA, { images: true, queue: true });
+	const ctl = await control(f, f.sessionA, { queue: true });
 	t.after(() => ctl.close());
 	const record: Required<ControlSubmission> = { submission: "sub-full", deliverAs: "steer", state: "queued", at: 1_700_000_000_000, entryId: "e-7", text: "Two images", truncated: true, images: 2 };
 	const delivered: ControlSubmission = { submission: "sub-done", deliverAs: "followUp", state: "delivered", at: 1_700_000_000_001, entryId: "e-8", images: 1 };

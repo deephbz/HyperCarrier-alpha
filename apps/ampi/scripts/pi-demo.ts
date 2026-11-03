@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Hub } from "../src/hub/hub.ts";
+import { maintainHost } from "../src/arc/service/client.ts";
 import { FAKE_HERDR } from "../test/pi-fixtures.ts";
 import { DEMO_EXTENSIONS } from "./demo/index.ts";
 import { seedDemoArcs } from "./demo/cos.ts";
@@ -38,7 +39,7 @@ export type { DemoSession };
 export const sessions = writeDemoSessions(agentDir, now);
 // UI journeys must not wait through automatic cadence after fixture appends. Trigger tests verify that policy.
 process.env.PI_CODING_AGENT_DIR = agentDir;
-writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ ampi_arc: { auto: false } }));
+writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ ampi_arc: { auto: false, model: "synthetic/model" } }));
 
 const agent = (pane: string, ws: string, tab: string, s: DemoSession, status = "idle", title = "") => ({
 	pane_id: pane,
@@ -129,7 +130,7 @@ const hub = new Hub(
 				// One offline stand-in model for every view: Chief of Staff's answers JSON prompts, Rarebit's the rest.
 				askCommand: [process.execPath, join(dir, "cos-model.cjs")],
 				agentConfig: { agentDir, pollMs: 100, discoverMs: 1000, teams: true, teamsMs: 2000, ptbObservation: ptb },
-				env: { HOME: dir, HERDR_BIN: herdr, FAKE_HERDR_STATE: join(dir, "state.json"), FAKE_HERDR_LOG: join(dir, "calls.jsonl") },
+				env: { HOME: dir, PI_BIN: join(dir, "cos-model.cjs"), HERDR_BIN: herdr, FAKE_HERDR_STATE: join(dir, "state.json"), FAKE_HERDR_LOG: join(dir, "calls.jsonl") },
 			},
 		],
 		// Helper models have no built-in default; the offline stand-in answers whatever they name.
@@ -137,6 +138,22 @@ const hub = new Hub(
 	},
 	{ token },
 );
-const port = await hub.listen(Number(process.env.PORT ?? 7880));
-await seedDemoArcs(port, token, Object.values(sessions).map(s => `pi:${s.id}`));
-console.log(`demo hub: http://127.0.0.1:${port}/?k=${token}  (data: ${dir})`);
+let closing: Promise<void> | undefined;
+function close() {
+ return closing ??= (async () => {
+  await hub.close();
+  // This disposable Host owns its service. Stop after link shutdown so it cannot restart.
+  const stopped = await maintainHost(hub.config.hosts[0]!, { op: "stop", timeoutMs: 5000 });
+  if (stopped.state !== "stopped") throw new Error(`Demo Arc did not stop: ${stopped.state}`);
+ })();
+}
+for (const signal of ["SIGTERM", "SIGINT"] as const) process.once(signal, () => {
+ void close().then(() => process.exit(0), error => { console.error(error); process.exit(1); });
+});
+try {
+ const port = await hub.listen(Number(process.env.PORT ?? 7880));
+ console.log(`demo hub: http://127.0.0.1:${port}/?k=${token}  (data: ${dir})`);
+ // Arc consumers wait for their own receipt. A model or resident failure must not stop the demo hub.
+ void seedDemoArcs(port, token, Object.values(sessions).map(s => `pi:${s.id}`))
+  .catch(error => { if (!closing) console.error(error); });
+} catch (error) { await close(); throw error; }

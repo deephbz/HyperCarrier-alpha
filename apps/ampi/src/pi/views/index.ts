@@ -16,5 +16,6 @@ export function viewOps(ctx: PiViewContext): OpHandlers<keyof ViewOps> {
 		"view.rarebit.ask": (args) => VIEWS.rarebit.ops.ask(ctx, args),
 		"view.cos.timeline.locate": (args) => VIEWS["cos.timeline"].ops.locate(ctx, args),
 		"view.arc.build": (args) => VIEWS.arc.ops.build(ctx, args),
+		"view.arc.dismiss": (args) => VIEWS.arc.ops.dismiss(ctx, args),
 	};
 }

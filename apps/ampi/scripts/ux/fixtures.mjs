@@ -1,6 +1,5 @@
 // Browser-only fixture adapter. No UI request is ever forwarded to the hub.
 // The live demo supplies read-only Pi snapshots. Explicit variants exercise the real UI with synthetic projections.
-import { NODE_IMAGE_LIMITS } from '../../src/node/images.ts';
 /** One prompt answered by 300 tool calls: the Session's first prompt, then its first tool call and result 300 times.
  * Copy k reads "step k", so a shot shows which part of the turn is on screen. */
 function longTurn(value) {
@@ -57,39 +56,28 @@ function fixtureSocket(ws, recipe, audit, clock) {
   const topics = new Map();
   // The prompt outline of each frozen thread snapshot, so the prompt rail has dashes without a hub request.
   const outlines = new Map();
-  const providers = [{ id: 'demo', name: 'Synthetic provider', signedIn: false, models: 1, methods: [{ type: 'api_key', label: 'Synthetic API key' }, { type: 'oauth', label: 'Synthetic subscription', subscription: true }] }];
-  const term = { id: 'ux-terminal', title: 'Synthetic shell · no process', cwd: '/work/demo', chunks: [{ n: 1, d: 'Synthetic terminal fixture. No shell process exists.\r\n$ ' }] };
   const snap = (sid, value) => ws.send(JSON.stringify({ t: 'snap', sid, value }));
   ws.onMessage(raw => {
     const f = JSON.parse(String(raw));
     if (f.t === 'sub') {
       topics.set(f.sid, f.topic);
-      if (f.topic.kind === 'terms') return snap(f.sid, { terms: { 'ux-terminal': term } });
-      if (f.topic.kind === 'term') return snap(f.sid, term);
-      if (f.topic.kind === 'login') return snap(f.sid, { status: 'running', events: recipe.setup === 'oauth' ? [{ type: 'auth_url', url: 'https://example.invalid/synthetic-login', instructions: 'Synthetic URL. Do not sign in.' }] : [], prompt: { id: 'synthetic-prompt', type: recipe.setup === 'oauth' ? 'manual_code' : 'secret', message: recipe.setup === 'oauth' ? 'Paste the synthetic confirmation code' : 'Enter a synthetic API key', placeholder: 'Demo only; never enter a real credential' } });
-      if (f.topic.kind === 'rarebit') return snap(f.sid, { items: [], count: 0, state: {}, fresh: true });
-      if (f.topic.kind === 'team') return snap(f.sid, { team: null, tasks: [], workers: [], deliveries: [], events: [] });
       return server.send(raw);
     }
     if (f.t === 'unsub') return server.send(raw);
+    // The page says its build first; the hub checks it (P1).
+    if (f.t === 'hello') return server.send(raw);
     if (!['req', 'hub'].includes(f.t)) throw new Error('Unexpected client frame');
     audit.requests.push({ op: f.op, host: f.host ?? 'hub', disposition: 'browser-fixture-only' });
     const respond = value => ws.send(JSON.stringify({ t: 'res', id: f.id, ok: true, value }));
     const reject = () => ws.send(JSON.stringify({ t: 'res', id: f.id, ok: false, error: { code: 'synthetic_failure', message: 'Synthetic demo failure. No Host action was sent.' } }));
-    if (recipe.reject && !['models.list', 'prompts.list', 'thread.history', 'compact.records', 'fs.dirs'].includes(f.op)) return reject();
-    if (recipe.pending && ['accounts.list', 'view.rarebit.ask', 'view.arc.build'].includes(f.op)) return;
+    if (recipe.reject && !['models.list', 'prompts.list', 'thread.history'].includes(f.op)) return reject();
+    if (recipe.pending && ['view.rarebit.ask', 'view.arc.build'].includes(f.op)) return;
     switch (f.op) {
       case 'models.list': return respond([]);
-      case 'accounts.list': return respond(providers);
-      case 'accounts.login': return respond({ id: 'synthetic-login' });
-      case 'accounts.answer': case 'accounts.cancel': case 'accounts.logout': return respond({});
+      case 'thread.commands': return respond({ commands: [], models: [], model: 'synthetic/offline', thinkingLevels: ['off'] });
       case 'prompts.list': return respond({ prompts: [], skills: [] });
-      case 'compact.records': return respond({ records: [] });
       case 'thread.history': return respond({ entries: [], more: false });
       case 'thread.outline': return outlines.has(f.args.threadId) ? respond(outlines.get(f.args.threadId)) : reject();
-      case 'fs.dirs': return respond({ path: '/work/demo', parent: '/work', dirs: ['src', 'test'] });
-      case 'git.changes': return respond({ repo: true, root: '/work/demo', branch: 'synthetic', files: [{ status: 'M', path: 'src/demo.ts' }], patch: 'diff --git a/src/demo.ts b/src/demo.ts\n--- a/src/demo.ts\n+++ b/src/demo.ts\n@@ -1 +1 @@\n-export const demo = false;\n+export const demo = true;\n', truncated: false });
-      case 'term.open': return respond({ id: term.id });
       case 'view.rarebit.ask': return respond(f.args.end ? {} : { side: { id: 'synthetic-side', at: new Date(now()).toISOString(), count: 12, included: 12, omittedChars: 0, revision: 1, model: 'synthetic/offline', turns: [{ question: f.args.question, answer: 'Synthetic answer: the reader and GUI fixtures are ready for review.' }] } });
 
       case 'thread.submit': return respond({ via: 'synthetic', evidence: 'sent' });
@@ -102,7 +90,6 @@ function fixtureSocket(ws, recipe, audit, clock) {
     if (f.t === 'hosts') {
       for (const h of f.hosts) {
         h.node = { nodeId: 'synthetic-node', hostname: 'synthetic-host', platform: 'synthetic', user: '', home: '/work/demo', version: 'demo', storage: '/work/demo/cache' };
-        if (recipe.node) h.kind = 'local';
         if (recipe.variant === 'away') h.status = 'disconnected';
       }
       pinHubClock('hosts', f.hosts, clock);
@@ -113,21 +100,18 @@ function fixtureSocket(ws, recipe, audit, clock) {
     const topic = topics.get(f.sid);
     if (!topic) return;
     const v = recipe.variant;
-    if (v === 'loading' && topic.kind !== 'terms') return;
+    if (v === 'loading') return;
     if (v === 'loading-view' && topic.kind === 'view') return;
     if ((v === 'error' && topic.kind !== 'threads') || (v === 'error-view' && topic.kind === 'view')) return ws.send(JSON.stringify({ t: 'end', sid: f.sid, reason: 'Synthetic reader failure. Reconnect to retry.' }));
     let value = f.value;
     if (topic.kind === 'threads') {
       if (v === 'empty') value = { threads: {} };
-      // A `node` recipe shows the demo Sessions as AmPi node Sessions, with the node's image limits.
-      if (recipe.node) for (const t of Object.values(value.threads)) { t.control = true; t.model = 'ampi-sim/offline'; t.images = NODE_IMAGE_LIMITS; }
     }
     if (topic.kind === 'thread') {
       if (v === 'long-turn') value = longTurn(value);
       const entries = value.entries ?? [];
       outlines.set(topic.threadId, { version: value.sourceVersion, totalEntries: entries.length, truncated: false,
         users: entries.flatMap((e, i) => e.kind === 'user' ? [{ id: e.id, ordinal: i, firstLine: String(e.text).split(/\r?\n/, 1)[0].slice(0, 120) }] : []) });
-      if (recipe.node) value.agent = { cwd: '/work/demo', model: { provider: 'ampi-sim', modelId: 'offline' }, thinkingLevel: 'medium' };
       if (v === 'queued') value.inbox = { items: [{ id: 'synthetic-queue', mode: 'followUp', content: 'Synthetic queued follow-up: verify the next step.' }] };
       if (v === 'retry') { value.live.retry = { at: now(), error: 'Synthetic provider overload' }; value.live.compactions = [{ taskId: 'synthetic-compact', reason: 'working_budget', blocking: true }]; }
     }

@@ -1,7 +1,7 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ENGINES, anchor, frames, gap, grown, offsetOf, open, scrollTop, tailBelow, view } from "./thread-scroll-fixture.ts";
+import { ENGINES, HOSTS, anchor, frames, gap, grown, newButton, offsetOf, open, scrollAway, scrollTop, settled, tailBelow, view } from "./thread-scroll-fixture.ts";
 import { engineSkip } from "./engines.ts";
 
 // A reply streams into the real ThreadView (see thread-scroll-hold.test.ts): a reader at the end follows it in both
@@ -156,4 +156,53 @@ for (const engine of ENGINES) for (const move of ["find", "link", "focus", "step
 		const at = await offsetOf(page, read.id);
 		assert.ok(at !== null && Math.abs(at - read.offset) <= 2 && await gap(page) > 60, `after line ${lines}, ${read.id} moved from ${read.offset} to ${at}; gap ${await gap(page)}`);
 	}
+});
+
+for (const engine of ENGINES) for (const backend of Object.keys(HOSTS) as (keyof typeof HOSTS)[])
+for (const phone of [false, true]) for (const following of [false, true]) for (const action of ["Send", "Queue", "Steer", "Quote"] as const)
+test(`send keeps view (${engine}, ${backend}, ${phone ? "phone" : "desktop"}, ${following ? "following" : "above tail"}, ${action})`, { skip: engineSkip(engine) }, async t => {
+ const { page, send, answer } = await open(t, 201, backend, engine, 1, 1, phone ? { width: 390, height: 844 } : { width: 1000, height: 700 }, true);
+ const current = view(201);
+ if (action === "Queue" || action === "Steer") current.live = { run: { activity: "working" } };
+ send(current); await frames(page);
+ let submitted: Record<string, unknown> | undefined;
+ answer((frame, reply) => {
+  if (frame.op !== "thread.submit") return false;
+  submitted = frame.args; reply({ ok: true, value: {} }); return true;
+ });
+ if (!following) { await scrollAway(page); await settled(page); assert.ok(await gap(page) > 60); }
+ const draft = page.getByRole("textbox", { name: "Message the agent", exact: true });
+ if (action === "Quote") {
+  await page.evaluate(() => {
+   const transcript = document.querySelector("[data-region=transcript]")!.getBoundingClientRect();
+   const body = [...document.querySelectorAll("[data-entry] [data-quote-body], [data-entry] .md p")].find(node => {
+    const rect = node.getBoundingClientRect(); return rect.top >= transcript.top + 5 && rect.bottom <= transcript.bottom - 5;
+   })!;
+   const range = document.createRange(); range.selectNodeContents(body);
+   const selection = getSelection()!; selection.removeAllRanges(); selection.addRange(range);
+  });
+  await page.getByRole("button", { name: "Quote q", exact: true }).click();
+  await page.getByRole("textbox", { name: "Quote note (optional)" }).press("Enter");
+  await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "Message the agent");
+  assert.match(await draft.inputValue(), /^> /);
+ } else await draft.fill(`Synthetic ${action} message`);
+ await settled(page);
+ const before = await scrollTop(page);
+ await page.getByRole("button", { name: action === "Quote" || action === "Send" ? "Send ↵" : action === "Queue" ? /Queue/ : /Steer/, exact: action === "Quote" || action === "Send" }).click();
+ await frames(page);
+ assert.ok(submitted, "the user action submits a message");
+ assert.equal(submitted.whenBusy, action === "Queue" ? "followUp" : "steer");
+ if (!following) assert.equal(await scrollTop(page), before, "sending above the tail does not move scrollTop");
+ const arrived = { ...current, entries: [...current.entries, { id: "sent", kind: "user", text: String(submitted.content), images: 0 }] };
+ send(arrived); await frames(page); await settled(page);
+ if (!following) {
+  assert.equal(await scrollTop(page), before, "the sent message arrival keeps the read place");
+  await newButton(page).click(); await frames(page);
+ }
+ await page.locator('[data-entry="sent"]').waitFor();
+ assert.equal(await page.locator('[data-entry="sent"] [data-quote-body]').textContent(), submitted.content);
+ assert.ok(await gap(page) <= 2, "following stays at the tail; the existing new-message control returns a reader there");
+ send({ ...arrived, entries: [...arrived.entries, { id: "reply", kind: "assistant", blocks: [{ type: "text", text: grown(8) }] }] });
+ await page.locator('[data-entry="reply"]').waitFor(); await frames(page);
+ assert.ok(await gap(page) <= 2, "the next reply remains followed");
 });

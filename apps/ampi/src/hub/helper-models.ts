@@ -1,5 +1,5 @@
 // The hub's global config file, its one writer, and the helper models it names. Helper models answer the hub's own
-// isolated Rarebit side asks; thread models are chosen per Session elsewhere (src/node/models.ts).
+// isolated Rarebit side asks; each Pi Session keeps the model that Pi chose for it.
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { ampiHome } from "../shared/home.ts";
@@ -50,16 +50,12 @@ function namedModel(purpose: ModelPurpose, explicit: unknown, path: string | und
 
 const noModel = (message: string) => Object.assign(new Error(message), { code: "no_model" });
 
-/**
- * Unknown helper settings and the AMPI_RAREBIT_ASK_MODEL environment variable. An unset key's error repeats them, so an owner who set the old name learns why it has no effect.
- */
+/** Unknown helper settings. An unset key's error repeats them, so an owner who set a wrong name learns why it has no effect. */
 function staleNotes(models: unknown, file: string): string[] {
 	const notes: string[] = [];
 	for (const key of models && typeof models === "object" ? Object.keys(models) : []) {
 		if (!key.startsWith("arc") && !PURPOSES.includes(key as ModelPurpose)) notes.push(`models.${key} is not a model key; use models.${PURPOSES.join(", models.")}.`);
 	}
-	for (const [env, key] of [["AMPI_RAREBIT_ASK_MODEL", "rarebitAsk"]] as const)
-		if (process.env[env]) notes.push(`${env} is ignored; set models.${key} in ${file}.`);
 	return notes;
 }
 

@@ -53,15 +53,6 @@ test("boot: a fresh tab is depth 0 and Back there stays in AmPi", async () => {
 	assert.equal(location.hash, overview);
 });
 
-test("boot: an entry written before this code is unknown, so Back is allowed", async () => {
-	const nav = await load([{ state: null, hash: overview }, { state: { place: { id: "x" } }, hash: session("a") }]);
-	assert.deepEqual(nav.arriveEntry(), { kind: "new" });
-	assert.equal(state().nav, null);
-	assert.deepEqual(state().place, { id: "x" });
-	nav.goBack();
-	assert.equal(location.hash, overview);
-});
-
 test("navigate stamps depth at write time; Back and Forward return each entry's focus", async () => {
 	const nav = await load([{ state: null, hash: session("a") }]);
 	nav.arriveEntry();
@@ -132,69 +123,42 @@ test("a panel-only change replaces the entry and keeps its place", async () => {
 
 test("one Session has one route: every link builder names its Host by Host ID", async () => {
 	// The notification builder is checked in needs-you-notify.test.ts, which loads attention.ts with the web build.
-	const { href, canonicalRoute, parseRoute } = await import("../web/src/util.ts");
+	const { href, parseRoute } = await import("../web/src/util.ts");
 	const canonical = "#/h/devbox/t/pi%3Asess-a";
 	assert.deepEqual(
 		{
 			linkKey: href.thread("devbox#pi", "pi:sess-a"),
 			hostId: href.thread("devbox", "pi:sess-a"),
 			citation: href.ref("devbox/pi:sess-a"),
-			oldLink: canonicalRoute("#/h/devbox%23pi/t/pi%3Asess-a"),
 		},
-		{ linkKey: canonical, hostId: canonical, citation: canonical, oldLink: canonical },
+		{ linkKey: canonical, hostId: canonical, citation: canonical },
 	);
-	assert.equal(canonicalRoute("#/h/devbox%23pi"), "#/h/devbox%23pi", "a Host route keeps its link key");
-	assert.equal(canonicalRoute("#/h/devbox%23pi/x/term-1"), "#/h/devbox%23pi/x/term-1", "a terminal route keeps its link key");
 	for (const malformed of ["#/h/devbox/t/%E0%A4", "#/h/devbox%23pi/t/%E0%A4", "#/h/%E0%A4/t/c1"]) {
-		assert.equal(canonicalRoute(malformed), malformed, "a malformed escape stays as typed");
 		const { query: _, ...route } = parseRoute(malformed);
 		assert.deepEqual(route, { page: "overview", rest: [] }, "a malformed escape names the Overview");
 	}
-	assert.equal(href.thread("devbox#durable", "t-1", { entry: "m1" }), "#/h/devbox/t/t-1?e=m1");
+	assert.equal(href.thread("devbox#pi", "t-1", { entry: "m1" }), "#/h/devbox/t/t-1?e=m1");
 });
 
-test("an older link-key route arrives in place as the Session's one route; a step to either form pushes nothing", async () => {
+test("a link-key thread route stays as typed and names no Host", async () => {
 	const old = "#/h/devbox%23pi/t/pi%3Asess-a?e=m1";
-	const canonical = "#/h/devbox/t/pi%3Asess-a?e=m1";
 	const nav = await load([{ state: null, hash: overview }]);
-	assert.equal(nav.entryKind(old, canonical), "replace");
-	assert.equal(nav.entryKind("#/h/devbox/t/pi%3Asess-a", old), "push", "an entry jump stays a step");
 	nav.arriveEntry();
 	history.pushState(null, "", old); // a pasted bookmark: the browser's own step
 	assert.deepEqual(nav.arriveEntry(), { kind: "new" });
-	assert.equal(location.hash, canonical);
-	assert.equal(fake.entries.length, 2);
-	assert.equal(nav.navigate(old), false, "the old form names the current route");
-	assert.equal(nav.navigate(canonical), false);
-	assert.equal(fake.entries.length, 2);
-	nav.goBack();
-	assert.equal(location.hash, overview, "Back leaves the Session in one step");
+	assert.equal(location.hash, old);
+	assert.equal(nav.navigate("#/h/devbox/t/pi%3Asess-a?e=m1"), true, "the Host ID route is another route");
 });
 
-test("an older link-key entry reached by Back is rewritten in place and keeps its state", async () => {
-	const nav = await load([{ state: { id: "a", nav: 0, place: { id: "p" } }, hash: "#/h/devbox%23pi/t/pi%3Asess-a" }, { state: { id: "b", nav: 1 }, hash: overview }]);
-	nav.arriveEntry();
-	nav.goBack();
-	assert.equal(nav.arriveEntry().kind, "traverse");
-	assert.equal(location.hash, "#/h/devbox/t/pi%3Asess-a");
-	assert.deepEqual(state().place, { id: "p" });
-	assert.equal(fake.entries.length, 2);
-});
-
-test("one Host with a Pi and a durable source: their Sessions never share a route, and a Host route keeps its link key", async () => {
-	const nav = await load([{ state: null, hash: overview }]);
+test("a thread route resolves by Host ID: a link-key or durable thread route names no Host; a Host route keeps its link key", async () => {
+	await load([{ state: null, hash: overview }]);
 	const { href, parseRoute } = await import("../web/src/util.ts");
 	const { findHost } = await import("../web/src/components/host-label.ts");
-	const hosts = [{ id: "devbox", link: "devbox#pi" }, { id: "devbox", link: "devbox#durable" }];
-	const pi = href.thread("devbox#pi", "pi:sess-a");
-	const durable = href.thread("devbox#durable", "t1a2b3c.c1");
-	assert.notEqual(pi, durable);
-	assert.equal(nav.entryKind(pi, durable), "push");
-	for (const [route, link] of [[pi, "devbox#pi"], [durable, "devbox#durable"], ["#/h/devbox%23durable", "devbox#durable"], ["#/h/devbox%23pi/x/term-1", "devbox#pi"]] as const) {
+	const hosts = [{ id: "devbox", link: "devbox#pi" }];
+	for (const [route, link] of [[href.thread("devbox#pi", "pi:sess-a"), "devbox#pi"], ["#/h/devbox%23pi/t/pi%3Asess-a", undefined], ["#/h/devbox%23pi", "devbox#pi"], ["#/h/devbox", "devbox#pi"], ["#/h/devbox%23durable/t/t1a2b3c.c1", undefined], ["#/h/devbox/t/t1a2b3c.c1", undefined]] as const) {
 		const r = parseRoute(route);
 		assert.equal(findHost(hosts, r.host, r.thread)?.link, link, route);
 	}
-	assert.equal(findHost(hosts, "devbox"), undefined, "a bare Host route is ambiguous here, so no builder writes one");
 });
 
 test("focus writes are deferred: 200 focus changes cost one history write (WebKit's 100 per 10 s limit)", async () => {
@@ -294,7 +258,7 @@ test("the ledger stays bounded: an evicted entry leaves both its notes and its u
 	assert.equal(fake.writes, 0, "an evicted entry has nothing left to write");
 });
 
-test("known error after deploy: an older null-state entry reloads as depth 0 once, and the next step counts from there", async () => {
+test("a null-state entry reloads as depth 0, and the next step counts from there", async () => {
 	const nav = await load([{ state: null, hash: overview }, { state: null, hash: session("a") }]);
 	assert.deepEqual(nav.arriveEntry(), { kind: "new" });
 	assert.equal(state().nav, 0);

@@ -93,11 +93,8 @@ for (const engine of ENGINES) for (const step of [20, 40]) test(`scroll hold (${
 // reader's own scroll wins over the saved place: no step snaps back, the end band resumes follow, and the reply's end
 // (a live reply replaced by its entry) does not jump.
 for (const engine of ENGINES) for (const shape of ["same entry"] as const) test(`scroll hold (${engine}): ${shape}, a reader wheeling down through a stream moves with the wheel and follows at the end`, { skip: engineSkip(engine) }, async (t) => {
-	const live = false;
-	const { page, send } = await open(t, 201, live ? "durable" : "pi", engine);
-	const frame = (lines: number) => live
-		? { ...view(201), live: { run: { activity: "streaming" }, generation: { message: { role: "assistant", content: [{ type: "text", text: grown(lines) }] } } } }
-		: view(201, grown(lines));
+	const { page, send } = await open(t, 201, "pi", engine);
+	const frame = (lines: number) => view(201, grown(lines));
 	const grow = async (lines: number) => {
 		send(frame(lines));
 		await page.waitForFunction((lines) => [...document.querySelectorAll("[data-region=transcript] p")].some((p) => p.textContent?.includes(`line ${lines} `)), lines);
@@ -126,9 +123,8 @@ for (const engine of ENGINES) for (const shape of ["same entry"] as const) test(
 		const tail = await tailBelow(page);
 		assert.ok(tail.below <= 1, `the end band follows again; ${JSON.stringify(tail)}`);
 	}
-	// The reply ends: a live reply becomes entry e201; a same-entry reply stops growing. The end stays in view.
-	send(live ? view(202, grown(lines)) : view(201, grown(lines)));
-	if (live) await page.locator('[data-entry="e201"]').waitFor({ state: "attached" });
+	// The reply ends: the same-entry reply stops growing. The end stays in view.
+	send(view(201, grown(lines)));
 	await frames(page);
 	const done = await tailBelow(page);
 	assert.ok(done.below <= 1 && await gap(page) <= 2, `the reply's end stays in view; gap ${await gap(page)}, ${JSON.stringify(done)}`);

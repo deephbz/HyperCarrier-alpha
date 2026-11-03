@@ -1,12 +1,15 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium, type Browser, type Page, type WebSocketRoute } from "playwright";
 import { build } from "vite";
 import react from "@vitejs/plugin-react";
+import { ArcReplica } from "../src/hub/arc-replica.ts";
+import { serviceStatus } from "../src/arc/service/status.ts";
 import { arcPanelFixture } from "./arc-panel-fixture.ts";
 // @ts-ignore: shared browser discovery is plain ESM.
 import { findChrome } from "../scripts/perf/browser.mjs";
@@ -28,6 +31,319 @@ before(async () => {
 });
 after(async () => { await browser?.close(); });
 const frames = (page: Page) => page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+
+test("Arc replica suppresses equal heartbeats but sends real service changes to the panel", async t => {
+ const dir = mkdtempSync(join(tmpdir(), "arc-panel-heartbeat-"));
+ const page = await browser.newPage();
+ let socket: WebSocketRoute | undefined, sid = 0, updates = 0;
+ const fixture = arcPanelFixture(), stamp = { id: "synthetic", order: 1, line: null };
+ const replica = new ArcReplica({ dir, host: "devbox", requester: "hub", send: () => true, changed() {
+  if (socket) { updates++; socket.send(JSON.stringify({ t: "snap", sid, value: { ...fixture, ...replica.value("pi:arc-demo") } })); }
+ } });
+ t.after(async () => { socket = undefined; replica.disconnect(); await page.context().close(); rmSync(dir, { recursive: true, force: true }); });
+ const service = serviceStatus("devbox", { state: "running", running: true, stamp });
+ replica.receive({ t: "arc.hello", generation: "one", stamp, expected: stamp, service });
+ replica.receive({ t: "arc.status", generation: "one", seq: 1, service, statuses: [], scheduled: [] });
+ await page.route("**/*", route => route.fulfill(new URL(route.request().url()).pathname === "/component.js"
+  ? { contentType: "text/javascript", body: script }
+  : { contentType: "text/html", body: `<meta charset="utf-8"><style>${css}</style><div id="root"></div><script src="/component.js"></script>` }));
+ await page.routeWebSocket("**/ws", client => client.onMessage(data => {
+  const frame = JSON.parse(String(data));
+  if (frame.t === "sub") { socket = client; sid = frame.sid; client.send(JSON.stringify({ t: "snap", sid, value: { ...fixture, ...replica.value("pi:arc-demo") } })); }
+ }));
+ await page.goto(origin);
+ await page.getByRole("button", { name: "Build", exact: true }).waitFor();
+ replica.receive({ t: "arc.status", generation: "one", seq: 2, service: structuredClone(service), statuses: [], scheduled: [] });
+ await frames(page); assert.equal(updates, 0, "an equal heartbeat does not send a panel update");
+ replica.receive({ t: "arc.status", generation: "one", seq: 3, service: { ...service, state: "fault" }, statuses: [], scheduled: [] });
+ await page.getByText(/devbox: Arc service stopped Builds after an internal error/).waitFor();
+ assert.equal(updates, 1);
+ assert.equal(await page.getByRole("button", { name: "Build", exact: true }).isDisabled(), true);
+});
+
+test("Arc panel renders chapters without timestamps and keeps disclosure usable", async (t) => {
+ for (const at of [null, "not-a-time"]) await t.test(at === null ? "null time" : "unparseable time", async (t) => {
+ const page = await browser.newPage({ viewport: { width: 380, height: 1000 }, timezoneId: "UTC" });
+ t.after(() => page.context().close());
+ const value = arcPanelFixture(2), errors: string[] = [];
+ value.sourceCount = value.receipt!.asOfCount;
+ Object.assign(value.receipt!.chapters[1]!, { firstAt: at, lastAt: at });
+ page.on("pageerror", error => errors.push(error.message));
+ await page.route("**/*", route => route.fulfill(new URL(route.request().url()).pathname === "/component.js"
+  ? { contentType: "text/javascript", body: script }
+  : { contentType: "text/html", body: `<meta charset="utf-8"><style>${css}</style><div id="root"></div><script src="/component.js"></script>` }));
+ await page.routeWebSocket("**/ws", client => client.onMessage(data => {
+  const frame = JSON.parse(String(data));
+  if (frame.t === "sub") client.send(JSON.stringify({ t: "snap", sid: frame.sid, value }));
+ }));
+ await page.goto(origin);
+ await page.locator(".arc-goal").waitFor({ timeout: 5000 });
+ assert.deepEqual(errors, []);
+ assert.match(await page.locator(".arc-status").innerText(), /covers to time unavailable/);
+ assert.match(await page.locator(".arc-timeline").innerText(), /Chapter times unavailable/);
+ const band = page.locator('[data-band="2"]');
+ assert.ok(Number(await band.getAttribute("width")) > 0);
+ assert.ok(Number.isFinite(Number(await band.getAttribute("x"))));
+ await band.click();
+ await page.locator('[data-chapter="2"] .arc-chapter-summary').waitFor();
+ assert.match(await page.locator('[data-chapter="2"] .arc-span').innerText(), /time unavailable/);
+ assert.ok(!/NaN|Invalid Date/.test(await page.locator("#root").innerHTML()));
+ if (process.env.AMPI_ARC_PROOF) {
+  mkdirSync(process.env.AMPI_ARC_PROOF, { recursive: true });
+  await page.screenshot({ path: join(process.env.AMPI_ARC_PROOF, `chapter-${at === null ? "null" : "invalid"}-time.png`) });
+ }
+ });
+});
+
+test("Arc render fault stays inside the panel and Retry view does not Build", async (t) => {
+ const page = await browser.newPage({ viewport: { width: 720, height: 1000 } });
+ t.after(() => page.context().close());
+ const value = arcPanelFixture(2);
+ // A non-renderable claim forces a descendant render exception without a production fault switch.
+ value.receipt!.goal.text = { forced: "render fault" } as unknown as string;
+ const peers: { client: WebSocketRoute; sid: string }[] = [], operations: string[] = [];
+ await page.route("**/*", route => route.fulfill(new URL(route.request().url()).pathname === "/component.js"
+  ? { contentType: "text/javascript", body: script }
+  : { contentType: "text/html", body: `<meta charset="utf-8"><style>${css}</style><div id="root"></div><script src="/component.js"></script>` }));
+ await page.routeWebSocket("**/ws", client => client.onMessage(data => {
+  const frame = JSON.parse(String(data));
+  if (frame.t === "sub") { peers.push({ client, sid: frame.sid }); client.send(JSON.stringify({ t: "snap", sid: frame.sid, value })); }
+  if (frame.t === "req") operations.push(frame.op);
+ }));
+ await page.goto(origin);
+ await page.getByRole("alert").filter({ hasText: "Arc could not be displayed" }).waitFor({ timeout: 5000 });
+ const preferred = page.getByRole("button", { name: "Open Arc by default", exact: true });
+ await preferred.click();
+ assert.equal(await preferred.getAttribute("aria-pressed"), "true", "panel tabs remain interactive after an Arc fault");
+ if (process.env.AMPI_ARC_PROOF) {
+  mkdirSync(process.env.AMPI_ARC_PROOF, { recursive: true });
+  await page.screenshot({ path: join(process.env.AMPI_ARC_PROOF, "arc-render-fault.png") });
+ }
+ await page.getByText("Error details", { exact: true }).click();
+ assert.match(await page.getByRole("alert").innerText(), /React|Objects are not valid/);
+ value.receipt!.goal.text = "Recovered Arc goal";
+ for (const { client, sid } of peers) client.send(JSON.stringify({ t: "snap", sid, value }));
+ await frames(page);
+ await page.getByRole("button", { name: "Retry view", exact: true }).click();
+ await page.getByText("Recovered Arc goal", { exact: false }).waitFor({ timeout: 5000 });
+ assert.equal(await page.getByRole("alert").count(), 0);
+ assert.ok(!operations.includes("view.arc.build"), "retry only re-renders the saved Arc");
+});
+
+test("Arc Goal uses the Now body style on desktop and touch", async (t) => {
+	for (const hasTouch of [false, true]) {
+		await t.test(hasTouch ? "touch" : "desktop", async (t) => {
+			const page = await browser.newPage({ hasTouch, viewport: { width: hasTouch ? 380 : 720, height: 1000 } });
+			t.after(() => page.context().close());
+			const value = arcPanelFixture();
+			value.receipt!.kept = ["goal"];
+			await page.route("**/*", (route) => route.fulfill(new URL(route.request().url()).pathname === "/component.js"
+				? { contentType: "text/javascript", body: script }
+				: { contentType: "text/html", body: `<meta charset="utf-8"><style>${css}</style><div id="root"></div><script src="/component.js"></script>` }));
+			await page.routeWebSocket("**/ws", (client) => client.onMessage((data) => {
+				const frame = JSON.parse(String(data));
+				if (frame.t === "sub") client.send(JSON.stringify({ t: "snap", sid: frame.sid, value }));
+			}));
+			await page.goto(origin);
+			await page.locator(".arc-goal").waitFor();
+			const styles = await page.evaluate(() => {
+				const style = (selector: string) => {
+					const s = getComputedStyle(document.querySelector(selector)!);
+					return { size: s.fontSize, line: s.lineHeight, color: s.color };
+				};
+				return { goal: style(".arc-goal"), now: style(".arc-now > p:not([class])"),
+					bold: getComputedStyle(document.querySelector(".arc-goal > b")!).fontWeight,
+					cite: style(".arc-goal .arc-cite"), kept: style(".arc-goal .arc-kept") };
+			});
+			assert.deepEqual(styles.goal, styles.now, "Goal has the Now paragraph size, line height and color");
+			assert.equal(styles.goal.size, hasTouch ? "16px" : "13px");
+			assert.equal(styles.goal.line, hasTouch ? "24px" : "20px");
+			assert.equal(styles.bold, "500");
+			assert.equal(styles.cite.size, "11px");
+			assert.equal(styles.kept.size, "12px");
+		});
+	}
+});
+
+test("Arc service facts, request outcomes, loss disclosure and stale elapsed on desktop and touch", async (t) => {
+	for (const hasTouch of [false, true]) await t.test(hasTouch ? "touch" : "desktop", async (t) => {
+		const page = await browser.newPage({ hasTouch, viewport: { width: hasTouch ? 380 : 720, height: 1000 }, timezoneId: "UTC" });
+		t.after(() => page.context().close());
+		await page.clock.install({ time: new Date("2026-11-03T04:00:00Z") });
+		const value = arcPanelFixture();
+		const rendered: Record<string, string> = {};
+		let socket: WebSocketRoute, sid: number, buildRequestId: number;
+		let refuseDismiss = false;
+		const requests: { op: string; args: Record<string, unknown> }[] = [], errors: string[] = [];
+		page.on("pageerror", (e) => errors.push(e.message));
+		await page.route("**/*", (route) => {
+			const url = new URL(route.request().url());
+			assert.equal(url.origin, origin);
+			return route.fulfill(url.pathname === "/component.js" ? { contentType: "text/javascript", body: script } : { contentType: "text/html", body: `<meta charset="utf-8"><style>${css}</style><div id="root"></div><script src="/component.js"></script>` });
+		});
+		await page.routeWebSocket("**/ws", (client) => {
+			socket = client;
+			client.onMessage((data) => {
+				const frame = JSON.parse(String(data));
+				if (frame.t === "sub") { sid = frame.sid; client.send(JSON.stringify({ t: "snap", sid, value })); }
+				if (frame.t === "req") {
+					requests.push({ op: frame.op, args: frame.args });
+					if (frame.op === "view.arc.build") { buildRequestId = frame.id; return; }
+					client.send(JSON.stringify({ t: "res", id: frame.id, ok: true, value: frame.op === "view.arc.dismiss" ? refuseDismiss ? { outcome: "refused", code: "source" } : { outcome: "dismissed", revision: 2 } : { outcome: "unknown", requestId: "synthetic-request" } }));
+				}
+			});
+		});
+		const send = async () => { socket!.send(JSON.stringify({ t: "snap", sid: sid!, value })); await frames(page); };
+		await page.goto(origin);
+		await page.locator(".arc-goal").waitFor();
+		assert.equal(requests.length, 0);
+		await page.getByRole("button", { name: "Build", exact: true }).click();
+		await page.getByRole("button", { name: "Build requested", exact: true }).waitFor();
+		const firstCommand = String(requests.at(-1)!.args.requestId);
+		value.request = { requestId: firstCommand, outcome: "accepted", buildId: "synthetic-build" }; await send();
+		socket!.send(JSON.stringify({ t: "res", id: buildRequestId!, ok: true, value: { outcome: "unknown", requestId: firstCommand } })); await frames(page);
+		assert.equal(await page.getByText(/Build request status unknown/).count(), 0, "accepted knowledge wins over a delayed unknown for the same command");
+		await page.getByRole("button", { name: "Build", exact: true }).click();
+		await page.getByRole("button", { name: "Build requested", exact: true }).waitFor();
+		const secondCommand = String(requests.at(-1)!.args.requestId);
+		assert.notEqual(firstCommand, secondCommand);
+		socket!.send(JSON.stringify({ t: "res", id: buildRequestId!, ok: true, value: { outcome: "unknown", requestId: secondCommand } }));
+		await page.getByText("Build request status unknown. AmPi sends it again when devbox reconnects.", { exact: true }).waitFor();
+		value.request = { requestId: secondCommand, outcome: "accepted", buildId: "synthetic-build" };
+		value.status = { state: "waiting", elapsedMs: 0, waitCause: "capacity", wait: { reason: "capacity", running: 8, limit: 8, scope: "global", byHost: [{ host: "devbox", running: 5 }, { host: "lab", running: 3 }] } };
+		await send();
+		assert.match(await page.locator(".arc-panel").innerText(), /Waiting for a model slot: 8 of 8 in use \(devbox 5, lab 3\)\./);
+		assert.equal(await page.locator(".arc-elapsed").count(), 0);
+		assert.equal(await page.getByRole("button", { name: "Waiting", exact: true }).isDisabled(), true);
+		assert.equal(await page.getByRole("alert").count(), 0);
+		for (const [waitCause, expected] of [["admission-unavailable", "Waiting: AmPi cannot check the shared model limit now."], ["source-unavailable", "Waiting: the Session file on devbox cannot be read now."], ["survivor", "Waiting for an earlier model process on devbox to end."]] as const) {
+			value.status = { state: "waiting", elapsedMs: 0, waitCause }; await send();
+			assert.ok((await page.locator(".arc-panel").innerText()).includes(expected));
+		}
+		value.status = { state: "uncertain", elapsedMs: 133000, pause: "uncertain-call", detail: "Synthetic process identity could not be verified." }; await send();
+		assert.match(await page.locator(".arc-panel").innerText(), /Automatic Builds paused: the last Build stopped during a model call that may have been charged\. Press Build to continue \(it may charge again\)\./);
+		assert.equal(await page.getByRole("button", { name: "Build", exact: true }).isEnabled(), true);
+		assert.equal(await page.getByText("Synthetic process identity could not be verified.").isVisible(), false);
+		await page.getByText("Build details", { exact: true }).click();
+		assert.equal(await page.getByText("Synthetic process identity could not be verified.").isVisible(), true);
+		assert.equal(await page.locator(".arc-elapsed").count(), 0);
+		await page.getByText("Build details", { exact: true }).click();
+		value.status = { state: "queued", elapsedMs: 0, nextAt: "2026-11-03T04:05:00Z" }; await send();
+		assert.equal(await page.locator(".arc-elapsed").count(), 0);
+		for (const [code, sentence] of [["sign-in", "Build failed: no sign-in for the Arc model on devbox."], ["model-mismatch", "Build result is uncertain: the model that answered differs from the setting."], ["quota", "Build failed: model quota reached."], ["model", "Build failed: the model call failed."], ["answer", "Build failed: the model's answer could not be used."], ["settings", "Build failed: Arc settings on devbox are invalid."], ["internal", "Build failed."]] as const) {
+			value.status = { sessionRef: "synthetic-session", buildId: "synthetic-build", state: "failed", elapsedMs: 41000, observedAt: "2026-11-03T04:00:00Z", nextAt: "2026-11-03T05:00:00Z", record: { ...value.receipt!.builds.at(-1)!, error: { code, message: "Synthetic failure diagnostic." } } }; await send();
+			assert.ok((await page.getByRole("alert").innerText()).startsWith(`${sentence} Next try 05:00. Showing the last good Arc.`));
+			assert.equal(await page.locator(".arc-elapsed").count(), 0);
+			assert.equal(await page.getByText("Synthetic failure diagnostic.", { exact: true }).isVisible(), false);
+			assert.equal(await page.getByText("Build details", { exact: true }).evaluate((detail) => Boolean(document.querySelector(".arc-error")!.compareDocumentPosition(detail) & Node.DOCUMENT_POSITION_FOLLOWING)), true, "the failure sentence precedes its detail disclosure");
+		}
+		value.status = { state: "idle", elapsedMs: 0 };
+		value.request = { requestId: secondCommand, outcome: "refused", code: "settings", detail: "Synthetic model setting is invalid." }; await send();
+		await page.getByText("Build request refused. Arc settings on devbox are invalid.", { exact: true }).waitFor();
+		assert.equal(await page.getByText("Synthetic model setting is invalid.").isVisible(), false);
+		value.request = { requestId: secondCommand, outcome: "not-sent" }; await send();
+		await page.getByText("devbox is not reachable. The Arc cannot build now.", { exact: true }).waitFor();
+  for (const text of ["This AmPi is older than devbox. Update it.", "devbox: AmPi could not replace the older Arc service (timed out). Run ampi arc status --host devbox; the log is /synthetic/service.log."]) {
+   value.services = [{ host: "devbox", state: "error", text }]; await send();
+   await page.getByText(text, { exact: true }).waitFor();
+   assert.equal(await page.getByRole("button", { name: "Build", exact: true }).isDisabled(), true);
+  }
+		for (const service of [{ host: "devbox", state: "no-sign-in", model: "test/model", path: "/synthetic/auth.json" }, { host: "devbox", state: "invalid-settings", path: "/synthetic/settings.json", key: "ampi_arc.model" }, { host: "devbox", state: "updating" }, { host: "devbox", state: "stopped" }, { host: "devbox", state: "fault" }, { host: "devbox", state: "stopping" }, { host: "devbox", state: "busy" }, { host: "devbox", state: "error" }, { host: "devbox", state: "cannot-start", prerequisite: "perl" }, { host: "devbox", state: "unreachable", since: "2026-11-03T04:00:00Z" }] as const) {
+			value.services = [service]; await send();
+			assert.match(await page.locator(".arc-service").innerText(), /devbox: (Arc (service|Builds|store|maintenance)|Stopping Arc|Host is unreachable)/);
+   if (!["no-sign-in", "invalid-settings"].includes(service.state)) {
+    assert.equal(await page.getByRole("button", { name: "Build", exact: true }).isDisabled(), true);
+    assert.equal(await page.getByRole("button", { name: "Rebuild", exact: true, includeHidden: true }).isDisabled(), true);
+   }
+			if (service.state === "stopped") assert.equal(await page.locator(".arc-service").innerText(), "devbox: Arc service is stopped. A linked hub restarts it within seconds.");
+			if (service.state === "stopping") {
+				value.services = [{ ...service, text: "devbox: Stopping Arc drains Builds for every client. A linked hub restarts it within seconds." }]; await send();
+				rendered.stopping = await page.locator(".arc-service").innerText();
+				assert.equal(rendered.stopping, "devbox: Arc service is stopping. It drains Builds for every client; a linked hub restarts it within seconds.");
+			}
+		}
+  value.services = [{ host: "devbox", state: "stopped" }];
+  value.request = { requestId: secondCommand, outcome: "refused", code: "service", detail: "Synthetic stopped service." }; await send();
+  const refusal = page.getByText("Build request refused. devbox: Arc service is stopped. A linked hub restarts it within seconds.", { exact: true });
+  await refusal.waitFor(); rendered.refusal = await refusal.innerText();
+  assert.doesNotMatch(await page.locator(".arc-panel").innerText(), /see the line above/);
+  const savedReceipt = value.receipt; value.receipt = undefined; value.v2Removed = true; await send();
+  await page.getByText("Arcs from the previous version were removed. Build to create this Session's Arc.", { exact: true }).waitFor();
+  value.receipt = savedReceipt; await send();
+  assert.equal(await page.getByText(/Arcs from the previous version were removed/).count(), 0);
+		value.services = [{ host: "devbox", state: "running", version: "2.1.0" }]; await send();
+  assert.equal(await page.getByRole("button", { name: "Build", exact: true }).isEnabled(), true);
+		assert.equal(await page.locator(".arc-service").count(), 0, "healthy service facts do not add a status line");
+  assert.equal(await page.getByText(/Build request refused/).count(), 0, "recovery hides the service refusal");
+  assert.equal(await page.getByText("Request details", { exact: true }).count(), 0, "recovery also hides the refusal diagnostic");
+  value.request = { requestId: secondCommand, outcome: "unknown", waitFor: "service" }; await send();
+  const serviceWait = page.getByText("Build request status unknown. AmPi sends it again when the Arc service on devbox is ready.", { exact: true });
+  await serviceWait.waitFor(); rendered.drain = await serviceWait.innerText();
+  value.services = [{ host: "devbox", state: "unreachable", since: "2026-11-03T03:52:00Z", text: "devbox: Host is unreachable. Check the SSH connection, then run ampi arc status --host devbox." }]; await send();
+  await page.getByText("Build request status unknown. AmPi sends it again when devbox reconnects.", { exact: true }).waitFor();
+  for (const browserTime of ["2026-11-03T03:55:00Z", "2026-11-03T04:05:00Z"]) {
+   await page.clock.setFixedTime(new Date(browserTime));
+   rendered.unreachable = await page.locator(".arc-service").innerText();
+   assert.equal(rendered.unreachable, "devbox: Host is unreachable since 03:52. Check the SSH connection, then run ampi arc status --host devbox.");
+  }
+  if (process.env.AMPI_ARC_PROOF) {
+   mkdirSync(process.env.AMPI_ARC_PROOF, { recursive: true });
+   writeFileSync(join(process.env.AMPI_ARC_PROOF, `service-text-${hasTouch ? "touch" : "desktop"}.json`), JSON.stringify(rendered, null, 2) + "\n");
+  }
+  value.services = [{ host: "devbox", state: "running" }]; value.request = { requestId: secondCommand, outcome: "accepted", buildId: "synthetic-build" }; await send();
+		value.receipt!.points = value.receipt!.points.filter((p) => !p.needsYou);
+		value.receipt!.drops = [{ id: "loss-1", title: "Confirm the target", kind: "decision", reason: "No valid citation.", needsYou: true, from: "reply-3", to: "reply-5", fromPosition: 3, toPosition: 5 }]; await send();
+		assert.match(await page.locator(".arc-needs .arc-drop").innerText(), /a decision from messages 3–5/);
+		assert.match((await page.locator(".arc-drop a").getAttribute("href"))!, /e=reply-3/);
+		assert.equal(await page.getByText("No valid citation.").isVisible(), false);
+		assert.equal(await page.getByRole("button", { name: "Dismiss warning: Confirm the target" }).count(), 0, "a hub that cannot dismiss offers no Dismiss button");
+		assert.match(await page.locator(".arc-needs h3").innerText(), /0 · 1 not added/);
+		value.canDismiss = true; await send();
+		const dismissButton = page.getByRole("button", { name: "Dismiss warning: Confirm the target" });
+		assert.ok((await dismissButton.boundingBox())!.height >= (hasTouch ? 40 : 24));
+		await dismissButton.click();
+		await page.getByText("Dismissing…", { exact: true }).waitFor();
+		assert.equal(await dismissButton.isDisabled(), true);
+		assert.deepEqual(requests.at(-1), { op: "view.arc.dismiss", args: { threadId: "pi:arc-demo", dropId: "loss-1", toPosition: 5 } });
+		assert.equal(await page.locator(".arc-drop").count(), 1, "the receipt owns clearing; an ack alone does not hide a warning");
+		const dropped = value.receipt!.drops![0]!;
+		value.receipt!.drops = []; await send();
+		assert.equal(await page.locator(".arc-drop").count(), 0);
+		refuseDismiss = true;
+		value.receipt!.drops = [{ ...dropped, toPosition: 6 }]; await send();
+		await dismissButton.click();
+		await page.getByText("The warning could not be dismissed. Try again.", { exact: true }).waitFor();
+		assert.equal(await page.locator(".arc-drop").filter({ has: dismissButton }).getByRole("alert").innerText(), "The warning could not be dismissed. Try again.");
+		assert.equal(await page.locator(".arc-panel > [role=alert]").count(), 0, "dismissal feedback stays with its warning");
+		assert.equal(await dismissButton.isEnabled(), true);
+		assert.equal(await page.locator(".arc-drop").count(), 1);
+		value.receipt!.drops = []; await send();
+		value.request = { requestId: secondCommand, outcome: "accepted", buildId: "synthetic-build" };
+		for (const browserTime of ["2026-11-03T03:55:00Z", "2026-11-03T04:05:00Z"]) {
+			await page.clock.setFixedTime(new Date(browserTime));
+			value.status = { state: "building", elapsedMs: 65_000, observedAt: browserTime === "2026-11-03T03:55:00Z" ? "2026-11-03T03:59:59Z" : "2026-11-03T04:00:00Z" }; await send();
+			await page.getByText("Elapsed 1:05", { exact: true }).waitFor();
+		}
+		await page.getByText("Elapsed 1:05", { exact: true }).waitFor();
+		await page.clock.fastForward(2000);
+		await page.getByText("Elapsed 1:07", { exact: true }).waitFor();
+		value.statusStale = true;
+		value.services = [{ host: "devbox", state: "unreachable", since: "2026-11-03T04:00:02Z" }]; await send();
+		const frozen = await page.locator(".arc-elapsed").innerText();
+		assert.match(frozen, /1:07 · as of 04:00/);
+		await page.clock.fastForward(10_000);
+		assert.equal(await page.locator(".arc-elapsed").innerText(), frozen);
+		assert.doesNotMatch(await page.locator(".arc-status").innerText(), /newer message/);
+		assert.equal(await page.locator(".arc-panel").evaluate((el) => el.scrollWidth > el.clientWidth), false);
+		value.builderHost = "devbox";
+		value.receipt!.builds.at(-1)!.requester = "desk";
+		value.receipt!.builds.at(-1)!.possibleRepeatCost = true; await send();
+		await page.locator(".arc-builds > summary").click();
+		assert.match(await page.locator(".arc-builds").innerText(), /from desk · built on devbox/);
+		assert.match(await page.locator(".arc-builds").innerText(), /may have been charged/);
+		assert.deepEqual(errors, []);
+	});
+});
 
 test("Arc panel: source disclosure, timeline sync, scoped boards, receipt arrivals and narrow themes", async (t) => {
 	const page = await browser.newPage({ viewport: { width: 720, height: 1000 }, timezoneId: "UTC" });
@@ -100,7 +416,7 @@ test("Arc panel: source disclosure, timeline sync, scoped boards, receipt arriva
 	await page.getByRole("button", { name: "Build", exact: true }).click();
 	await page.getByLabel("Arc Build options").click();
 	await page.getByRole("button", { name: "Rebuild", exact: true }).click();
-	assert.deepEqual(requests.filter((r) => r.op === "view.arc.build").map((r) => r.args), [{ threadId: "pi:arc-demo" }, { threadId: "pi:arc-demo", rebuild: true }]);
+	assert.deepEqual(requests.filter((r) => r.op === "view.arc.build").map(({ args: { requestId, ...args } }) => { assert.equal(typeof requestId, "string"); return args; }), [{ threadId: "pi:arc-demo" }, { threadId: "pi:arc-demo", rebuild: true }]);
 
 	// A receipt arrival adds content above the reader. It must preserve the visible chapter and its open state.
 	await row.click(); await row.click();
@@ -148,10 +464,10 @@ test("Arc panel: source disclosure, timeline sync, scoped boards, receipt arriva
 	assert.match(await page.getByRole("alert").innerText(), /Showing the last good Arc/);
 	assert.equal(await page.locator("[data-chapter]").count(), 15);
 	assert.match(await page.locator(".arc-status").innerText(), /Covers 640 of 1,076 messages/);
-	assert.match(await page.getByRole("alert").innerText(), /Build failed: Synthetic provider unavailable.*Build to cover the remaining messages/);
+	assert.match(await page.getByRole("alert").innerText(), /Build failed: the model call failed\..*Build to cover the remaining messages/);
 	assert.equal(await page.getByRole("button", { name: "Build", exact: true }).isEnabled(), true);
-	assert.match(await page.getByRole("alert").innerText(), /next try 21:05/);
-	assert.equal((await page.locator(".arc-panel").innerText()).match(/next try|starts 21:05/g)?.length, 1, "the retry time shows once");
+	assert.match(await page.getByRole("alert").innerText(), /Next try 21:05/);
+	assert.equal((await page.locator(".arc-panel").innerText()).match(/Next try|starts 21:05/g)?.length, 1, "the retry time shows once");
 	assert.match(await page.locator(".arc-status").innerText(), /Saved 21:01 \(partial\)/);
 	// A partial Arc reads like a complete one: the status line alone says what it covers.
 	assert.doesNotMatch(await page.locator(".arc-panel h2").first().innerText(), /as of/i);
@@ -177,17 +493,16 @@ test("Arc panel: source disclosure, timeline sync, scoped boards, receipt arriva
 	// Contract: arc.md / View: progress names the whole job in one muted italic line; elapsed time ticks outside the
 	// status region, and the retry reason is on hover only.
 	const startedAt = new Date(Date.now() - 72_000).toISOString();
-	value.status = { state: "building", progress: "Building messages 641–1,076 of 1,076 · part 2 of 3 · try 2 of 3", work: { from: 641, to: 1076, total: 1076, part: 2, parts: 3, attempt: 2, attempts: 3, reason: "Expected an object", startedAt } };
+	value.status = { state: "building", elapsedMs: 72000, observedAt: new Date().toISOString(), progress: "Building messages 641–1,076 of 1,076 · part 2 of 3 · try 2 of 3", work: { from: 641, to: 1076, total: 1076, part: 2, parts: 3, attempt: 2, attempts: 3, reason: "Expected an object", startedAt } };
 	socket!.send(JSON.stringify({ t: "snap", sid: sid!, value }));
 	const progress = page.locator(".arc-progress");
 	await progress.waitFor();
 	assert.equal(await progress.getByRole("status").innerText(), "Building messages 641–1,076 · part 2 of 3 · try 2 of 3");
-	assert.match(await progress.innerText(), / · 1:1\d$/);
+	assert.match(await page.locator(".arc-elapsed").innerText(), /^Elapsed 1:1\d$/);
 	assert.equal(await progress.getByRole("status").getAttribute("title"), "Last answer rejected: Expected an object");
 	assert.equal(await progress.evaluate((el) => getComputedStyle(el).fontStyle), "italic");
 	assert.doesNotMatch(await page.locator(".arc-panel").innerText(), /Expected an object/, "the internal reason stays out of the text");
 	value.status = { state: "queued", progress: "Waiting for a model slot" };
-	value.receipt!.builds.at(-1)!.error = { code: "busy", message: "Model-call capacity is busy." };
 	socket!.send(JSON.stringify({ t: "snap", sid: sid!, value }));
 	await page.getByText("Waiting for a model slot", { exact: true }).waitFor();
 	assert.equal(await page.getByRole("alert").count(), 0, "admission wait is not a red model failure");

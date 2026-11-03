@@ -1,111 +1,15 @@
 import type { ThreadSummary } from "../../../src/shared/protocol.ts";
-import { ACTIVITY_LABEL, MOD, ago, arcNeedsYou, attentionOf, go, href, isBusy, needsYou } from "../util.ts";
+import { ACTIVITY_LABEL, ago, arcNeedsYou, attentionOf, href, isBusy, needsYou } from "../util.ts";
 import { useEffect, useRef, useState } from "react";
 import { useKeepPlace } from "../keep-place.ts";
-import { hasRealModel, useModels } from "../models.ts";
-import { openAccounts } from "./Accounts.tsx";
-import { ONBOARDING_KEY } from "./Dialogs.tsx";
 import { useNow } from "../client.ts";
 import { linkLine, linkView } from "./host-fold.ts";
 import type { HostThreads } from "./Sidebar.tsx";
-import { isPiHost } from "./host-label.ts";
 import { ActivityIcon, ThreadBadges } from "./ThreadStatus.tsx";
 import { emptyNote, reading, unavailable } from "../host-lists.ts";
 import { arcCoverage, arcNeedsRows, coverageNote } from "../views/cos/needs.ts";
 
 import { activeSpend } from "../views/cos/totals.ts";
-
-function Step({ done, title, children, action }: { done: boolean | undefined; title: string; children?: React.ReactNode; action?: React.ReactNode }) {
-	return (
-		<div className={`step ${done ? "done" : ""}`} data-step={title} data-done={done ? "yes" : "no"}>
-			<span className="check">{done ? "✓" : ""}</span>
-			<div className="what">
-				<b>{title}</b>
-				{children && <div className="hint">{children}</div>}
-			</div>
-			{!done && action}
-		</div>
-	);
-}
-
-/**
- * First-run checklist, computed from real state rather than ticked by hand: the local node answers, a real model is
- * signed in, a thread exists, a remote host is added. It stays until every required step is done or the owner hides it.
- */
-function Onboarding({ data, onNew, onHostSetup, onHelp }: { data: HostThreads[]; onNew: () => void; onHostSetup: () => void; onHelp: () => void }) {
-	const [hidden, setHidden] = useState(() => localStorage.getItem(ONBOARDING_KEY) === "1");
-	const local = data.find((d) => d.host.kind === "local") ?? data[0];
-	const connected = local?.host.status === "connected";
-	const real = hasRealModel(useModels(local?.host.link, connected));
-	const anyThread = data.some((d) => d.threads.some((t) => t.kind === "thread"));
-	const remote = data.find((d) => d.host.kind === "ssh" || d.host.kind === "pi-ssh");
-	const required = connected && real === true && anyThread;
-	if (hidden || required) return null;
-	return (
-		<div className="onboarding" data-onboarding>
-			<div style={{ display: "flex", alignItems: "baseline" }}>
-				<h2>Set up AmPi</h2>
-				<span style={{ flex: 1 }} />
-				<button
-					className="btn ghost small"
-					onClick={() => {
-						localStorage.setItem(ONBOARDING_KEY, "1");
-						setHidden(true);
-					}}
-				>
-					Hide
-				</button>
-			</div>
-			<div className="hint" style={{ marginBottom: 6 }}>
-				Three steps, about two minutes. Each turns green on its own. <a href="#" onClick={(e) => (e.preventDefault(), onHelp())}>Keys and help (?)</a>
-			</div>
-			<Step done={connected} title="This computer's node is running">
-				{connected
-					? `${local!.host.node?.hostname ?? "local"} · agents keep working when this window closes.`
-					: "The hub is starting its local node. If this stays, run ampi doctor in a terminal."}
-			</Step>
-			<Step
-				done={real}
-				title="Sign in to a model"
-				action={
-					connected && (
-						<button className="btn primary small" onClick={() => openAccounts(local!.host.link)}>
-							Set up models
-						</button>
-					)
-				}
-			>
-				{real
-					? "A model is signed in on this computer."
-					: "Use a subscription (Claude, ChatGPT) or an API key. Until then, threads run on the offline simulator, which only demonstrates the interface."}
-			</Step>
-			<Step
-				done={anyThread}
-				title="Start a thread"
-				action={
-					<button className="btn small" onClick={onNew}>
-						New agent <span className="kbd">{MOD}N</span>
-					</button>
-				}
-			>
-				Pick a folder and say what you want done. The thread keeps running if you close this window.
-			</Step>
-			<Step
-				done={remote !== undefined}
-				title="Optional: add a remote machine over SSH"
-				action={
-					<button className="btn small" onClick={onHostSetup}>
-						Remote host (?)
-					</button>
-				}
-			>
-				{remote
-					? `${remote.host.label} is added.`
-					: "Copy the setup prompt into a coding agent; it sets up SSH and the machine, then adds the Host to hub.json."}
-			</Step>
-		</div>
-	);
-}
 
 type Row = { host: string; hostLabel: string; t: ThreadSummary };
 
@@ -141,7 +45,7 @@ function List({ rows, empty, reason, link, id, page, onPage }: ListProps & { id:
  * The return-to-desk view (O1): what needs the owner and why, what is running, and what changed, across hosts. The
  * axes stay separate (P5): a thread can be running and need attention; idle never means done.
  */
-export function Overview({ data, onNew, onHostSetup, onHelp }: { data: HostThreads[]; onNew: () => void; onHostSetup: () => void; onHelp: () => void }) {
+export function Overview({ data, onNew }: { data: HostThreads[]; onNew: () => void }) {
 	const scroller = useRef<HTMLDivElement>(null);
 	const pinned = useRef(false);
 	const keepPlace = useKeepPlace(scroller, "[data-place]", "data-place", pinned);
@@ -189,8 +93,6 @@ export function Overview({ data, onNew, onHostSetup, onHelp }: { data: HostThrea
 		.sort(byRecent);
 	const note = coverageNote(coverage, asks.length === 0);
 	const teams = rows.filter((r) => r.t.team?.role === "lead").sort(byRecent);
-	// Pi Hosts (D15 stage 1): agents start in Herdr, and there is no node to set up.
-	const piOnly = data.length > 0 && data.every((d) => isPiHost(d.host));
 	// One figure over both backends: the sum names the classes some of its Sessions do not count.
 	const spend = activeSpend(rows.map((r) => r.t), dayAgo);
 	const changed = rows.filter((r) => r.t.updatedAt > (since ?? dayAgo)).length;
@@ -212,7 +114,6 @@ export function Overview({ data, onNew, onHostSetup, onHelp }: { data: HostThrea
 			</div>
 			<div className="scroll" ref={scroller} onScroll={keepPlace.onScroll} data-page-scroller tabIndex={-1}>
 				<div className="overview">
-					{!piOnly && <Onboarding data={data} onNew={onNew} onHostSetup={onHostSetup} onHelp={onHelp} />}
 					<section className="attention-summary" aria-label="Activity since your last visit">
 						<h1>{since ? "Since you last checked Overview" : "Recent activity"}</h1>
 						<p>{loading ? "Reading Sessions…" : <>{changed.toLocaleString()} Session{changed === 1 ? "" : "s"} updated {since ? `since ${new Date(since).toLocaleString()}` : "in the last 24 hours"}. {needs.length > 0 ? `${needs.length.toLocaleString()} ${needs.length === 1 ? "has" : "have"} a signal that ${needs.length === 1 ? "it needs" : "they need"} you.` : "No Session has a positive signal that it needs you."}</>}</p>

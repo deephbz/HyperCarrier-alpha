@@ -128,7 +128,7 @@ try {
     const text = await p.locator('body').innerText();
     if (/MacBook|\/Users\//.test(text)) throw new Error(`Private host identity/path in ${r.id}`);
     await p.screenshot({ path: join(out, 'screens', r.id + '.png'), animations: 'disabled', timeout: 30_000 });
-    nodes.push({ ...r, screenshot: `screens/${r.id}.png`, viewport: { width: r.width ?? 1280, height: 900 }, theme: r.theme ?? 'light', evidence: r.variant || r.node ? 'synthetic browser projection' : 'synthetic demo hub', elementIds: Object.fromEntries(ids), elements: es, assertions: { appRendered: true, setupCompleted: true }, text: text.slice(-1800) });
+    nodes.push({ ...r, screenshot: `screens/${r.id}.png`, viewport: { width: r.width ?? 1280, height: 900 }, theme: r.theme ?? 'light', evidence: r.variant ? 'synthetic browser projection' : 'synthetic demo hub', elementIds: Object.fromEntries(ids), elements: es, assertions: { appRendered: true, setupCompleted: true }, text: text.slice(-1800) });
     console.log(`${r.id} ${r.title}: ${es.length} controls`);
     await deadline(context.close(), `${r.id} context close`);
   }
@@ -165,13 +165,11 @@ function checkedTransitions() { return [
   { from: 'S06.d', to: 'S06.e', matches: /^Build arc$/ },
   { from: 'S07.a', to: 'S07.b', matches: /^New workspace$/ },
   { from: 'S01.a', to: 'S08.a', matches: /^Remote host \(\?\)$/ },
-  { from: 'S09.a', to: 'S09.d', matches: /^Synthetic API key$/ },
-  { from: 'S09.a', to: 'S09.e', matches: /^Synthetic subscription$/ },
 ]; }
 function makeEdges(nodes) {
   const byId = new Set(nodes.map(n => n.id));
   const canonical = new Map();
-  for (const n of nodes) if (!n.setup && !n.variant && !n.node) { const key = n.route.split('?')[0]; if (!canonical.has(key)) canonical.set(key, n.id); }
+  for (const n of nodes) if (!n.setup && !n.variant) { const key = n.route.split('?')[0]; if (!canonical.has(key)) canonical.set(key, n.id); }
   const edges = [];
   for (const n of nodes) for (const e of n.elements) {
     let target = n.id, kind = 'local-action', evidence = 'inferred; outcome not exercised';
@@ -183,7 +181,7 @@ function makeEdges(nodes) {
     } else {
       const rules = [[/^More actions$/, 'S03.i'], [/^Models$/, 'S04.c'], [/^Diagnosis/, 'S04.d'], [/^Graph$/, 'S05.c'], [/^List$/, 'S05.a'], [/^New workspace$/, 'S07.b'], [/^\+ New agent|^New agent beside|^New thread|^\+ New thread/, 'S07.a'], [/^Close pane…|^Stop Pi and free/, 'S07.d'], [/^Remote host \(\?\)$/, 'S08.a'], [/^Hide continuations$/, 'S04.b'], [/^Chat$/, 'S04.l'], [/^Full$/, 'S04.a'], [/^Ask$/, 'S04.i'], [/^End$/, 'S04.a'], [/^Build arc$/, 'S06.e']];
       const matched = rules.find(([test]) => test.test(name)); if (matched) target = matched[1];
-      if (/^Cancel$|^Close$|^Done$/.test(name)) target = n.family === 'Settings' ? 'S02.d' : n.family.includes('dialogs') ? 'S03.a' : n.id;
+      if (/^Cancel$|^Close$|^Done$/.test(name)) target = n.family.includes('dialogs') ? 'S03.a' : n.id;
     }
     if (!byId.has(target)) target = n.id;
     const checked = checkedTransitions().find(t => t.from === n.id && t.matches.test(name) && n.elements.find(candidate => t.matches.test(candidate.name)) === e && byId.has(t.to));

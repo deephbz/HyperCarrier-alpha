@@ -35,17 +35,20 @@ descriptors whose pid is dead.
 
 Frames are one JSON object per line; replies carry the request `id`. Multiple
 clients and pipelined requests are allowed. Ops: `status`, `submit`, `abort`,
-`commands`, `command`. `status.commands = 1` announces the last two; an older
-control answers them `unknown_op`.
+`commands`, `command`. `status.stamp` names this control's build:
+`{ id, order, line }`, computed at load from `src/` and the
+checkout's HEAD commit time (`src/stamp.mjs`). It is null when the checkout
+has no git metadata. AmPi serves only a control of its own build (AmPi P1).
+Another build gets a refusal that names both builds, and nothing reaches Pi.
+To update, pull the checkout Pi loads this package from, then run `/reload`
+in each Pi pane.
 
 `submit` takes `text`, `deliverAs`, and optional `images`: at most 8
 `{ data, mimeType }` objects with base64 `data` and a PNG, JPEG, GIF, or WebP
 `mimeType`, at most 6 MiB of base64 in total. `text` may be empty when images
 are attached. The images reach Pi in the same user message as the text, and
-Pi may resize them. `status.images = 1` announces this field with exactly the
-limits that `control.mjs` exports as `IMAGE_LIMITS`; other limits need a new
-version. An older control ignores the field, so a client must check the
-capability before it sends images.
+Pi may resize them. The limits are the ones `control.mjs` exports as
+`IMAGE_LIMITS`.
 
 ## Acknowledgements
 

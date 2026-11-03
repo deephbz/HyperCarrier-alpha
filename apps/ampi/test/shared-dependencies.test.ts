@@ -53,3 +53,18 @@ test("web values depend only on shared source contracts", () => {
 		"web/src/views/rarebit/Diagnosis.tsx -> src/pi/views/rarebit.ts",
 	]));
 });
+
+test("AmPi imports chord only through @earendil-works/chord/delta (failure: a chord import outside delta returned with the durable node)", () => {
+	const violations: string[] = [];
+	function scan(dir: string): void {
+		for (const entry of readdirSync(dir, { withFileTypes: true })) {
+			const file = join(dir, entry.name);
+			if (entry.isDirectory()) { if (entry.name !== "node_modules" && entry.name !== "dist") scan(file); continue; }
+			if (!/\.[cm]?[jt]sx?$/.test(file)) continue;
+			for (const match of readFileSync(file, "utf8").matchAll(/["'](@earendil-works\/chord(?:\/[^"']*)?)["']/g))
+				if (match[1] !== "@earendil-works/chord/delta") violations.push(`${relative(root, file)}: ${match[1]}`);
+		}
+	}
+	for (const dir of ["src", "web/src", "test", "scripts", "bin"]) scan(join(root, dir));
+	assert.deepEqual(violations, [], violations.join("\n"));
+});

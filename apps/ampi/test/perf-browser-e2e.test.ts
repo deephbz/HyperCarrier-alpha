@@ -1,35 +1,21 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { Hub } from "../src/hub/hub.ts";
-import { runDaemon } from "../src/node/daemon.ts";
-import { hydrate } from "../src/plugins.ts";
-import { Browser, tempHome } from "./helpers.ts";
+import { TOKEN, assistant, iso, line, setup, user } from "./pi-host-fixtures.ts";
 // @ts-expect-error: a plain ESM script without types
 import { findChrome, runScenario } from "../scripts/perf/browser.mjs";
 
 // The browser driver end to end: headless Chrome against a real hub. Exhaustive lane only (about 15 s).
-const TOKEN = "c".repeat(64);
-const SIM = { provider: "ampi-sim", modelId: "sim-1" };
 const epochUs = () => (performance.timeOrigin + performance.now()) * 1000;
 
 test("perf browser: the switch scenario on a real hub records first data, timed switches, and a trace on the runner clock", { skip: !findChrome() ? "no Chrome" : !existsSync(join(import.meta.dirname, "..", "web", "dist", "index.html")) ? "web/dist is not built" : false }, async (t) => {
-	const home = tempHome();
-	const daemon = await runDaemon({ home, simTokensPerSecond: 50000, plugins: await hydrate() });
-	const hub = new Hub({ hosts: [{ id: "local", label: "Local", kind: "local", home }] }, { token: TOKEN });
-	const port = await hub.listen(0);
-	t.after(async () => {
-		await hub.close();
-		await daemon.stop();
-	});
-	const client = await Browser.open(port, undefined, `ampi_k_${port}=${TOKEN}`);
-	const threads = client.sub("local", { kind: "threads" });
-	for (const word of ["alpha", "beta", "gamma"]) await client.req("local", "thread.create", { cwd: home, model: SIM, prompt: `${word}\n/sim bash echo ${word}` });
-	await client.until<any>(threads, (v) => Object.values(v.threads).filter((x: any) => x.activity === "idle").length === 3, 20_000);
-	client.ws.close();
+	const { f, browser, port } = await setup(t);
+	writeFileSync(join(f.sessionA, "..", "c.jsonl"), line({ type: "session", version: 3, id: "sess-c", timestamp: iso(0), cwd: "/work" }) + user("u1", null, 1, "gamma") + assistant("a1", "u1", 2, "Done."));
+	const threads = browser.sub("devbox", { kind: "threads" });
+	await browser.until<any>(threads, (v) => ["pi:sess-a", "pi:sess-b", "pi:sess-c"].every((id) => v.threads[id]), 20_000);
 
 	const runDir = mkdtempSync(join(tmpdir(), "ampi-perf-run-"));
 	const logs: string[] = [];
