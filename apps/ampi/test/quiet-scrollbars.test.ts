@@ -28,7 +28,8 @@ const ORIGIN = "http://localhost";
 const REGIONS: Record<string, RegExp | string> = {
 	".side": /<aside className="side /, ".side-scroll": /<div className="side-scroll /, ".panel-tabs > .seg": /<div className="seg quiet/,
 	".panel-body": /<div className="panel-body /, ".modal": /className="modal /,
-	".slash-menu": /<Popover className="slash-menu /,
+	".slash-menu": /<Popover className="slash-menu /, ".slash-menu-whole-scroll": /<Popover className="slash-menu quiet-scroll"/,
+	".slash-options": /<div className="slash-options quiet-scroll">/,
 	".session-metadata": /<Popover className="session-metadata /, ".tool-body": /<div className="tool-body /,
 	".rb-header": /<header className="rb-header /, ".rb-scroll": /<div className="rb-scroll /, ".rb-band": /<div className="rb-band /,
 	".rb-tools summary": /<summary className="quiet-scroll">\{run\.entries/, ".cos-scroll": /<div className="cos-scroll /,

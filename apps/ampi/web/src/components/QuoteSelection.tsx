@@ -1,3 +1,4 @@
+import { composing } from "../composer-keys.ts";
 import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import { quoteDraftOf, setQuoteDraft, subscribeQuoteDrafts } from "../composer-drafts.ts";
 import { Popover, at } from "./Popover.tsx";
@@ -124,7 +125,7 @@ export function QuoteSelection({onQuote,transcript,draftKey,enabled}: {onQuote:(
    else if (!window.getSelection()?.isCollapsed && window.getSelection()?.rangeCount) setPick(undefined);
   };
   const key = (event: KeyboardEvent) => {
-   if (event.isComposing || event.keyCode === 229) return;
+   if (composing(event)) return;
    const ownsEscape = event.target instanceof Node && (editing ? pill.current?.contains(event.target) : root.contains(event.target) || pill.current?.contains(event.target));
    if (event.key === "Escape" && current.current && ownsEscape) {event.preventDefault();event.stopPropagation();cancel();return;}
    if (editing || !enabled || event.key !== "q" || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || !(event.target instanceof Node) || !root.contains(event.target)) return;
@@ -162,7 +163,7 @@ export function QuoteSelection({onQuote,transcript,draftKey,enabled}: {onQuote:(
    event.preventDefault();
    onQuote(pick.text,note);
    cancel();
-  }}>{pinned && <blockquote className="quiet-scroll">{pick.text}</blockquote>}<input ref={input} onKeyDown={event => { if (event.key === "Enter" && (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)) event.preventDefault(); }} aria-label="Quote note (optional)" placeholder="Reply note (optional) · Enter adds quote to draft" value={note} onChange={event=>{if (quote) setQuoteDraft(draftKey,{...quote,note:event.target.value});}} /><button type="button" className="btn small" onClick={cancel}>Cancel</button></form>
+  }}>{pinned && <blockquote className="quiet-scroll">{pick.text}</blockquote>}<input ref={input} onKeyDown={event => { if (event.key === "Enter" && composing(event.nativeEvent)) event.preventDefault(); }} aria-label="Quote note (optional)" placeholder="Reply note (optional) · Enter adds quote to draft" value={note} onChange={event=>{if (quote) setQuoteDraft(draftKey,{...quote,note:event.target.value});}} /><button type="button" className="btn small" onClick={cancel}>Cancel</button></form>
    : <button className="btn small" onMouseDown={event=>event.preventDefault()} onClick={()=>open(pick)}>Quote <kbd>q</kbd></button>}
  </Popover>;
 }

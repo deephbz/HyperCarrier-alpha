@@ -5,7 +5,7 @@ import { useKeepPlace } from "../keep-place.ts";
 import { useNow } from "../client.ts";
 import { linkLine, linkView } from "./host-fold.ts";
 import { hostLabel } from "./host-label.ts";
-import { overviewSteps } from "../extensions-ui.ts";
+import { overviewSteps } from "../slot-registry.ts";
 import type { OverviewStepProps } from "../shell-slots.ts";
 import { ActivityIcon, ThreadBadges } from "./ThreadStatus.tsx";
 import { emptyNote, reading, unavailable } from "../host-lists.ts";

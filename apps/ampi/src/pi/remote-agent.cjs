@@ -38,6 +38,7 @@
 //   keys.followUp   key tokens that queue the typed text as a follow-up. Default ['alt+enter'].
 //   keys.interrupt  key tokens that interrupt a turn. Default ['esc'].
 //   agentStartMs    `herdr agent start --timeout` (default 30000); the process gets a few seconds more.
+//   shellReadyMs    how long a pane this agent just made may stay `agent_pane_busy` while its shell starts (default 15000)
 const fs = require('fs');
 const cp = require('child_process');
 const net = require('net');
@@ -86,6 +87,7 @@ const controlDir = path.join(agentDir, 'hc-control');
 const controlStatusMs = cfg.controlStatusMs ?? 500;
 const controlSubmitMs = cfg.controlSubmitMs ?? 130_000;
 const agentStartMs = cfg.agentStartMs ?? 30_000;
+const shellReadyMs = cfg.shellReadyMs ?? 15_000;
 const keys = {
   typeArgv: ['pane', 'send-text', '{pane}', '{text}'],
   followUp: ['alt+enter'],
@@ -879,7 +881,17 @@ async function spawnAgent(msg) {
   if (renamed.error) warning = `pane not named: ${renamed.error.code}: ${renamed.error.message}`.slice(0, 300);
   // The Session id is bound before Herdr runs anything: Pi creates the Session with exactly this id.
   const piArgs = resume ? ['--session', resume] : ['--session-id', sessionId];
-  const start = await herdrCall(['agent', 'start', name, '--kind', 'pi', '--pane', pane, '--timeout', String(agentStartMs), '--', ...piArgs], agentStartMs + 5000);
+  // A new pane's shell runs its startup files and prompt hooks in the foreground first (starship init and prompt take
+  // ~0.5 s idle, longer under load). Until its prompt is up, Herdr answers agent_pane_busy and runs nothing. For this
+  // pane, which no one else has used yet, that refusal is transient: ask again until the shell is ready.
+  let start;
+  for (const until = Date.now() + shellReadyMs; ;) {
+    start = await herdrCall(['agent', 'start', name, '--kind', 'pi', '--pane', pane, '--timeout', String(agentStartMs), '--', ...piArgs], agentStartMs + 5000);
+    if (start.error?.code !== 'agent_pane_busy' || Date.now() >= until) break;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  if (start.error?.code === 'agent_pane_busy')
+    start.error = { ...start.error, message: `${start.error.message} after ${Math.round(shellReadyMs / 1000)} s; its shell never reached an idle prompt` };
   rediscover();
   const base = { pane, name, ...(warning ? { warning } : {}) };
   if (start.error && START_REFUSALS.includes(start.error.code)) {
@@ -905,20 +917,9 @@ async function spawnAgent(msg) {
   ackOf(msg, 'herdr', { ok: true, evidence: state, ...base, ...(submitted ? { submitted } : {}), ...(start.error ? { fact: `${start.error.code}: ${start.error.message}`.slice(0, 300) } : {}) });
 }
 
-// Pi Team Bright installed here, as far as this agent can tell. Its absence of state must not read as "no Team".
-function ptbInstalled() {
-  if (cfg.teams === false) return false;
-  return ptb === undefined ? !!ptbObservationFile() : !!ptb;
-}
-
 async function closePane(msg) {
   if (!(typeof msg.session === 'string' && msg.session) && !msg.expectSession || typeof msg.pane !== 'string' || !msg.pane) return fail(msg, 'herdr', 'bad_request', 'session (or expectSession) and pane required');
-  // Fail closed: without a recent Team snapshot, any pane may be a teammate's.
-  if (ptbInstalled() && Date.now() - goodAt > 30_000)
-    return fail(msg, 'herdr', 'team_unknown', 'Pi Team Bright state is unavailable, so this pane may belong to a Team; retry shortly or close it in Herdr');
-  const member = teamOf.get(msg.pane);
-  if (member && member.role !== 'lead')
-    return fail(msg, 'herdr', 'team_worker', "Pi Team Bright owns this worker's pane; ask its lead to stop it");
+  // Any pane closes, as in Herdr itself: a Team tracks its own members' exits.
   if (!herdr) return fail(msg, 'herdr', 'no_route', 'herdr not found on this host');
   if (!await checkSession()) return fail(msg, 'herdr', 'herdr_unavailable', `Herdr session ${herdrSession} not running`);
   // Ordered get -> list -> recheck -> close. A change between the recheck and the close is not excluded.

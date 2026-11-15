@@ -130,6 +130,8 @@ else if (a === "agent" && b === "get") {
   const p = paneOf(opt("--pane"));
   if (!p) refuse("pane_not_found", "no pane");
   if (state.startError) refuse(state.startError, "fake start error");
+  // A new pane whose shell is still starting: Herdr refuses and runs nothing.
+  if (state.startBusyCalls > 0) { state.startBusyCalls--; save(); refuse("agent_pane_busy", "agent target pane is not an available shell"); }
   if (state.startDelayMs) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, state.startDelayMs);
   const rest = argv.slice(argv.indexOf("--") + 1);
   const at = (flag) => (rest.includes(flag) ? rest[rest.indexOf(flag) + 1] : undefined);
@@ -160,8 +162,8 @@ export function fixture(): Fixture {
 	const sessions = join(agentDir, "sessions", "--work--");
 	mkdirSync(sessions, { recursive: true });
  arcStores.add(join(realpathSync(agentDir), "ampi-arc"));
- // Non-Arc fixtures never schedule model work and expire after their link closes.
- writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ ampi_arc: { auto: false, serviceIdleHours: 0.0001 } }));
+ // Non-Arc fixtures never schedule model work; teardown stops their service.
+ writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ ampi_arc: { auto: false } }));
 	const sessionA = join(sessions, "a.jsonl");
 	const sessionB = join(sessions, "b.jsonl");
 	writeFileSync(sessionA, `${JSON.stringify({ type: "session", id: "sess-a", cwd: "/work" })}\n`);

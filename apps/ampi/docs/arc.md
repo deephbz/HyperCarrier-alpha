@@ -2,7 +2,7 @@
 
 - **Purpose:** tell the owner where one Session's work is and what needs a decision, with citations.
 - **Scope:** a private, disposable reading aid for one Session. Arc creates no Task, Project or execution authority. Session evidence remains authoritative.
-- **Status:** consolidation, 2026-11-03. Synthetic checks cover the Builder, resident service, two delayed hub links and panel. Live owner acceptance and Q1–Q3 below remain open. This document does not authorize deployment.
+- **Status:** consolidation, 2026-11-03. Synthetic checks cover the Builder, resident service, two delayed hub links and panel. Live owner acceptance and Q2–Q3 below remain open. This document does not authorize deployment.
 
 ## Owner jobs
 
@@ -55,7 +55,7 @@ The Builder persists call intent before dispatch, records model-child identity b
 
 A failed later window can publish a checkpoint only when it covers more of the same selection than the stored receipt. A failed Rebuild keeps the last good Arc. Only an authoritative source check can prove that history changed. Only that proof requires a Rebuild. An unavailable source causes waiting; it does not prove a branch change. Obsolete work cannot publish.
 
-An explicit service stop cancels active and queued Builds for every client. The Builder checks cancellation at asynchronous boundaries. It reaps active model children and persists a `cancelled` Build record before the service releases its lock. Repeated stops share completion. A committed `done` Build stays done. Update replacement and idle shutdown drain Builds instead. An explicit stop can cancel an update drain.
+An explicit service stop cancels active and queued Builds for every client. The Builder checks cancellation at asynchronous boundaries. It reaps active model children and persists a `cancelled` Build record before the service releases its lock. Repeated stops share completion. A committed `done` Build stays done. Update replacement drains Builds. No-hub shutdown cancels unfinished Builds after the grace. An explicit stop can cancel an update drain.
 
 A cancelled Build preserves accepted checkpoints and measured usage. An interrupted call with unknown cost keeps automatic Builds paused. An explicit later Build can continue and carries a possible-repeat-cost warning. Cancellation does not fabricate an Arc receipt when no window was accepted. Older service versions retain their drain-only stop behavior until replaced.
 
@@ -82,7 +82,7 @@ The service watches Session files through the published selection. Owner message
 
 A resident checks its store, lifetime-lock identity and control socket at each existing service tick. Loss of any of these cancels current calls and ends the resident after child reaping. If terminal persistence fails while these authority paths remain valid, the resident retains its lock and stop reports busy. The existing tick still checks authority loss after that failure. A displaced resident never closes or removes a successor control socket. If the authority paths are gone, shutdown cannot retain a readable terminal record and still ends after child reaping. A fixture must stop and await the resident before it removes the store.
 
-**Provisional — Q1:** after the last compatible hub handshake, the service continues automatic work for up to `serviceIdleHours` (default 24 hours), then drains and stops. A crash or Host reboot requires a later hub connection to start it again. v2.1 adds no OS supervisor. The owner has not confirmed the no-hub lifetime.
+**Q1 — no-hub grace:** the service stops after five minutes without a compatible hub handshake. Work can finish during the grace. At expiry, the service cancels unfinished Builds, persists cancellation and reaps model children before exit. A compatible hub that returns during the grace renews it, including during an update drain. Expiry also cancels an update drain. A later hub connection starts a stopped service again. The panel keeps the cancelled Build's cause and says "Press Build to continue." An interrupted model call also retains the charge warning. v2.1 adds no OS supervisor.
 
 **Provisional — Q2:** an uncertain paid call pauses automatic Builds for that Session across restart. Only an explicit Build or Rebuild authorizes another attempt that may charge again. It records possible repeat cost. Other Sessions continue. An accepted Build clears the pause. The owner has not selected automatic recovery.
 
@@ -98,15 +98,14 @@ The Session Host's Pi `settings.json` owns `ampi_arc`; the hub's credentials and
     "model": "anthropic/claude-haiku-5-5",
     "auto": true,
     "retries": 2,
-    "concurrency": 8,
-    "serviceIdleHours": 24
+    "concurrency": 8
   }
 }
 ```
 
 The model is an exact `provider/modelId`, with no fuzzy match. Invalid settings name the file and key. Missing sign-in names the model and auth path. The service checks sign-in before each paid call.
 
-`retries` permits 0–5 extra attempts after an unusable answer; zero disables the Needs-you retry too. `concurrency` and `serviceIdleHours` remain subject to Q3 and Q1. Depth stays tier b; zoom calls and adaptive depth are deferred.
+`retries` permits 0–5 extra attempts after an unusable answer; zero disables the Needs-you retry too. `concurrency` remains subject to Q3. Old `serviceIdleHours` values are ignored; the service logs this once per start. Depth stays tier b; zoom calls and adaptive depth are deferred.
 
 ## Validation and loss warnings
 

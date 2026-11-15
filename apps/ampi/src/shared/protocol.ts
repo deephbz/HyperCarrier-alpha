@@ -293,6 +293,13 @@ export interface ThreadCreated { threadId: string; pane: string; evidence?: stri
 export type ThreadResumed = { threadId: string; pane: string; evidence?: string; warning?: string };
 /** Compact navigation over the whole current branch. Ordinals are zero-based among projectable entries (non-null ui) on that branch. */
 export type ThreadOutline = { version: string; totalEntries: number; users: { id: string; ordinal: number; firstLine: string }[]; truncated: boolean };
+/** What a page holds of a thread's outline: its version and its last prompt. */
+export type OutlineKnown = { version: string; lastId: string; lastOrdinal: number };
+/**
+ * A `thread.outline` reply. With `base` it is a delta on the outline the page holds at version `base`: `users` holds only
+ * the prompts after the held last prompt. Without `base` it is the full outline (an old Host, a reset, nothing held).
+ */
+export type ThreadOutlineReply = ThreadOutline & { base?: string };
 
 export type HistoryPage = { entries: PiEntry[]; more: boolean; version?: string };
 /**
@@ -334,7 +341,7 @@ export type HostOps = {
 	"thread.resume": OpSpec<{ requestId: string; threadId: string; place: Placement; cwd?: string; name?: string }, ThreadResumed>;
 	"thread.close": OpSpec<{ threadId: string; lastPane?: boolean }, ActionAck>;
 	"sessions.search": OpSpec<{ query: string }, FleetSearchResult>;
-	"thread.outline": OpSpec<{ threadId: string }, ThreadOutline>;
+	"thread.outline": OpSpec<{ threadId: string; known?: OutlineKnown }, ThreadOutlineReply>;
 	/**
 	 * `from` (an entry ID, the reader's place) centers the result's windows and the result echoes `anchored`; `tail`
 	 * puts them at the branch's end. Without either they hold the first matches. A Session the Host has not indexed

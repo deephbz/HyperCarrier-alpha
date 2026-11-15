@@ -5,7 +5,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 // @ts-ignore: the perf scripts are plain ESM.
 import { acquireRunLock } from "../scripts/perf/lock.mjs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { test } from "node:test";
 import { Worker } from "node:worker_threads";
 import "./bound.ts";
@@ -21,10 +21,18 @@ for (const mode of ["queued", "inherited", "focused", "SIGTERM", "SIGINT", "SIGH
 		const app = join(home, "apps", "ampi"), perf = join(home, "perf"), lock = join(perf, "gate.lock");
 		mkdirSync(join(app, "scripts", "perf"), { recursive: true });
 		mkdirSync(join(app, "test"));
-		for (const file of ["run-tests.cjs", "gate-lock.cjs", "stdio-sync.cjs", "perf/lock.mjs"])
-			cpSync(join(scripts, file), join(app, "scripts", file));
-		mkdirSync(join(home, "scripts", "lib"), { recursive: true });
-		cpSync(join(scripts, "..", "..", "..", "scripts", "lib", "line-fragments.cjs"), join(home, "scripts", "lib", "line-fragments.cjs"));
+		// Copy the local import graph of the runner, including lazy lane-lock imports.
+		// A new helper must not depend on a second hand-written file list here.
+		const root = join(scripts, "..", "..", ".."), copied = new Set<string>();
+		const copy = (file: string) => {
+			if (copied.has(file)) return;
+			copied.add(file);
+			const target = join(home, relative(root, file));
+			mkdirSync(dirname(target), { recursive: true }); cpSync(file, target);
+			const source = readFileSync(file, "utf8");
+			for (const match of source.matchAll(/(?:require\(|import\(|from\s+|import\s+)["'](\.\.?\/[^"']+)["']/g)) copy(resolve(dirname(file), match[1]!));
+		};
+		copy(resolve(runner));
 		writeFileSync(join(app, "test-lanes.json"), JSON.stringify({ fast: ["ok.test.cjs"] }));
 		writeFileSync(join(app, "test", "ok.test.cjs"), 'require("node:test")("runs", () => {});');
 		const invalid = ["invalid", "negative", "empty", "infinite"].includes(mode);

@@ -64,5 +64,5 @@ export interface Builder {
  // Run accepted work, or retry admission after a wait. There is no timer or transport in the core.
  run(sessionRef?: string): Promise<void>;
  // Fence new work, cancel active calls and persist terminal records before return. Repeated calls share completion.
- cancel(): Promise<void>;
+ cancel(reason?: string): Promise<void>;
 }

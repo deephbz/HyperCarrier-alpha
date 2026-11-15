@@ -1,13 +1,14 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { after, test } from "node:test";
 import { maintainHost } from "../src/arc/service/client.ts";
-import { demoSessions, seededArc } from "./resize-edges-fixture.ts";
+import { demoSessions, seededArc, waitForDemoGuardian } from "./resize-edges-fixture.ts";
+import { ownerAlive, processIdentity } from "../scripts/process-owner.cjs";
 
 let resident: number | undefined;
 after(() => {
@@ -15,6 +16,21 @@ after(() => {
 	const rows = execFileSync("ps", ["-axo", "pid=,stat="], { encoding: "utf8" }).trim().split("\n");
 	const state = rows.map(row => row.trim().split(/\s+/)).find(([pid]) => Number(pid) === resident)?.[1];
 	assert.ok(!state || /^[ZX]/.test(state), `demo Arc resident ${resident} outlived fixture teardown (${state})`);
+});
+
+test("demo fixture guardian wait fails on timeout without signalling the process", async t => {
+	const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+	const exited = new Promise<void>(resolve => child.once("exit", () => resolve()));
+	t.after(async () => { child.kill("SIGKILL"); await exited; });
+	const identity = processIdentity(child.pid!);
+	assert.ok(identity);
+	await assert.rejects(waitForDemoGuardian(identity, 100), error => {
+		assert.ok(error instanceof Error);
+		assert.ok(error.message.includes(identity), error.message);
+		assert.match(error.message, /did not end within 100 ms/);
+		return true;
+	});
+	assert.equal(ownerAlive(identity), true, "the timeout must not kill or ignore the live generation");
 });
 
 test("demo fixture stops its detached Arc resident after abrupt hub exit", async () => {

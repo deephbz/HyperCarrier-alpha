@@ -10,7 +10,7 @@ import { threadSurface } from "./shell-slots.ts";
 import { PAGES } from "./views/registry.ts";
 import { type HostThreads, Sidebar, SidebarIcon } from "./components/Sidebar.tsx";
 import { SessionUnresolved } from "./components/SessionUnresolved.tsx";
-import { appLayers } from "./extensions-ui.ts";
+import { appLayers } from "./slot-registry.ts";
 import { ThreadView } from "./components/ThreadView.tsx";
 import { hashRoute, href, MOD, type Route } from "./util.ts";
 import { FeedsContext, FocusIntentContext } from "./context.ts";

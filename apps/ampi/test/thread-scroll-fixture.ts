@@ -66,8 +66,9 @@ export const view = (n: number, tail = "", from = 0) => {
 
 let bundle: Promise<string> | undefined;
 let chrome: Promise<Browser> | undefined;
+let chromeWithScrollbars: Promise<Browser> | undefined;
 let safari: Promise<Browser> | undefined;
-after(async () => { await (await chrome)?.close(); await (await safari)?.close(); });
+after(async () => { await (await chrome)?.close(); await (await chromeWithScrollbars)?.close(); await (await safari)?.close(); });
 export type Engine = "chromium" | "webkit";
 export const ENGINES: Engine[] = ["chromium", "webkit"];
 
@@ -81,9 +82,9 @@ export const THREADS = { pi: THREAD };
  */
 /** Answers one request frame with `reply` and returns true, or returns false to refuse it as unsupported. */
 export type Answer = (frame: { op: string; args: Record<string, unknown> }, reply: (result: { ok: true; value: unknown } | { ok: false; error: { code: string; message: string } }) => void) => boolean;
-export async function open(t: TestContext, count: number, backend: keyof typeof HOSTS = "pi", engine: Engine = "chromium", zoom = 1, region = 1, size = { width: 1000, height: 700 }, control = false): Promise<{ page: Page; publish: Publish; send: (value: unknown) => void; answer: (handler: Answer) => void; hold: (value: unknown) => void; subs: () => number }> {
+export async function open(t: TestContext, count: number, backend: keyof typeof HOSTS = "pi", engine: Engine = "chromium", zoom = 1, region = 1, size = { width: 1000, height: 700 }, control = false, visibleScrollbars = false): Promise<{ page: Page; publish: Publish; send: (value: unknown) => void; answer: (handler: Answer) => void; hold: (value: unknown) => void; subs: () => number }> {
 	const script = await (bundle ??= componentScript());
-	const browser = await (engine === "webkit" ? (safari ??= webkit.launch({ headless: true })) : (chrome ??= chromium.launch({ headless: true, executablePath: findChrome() })));
+	const browser = await (engine === "webkit" ? (safari ??= webkit.launch({ headless: true })) : visibleScrollbars ? (chromeWithScrollbars ??= chromium.launch({ headless: true, executablePath: findChrome(), ignoreDefaultArgs: ["--hide-scrollbars"], args: ["--disable-features=OverlayScrollbar"] })) : (chrome ??= chromium.launch({ headless: true, executablePath: findChrome() })));
 	const page = await browser.newPage({ viewport: { width: Math.round(size.width * zoom), height: Math.round(size.height * zoom) } });
 	t.after(() => page.context().close());
 	page.setDefaultTimeout(3000);

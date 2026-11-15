@@ -5,12 +5,13 @@ import { hub, useHosts } from "../client.ts";
 import { composerHint, composerSubmission } from "../composer-keys.ts";
 import { type Custody, type Draft, type Outcome, type SendIntent, appendDraftQuote, appendDraftText, dismissNotice, editDraft, giveBack, isEmpty, messageText, noticeKeyed, outcomeText, restoreReturned, takeDraft } from "../composer-drafts.ts";
 import { hostErrorMessage, sendOutcome } from "../composer-outcomes.ts";
-import { toCss, touchFields } from "../display.ts";
+import { scaleOf, toCss, touchFields } from "../display.ts";
 import { useHoverCard } from "./hover-card.tsx";
 import { ModelHudCard } from "./ModelHudCard.tsx";
 import { Popover, hoverIntent } from "./Popover.tsx";
 import { tokens } from "../util.ts";
 import { hostLabelFor } from "./host-label.ts";
+import { slashCommandSlots } from "../slash-command-slots.ts";
 import { newId } from "../ids.ts";
 import { type ComposerApi, type ComposerSurface, type LocalCommand, type QueueOutcome, useThreadSurface } from "../shell-slots.ts";
 
@@ -229,7 +230,9 @@ export function Composer({
 	const [error, setError] = useState<string>();
 	const [feedbackMaxHeight, setFeedbackMaxHeight] = useState(120);
 	const [note, setNote] = useState<string>();
-	const [pick, setPick] = useState(0);
+	const [pickName, setPickName] = useState<string | undefined>(undefined);
+	const previousSlashPlacement = useRef<{ menu: HTMLElement; selected: string } | undefined>(undefined);
+	const [slashHeight, setSlashHeight] = useState<number>();
 	const [dragging, setDragging] = useState(false);
 	const [choice, setChoice] = useState<Choice>();
 	const [piCommands, setPiCommands] = useState<PiCommands>();
@@ -319,19 +322,19 @@ export function Composer({
 	}, [busy]);
 	// Without a control the draft is typed into the pane, where Pi's TUI runs the command itself.
 	const commandsHint = !wantsCommands || loaded?.state === "ready" ? undefined
-		: !loaded || loaded.state === "loading" ? `Commands unavailable: loading the list from ${texts.source}…`
+		: !loaded || loaded.state === "loading" ? "Loading commands from Pi…"
 		: loaded.code === "no_control" ? "No control socket: Enter types a Pi command into the Pi pane's empty input box, and Pi runs it there"
 		: loaded.code === "version_skew" ? loaded.message
 		: `Commands unavailable: ${hostErrorMessage(loaded, label)}`;
 	const local = surface.localCommands?.(place, api) ?? [];
 	const discovered = loaded?.state === "ready" ? loaded.value.commands : [];
-	const list: Command[] = [
+	// Keep the built-in interrupt first. Local commands follow in their fixed order; Pi commands keep Pi's order.
+	const list = slashCommandSlots(
+		local,
+		discovered,
 		{ name: "stop", help: "Interrupt the current run or compaction (Esc)", run: () => abort() },
-		...discovered
-			.filter((c) => c.name !== "stop" && (c.supported || !local.some((action) => action.name === c.name)))
-			.map((c) => ({ name: c.name, args: c.argsHint, help: c.supported ? (c.description ?? c.source) : texts.unsupported, disabled: !c.supported })),
-		...local.filter((c) => c.name !== "stop" && !discovered.some((remote) => remote.name === c.name && remote.supported)),
-	];
+		texts.unsupported,
+	);
 	// After `/model `, complete from the models this Pi can use and mark the current one.
 	const modelRefs = loaded?.state === "ready" && /^\/model \S*$/.test(text)
 		? loaded.value.models.map((m) => ({ name: `model ${m.ref}`, help: m.ref === loaded.value.model ? "current" : (m.name ?? "") }))
@@ -339,7 +342,21 @@ export function Composer({
 	const menu: Command[] = [...list, ...modelRefs];
 	const slash = /^\/(\S*)$/.exec(text) ?? (modelRefs.length ? /^\/(model \S*)$/.exec(text) : null);
 	const matches = slash ? menu.filter((c) => c.name.toLowerCase().startsWith(slash[1]!.toLowerCase())) : [];
-	useEffect(() => setPick(0), [slash?.[1]]);
+	const selectedIndex = matches.findIndex((command) => command.name === pickName);
+	const pick = selectedIndex < 0 ? 0 : selectedIndex;
+	useLayoutEffect(() => setPickName(matches[0]?.name), [slash?.[1]]);
+	useLayoutEffect(() => {
+		if (!slash && !commandsHint) return;
+		const measure = () => {
+			const transcript = document.querySelector<HTMLElement>('[data-region="transcript"]');
+			const height = Math.min(window.innerHeight * 0.4, 320, (transcript?.getBoundingClientRect().height ?? window.innerHeight) * 0.43);
+			setSlashHeight(toCss(height, document.body));
+		};
+		measure();
+		window.addEventListener("resize", measure);
+		window.addEventListener("ampi:display", measure);
+		return () => { window.removeEventListener("resize", measure); window.removeEventListener("ampi:display", measure); };
+	}, [Boolean(slash), Boolean(commandsHint)]);
 	useEffect(() => {
 		if (!note) return;
 		const timer = setTimeout(() => setNote(undefined), 4000);
@@ -628,28 +645,60 @@ export function Composer({
 				</div>
 			)}
 			{(matches.length > 0 || commandsHint) && (
-				<Popover className="slash-menu quiet-scroll" role="listbox" data-slash-menu anchor={() => box.current?.getBoundingClientRect()} side="above" gap={8} fit owner={box.current}>
-					{matches.map((c, i) => (
-						<div
-							key={c.name}
-							role="option"
-							aria-selected={i === pick}
-							className={`slash-item ${i === pick ? "on" : ""}`}
-							aria-disabled={c.disabled || undefined}
-							style={c.disabled ? { opacity: 0.55 } : undefined}
-							{...hoverIntent(() => setPick(i))}
-							onMouseDown={(e) => {
-								e.preventDefault();
-								setText(`/${c.name}${c.args ? " " : ""}`);
-								ref.current?.focus();
-							}}
-						>
-							<code>/{c.name}</code>
-							{c.args && <span className="hint"> {c.args}</span>}
-							<span className="grow" />
-							<span className="hint">{c.help}</span>
+				<Popover className="slash-menu quiet-scroll" role="listbox" data-slash-menu anchor={() => box.current?.getBoundingClientRect()} side="above" gap={8} fit owner={box.current} style={slashHeight === undefined ? undefined : { height: `${slashHeight}px` }} onPlaced={(menu) => {
+					const selected = menu.querySelectorAll<HTMLElement>("[role=option]")[pick];
+					const options = menu.querySelector<HTMLElement>(".slash-options");
+					const footer = menu.querySelector<HTMLElement>(".slash-foot");
+					if (!selected || !options || !footer) return;
+					const selectedHeight = selected.getBoundingClientRect().height;
+					const rowHeight = toCss(selectedHeight, options);
+					options.style.setProperty("--slash-option-floor", `${rowHeight}px`);
+					const menuBox = menu.getBoundingClientRect(), optionsBox = options.getBoundingClientRect(), footerBox = footer.getBoundingClientRect();
+					const menuChrome = menuBox.height - optionsBox.height - footerBox.height;
+					const rowFloor = toCss(selectedHeight + footerBox.height + menuChrome, menu);
+					menu.style.minHeight = `${rowFloor}px`;
+					const whole = menu.scrollHeight > menu.clientHeight + 1;
+					menu.classList.toggle("slash-menu-whole-scroll", whole);
+					const previous = previousSlashPlacement.current;
+					const selectedName = selected.querySelector("code")?.textContent ?? "";
+					const reveal = !previous || previous.menu !== menu || previous.selected !== selectedName;
+					if (reveal) requestAnimationFrame(() => {
+						if (!menu.isConnected) return;
+						const current = [...menu.querySelectorAll<HTMLElement>("[role=option]")].find((option) => option.querySelector("code")?.textContent === selectedName);
+						if (!current) return;
+						const target = menu.classList.contains("slash-menu-whole-scroll") ? menu : options;
+						const currentRow = current.getBoundingClientRect(), currentClip = target.getBoundingClientRect();
+						if (currentRow.top < currentClip.top) target.scrollTop -= toCss(currentClip.top - currentRow.top + 2, target);
+						else if (currentRow.bottom > currentClip.bottom) target.scrollTop += toCss(currentRow.bottom - currentClip.bottom + 2, target);
+					});
+					previousSlashPlacement.current = { menu, selected: selectedName };
+				}}>
+					<div className="slash-options quiet-scroll">
+						<div className="slash-option-list">
+						{matches.map((c, i) => (
+							<div
+								key={c.name}
+								role="option"
+								aria-selected={i === pick}
+								className={`slash-item ${i === pick ? "on" : ""}`}
+								aria-disabled={c.disabled || undefined}
+								style={c.disabled ? { opacity: 0.55 } : undefined}
+								{...hoverIntent(() => setPickName(c.name))}
+								onMouseDown={(e) => {
+									e.preventDefault();
+									setText(`/${c.name}${c.args ? " " : ""}`);
+									ref.current?.focus();
+								}}
+							>
+								<code>/{c.name}</code>
+								{c.args && <span className="hint"> {c.args}</span>}
+								<span className="grow" />
+								<span className="hint">{c.help}</span>
+							</div>
+						))}
+						{matches.length === 0 && <div className="slash-placeholder" aria-hidden="true" />}
 						</div>
-					))}
+					</div>
 					<div className="hint slash-foot" data-commands-hint={commandsHint ? "" : undefined}>
 						{commandsHint ?? "Tab completes · //text sends /text as a message"}
 					</div>
@@ -703,10 +752,10 @@ export function Composer({
 						void attach(files);
 					}}
 					onKeyDown={(e) => {
-						const whenBusy = composerSubmission({ key: e.key, altKey: e.altKey, shiftKey: e.shiftKey, repeat: e.repeat, isComposing: e.nativeEvent.isComposing });
+						const whenBusy = composerSubmission({ key: e.key, altKey: e.altKey, shiftKey: e.shiftKey, repeat: e.repeat, isComposing: e.nativeEvent.isComposing, keyCode: e.nativeEvent.keyCode });
 						if (matches.length > 0 && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
 							e.preventDefault();
-							setPick((p) => (p + (e.key === "ArrowDown" ? 1 : matches.length - 1)) % matches.length);
+							setPickName(matches[(pick + (e.key === "ArrowDown" ? 1 : matches.length - 1)) % matches.length]!.name);
 						} else if (matches.length > 0 && e.key === "Tab") {
 							e.preventDefault();
 							const c = matches[pick]!;

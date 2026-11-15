@@ -39,8 +39,8 @@ test("pi host: create beside a Session binds the new Session id before Herdr run
 	assert.ok(existsSync(join(f.agentDir, "hc-control", "spawns", `${requestId}.json`)));
 	await assert.rejects(browser.req("devbox", "thread.create", { ...args, requestId: "not-a-uuid" }), /UUID/);
 	// Herdr refused to start Pi after the split: the error names the pane left open.
-	f.setState({ ...f.state, startError: "agent_pane_busy" });
-	await assert.rejects(browser.req("devbox", "thread.create", { ...args, requestId: randomUUID() }), (e: any) => e.code === "agent_pane_busy" && /^w1:n\d+$/.test(e.pane) && /pane w1:n\d+ .*left open in Herdr/.test(e.message));
+	f.setState({ ...f.state, startError: "unsupported_agent_kind" });
+	await assert.rejects(browser.req("devbox", "thread.create", { ...args, requestId: randomUUID() }), (e: any) => e.code === "unsupported_agent_kind" && /^w1:n\d+$/.test(e.pane) && /pane w1:n\d+ .*left open in Herdr/.test(e.message));
 });
 
 test("pi host: a failing view does not stop other subscriptions, a view without a threadId follows every Session, and ask runs an isolated model call", async (t) => {

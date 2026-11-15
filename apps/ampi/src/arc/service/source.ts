@@ -47,23 +47,28 @@ export function piSource(options: { sessionsDir: string; storeDir: string }) {
    return { session: ref, selector, sourceVersion: hash(JSON.stringify([changed.version, selector, fingerprint(items), entries])), fingerprint: fingerprint(items), items, entries };
   } finally { reader.close(); }
  }
- async function files(dir: string): Promise<string[]> {
+ async function files(dir: string, signal?: AbortSignal): Promise<string[]> {
+  if (signal?.aborted) return [];
   let names;
   try { names = await readdir(dir, { withFileTypes: true }); }
   catch (e) { if ((e as NodeJS.ErrnoException).code === "ENOENT") return []; throw e; }
   const out: string[] = [];
   for (const name of names) {
+   if (signal?.aborted) break;
    const file = join(dir, name.name);
-   if (name.isDirectory()) out.push(...await files(file));
+   if (name.isDirectory()) out.push(...await files(file, signal));
    else if (name.isFile() && name.name.endsWith(".jsonl")) out.push(file);
   }
   return out;
  }
- async function scan(): Promise<SourceSnapshot[]> {
+ async function scan(signal?: AbortSignal): Promise<SourceSnapshot[]> {
   const changed: SourceSnapshot[] = [];
-  for (const file of await files(options.sessionsDir)) {
+  for (const file of await files(options.sessionsDir, signal)) {
+   if (signal?.aborted) break;
    const s = await stat(file), stamp = `${s.ino}:${s.size}:${s.mtimeMs}:${s.ctimeMs}`;
+   if (signal?.aborted) break;
    if (stamps.get(file) === stamp) continue;
+   // Finish an admitted read. Cancellation only closes admission between files.
    try { changed.push(await read(file)); stamps.set(file, stamp); }
    catch { /* A partial write retries at the next poll. No cursor advances. */ }
   }

@@ -228,6 +228,18 @@ test("Arc service facts, request outcomes, loss disclosure and stale elapsed on 
 		assert.equal(await page.getByText("Synthetic process identity could not be verified.").isVisible(), true);
 		assert.equal(await page.locator(".arc-elapsed").count(), 0);
 		await page.getByText("Build details", { exact: true }).click();
+		for (const state of ["idle", "uncertain"] as const) {
+			const reason = "No AmPi hub was connected for 5 minutes, so Arc cancelled this Build.";
+			value.status = { state, ...(state === "uncertain" ? { pause: "uncertain-call" as const } : {}), detail: reason, record: { ...value.receipt!.builds.at(-1)!, state: "cancelled", reason } };
+			value.services = [{ host: "devbox", state: "running" }];
+			await send();
+			const text = await page.locator('.arc-panel [role="status"]').allTextContents();
+			const expected = state === "uncertain"
+				? reason + " Automatic Builds are paused: the model call may have been charged. Press Build to continue; it may charge again."
+				: reason + " Press Build to continue.";
+			assert.ok(text.includes(expected), state + ": show cause, charge warning when needed, then the action as the last sentence");
+			assert.equal(await page.getByRole("button", { name: "Build", exact: true }).isEnabled(), true);
+		}
 		value.status = { state: "queued", elapsedMs: 0, nextAt: "2026-11-03T04:05:00Z" }; await send();
 		assert.equal(await page.locator(".arc-elapsed").count(), 0);
 		for (const [code, sentence] of [["sign-in", "Build failed: no sign-in for the Arc model on devbox."], ["model-mismatch", "Build result is uncertain: the model that answered differs from the setting."], ["quota", "Build failed: model quota reached."], ["model", "Build failed: the model call failed."], ["answer", "Build failed: the model's answer could not be used."], ["settings", "Build failed: Arc settings on devbox are invalid."], ["internal", "Build failed."]] as const) {

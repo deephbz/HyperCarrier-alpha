@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import type { Page } from "playwright";
 import { engineSkip } from "./engines.ts";
-import { anchor, ENGINES, type Engine, entries, frames, gap, newButton, offsetOf, open, scrollAway, scrollTop, streaming, view } from "./thread-scroll-fixture.ts";
+import { END_BAND } from "../web/src/keep-place.ts";
+import { anchor, ENGINES, type Engine, entries, frames, gap, newButton, offsetOf, open, scrollAway, scrollTop, settled, streaming, view } from "./thread-scroll-fixture.ts";
 
 // The real ThreadView with the real stylesheet in Chromium; only the hub is a script on the page's WebSocket. A reader
 // away from the newest end keeps the entry they read at its screen height while entries arrive; a reader at the end
@@ -67,6 +68,309 @@ test("scroll hold: a reader at the newest end follows arriving entries", async (
 	for (const n of [201, 205]) {
 		await publish(n);
 		assert.ok(await gap(page) <= 2, `after ${n} entries the reader is still at the newest end`);
+	}
+});
+
+for (const engine of ENGINES) for (const key of ["Control+End", "Meta+ArrowDown"] as const) test(`scroll hold (${engine}): ${key} in the thread goes to newest`, { skip: engineSkip(engine) }, async (t) => {
+	const { page, send } = await open(t, 300, "pi", engine);
+	await scrollAway(page);
+	send({ ...view(303), hiddenBefore: true });
+	await newButton(page).getByText("↓ 3 new messages", { exact: true }).waitFor();
+	await page.locator('[data-region="transcript"]').focus();
+	await page.keyboard.press(key);
+	await settled(page);
+	assert.ok(await gap(page) <= 1, `${key} goes to the newest end`);
+	assert.equal(await newButton(page).count(), 0, `${key} clears the new-entry pill`);
+	send({ ...view(306), hiddenBefore: true });
+	await settled(page);
+	assert.ok(await gap(page) <= 1, `${key} follows the next arrival`);
+});
+
+for (const engine of ENGINES) test(`scroll hold (${engine}): End in composer preserves transcript place and pin${engine === "webkit" ? " (native caret stays at 0)" : ""}`, { skip: engineSkip(engine) }, async (t) => {
+	const { page, send } = await open(t, 300, "pi", engine);
+	await scrollAway(page);
+	send({ ...view(303), hiddenBefore: true });
+	await newButton(page).getByText("↓ 3 new messages", { exact: true }).waitFor();
+	const composer = page.locator(".composer textarea");
+	await composer.fill("draft");
+	await composer.evaluate((el: HTMLTextAreaElement) => { el.focus(); el.setSelectionRange(0, 0); });
+	const before = await scrollTop(page);
+	await page.evaluate(() => {
+		(window as any).endKeyPrevented = undefined;
+		window.addEventListener("keydown", (event) => {
+			if (event.key === "End") (window as any).endKeyPrevented = event.defaultPrevented;
+		}, { once: true });
+	});
+	await page.keyboard.press("End");
+	assert.equal(await page.evaluate(() => (window as any).endKeyPrevented), false, "End is not prevented in the composer");
+	if (engine === "chromium") assert.equal(await composer.evaluate((el: HTMLTextAreaElement) => el.selectionStart), 5, "Chromium End moves the composer caret to the end");
+	else assert.equal(await composer.evaluate((el: HTMLTextAreaElement) => el.selectionStart), 0, "WebKit keeps the caret at 0 for native End behavior");
+	assert.equal(await scrollTop(page), before, "composer End does not move the transcript");
+	assert.equal(await newButton(page).textContent(), "↓ 3 new messages", "composer End leaves the reader away and the pill unchanged");
+	send({ ...view(306), hiddenBefore: true });
+	await newButton(page).getByText("↓ 6 new messages", { exact: true }).waitFor();
+	assert.equal(await newButton(page).textContent(), "↓ 6 new messages", "composer End leaves the reader away and unpinned");
+});
+
+for (const engine of ENGINES) test(`scroll hold (${engine}): settled upward flick keeps its anchor through history and source`, { skip: engineSkip(engine) }, async (t) => {
+	const { page, send, answer } = await open(t, 300, "pi", engine);
+	let releaseHistory: (() => void) | undefined;
+	let markRequested!: () => void;
+	const historyRequested = new Promise<void>((resolve) => { markRequested = resolve; });
+	answer((frame, reply) => {
+		if (frame.op !== "thread.history") return false;
+		markRequested();
+		releaseHistory = () => reply({ ok: true, value: { entries: entries(100).map((entry, i) => ({ ...entry, id: `history-${i}` })), more: true, version: String(frame.args.version) } });
+		return true;
+	});
+	send({ ...view(300), hiddenBefore: true, sourceVersion: "v300" });
+	assert.ok(await gap(page) <= 2, "the reader starts at the tail");
+	await page.getByRole("button", { name: "Read an earlier page" }).click();
+	await historyRequested;
+	await page.locator('[data-region="transcript"]').hover();
+	await page.mouse.wheel(0, -500);
+	await settled(page);
+	assert.ok(await gap(page) > END_BAND, "the upward flick settles away from the tail");
+	const read = await anchor(page);
+	releaseHistory!();
+	await page.locator('[data-entry="history-99"]').waitFor({ state: "attached" });
+	send({ ...view(303, "", 3), hiddenBefore: true, sourceVersion: "v303" });
+	await newButton(page).getByText("↓ 3 new messages", { exact: true }).waitFor();
+	const offset = await offsetOf(page, read.id);
+	assert.ok(offset !== null && Math.abs(offset - read.offset) <= 2, `the settled away anchor survives history and source: ${read.offset} to ${offset}`);
+	assert.ok(await gap(page) > END_BAND, "the reader remains away after both updates");
+	assert.equal(await newButton(page).textContent(), "↓ 3 new messages", "the away reader sees the exact count");
+});
+
+for (const engine of ENGINES) test(`scroll hold (${engine}): input before its first pixel leaves the reader away`, { skip: engineSkip(engine) }, async (t) => {
+	const { page, send, answer } = await open(t, 300, "pi", engine);
+	answer((frame, reply) => {
+		if (frame.op !== "thread.history") return false;
+		reply({ ok: true, value: { entries: entries(100).map((entry, i) => ({ ...entry, id: `history-${i}` })), more: true, version: String(frame.args.version) } });
+		return true;
+	});
+	send({ ...view(300), hiddenBefore: true, sourceVersion: "v300" });
+	assert.ok(await gap(page) <= 2, "the reader starts at the tail");
+	await page.getByRole("button", { name: "Read an earlier page" }).click();
+	await page.locator('[data-entry="history-99"]').waitFor({ state: "attached" });
+	await page.locator('[data-region="transcript"]').hover();
+	await page.mouse.wheel(0, -500);
+	send({ ...view(303, "", 3), hiddenBefore: true, sourceVersion: "v303" });
+	await settled(page);
+	assert.ok(await gap(page) > END_BAND, "the reader stays away after the input and render race");
+	await newButton(page).getByText("↓ 3 new messages", { exact: true }).waitFor();
+	assert.equal(await newButton(page).textContent(), "↓ 3 new messages", "the away reader sees the exact count");
+});
+
+for (const engine of ENGINES) test(`scroll hold (${engine}): returning after an older page keeps the live tail painted`, { skip: engineSkip(engine) }, async (t) => {
+	const { page, send, answer } = await open(t, 300, "pi", engine);
+	let releaseHistory: (() => void) | undefined;
+	let markRequested!: () => void;
+	const historyRequested = new Promise<void>((resolve) => { markRequested = resolve; });
+	answer((frame, reply) => {
+		if (frame.op !== "thread.history") return false;
+		markRequested();
+		releaseHistory = () => reply({ ok: true, value: { entries: entries(100).map((entry, i) => ({ ...entry, id: `history-${i}` })), more: true, version: String(frame.args.version) } });
+		return true;
+	});
+	send({ ...view(300), hiddenBefore: true, sourceVersion: "v300" });
+	await page.getByRole("button", { name: "Read an earlier page" }).click();
+	await historyRequested;
+
+	await scrollAway(page);
+	assert.ok(await gap(page) > 1000, "the reader moved away while the older-page request is held");
+	await page.locator('[data-region="transcript"]').evaluate((el: HTMLElement) => { el.scrollTop = el.scrollHeight; });
+	await frames(page);
+	assert.ok(await gap(page) <= 2, "the reader returned to the end before the history reply");
+	releaseHistory!();
+	await page.locator('[data-entry="history-99"]').waitFor({ state: "attached" });
+
+	const next = (n: number) => ({ ...view(n, "", Math.max(0, n - 300)), hiddenBefore: true, sourceVersion: `v${n}` });
+	send(next(399));
+	await page.locator('[data-entry="e398"]').waitFor({ state: "attached" });
+	await frames(page);
+	const painted = await page.locator('[data-region="transcript"] [data-entry^="e3"]').count();
+	assert.equal(painted, 99, "all newest source entries e300-e398 are painted");
+	assert.ok(await gap(page) <= 2, `the reader stays at the end; gap ${await gap(page)}`);
+	assert.equal(await newButton(page).count(), 0, "a reader at the end sees no new-entry pill");
+});
+
+for (const engine of ENGINES) test(`scroll hold (${engine}): an unexplained move to the painted end extends below and holds place`, { skip: engineSkip(engine) }, async (t) => {
+	const { page, send, answer } = await open(t, 300, "pi", engine);
+	answer((frame, reply) => {
+		if (frame.op !== "thread.history") return false;
+		reply({ ok: true, value: { entries: entries(100).map((entry, i) => ({ ...entry, id: `history-${i}` })), more: true, version: String(frame.args.version) } });
+		return true;
+	});
+	send({ ...view(300), hiddenBefore: true, sourceVersion: "v300" });
+	await page.getByRole("button", { name: "Read an earlier page" }).click();
+	await page.locator('[data-entry="history-99"]').waitFor({ state: "attached" });
+	await scrollAway(page);
+	await settled(page);
+	assert.ok(await gap(page) > END_BAND, "the reader starts away with history loaded");
+	const next = (n: number) => ({ ...view(n, "", n - 300), hiddenBefore: true, sourceVersion: `v${n}` });
+	send(next(303));
+	await newButton(page).getByText("↓ 3 new messages", { exact: true }).waitFor();
+	assert.equal(await page.locator('[data-entry="e302"]').count(), 0, "the source tail is not yet painted");
+	const read = await page.evaluate(() => {
+		const el = document.querySelector<HTMLElement>('[data-region="transcript"]')!;
+		(window as any).returnInputs = 0;
+		for (const type of ["wheel", "keydown", "touchstart", "touchmove", "pointerdown"]) el.addEventListener(type, () => { (window as any).returnInputs++; });
+		el.scrollTop = el.scrollHeight;
+		const top = el.getBoundingClientRect().top;
+		const node = [...el.querySelectorAll<HTMLElement>("[data-entry]")].find((entry) => entry.getBoundingClientRect().bottom > top + 40)!;
+		return { id: node.dataset.entry!, offset: node.getBoundingClientRect().top - top };
+	});
+	await page.locator('[data-entry="e302"]').waitFor({ state: "attached" });
+	await settled(page);
+	assert.equal(await page.evaluate(() => (window as any).returnInputs), 0, "no input event explains the move");
+	const offset = await offsetOf(page, read.id);
+	assert.ok(offset !== null && Math.abs(offset - read.offset) <= 1, `the extension holds ${read.id} within 1px: ${read.offset} to ${offset}`);
+	assert.ok(await gap(page) > 2, "extending below the old painted end does not move the reader to the newest end");
+	assert.equal(await newButton(page).textContent(), "↓ 3 new messages", "the reader still sees the exact unread count");
+	await page.locator('[data-region="transcript"]').focus();
+	await page.keyboard.press("End");
+	await settled(page);
+	assert.ok(await gap(page) <= 1, "End explicitly goes to the newest end");
+	assert.equal(await newButton(page).count(), 0, "End clears the unread count");
+	send(next(306));
+	await page.locator('[data-entry="e305"]').waitFor({ state: "attached" });
+	await settled(page);
+	assert.ok(await gap(page) <= 1, "later live entries render at the followed end");
+	assert.equal(await newButton(page).count(), 0, "later arrivals keep the reader following");
+});
+
+for (const engine of ENGINES) for (const method of ["scrollTop", "wheel", "scrollbar drag", "End", "PageDown", "Space", "pill"] as const) test(`scroll hold (${engine}): ${method} at an older painted end extends or goes newest`, { skip: method === "scrollbar drag" && engine === "webkit" ? "WebKit on macOS uses overlay scrollbars with no hit-testable thumb; scrollTop covers shared EXTEND behavior, not native drag extend delivery" : engineSkip(engine) }, async (t) => {
+	const { page, send, answer } = await open(t, 300, "pi", engine, 1, 1, undefined, false, method === "scrollbar drag");
+	if (method === "scrollbar drag") await page.addStyleTag({ content: `[data-region="transcript"] { scrollbar-width: auto !important; scrollbar-color: #777 #ddd !important; } [data-region="transcript"]::-webkit-scrollbar { display: block !important; width: 16px !important; } [data-region="transcript"]::-webkit-scrollbar-thumb { background: #777 !important; }` });
+	let releaseHistory: (() => void) | undefined;
+	let markRequested!: () => void;
+	const historyRequested = new Promise<void>((resolve) => { markRequested = resolve; });
+	answer((frame, reply) => {
+		if (frame.op !== "thread.history") return false;
+		markRequested();
+		releaseHistory = () => reply({ ok: true, value: { entries: entries(100).map((entry, i) => ({ ...entry, id: `history-${i}` })), more: true, version: String(frame.args.version) } });
+		return true;
+	});
+	send({ ...view(300), hiddenBefore: true, sourceVersion: "v300" });
+	await page.getByRole("button", { name: "Read an earlier page" }).click();
+	await historyRequested;
+	await scrollAway(page);
+	assert.ok(await gap(page) > 1000, "the reader moved away while the older-page request is held");
+
+	const next = (n: number) => ({ ...view(n, "", Math.max(0, n - 300)), hiddenBefore: true, sourceVersion: `v${n}` });
+	send(next(399));
+	await newButton(page).getByText("↓ 99 new messages", { exact: true }).waitFor();
+	await frames(page);
+	if (method === "scrollTop") await page.locator('[data-region="transcript"]').evaluate((el: HTMLElement) => { el.scrollTop = el.scrollHeight; });
+	else if (method === "wheel") {
+		await page.locator('[data-region="transcript"]').hover();
+		await page.mouse.wheel(0, 100_000);
+	} else if (method === "scrollbar drag") {
+		const points = await page.locator('[data-region="transcript"]').evaluate((el: HTMLElement) => {
+			const rect = el.getBoundingClientRect();
+			const maxScroll = el.scrollHeight - el.clientHeight;
+			const metrics = { width: el.offsetWidth, clientWidth: el.clientWidth };
+			const thumbHeight = Math.max(8, el.clientHeight * el.clientHeight / el.scrollHeight);
+			const maxThumbTop = el.clientHeight - thumbHeight;
+			const thumbTop = rect.top + maxThumbTop * (el.scrollTop / maxScroll);
+			return { x: rect.right - 3, fromY: thumbTop + thumbHeight / 2, toY: rect.bottom - thumbHeight / 2, metrics };
+		});
+		if (points.metrics.width <= points.metrics.clientWidth) {
+			t.skip(`Chromium headless exposes no hit-testable native scrollbar: ${JSON.stringify(points.metrics)}; scrollTop covers shared EXTEND behavior, not native drag extend delivery`);
+			return;
+		}
+		await page.mouse.move(points.x, points.fromY);
+		await page.mouse.down();
+		await page.mouse.move(points.x, points.toY, { steps: 8 });
+		await page.mouse.up();
+	} else if (method === "pill") {
+		await newButton(page).getByText("↓ 99 new messages", { exact: true }).click();
+	} else {
+		const scroller = page.locator('[data-region="transcript"]');
+		if (method === "PageDown" || method === "Space") {
+			await scroller.evaluate((el: HTMLElement) => { el.scrollTop = el.scrollHeight - el.clientHeight - 601; });
+			await frames(page);
+		}
+		await scroller.focus();
+		await page.keyboard.press(method);
+		await settled(page);
+	}
+	await settled(page);
+	const explicitNewest = method === "End" || method === "pill";
+	const read = explicitNewest ? undefined : await anchor(page);
+	releaseHistory!();
+	await page.locator('[data-entry="history-99"]').waitFor({ state: "attached" });
+	await page.locator('[data-entry="e398"]').waitFor({ state: "attached" });
+	await frames(page);
+	const painted = await page.locator('[data-region="transcript"] [data-entry^="e3"]').count();
+	assert.equal(painted, 99, "all newest source entries e300-e398 are painted after the local extension");
+	if (explicitNewest) {
+		assert.ok(await gap(page) <= 1, `the explicit newest-end action follows the source tail; gap ${await gap(page)}`);
+		assert.equal(await newButton(page).count(), 0, "the explicit newest-end action clears the new-entry pill");
+	} else {
+		assert.ok(read);
+		const offset = await offsetOf(page, read.id);
+		assert.ok(offset !== null && Math.abs(offset - read.offset) <= 1, `EXTEND holds ${read.id} within 1px: ${read.offset} to ${offset}`);
+		assert.ok(await gap(page) > 1, "EXTEND does not follow the source tail");
+		assert.equal(await newButton(page).textContent(), "↓ 99 new messages", "the reader sees the exact new-entry count");
+		await page.locator('[data-region="transcript"]').focus();
+		await page.keyboard.press("End");
+		await settled(page);
+		assert.ok(await gap(page) <= 1, "End explicitly goes to the newest");
+		assert.equal(await newButton(page).count(), 0, "End clears the new-entry pill");
+	}
+	send(next(402));
+	await page.locator('[data-entry="e401"]').waitFor({ state: "attached" });
+	await frames(page);
+	assert.ok(await gap(page) <= 1, "the followed newest end stays pinned through later arrivals");
+});
+
+
+
+for (const engine of ENGINES) for (const movement of ["scrollTop", "touch"] as const) for (const control of [false, true] as const) test(`scroll hold (${engine}): ${control ? "no-upward control" : `upward ${movement}`} during extend gesture`, { skip: engineSkip(engine) }, async (t) => {
+	const { page, answer, send } = await open(t, 300, "pi", engine);
+	let releaseHistory: (() => void) | undefined;
+	let markRequested!: () => void;
+	const historyRequested = new Promise<void>((resolve) => { markRequested = resolve; });
+	answer((frame, reply) => {
+		if (frame.op !== "thread.history") return false;
+		markRequested();
+		releaseHistory = () => reply({ ok: true, value: { entries: entries(100).map((entry, i) => ({ ...entry, id: `history-${i}` })), more: true, version: String(frame.args.version) } });
+		return true;
+	});
+	send({ ...view(300), hiddenBefore: true, sourceVersion: "v300" });
+	await page.getByRole("button", { name: "Read an earlier page" }).click();
+	await historyRequested;
+	await scrollAway(page);
+	assert.ok(await gap(page) > 1000, "the reader starts away from the newest end");
+	const next = (n: number) => ({ ...view(n, "", n - 300), hiddenBefore: true, sourceVersion: `v${n}` });
+	send(next(303));
+	await newButton(page).getByText("↓ 3 new messages", { exact: true }).waitFor();
+	const scroller = page.locator('[data-region="transcript"]');
+	await scroller.evaluate((el: HTMLElement) => { el.scrollTop = el.scrollHeight; });
+	await frames(page);
+	if (!control) {
+		if (movement === "touch") await scroller.dispatchEvent("touchmove");
+		await scroller.evaluate((el: HTMLElement) => { el.scrollTop -= 700; });
+		await settled(page);
+		assert.ok(await gap(page) > 600, `the upward ${movement} movement lands away before history is released`);
+	}
+	const read = await anchor(page);
+	releaseHistory!();
+	await page.locator('[data-entry="history-99"]').waitFor({ state: "attached" });
+	const deliveredAfterMove = 306 - 300;
+	send(next(306));
+	if (control) {
+		await newButton(page).getByText("↓ 6 new messages", { exact: true }).waitFor();
+		assert.ok(await gap(page) > 1, "painting the newest source rows above the reader does not follow");
+		assert.equal(await newButton(page).textContent(), "↓ 6 new messages", "the unpinned reader keeps the exact count");
+	} else {
+		await newButton(page).getByText(`↓ ${deliveredAfterMove} new messages`, { exact: true }).waitFor();
+		const offset = await offsetOf(page, read.id);
+		assert.ok(offset !== null && Math.abs(offset - read.offset) <= 1, `the reader stays at the read line after upward ${movement}: ${read.offset} to ${offset}`);
+		assert.ok(await gap(page) > 60, `the reader stays away from the tail; gap ${await gap(page)}`);
+		assert.equal(await newButton(page).textContent(), `↓ ${deliveredAfterMove} new messages`, `the away reader sees the exact delivered count (${deliveredAfterMove})`);
 	}
 });
 
@@ -338,6 +642,26 @@ test("scroll hold: a source window that drops the held first entry keeps a mid-t
 // Only the reader moves scrollTop (scroll anchoring is off), and their scroll event comes a frame later. A render or a
 // resize before that event sees the moved scrollTop first; it must treat the move as the reader's scroll, as the event
 // would. A move down into the end band follows again; any move keeps its place.
+for (const engine of ENGINES) test(`scroll hold (${engine}): a collapse clamp does not qualify as a return`, { skip: engineSkip(engine) }, async (t) => {
+	const { page, send } = await open(t, 200, "pi", engine);
+	send(streaming(200, 3));
+	await frames(page);
+	await page.locator('[data-region="transcript"]').evaluate((el: HTMLElement) => { el.scrollTop = el.scrollHeight - el.clientHeight - 100; });
+	await frames(page);
+	assert.ok(await gap(page) > END_BAND, "the reader is away before the partial entry collapses");
+	const before = await anchor(page);
+	const beforeTop = await scrollTop(page);
+	send(view(200));
+	await frames(page);
+	const clampedTop = await scrollTop(page);
+	assert.ok(clampedTop < beforeTop, `the content collapse clamps scrollTop from ${beforeTop} to ${clampedTop}`);
+	send(streaming(200, 3));
+	await frames(page);
+	const after = await offsetOf(page, before.id);
+	assert.ok(after !== null && Math.abs(after - before.offset) <= 1, `the anchor survives the clamp and reflow: ${before.offset} to ${after}`);
+	assert.ok(await gap(page) > END_BAND, "a clamp and reflow do not pin the reader to the live tail");
+});
+
 for (const engine of ENGINES) test(`scroll hold (${engine}): a reader back at the end follows the next arrival after a render before the scroll event`, { skip: engineSkip(engine) }, async (t) => {
 	const { page, publish } = await replayable(t, engine);
 	await scrollAway(page);

@@ -8,7 +8,7 @@ import { handleSidebarKeyDown } from "./sidebar-keys.ts";
 import { setThemeChoice, useThemeChoice, type ThemeChoice } from "../theme.ts";
 import { PinMenu, PinnedSection } from "./Pinned.tsx";
 import { Segmented } from "./Segmented.tsx";
-import { sidebarFooter } from "../extensions-ui.ts";
+import { sidebarFooter } from "../slot-registry.ts";
 
 /**
  * `error`: why the Host ended or holds this list (pending or end frame); an ended list never loads further. The list

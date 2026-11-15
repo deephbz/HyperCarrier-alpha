@@ -98,7 +98,9 @@
     "demo-stress.test.ts",
     "host-kinds.test.ts",
     "hub-version-skew.test.ts",
+    "keep-place-pending-capture.test.ts",
     "notice-entry-render.test.ts",
+    "outline-delta-page.test.ts",
     "pi-host-d.test.ts",
     "pi-host-e.test.ts",
     "pi-host-f.test.ts",
@@ -112,6 +114,7 @@
     "pi-remote-agent-keys.test.ts",
     "pi-remote-agent.test.ts",
     "pi-meter-budget.test.ts",
+    "pi-outline-delta.test.ts",
     "pi-retention-writer.test.ts",
     "pi-search-index.test.ts",
     "pi-sidebar-host.test.ts",
@@ -189,6 +192,8 @@
     "adversarial-overlays.test.ts",
     "adversarial-restore.test.ts",
     "perf-browser-e2e.test.ts",
+    "phone-axis-matrix.test.ts",
+    "phone-axis-matrix-wide.test.ts",
     "recorded-reveal-anchor.test.ts"
   ],
   "costs": {

@@ -72,7 +72,7 @@ export function submodulesPinned(root = target) {
 }
 
 /** Start pi-demo.ts in its own process group with disposable HOME and AMPI_HOME on an OS-assigned port. */
-export async function launch({ runId = `run-${new Date().toISOString().replace(/[:.]/g, '-')}`, attempts = 3 } = {}) {
+export async function launch({ runId = `run-${new Date().toISOString().replace(/[:.]/g, '-')}`, attempts = 3, lifetime = 'owner' } = {}) {
   for (const ready of [submodulesPinned(), webDistCurrent(target)]) {
     if (!ready.ok) throw new Error(ready.detail);
     for (const warning of ready.warnings ?? []) console.warn(`warning: ${warning}`);
@@ -83,9 +83,10 @@ export async function launch({ runId = `run-${new Date().toISOString().replace(/
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const home = join(run, 'home'), demo = join(run, 'demo'), log = join(run, `hub-${attempt}.log`);
     mkdirSync(join(home, '.ampi'), { recursive: true });
-    const env = { ...process.env, PATH: refusingPath(join(run, 'bin'), process.env.PATH), HOME: home, AMPI_HOME: join(home, '.ampi'), AMPI_HUB_CONFIG: join(home, '.ampi/hub.json'), PI_CODING_AGENT_DIR: join(demo, 'agent'), DEMO_DIR: demo, PORT: '0' };
+    const env = { ...process.env, PATH: refusingPath(join(run, 'bin'), process.env.PATH), HOME: home, AMPI_HOME: join(home, '.ampi'), AMPI_HUB_CONFIG: join(home, '.ampi/hub.json'), PI_CODING_AGENT_DIR: join(demo, 'agent'), DEMO_DIR: demo, PORT: '0', DEMO_LIFETIME: lifetime, DEMO_OWNER_FD: lifetime === 'owner' ? '3' : '' };
     const out = openSync(log, 'a');
-    const child = spawn(process.execPath, ['scripts/pi-demo.ts'], { cwd: app, detached: true, env, stdio: ['ignore', out, out] });
+    const child = spawn(process.execPath, ['scripts/pi-demo.ts'], { cwd: app, detached: true, env, stdio: ['ignore', out, out, lifetime === 'owner' ? 'pipe' : 'ignore'] });
+    child.stdio[3]?.unref();
     child.unref();
     const started = Date.now();
     let match;
@@ -202,7 +203,8 @@ export async function settled(state, { stableMs = 1500, timeout = 60_000, builds
 
 /**
  * Ties the hub to this process: a signal or an exit before cleanup() kills its group, so it never outlives the run
- * (ppid 1). `hub.mjs start` does not call this; its hub keeps running by design. SIGKILL still orphans the hub.
+ * (ppid 1). The demo also observes pipe EOF and runner death after SIGKILL.
+ * `hub.mjs start` explicitly requests a manual lifetime.
  */
 export function tieToProcess(state, onSignal = () => {}) {
   process.once('exit', () => killGroup(state.pid));
@@ -219,7 +221,7 @@ export function tieToProcess(state, onSignal = () => {}) {
  */
 export function refusingPath(dir, path = '') {
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'herdr'), '#!/bin/sh\necho "verify hub: herdr on PATH is refused; the demo sets HERDR_BIN" >&2\nexit 1\n', { mode: 0o755 });
+  for (const tool of ['herdr', 'pi']) writeFileSync(join(dir, tool), `#!/bin/sh\necho "verify hub: ${tool} on PATH is refused; the demo uses offline stand-ins" >&2\nexit 1\n`, { mode: 0o755 });
   return path ? `${dir}${delimiter}${path}` : dir;
 }
 
@@ -244,7 +246,7 @@ export async function cleanup(state) {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [command, run] = process.argv.slice(2);
   if (command === 'start') {
-    const state = await launch();
+    const state = await launch({ lifetime: 'manual' });
     const health = await doctor(state);
     console.log(JSON.stringify({ run: state.run, proof: state.proof, port: state.port, doctor: health.ok }, null, 2));
     if (!health.ok) { console.error(JSON.stringify(health.checks.filter(c => !c.ok))); await cleanup(state); process.exit(1); }

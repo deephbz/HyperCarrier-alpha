@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import ts from "typescript";
 import { modelLabel } from "../web/src/model-label.ts";
-import { COMPOSER_BUSY_HINT, COMPOSER_SHORTCUTS, composerHint, composerSubmission, freshPress } from "../web/src/composer-keys.ts";
+import { COMPOSER_BUSY_HINT, COMPOSER_SHORTCUTS, composerHint, composerSubmission, composing, freshPress } from "../web/src/composer-keys.ts";
 
 test("compact model labels preserve the HUD identity and omit unsupported effort", () => {
  for (const [model, expected] of [
@@ -56,12 +56,12 @@ test("composer help and busy hint match submission keys; newline and IME input n
 	assert.equal(COMPOSER_BUSY_HINT, "Steer now (Enter) or queue a follow-up (Alt+Enter). Esc interrupts.");
 	for (const [modifiers, expected] of [
 		[{}, "steer"], [{ altKey: true }, "followUp"], [{ shiftKey: true }, null],
-		[{ altKey: true, shiftKey: true }, null], [{ isComposing: true }, null],
+		[{ altKey: true, shiftKey: true }, null], [{ isComposing: true }, null], [{ keyCode: 229 }, null],
 		[{ ctrlKey: true }, "steer"], [{ metaKey: true }, "steer"],
 	] as const) {
 		const sent: string[] = []; let prevented = false;
 		const handler = evaluate(attribute("onKeyDown"), { composerSubmission, matches: [], send: (mode: string) => sent.push(mode) });
-		handler({ key: "Enter", altKey: false, shiftKey: false, ...modifiers, nativeEvent: { isComposing: "isComposing" in modifiers }, preventDefault: () => { prevented = true; } });
+		handler({ key: "Enter", altKey: false, shiftKey: false, ...modifiers, nativeEvent: { isComposing: "isComposing" in modifiers, keyCode: "keyCode" in modifiers ? 229 : 13 }, preventDefault: () => { prevented = true; } });
 		assert.deepEqual(sent, expected ? [expected] : [], JSON.stringify(modifiers));
 		assert.equal(prevented, expected !== null, JSON.stringify(modifiers));
 	}
@@ -84,10 +84,18 @@ test("every field that sends on a key sends only on a fresh press", () => {
 	];
 	for (const { name, handler, call, chord } of fields) for (const repeat of [false, true]) {
 		const calls: unknown[] = []; let prevented = false;
-		const run = evaluate(handler, { composerSubmission, freshPress, matches: [], [call]: (...args: unknown[]) => calls.push(args) });
+		const run = evaluate(handler, { composerSubmission, freshPress, composing, matches: [], [call]: (...args: unknown[]) => calls.push(args) });
 		run({ key: "Enter", altKey: false, shiftKey: false, metaKey: false, ctrlKey: false, ...chord, repeat, nativeEvent: { repeat, isComposing: false }, preventDefault: () => { prevented = true; } });
 		assert.equal(calls.length, repeat ? 0 : 1, `${name}: ${repeat ? "a repeat sends" : "a fresh press does not send"}`);
 		if (name === "Composer" || name === "Rarebit ask") assert.equal(prevented, true, `${name}: a held Enter adds a new line`);
+	}
+	// WebKit (AmPi.app) ends an IME composition before the Enter that commits it: that keydown has isComposing false
+	// and keyCode 229. Chrome marks it isComposing. Neither commit key sends.
+	for (const { name, handler, call, chord } of fields) for (const ime of [{ isComposing: true, keyCode: 229 }, { isComposing: false, keyCode: 229 }]) {
+		const calls: unknown[] = [];
+		const run = evaluate(handler, { composerSubmission, freshPress, composing, matches: [], [call]: (...args: unknown[]) => calls.push(args) });
+		run({ key: "Enter", altKey: false, shiftKey: false, metaKey: false, ctrlKey: false, ...chord, repeat: false, keyCode: ime.keyCode, nativeEvent: { repeat: false, ...ime }, preventDefault: () => {} });
+		assert.equal(calls.length, 0, `${name}: the Enter that commits IME input (${JSON.stringify(ime)}) sends`);
 	}
 });
 

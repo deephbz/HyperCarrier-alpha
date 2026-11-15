@@ -1716,13 +1716,38 @@ details[open] > .disclosure::before,
 	outline-offset: 2px;
 }
 .slash-menu {
+	display: flex;
+	flex-direction: column;
 	border: 1px solid var(--border);
 	border-radius: 8px;
 	box-shadow: var(--shadow);
 	background: var(--bg-elev);
 	padding: 4px;
 	max-height: min(40vh, 320px);
+	overflow: hidden;
+}
+.slash-options {
+	flex: 1 1 auto;
+	min-height: var(--slash-option-floor, 2.6em);
 	overflow-y: auto;
+}
+.slash-menu-whole-scroll {
+	overflow-y: auto;
+}
+.slash-menu-whole-scroll .slash-options {
+	flex: 0 0 auto;
+	overflow: visible;
+}
+.slash-option-list {
+	display: flex;
+	flex-direction: column;
+	min-height: 100%;
+}
+.slash-placeholder {
+	flex: 1 0 28px;
+	min-height: 28px;
+	border-radius: 4px;
+	background: linear-gradient(to bottom, transparent 0, transparent 45%, var(--border) 45%, var(--border) 48%, transparent 48%);
 }
 .slash-item {
 	display: flex;
@@ -1739,7 +1764,12 @@ details[open] > .disclosure::before,
 	flex: 1;
 }
 .slash-foot {
-	padding: 4px 8px 2px;
+	box-sizing: border-box;
+	flex: 0 0 auto;
+	height: auto;
+	min-height: 1.5em;
+	overflow: visible;
+	padding: 4px 8px 5px;
 	border-top: 1px solid var(--border);
 	margin-top: 4px;
 }

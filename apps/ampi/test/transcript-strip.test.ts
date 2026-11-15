@@ -159,8 +159,8 @@ for (const engine of ENGINES) test(`${engine}: a new message keeps every dash no
 	await page.locator('[data-entry="e201"]').waitFor({ state: "attached" });
 	await waitFrames(page, 4);
 	assert.equal(await page.locator("[data-user-mark]").count(), 100, "the old dashes stay while the reply is held");
-	assert.equal(await busy(page), "true", "the strip says its outline is behind");
-	assert.equal(await page.locator("[data-user-mark][href]").count(), 0, "kept dashes do not link while busy");
+	assert.notEqual(await busy(page), "true", "a new message does not mark the kept dashes busy");
+	assert.equal(await page.locator("[data-user-mark][href]").count(), 100, "kept dashes keep their links while the next outline loads");
 	release("v202");
 	await page.locator('[data-outline-version="v202"]').waitFor();
 	await frames(page);

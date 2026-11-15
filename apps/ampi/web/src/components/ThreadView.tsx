@@ -1,5 +1,5 @@
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { CompanionScrollbar, PromptHeader, readingEntry, usePromptPlace, usePromptRail, useThreadOutline } from "./CompanionScrollbar.tsx";
+import { CompanionScrollbar, PromptHeader, readingEntry, useFrameContinues, usePromptPlace, usePromptRail, useThreadOutline } from "./CompanionScrollbar.tsx";
 import { Composer, quoteDraft, type ComposerHandle } from "./Composer.tsx";
 import { QuoteSelection } from "./QuoteSelection.tsx";
 import { FormRow } from "./FormRow.tsx";
@@ -503,6 +503,7 @@ export function ThreadView({
 	const [title, setTitle] = useState(summary?.title ?? "");
 	useEffect(() => setTitle(summary?.title ?? ""), [summary?.title]);
 	useEffect(() => {
+		keepPlace.cancelExtend();
 		setOlder([]);
 		setOlderMore(true);
   setHistoryError(undefined);
@@ -580,6 +581,7 @@ export function ThreadView({
 	useEffect(() => {
 		const key = `${host}/${threadId}`;
 		const pop = () => {
+			keepPlace.cancelExtend();
 			const place = entryState().place as (Place & { key: string }) | undefined;
 			if (!place || place.key !== key) return;
 			restore.current = place;
@@ -630,7 +632,7 @@ export function ThreadView({
 		keepPlace.capture();
 		setLimit(painted.current + WINDOW);
 	};
-	// A frozen window changes only by the reader: a scroll near its bottom extends it, G or "↓ N new" thaws it.
+	// A frozen window extends below as the reader reaches its painted end; its scrollbar thumb measures that window, so another drag may be needed to reach the newest. G or "↓ N new" goes straight to the newest.
 	const [frozen, setFrozen] = useState(0);
 	const extending = useRef(false);
 	const thaw = () => {
@@ -732,6 +734,11 @@ export function ThreadView({
 				keepPlace.follow();
 			}
 		} else if (keepPlace.following()) keepPlace.follow();
+		const extendToken = keepPlace.pendingExtend();
+		if (extendToken !== undefined) {
+			if (!extending.current && last.current && allRef.current.some((entry) => entry.id === last.current)) growBelow();
+			keepPlace.completeExtend(extendToken);
+		}
 	});
 	const openConversation = useCallback(
 		(conversationId: string) => {
@@ -746,7 +753,6 @@ export function ThreadView({
   setHistoryError(undefined);
   try {
 		const page = await readHistory("Loading earlier entries…", (version) => hub.request(host, "thread.history", { threadId, before: first, limit: 200, version }), view?.sourceVersion);
-		pinned.current = false;
 		// Earlier messages arrive above: keep the message being read where it is.
 		keepPlace.capture();
 		setOlder((prev) => [...page.entries, ...prev].slice(0, reader ? 400 : undefined));
@@ -814,6 +820,7 @@ export function ThreadView({
 			const end = last.current ? allRef.current.findIndex((e) => e.id === last.current) : -1;
 			const at = allRef.current.findIndex((e) => e.id === (holder?.id ?? entry));
 			if (end >= 0 && at > end) thaw();
+			keepPlace.cancelExtend();
 			setLimit((l) => (index < 0 ? Number.POSITIVE_INFINITY : Math.max(l, view.entries.length - index + 20)));
 			pinned.current = false;
 			setJump({ entry, holder: holder?.id ?? entry, seq: want!.seq, threadId });
@@ -892,7 +899,8 @@ export function ThreadView({
 		if (view && document.visibilityState === "visible") markSeen(`${host}/${threadId}`);
 	}, [host, threadId, view]);
 	const parent = summary?.parentId;
-	const outline = useThreadOutline(host, threadId, reader ? view?.sourceVersion : undefined, missing?.entry);
+	const continued = useFrameContinues(JSON.stringify([host, threadId]), view?.sourceVersion, view?.entries);
+	const outline = useThreadOutline(host, threadId, reader ? view?.sourceVersion : undefined, missing?.entry, continued);
 	const promptPlace = usePromptPlace(scroller, outline.outline, reader);
 	const closeFind = () => { readerMoved(); find.close(); focusIntent("find.close"); };
 	// A reveal from elsewhere (a link, a prompt step, the rail) shows the full transcript.
@@ -957,15 +965,9 @@ export function ThreadView({
 									<button title={`Start another agent in a pane beside this one (${MOD}N)`} onClick={() => window.dispatchEvent(new Event("ampi:new"))}>
 										New agent beside
 									</button>
-									{paneActions.team && paneActions.team.role !== "lead" ? (
-										<button disabled title="Pi Team Bright owns this worker's pane: ask its lead to stop it">
-											Close pane
-										</button>
-									) : (
-										<button title="Stop Pi and free its Herdr pane; Resume starts it again" onClick={() => setClosing(true)}>
-											Close pane…
-										</button>
-									)}
+									<button title="Stop Pi and free its Herdr pane; Resume starts it again" onClick={() => setClosing(true)}>
+										Close pane…
+									</button>
 								</>
 							)}
 						</Popover>}
@@ -1026,6 +1028,17 @@ export function ThreadView({
 				data-end-band={END_BAND}
 				tabIndex={-1}
 				onKeyDown={(event) => {
+					// Newest-end keys override native scroll only while focus stays in the transcript, never in an editor.
+					const target = event.target as HTMLElement;
+					const newestKey = !isEditableTarget(event.target) && !event.altKey && !event.shiftKey && (
+						(event.key === "End" && !event.metaKey) || (event.key === "ArrowDown" && event.metaKey && !event.ctrlKey)
+					);
+					if (newestKey && target.closest(".scroll, .panel-body, [data-scrollable]") === event.currentTarget) {
+						event.preventDefault();
+						event.stopPropagation();
+						toEnd();
+						return;
+					}
 					// G goes to the newest end, past a frozen window's bottom.
 					if (event.key === "G" && !event.metaKey && !event.ctrlKey && !event.altKey && !isEditableTarget(event.target) && (event.target as HTMLElement).closest(".scroll, .panel-body, [data-scrollable]") === event.currentTarget) {
 						event.preventDefault();
@@ -1047,7 +1060,12 @@ export function ThreadView({
 					keepPlace.onScroll();
 					noteAway();
 					if (el.scrollTop < 600 && !restore.current) growWindow();
-					if (el.scrollHeight - el.scrollTop - el.clientHeight < 600 && !restore.current) growBelow();
+					// Consume the reader's pending EXTEND here when its scroll event arrives before layout.
+					if (el.scrollHeight - el.scrollTop - el.clientHeight < 600 && !restore.current) {
+						const extendToken = keepPlace.pendingExtend();
+						if (extendToken !== undefined) keepPlace.completeExtend(extendToken);
+						growBelow();
+					}
 					savePlace();
 				}}
 			>

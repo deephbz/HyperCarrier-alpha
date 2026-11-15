@@ -3,14 +3,16 @@
 // Sessions spread over three days: two Teams, a 600-turn Session, compactions, a terminal error, long and non-Latin
 // titles, a Session outside Herdr, and a pane waiting for input. Everything is synthetic; nothing reads real logs.
 //
-//   node apps/ampi/scripts/pi-demo.ts            # http://127.0.0.1:7880/?k=<64 × d>, data under $TMPDIR/ampi-pi-demo
-//   PORT=7881 DEMO_DIR=/tmp/x node apps/ampi/scripts/pi-demo.ts
-//   DEMO_KEEP=1 DEMO_NOW=<epoch ms> ...      # a restart: keep the hub state; the base Sessions are rewritten byte-identical
+//   DEMO_LIFETIME=manual node apps/ampi/scripts/pi-demo.ts  # interactive; data under $TMPDIR/ampi-pi-demo
+//   DEMO_LIFETIME=manual PORT=7881 DEMO_DIR=/tmp/x node apps/ampi/scripts/pi-demo.ts
+//   DEMO_LIFETIME=manual DEMO_KEEP=1 DEMO_NOW=<epoch ms> ...      # a restart: keep the hub state; the base Sessions are rewritten byte-identical
 //
 // Views extend the data through scripts/demo/index.ts (one function per view), not by editing the base Sessions.
 
 import "./stdio-sync.cjs";
-import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, createReadStream, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { ownerAlive, processIdentity } from "./process-owner.cjs";
+import { execFileSync, spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,10 +35,39 @@ if (!web.ok && process.env.DEMO_WEB !== "external") {
 	process.exit(1);
 }
 
+const manualLifetime = process.env.DEMO_LIFETIME === "manual";
+const ownerIdentity = processIdentity(process.ppid);
+const runnerIdentity = process.env.AMPI_TEST_RUNNER_ID;
 const dataMode = demoDataMode(process.argv.slice(2));
-const dir = process.env.DEMO_DIR ?? join(tmpdir(), "ampi-pi-demo");
-if (process.env.DEMO_KEEP !== "1") rmSync(dir, { recursive: true, force: true });
+const dir = process.env.DEMO_DIR ?? (manualLifetime ? join(tmpdir(), "ampi-pi-demo") : mkdtempSync(join(tmpdir(), "ampi-pi-demo-")));
+if (!manualLifetime) {
+ const group = Number(execFileSync("ps", ["-p", String(process.pid), "-o", "pgid="], { encoding: "utf8", env: { ...process.env, LC_ALL: "C" } }).trim());
+ if (group !== process.pid) throw new Error("Owner-bound demos require a private process group (spawn with detached: true); use DEMO_LIFETIME=manual for an interactive demo.");
+ if (existsSync(join(dir, "agent/ampi-arc"))) throw new Error("Owner-bound demos require a fresh store; this DEMO_DIR already contains an Arc store. Use a new directory or DEMO_LIFETIME=manual.");
+ mkdirSync(dir, { recursive: true });
+ writeFileSync(join(dir, ".demo-owner"), ownerIdentity ?? "", { flag: "wx", mode: 0o600 });
+} else if (process.env.DEMO_KEEP !== "1") rmSync(dir, { recursive: true, force: true });
 const agentDir = join(dir, "agent");
+let guardian: ReturnType<typeof spawn> | undefined;
+let guardianExit: Promise<void> | undefined;
+let guardianIdentity: string | null = null;
+if (!manualLifetime) {
+ guardian = spawn(process.execPath, [fileURLToPath(new URL("./demo/owner-guardian.ts", import.meta.url)), processIdentity(process.pid)!, ownerIdentity ?? "", runnerIdentity ?? "", agentDir], {
+  detached: true, stdio: ["pipe", "pipe", "ignore"],
+ });
+ guardianExit = new Promise(resolve => guardian!.once("exit", () => resolve()));
+ await new Promise<void>((resolve, reject) => {
+  const deadline = setTimeout(() => { guardian!.kill("SIGKILL"); reject(new Error("Demo guardian did not become ready in 3 seconds")); }, 3000);
+  guardian!.once("error", error => { clearTimeout(deadline); reject(error); });
+  guardian!.once("exit", () => { clearTimeout(deadline); reject(new Error("Demo guardian exited before readiness")); });
+  guardian!.stdout!.once("data", () => { clearTimeout(deadline); resolve(); });
+ });
+ guardianIdentity = processIdentity(guardian.pid!);
+ writeFileSync(join(dir, ".demo-guardian"), guardianIdentity ?? "", { flag: "wx", mode: 0o600 });
+ (guardian.stdin as import("node:net").Socket).unref();
+ (guardian.stdout as import("node:net").Socket).unref();
+ guardian.unref();
+}
 const now = Number(process.env.DEMO_NOW) || Date.now();
 export type { DemoSession };
 const baseSessions = writeDemoSessions(agentDir, now);
@@ -135,6 +166,8 @@ const hub = new Hub(
 				label: "devbox",
 				kind: "pi-local",
 				cacheDir: join(dir, "cache"),
+				// A test that seeds Sessions dated at a fixed past instant widens the Session scope, so its fixture does not age out.
+				...(process.env.AMPI_DEMO_RECENT_MS ? { recentMs: Number(process.env.AMPI_DEMO_RECENT_MS) } : {}),
 				// One offline stand-in model for every view: Chief of Staff's answers JSON prompts, Rarebit's the rest.
 				askCommand: [process.execPath, join(dir, "cos-model.cjs")],
 				agentConfig: { agentDir, pollMs: 100, discoverMs: 1000, teams: true, teamsMs: 2000, ptbObservation: ptb },
@@ -150,14 +183,48 @@ let closing: Promise<void> | undefined;
 function close() {
  return closing ??= (async () => {
   await hub.close();
+  if (process.env.DEMO_CLOSE_FAILURE === "1") throw new Error("Synthetic demo close failure");
   // This disposable Host owns its service. Stop after link shutdown so it cannot restart.
   const stopped = await maintainHost(hub.config.hosts[0]!, { op: "stop", timeoutMs: 5000 });
   if (stopped.state !== "stopped") throw new Error(`Demo Arc did not stop: ${stopped.state}`);
  })();
 }
-for (const signal of ["SIGTERM", "SIGINT"] as const) process.once(signal, () => {
- void close().then(() => process.exit(0), error => { console.error(error); process.exit(1); });
-});
+let quitting: Promise<void> | undefined;
+function quit() {
+ void (quitting ??= (async () => {
+  let failure: unknown;
+  try { await close(); } catch (error) { failure = error; }
+  if (guardian && guardianExit) {
+   // close() quiesces links before reporting an error. A failed resident stop
+   // transfers cleanup to the guardian; a successful stop needs only its exit.
+   guardian.ref();
+   guardian.stdin!.end(failure ? "failed\n" : "closed\n");
+   let deadline: ReturnType<typeof setTimeout> | undefined;
+   try {
+    await Promise.race([guardianExit, new Promise<never>((_, reject) => {
+     deadline = setTimeout(() => {
+      let action = "No signal was sent because the guardian generation changed or signalling failed.";
+      if (ownerAlive(guardianIdentity)) {
+       try { process.kill(-guardian!.pid!, "SIGKILL"); action = "Sent SIGKILL to its process group."; } catch {}
+      }
+      reject(new Error(`Demo guardian (pid ${guardian!.pid}) did not exit within 15 seconds. ${action} The demo Arc service for ${join(agentDir, "ampi-arc")} may still run.`));
+     }, 15_000);
+    })]);
+   } finally { if (deadline) clearTimeout(deadline); }
+  }
+  if (failure) throw failure;
+ })()).then(() => process.exit(0), error => { guardian?.stdin?.end(); console.error(error); process.exit(1); });
+}
+for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.on(signal, quit);
+if (!manualLifetime) {
+ const alive = () => ownerAlive(ownerIdentity) && (!runnerIdentity || ownerAlive(runnerIdentity));
+ // Direct fixture launchers supply a pipe. Ad-hoc drivers use generation-checked parent polling.
+ if (process.env.DEMO_OWNER_FD === "3") {
+  const owner = createReadStream("", { fd: 3, autoClose: false });
+  owner.on("end", quit).on("error", quit).resume();
+ }
+ if (!alive()) { await close(); process.exit(0); }
+}
 try {
  const port = await hub.listen(Number(process.env.PORT ?? 7880));
  console.log(`demo hub: http://127.0.0.1:${port}/?k=${token}  (data: ${dir}; fixture: ${dataMode})`);

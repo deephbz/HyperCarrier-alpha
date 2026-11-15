@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 // One construction path for every overlay (owner incidents B1/B2): Popover.tsx places each menu, card, outline and pill
-// in a body portal, and Modal (Dialogs.tsx) renders each dialog there. A component that portals, writes a fixed
+// in a body portal, and Modal (Modal.tsx) renders each dialog there. A component that portals, writes a fixed
 // `left` or `top`, or styles its own fixed box would bring back per-overlay placement in a region's zoom and scroller.
 const src = fileURLToPath(new URL("../web/src", import.meta.url));
 const files = (readdirSync(src, { recursive: true }) as string[]).filter((f) => /\.tsx?$/.test(f)).map((f) => join(src, f));
@@ -14,7 +14,7 @@ const where = (pattern: RegExp) => files.flatMap((file) => readFileSync(file, "u
 const only = (found: string[], owners: string[]) => found.filter((at) => !owners.some((owner) => at.startsWith(`${owner}:`)));
 
 test("only Popover and Modal render in a portal", () => {
-	assert.deepEqual(only(where(/createPortal\(/), ["components/Popover.tsx", "components/Dialogs.tsx"]), []);
+	assert.deepEqual(only(where(/createPortal\(/), ["components/Popover.tsx", "components/Modal.tsx"]), []);
 });
 
 // JSX `style={{ left }}` stays legal: marks and graph nodes sit in flow inside their own relative box.

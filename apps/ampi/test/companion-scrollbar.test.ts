@@ -10,6 +10,7 @@ import { build } from "vite";
 import react from "@vitejs/plugin-react";
 // @ts-ignore: shared browser discovery is plain ESM.
 import { findChrome } from "../scripts/perf/browser.mjs";
+import { heldOf } from "./outline-delta.ts";
 
 // Real ThreadView, stylesheet and hash navigation; synthetic hub snapshots.
 const web = fileURLToPath(new URL("../web", import.meta.url));
@@ -57,7 +58,7 @@ for(const kind of ['pi-local']) test('companion '+kind+': whole-branch jump, idl
  const page=await browser.newPage({viewport:{width:1000,height:700}});t.after(()=>page.context().close());page.setDefaultTimeout(3000);loadBudget(page);
  await page.route('**/*',route=>route.fulfill({contentType:'text/html',body:'<style>'+readFileSync(join(web,'src/styles.css'),'utf8')+'</style><div id="root"></div><script>'+script+'</script>'}));
  let publish!:(n:number)=>void, late!:()=>void;
- let requests=0, count=400;
+ let requests=0, count=400; const held:unknown[]=[];
  await page.routeWebSocket('**/ws',client=>{
   const send=(frame:unknown)=>client.send(JSON.stringify(frame));let sid:number;
   publish=n=>{count=n;send({t:'snap',sid,value:view(n)});};
@@ -67,7 +68,7 @@ for(const kind of ['pi-local']) test('companion '+kind+': whole-branch jump, idl
    if(f.t==='sub' && f.topic.kind==='thread'){sid=f.sid;send({t:'snap',sid,value:view(count)});}
    else if(f.t==='sub')send({t:'snap',sid:f.sid,value:f.topic.kind==='threads'?{threads:{}}:{}});
    else if(f.t==='req' && f.op==='thread.outline'){
-    requests++;const value=outline(count);const reply=()=>send({t:'res',id:f.id,ok:true,value});
+    requests++;held.push(heldOf(f.args??{})?.version);const value=outline(count);const reply=()=>send({t:'res',id:f.id,ok:true,value});
     if(count===402)late=reply;else reply();
    }else if(f.t==='req' && f.op==='thread.history')send({t:'res',id:f.id,ok:true,value:{entries:entries(40),more:false,version:'v'+count}});
    else if(f.t==='req'||f.t==='hub')send({t:'res',id:f.id,ok:false,error:{code:'unsupported',message:'fixture'}});
@@ -96,16 +97,20 @@ for(const kind of ['pi-local']) test('companion '+kind+': whole-branch jump, idl
  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
  assert.equal(requests,1,'paint growth and idle do not refetch');
  publish(402);
- // The old outline stays in place, marked busy, until a current one replaces it.
- await page.waitForFunction(()=>document.querySelector('.companion-scrollbar')?.getAttribute('aria-busy')==='true');
+ // The old outline stays in place and usable while the next one is in flight: a new version moves no held dash.
+ while(requests<2)await new Promise(resolve=>setTimeout(resolve,10));
+ assert.notEqual(await page.locator('.companion-scrollbar').getAttribute('aria-busy'),'true','streaming does not mark the dashes busy');
  assert.equal(await page.locator('[data-outline-version="v400"]').count(),1);
  assert.equal(await marks.count(),200);
- // The second version answers first; a late old response must never replace it.
+ // A version change while a request is in flight sends no second request (outline-task.md FINAL contract).
  publish(404);
- await page.locator('[data-outline-version="v404"]').waitFor();
- late();
  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
- assert.equal(await page.locator('[data-outline-version="v404"]').count(),1);
+ await new Promise(resolve=>setTimeout(resolve,100));
+ assert.equal(requests,2,'one outline request in flight: a version change during it sends no second request');
+ // When it lands, the page asks once more, from the newest outline it holds.
+ late();
+ await page.locator('[data-outline-version="v404"]').waitFor();
  assert.equal(await marks.count(),202);assert.equal(requests,3);
+ assert.equal(held[2],'v402','the request after landing carries the newest held version');
  assert.ok(Math.abs(await offset()-before)<=2,'outline refresh preserves the reader place');
 });

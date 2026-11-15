@@ -51,10 +51,23 @@ function installFile(path: string, body: string) {
  renameSync(temp, path);
  const dir = openSync(dirname(path), "r"); try { fsyncSync(dir); } finally { closeSync(dir); }
 }
+function exitResident() {
+ // Workaround for Node teardown hanging in uv__threadpool_cleanup. The runtime
+ // has persisted state, closed its listener and released authority. SIGKILL
+ // bypasses native exit hooks; its signal status is not a failed Arc stop.
+ const terminate = () => process.kill(process.pid, "SIGKILL");
+ const deadline = setTimeout(terminate, 100);
+ let pending = 2;
+ const flushed = () => { if (--pending === 0) { clearTimeout(deadline); terminate(); } };
+ // stdout carries readiness; stderr is service.log. Flush only best-effort.
+ for (const stream of [process.stdout, process.stderr]) {
+  try { stream.write("", flushed); } catch { flushed(); }
+ }
+}
 export async function startService(agentDir: string, host: string, ready: (value: unknown) => void) {
  const lock = inheritedLock(), extensionPath = join(lock.store, "versions", serviceVersion, "ask-limit.mjs");
  installFile(extensionPath, __ARC_OUTPUT_LIMIT_SOURCE__);
- return runtime({ agentDir, host, serviceVersion, releaseLine, buildOrder, extensionPath, ready, exit: () => process.exit(0) });
+ return runtime({ agentDir, host, serviceVersion, releaseLine, buildOrder, extensionPath, ready, exit: exitResident });
 }
 async function lockedMain(operation: LockedOperation, body: string) {
  const agentDir = operation.agentDir ?? agentDirectory(), store = join(agentDir, "ampi-arc");
@@ -152,6 +165,13 @@ export async function manage(body: string, operation: ManageOperation): Promise<
  let staging: string | undefined, replacing = false, sawBusy = false;
  const failedReplacement = (cause: string) => serviceStatus(operation.host, { state: "error", code: "replacement-failed", serviceLogPath, detail: replacementText(operation.host, cause, serviceLogPath) });
  const busy = () => replacing ? failedReplacement("timed out waiting for the service to drain and release its lock") : serviceStatus(operation.host, { state: "busy", kind: "busy", serviceLogPath, detail: "Arc service holds its lock but does not answer" });
+ async function timedOut() {
+  if (replacing) return busy();
+  // A final bounded probe distinguishes a responsive drain from a silent owner.
+  // Earlier replies cannot prove that the resident still answers.
+  try { return await controlRequest(store, { op: "status", refreshAuth: false }, 1000); }
+  catch { return busy(); }
+ }
  try {
   while (true) {
    if (operation.op === "ensure" && command.storeIncarnation !== storeIncarnation(store)) return serviceStatus(operation.host, { state: "stopped", running: false, pid: null, serviceLogPath });
@@ -175,7 +195,7 @@ export async function manage(body: string, operation: ManageOperation): Promise<
      try { await controlRequest(store, { op: "stop" }, Math.max(1, Math.min(1000, deadline - Date.now()))); } catch {}
     }
    }
-   if (Date.now() >= deadline) return busy();
+   if (Date.now() >= deadline) return timedOut();
    if (!staging) {
     if (operation.op !== "ensure") mkdirSync(store, { recursive: true, mode: 0o700 });
     staging = join(store, "launch-" + randomUUID() + ".mjs");
@@ -184,14 +204,14 @@ export async function manage(body: string, operation: ManageOperation): Promise<
    const result = await launch(staging, store, { ...command, timeoutMs: Math.max(1, deadline - Date.now()) });
    if (!result.lockBusy) return replacing && result.state === "error" ? failedReplacement(result.detail ?? "the replacement service could not start") : result;
    sawBusy = true;
-   if (Date.now() >= deadline) return busy();
+   if (Date.now() >= deadline) return timedOut();
    await new Promise(resolve => setTimeout(resolve, 100));
   }
  } catch (error) {
   if (operation.op === "ensure" && command.storeIncarnation !== storeIncarnation(store)) return serviceStatus(operation.host, { state: "stopped", running: false, pid: null, serviceLogPath });
-  if (replacing && error instanceof LaunchDeadline && error.phase === "lock") return busy();
+  if (replacing && error instanceof LaunchDeadline && error.phase === "lock") return timedOut();
   if (replacing) return failedReplacement((error as Error).message);
-  if (sawBusy && Date.now() >= deadline) return busy();
+  if (sawBusy && Date.now() >= deadline) return timedOut();
   throw Object.assign(error as Error, { serviceLogPath: join(store, "service.log") });
  }
  finally { if (staging) rmSync(staging, { force: true }); }

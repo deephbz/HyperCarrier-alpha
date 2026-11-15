@@ -2,7 +2,7 @@
 // Perl supplies flock on macOS and Linux. A startup guardian reaps Node
 // if its manager disappears before accepting readiness.
 import { spawn, type SpawnOptions } from "node:child_process";
-import { fstatSync, mkdirSync, realpathSync, statSync } from "node:fs";
+import { closeSync, fstatSync, mkdirSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { storeIncarnation } from "./store.ts";
 
@@ -89,6 +89,7 @@ export function launchLocked(store: string, nodeArgs: string[], options: SpawnOp
 export interface ServiceLock {
  readonly store: string;
  assertHeld(): void;
+ release(): void;
 }
 
 // A child can only enter the writer through the launcher. Spawn model children
@@ -98,11 +99,17 @@ export function inheritedLock(): ServiceLock {
  const fd = Number(process.env.AMPI_ARC_LOCK_FD);
  if (!store || !Number.isInteger(fd) || fd < 3) throw new Error("Arc service requires the lifetime lock");
  const expected = fstatSync(fd);
+ let released = false;
  const assertHeld = () => {
+  if (released) throw new Error("Arc service lock was released");
   const open = fstatSync(fd), named = statSync(join(store, "service.lock"));
   if (!open.isFile() || open.dev !== expected.dev || open.ino !== expected.ino ||
       named.dev !== open.dev || named.ino !== open.ino) throw new Error("Arc service lock identity changed");
  };
  assertHeld();
- return { store, assertHeld };
+ return { store, assertHeld, release() {
+  if (released) return;
+  released = true;
+  closeSync(fd);
+ } };
 }

@@ -21,7 +21,7 @@ before(async () => {
 	vite = await createServer({ configFile: `${web}vite.config.ts`, root: web, logLevel: "silent", server: { middlewareMode: true, hmr: false } });
 	notice = (await vite.ssrLoadModule("/src/components/ThreadView.tsx")).NoticeEntry;
 	({ hostKinds } = await vite.ssrLoadModule("/src/extensions.ts"));
-	({ kindUis } = await vite.ssrLoadModule("/src/extensions-ui.ts"));
+	({ kindUis } = await vite.ssrLoadModule("/src/slot-registry.ts"));
 });
 after(async () => { await vite?.close(); });
 

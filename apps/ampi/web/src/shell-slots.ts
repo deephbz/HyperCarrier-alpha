@@ -1,5 +1,6 @@
 // The App shell's UI slots: what a Host kind draws in the sidebar and New agent, and the shell-wide layers, steps and
-// actions another line registers in extensions-ui.ts. Components read them here; host-kinds.ts keeps the pure facts.
+// actions another line registers in extensions-ui.ts. Components read them here and in slot-registry.ts; host-kinds.ts
+// keeps the pure facts.
 
 import type { ComponentType, ReactNode } from "react";
 import { findHost, useHosts, type HostState } from "./client.ts";
@@ -9,7 +10,7 @@ import type { HintState } from "./composer-keys.ts";
 import type { TeamValue } from "../../src/shared/team.ts";
 import type { HostThreads } from "./components/Sidebar.tsx";
 import type { PanelView } from "./views/registry.ts";
-import { kindUis } from "./extensions-ui.ts";
+import { kindUis } from "./slot-registry.ts";
 import { hostKind, kindOfLink } from "./host-kinds.ts";
 
 /**
@@ -107,7 +108,7 @@ export type ModelControlProps = ComposerPlace & { closed: boolean; onOpen: () =>
  * order: core entries first, then the slot's entries.
  */
 export interface ComposerSurface {
-	/** Commands that run in this page, listed after the Host's; a supported Host command of the same name wins. */
+	/** Commands that run in this page, listed first; a supported Host command of the same name fills its stable slot. */
 	localCommands?: (place: ComposerPlace, api: ComposerApi) => LocalCommand[];
 	/** Wording. `source`: who serves the command list ("Pi"). `unsupported`: the help of a command the composer cannot run. */
 	texts?: { source: string; unsupported: string; refuseUnsupported: (name: string) => string; noImages: string };

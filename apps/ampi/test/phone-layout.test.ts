@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
-import type { Page } from "playwright";
+import { AXIS_TIMES, AXIS_MATRIX, phone, phoneAxisTests, go, overflow, settled, open } from "./phone-axis-fixture.ts";
 import { engineSkip } from "./engines.ts";
-import { demoSessions, ENGINES, open } from "./resize-edges-fixture.ts";
+import { demoSessions, ENGINES, phoneTimelineFixture } from "./resize-edges-fixture.ts";
 import { shortTick } from "../web/src/views/cos/axis.ts";
 
 // A phone's page layout on every page. No page is wider than the phone: a wider page takes every sideways drag as its
@@ -16,9 +16,18 @@ import { shortTick } from "../web/src/views/cos/axis.ts";
 
 // The page formats the labels and this process computes the expected ones, so both use one locale and time zone.
 const LOCALE = "en-US";
-const phone = (width: number) => ({ viewport: { width, height: width === 375 ? 667 : 844 }, hasTouch: true, isMobile: true, locale: LOCALE, timezoneId: Intl.DateTimeFormat().resolvedOptions().timeZone });
 const WIDTHS = [320, 375, 390];
 const SESSION = "#/h/devbox/t/pi%3Asess-lead";
+// Measured line ceilings for the pinned historical endpoint below: width, zoom, Chromium [en-US,de-DE], WebKit [en-US,de-DE].
+const KNOWN_AXIS_LIMITS = [
+	[320, 2, [4, 3], [3, 3]],
+	[375, 1.5, [1, 1], [1, 1]],
+	[375, 1.75, [2, 1], [2, 1]],
+	[375, 1.8, [2, 1], [2, 1]],
+	[375, 1.81, [3, 1], [2, 1]],
+	[375, 1.875, [3, 2], [3, 1]],
+	[375, 2, [3, 2], [3, 2]],
+] as const;
 const PAGES: [string, string, string][] = [
 	["Overview", "#/v/overview", '.main .topbar b:text-is("Overview")'],
 	["Timeline", "#/v/timeline", ".cos-axis time"],
@@ -26,25 +35,6 @@ const PAGES: [string, string, string][] = [
 ];
 const WIDE = `<table><thead><tr>${"<th>column</th>".repeat(10)}</tr></thead><tbody><tr>${"<td>wordwordword</td>".repeat(10)}</tr></tbody></table>`
 	+ `<pre><code>${"long_line_".repeat(30)}</code></pre>`;
-
-/** The page's and the main view's sideways overflow, in px. */
-function overflow(page: Page) {
-	return page.evaluate(() => {
-		const doc = document.scrollingElement!;
-		const main = document.querySelector<HTMLElement>("[data-page-root] .main")!;
-		return { page: doc.scrollWidth - doc.clientWidth, main: main.scrollWidth - main.clientWidth };
-	});
-}
-
-async function settled(page: Page) {
-	await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-}
-
-async function go(page: Page, route: string, ready: string) {
-	await page.evaluate((route) => { location.hash = route; }, route);
-	await page.locator(ready).first().waitFor({ state: "attached" });
-	await settled(page);
-}
 
 test("a phone's short axis label names each tick exactly and in the coarsest unit that tells them apart", () => {
 	const at = (s: string) => new Date(s).getTime();
@@ -94,42 +84,40 @@ for (const [engine, type, path] of ENGINES) for (const width of WIDTHS) {
 		}
 	});
 
-	test(`phone layout ${engine} ${width} px: the Timeline axis shows three whole labels inside the axis`, { skip: engineSkip(engine) }, async (t) => {
-		const page = await open(t, engine, type, path(), { route: SESSION, context: phone(width) });
+
+	test(`phone layout ${engine} ${width} px: the Timeline axis contains synthetic long labels without clipping`, { skip: engineSkip(engine) }, async (t) => {
+		const page = await open(t, engine, type, path(), { route: SESSION, context: phone(width), beforeNavigate: (page) => page.clock.setFixedTime(new Date(AXIS_TIMES[1])) });
 		await go(page, "#/v/timeline", ".cos-axis time");
-		const axis = await page.evaluate(() => {
+		const texts = ["Wednesday 11:00 AM", "LongLocalizedWeekdayWithoutSpaces 12:00 PM", "Now"];
+		await page.locator(".cos-axis time").evaluateAll((ticks, texts) => {
+			for (const [i, tick] of [ticks[0], ticks[2], ticks[4]].entries()) tick.querySelector(".cos-tick-short")!.textContent = texts[i];
+		}, texts);
+		await settled(page);
+		const geometry = await page.evaluate(() => {
 			const box = document.querySelector(".cos-axis > div")!.getBoundingClientRect();
-			const shown = [...document.querySelectorAll<HTMLTimeElement>(".cos-axis time")].filter((time) => time.offsetParent);
-			return {
-				box: { left: box.left, right: box.right },
-				labels: shown.map((time) => {
-					const label = [...time.children].find((span) => getComputedStyle(span).display !== "none") as HTMLElement;
-					const rect = label.getBoundingClientRect();
-					return { at: Date.parse(time.dateTime), text: label.textContent!, left: rect.left, right: rect.right, cut: label.scrollWidth > Math.ceil(rect.width) };
-				}),
-				range: [...document.querySelectorAll<HTMLTimeElement>(".cos-axis time")].map((time) => Date.parse(time.dateTime)),
-				now: Date.now(),
-			};
+			return [...document.querySelectorAll<HTMLElement>(".cos-tick-short")].filter((span) => span.offsetParent).map((span) => {
+				const rect = span.getBoundingClientRect();
+				return { text: span.textContent, inside: rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5,
+					cut: span.scrollWidth > Math.ceil(rect.width) || span.scrollHeight > Math.ceil(rect.height) };
+			});
 		});
-		assert.equal(axis.labels.length, 3, "first, middle and last ticks");
-		// The default range ends now: the live "Now" tick is the right label, and it must clear the middle one.
-		assert.equal(axis.labels[2].text, "Now", "the default range's last tick is live");
-		const [from, to] = [axis.range[0], axis.range[4]];
-		for (const [i, label] of axis.labels.entries()) {
-			const live = i === 2 && Math.abs(to - axis.now) < 120_000;
-			assert.equal(label.text, live ? "Now" : shortTick(label.at, from, to, LOCALE), "the whole formatted value");
-			assert.equal(label.cut, false, `${label.text} is not cut`);
-			assert.ok(label.left >= axis.box.left - 0.5 && label.right <= axis.box.right + 0.5, `${label.text} sits inside the axis`);
-			if (i) assert.ok(label.left >= axis.labels[i - 1].right, `${label.text} does not overlap the label before it`);
-		}
+		assert.deepEqual(geometry, texts.map((text) => ({ text, inside: true, cut: false })), "every whole label stays inside its axis");
 	});
 
 	test(`phone layout ${engine} ${width} px: the Timeline lanes take their full height at every display size, under a sticky axis`, { skip: engineSkip(engine) }, async (t) => {
+		const fixedNow = Date.parse(AXIS_TIMES[1]);
+		const expectedRows = await phoneTimelineFixture(fixedNow);
 		let stuck = 0;
 		for (const overall of [1, 1.25, 1.5, 2]) {
-			const page = await open(t, engine, type, path(), { route: SESSION, display: { overall }, context: phone(width) });
+			const page = await open(t, engine, type, path(), { route: "#/v/overview", fixture: "empty", display: { overall }, context: phone(width), beforeNavigate: (page) => page.clock.setFixedTime(new Date(fixedNow)) });
 			await go(page, "#/v/timeline", ".cos-stream-row");
-			await page.waitForFunction(() => document.querySelectorAll(".cos-stream-row").length >= 5);
+			await page.waitForFunction((expected) => {
+				const loading = [...document.querySelectorAll(".cos-notice, .cos-empty")].some((node) => node.textContent?.includes("Reading the Sessions…"));
+				const rows = [...document.querySelectorAll<HTMLElement>(".cos-stream-row")].map((row) => row.dataset.lane);
+				return !loading && rows.length === expected.length && expected.every((id) => rows.includes(id));
+			}, expectedRows);
+			const renderedRows = await page.locator(".cos-stream-row").evaluateAll((rows) => rows.map((row) => (row as HTMLElement).dataset.lane));
+			assert.deepEqual([...renderedRows].sort(), [...expectedRows].sort(), "rendered Timeline row IDs match the ready fixture before scrolling");
 			const view = await page.evaluate(async () => {
 				const main = document.querySelector<HTMLElement>("main.cos-page")!;
 				const lanes = document.querySelector<HTMLElement>(".cos-scroll")!;
@@ -142,8 +130,9 @@ for (const [engine, type, path] of ENGINES) for (const width of WIDTHS) {
 				main.scrollTop += place;
 				await frame();
 				const screen = main.getBoundingClientRect();
-				const rows = [...document.querySelectorAll(".cos-stream-row")].map((row) => row.getBoundingClientRect());
-				const rowsInView = rows.filter((r) => r.top >= axis().bottom - 1 && r.bottom <= screen.bottom + 0.5).length;
+				const rows = [...document.querySelectorAll<HTMLElement>(".cos-stream-row")];
+				const rowIds = rows.map((row) => row.dataset.lane!);
+				const rowsInView = rows.map((row) => row.getBoundingClientRect()).filter((r) => r.top >= axis().bottom - 1 && r.bottom <= screen.bottom + 0.5).length;
 				// Scroll the page two screens down, or to its end: the axis labels stay in view.
 				main.scrollTop += 2 * main.clientHeight;
 				await frame();
@@ -159,7 +148,13 @@ for (const [engine, type, path] of ENGINES) for (const width of WIDTHS) {
 						if (r.width && r.left < reveal.right && r.right > reveal.left && r.top < reveal.bottom && r.bottom > reveal.top) underReveal.push(node.textContent!);
 					}
 				}
-				const tickStart = document.querySelector(".cos-axis > div")!.getBoundingClientRect().left;
+				const timeArea = document.querySelector(".cos-axis > div")!.getBoundingClientRect();
+				const fragments = [...document.querySelectorAll(".cos-tick-short")].flatMap((span) => {
+					const range = document.createRange(); range.selectNodeContents(span);
+					return [...range.getClientRects()].filter((rect) => rect.width);
+				});
+				const fragmentsInside = fragments.every((rect) => rect.left >= timeArea.left - 0.5 && rect.right <= timeArea.right + 0.5);
+				const tickStart = timeArea.left;
 				const laneStart = document.querySelector(".cos-stream-row > :nth-child(2)")!.getBoundingClientRect().left;
 				return {
 					ownScroll: lanes.scrollHeight - lanes.clientHeight,
@@ -167,17 +162,23 @@ for (const [engine, type, path] of ENGINES) for (const width of WIDTHS) {
 					// The page scrolled past the axis's own place, so only the sticky rule keeps it in view.
 					stuck: main.scrollTop > place + 1,
 					labelsInView: labels.length > 0 && labels.every((r) => r.top >= screen.top - 0.5 && r.bottom <= screen.bottom + 0.5),
-					rows: rows.length,
+					rows: rowIds,
 					rowsInView,
 					underReveal,
+					fragmentsInside,
+					axisHeight: axis().height,
+					lanesHeight: lanes.getBoundingClientRect().height,
 					tickShift: tickStart - laneStart,
 				};
 			});
 			const label = `overall ${overall}`;
+			assert.deepEqual(view.rows, renderedRows, `${label}: row IDs stay fixed through the scroll check`);
 			assert.ok(view.ownScroll <= 1, `${label}: the lanes have no own vertical scroller`);
 			assert.ok(view.scrolled, `${label}: the page scrolls`);
 			assert.ok(view.labelsInView, `${label}: the axis labels stay in view`);
-			assert.ok(view.rowsInView >= Math.min(5, Math.ceil(5 / overall), view.rows), `${label}: ${view.rowsInView} of ${view.rows} lanes show below the axis`);
+			assert.ok(view.fragmentsInside, `${label}: the sticky text fragments stay inside the time area`);
+			t.diagnostic(JSON.stringify({ overall, width, axisHeight: view.axisHeight, lanesHeight: view.lanesHeight, rowsInView: view.rowsInView }));
+			assert.ok(view.rowsInView >= Math.min(5, Math.ceil(5 / overall), view.rows.length), `${label}: ${view.rowsInView} of ${view.rows.length} lanes show below the axis`);
 			assert.deepEqual(view.underReveal, [], `${label}: no axis text sits under ☰`);
 			assert.ok(Math.abs(view.tickShift) <= 1, `${label}: the ticks start over the lanes' time column (${view.tickShift} px)`);
 			if (view.stuck) stuck++;
@@ -186,7 +187,135 @@ for (const [engine, type, path] of ENGINES) for (const width of WIDTHS) {
 	});
 }
 
+phoneAxisTests(AXIS_TIMES);
+
 for (const [engine, type, path] of ENGINES) {
+	test(`phone layout ${engine}: CSS keeps tick membership at page and panel breakpoints`, { skip: engineSkip(engine) }, async (t) => {
+		const page = await open(t, engine, type, path(), { route: SESSION, context: { viewport: { width: 1280, height: 900 }, locale: LOCALE, timezoneId: "Asia/Singapore" }, beforeNavigate: (page) => page.clock.setFixedTime(new Date(AXIS_TIMES[1])) });
+		await go(page, "#/v/timeline", ".cos-axis time");
+		for (const width of [1280, 1100, 601, 600, 375, 320]) {
+			await page.setViewportSize({ width, height: 900 }); await settled(page);
+			const shown = await page.locator(".cos-axis time").evaluateAll((ticks) => ticks.map((tick, index) => ({ index, visible: Boolean((tick as HTMLElement).offsetParent) })).filter((tick) => tick.visible).map((tick) => tick.index));
+			assert.deepEqual(shown, width > 1100 ? [0, 1, 2, 3, 4] : [0, 2, 4], `${width}px: CSS owns page membership`);
+		}
+		for (const width of [440, 320]) {
+			const panel = await open(t, engine, type, path(), { route: `${SESSION}?p=timeline`, context: { viewport: { width: 1280, height: 900 }, locale: LOCALE, timezoneId: "Asia/Singapore" }, beforeNavigate: async (page) => {
+				await page.clock.setFixedTime(new Date(AXIS_TIMES[1]));
+				await page.addInitScript((width) => localStorage.setItem("ampi.panel.width", String(width)), width);
+			} });
+			await panel.locator(".cos-panel .cos-axis time").first().waitFor({ state: "attached" }); await settled(panel);
+			const shown = await panel.locator(".cos-panel .cos-axis time").evaluateAll((ticks) => ticks.map((tick, index) => ({ index, visible: Boolean((tick as HTMLElement).offsetParent) })).filter((tick) => tick.visible).map((tick) => tick.index));
+			assert.deepEqual(shown, width > 380 ? [0, 4] : [4], `${width}px panel: CSS owns panel membership`);
+		}
+	});
+
+	for (const locale of [LOCALE, "de-DE"]) test(`phone layout ${engine}: the axis threshold covers every formatter family in ${locale}`, { skip: engineSkip(engine) }, async (t) => {
+		const page = await open(t, engine, type, path(), { route: SESSION, context: { ...phone(320), locale }, beforeNavigate: (page) => page.clock.setFixedTime(new Date(AXIS_TIMES[1])) });
+		await go(page, "#/v/timeline", ".cos-axis time");
+		const labels: { family: string; text: string }[] = [];
+		// Sample the same local wall times in every runner zone.
+		const at = (text: string) => Date.parse(text.replace(/\+08:00$/, ""));
+		for (const now of AXIS_MATRIX) {
+			const to = at(now);
+			labels.push({ family: "time", text: shortTick(to, to - 3600_000, to, locale) });
+			labels.push({ family: "weekday/time", text: shortTick(to, to - 4 * 86_400_000, to, locale) });
+		}
+		for (let month = 1; month <= 12; month++) for (const day of [1, 15, 28]) {
+			const value = at(`2026-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}T11:00:00+08:00`);
+			labels.push({ family: "month/day", text: shortTick(value, value - 30 * 86_400_000, value, locale) });
+			labels.push({ family: "month/year", text: shortTick(value, value - 400 * 86_400_000, value, locale) });
+		}
+		const measured = await page.evaluate((labels) => {
+			const parent = document.querySelector(".cos-axis time")!;
+			const axis = document.querySelector<HTMLElement>(".cos-axis")!;
+			const scale = axis.getBoundingClientRect().width / axis.offsetWidth;
+			return labels.map(({ family, text }) => {
+				const probe = document.createElement("span");
+				probe.style.cssText = "position:absolute;visibility:hidden;display:block;width:4.7em;white-space:normal;overflow-wrap:break-word";
+				probe.textContent = text; parent.append(probe);
+				const range = document.createRange(); range.selectNodeContents(probe);
+				const rects = [...range.getClientRects()].filter((rect) => rect.width);
+				const brokenTokens = [...text.matchAll(/\S+/gu)].filter((match) => {
+					const token = document.createRange(); token.setStart(probe.firstChild!, match.index!); token.setEnd(probe.firstChild!, match.index! + match[0].length);
+					return new Set([...token.getClientRects()].filter((rect) => rect.width).map((rect) => Math.round(rect.top))).size > 1;
+				}).map((match) => match[0]);
+				const result = { family, text, brokenTokens, lines: new Set(rects.map((rect) => Math.round(rect.top))).size,
+					needEm: Math.max(...rects.map((rect) => rect.width / scale / parseFloat(getComputedStyle(probe).fontSize))),
+					cut: probe.scrollWidth > probe.clientWidth + 1 };
+				probe.remove(); return result;
+			});
+		}, labels);
+		for (const label of measured) {
+			assert.ok(label.lines <= 2, `${label.family}: ${label.text} fits two greedy browser lines`);
+			assert.deepEqual(label.brokenTokens, [], `${label.family}: no supported token exceeds one track`);
+			assert.ok(label.needEm <= 4.7 + 1e-6 && !label.cut, `${label.family}: ${label.text} fits the measured threshold`);
+		}
+		t.diagnostic(JSON.stringify({ locale, maxGreedyLineEm: Math.max(...measured.map((label) => label.needEm)), families: [...new Set(labels.map((label) => label.family))] }));
+		for (const [delta, expected] of [[-0.01, 1], [0.01, 3]]) {
+			await page.locator(".cos-axis > div").evaluate((node, width) => { (node as HTMLElement).style.width = `${width}em`; }, 15.4334 + delta);
+			await settled(page);
+			const state = await page.evaluate(() => {
+				const area = document.querySelector(".cos-axis > div")!.getBoundingClientRect();
+				const ticks = [...document.querySelectorAll<HTMLElement>(".cos-axis time")].filter((tick) => tick.offsetParent);
+				const last = document.createRange(); last.selectNodeContents(ticks.at(-1)!.querySelector(".cos-tick-short")!);
+				return { count: ticks.length, inside: [...last.getClientRects()].every((rect) => rect.left >= area.left - 0.5 && rect.right <= area.right + 0.5) };
+			});
+			assert.deepEqual(state, { count: expected, inside: true }, `threshold ${delta < 0 ? "below" : "above"}: CSS alone selects the visible ticks`);
+		}
+	});
+
+	for (const width of [320, 375]) for (const locale of [LOCALE, "de-DE"]) test(`phone layout ${engine}: KNOWN LIMIT P2 historical endpoint at ${width} px ${locale}`, { skip: engineSkip(engine) }, async (t) => {
+		const now = Date.parse(AXIS_TIMES[1]), to = now - 86_400_000;
+		const rows = await phoneTimelineFixture(now - 2 * 86_400_000, "-historical");
+		const page = await open(t, engine, type, path(), { route: "#/v/overview", fixture: "empty", context: { ...phone(width), locale }, beforeNavigate: (page) => page.clock.setFixedTime(new Date(now)) });
+		// Reuse the locale/width context. A fresh document applies each zoom without spending another WebKit context.
+		for (const [, overall, chromiumLines, webkitLines] of KNOWN_AXIS_LIMITS.filter((limit) => limit[0] === width)) await t.test(`zoom ${overall}`, async (t) => {
+			await page.evaluate((overall) => localStorage.setItem("ampi.display", JSON.stringify({ overall })), overall);
+			await page.reload();
+			await go(page, `#/v/timeline?from=${now - 4 * 86_400_000}&to=${to + 3600_000}`, ".cos-stream-row");
+			await page.waitForFunction((expected) => document.querySelectorAll(".cos-stream-row").length === expected, rows.length);
+			// Use the actual brush control. Its persisted range must not turn a historical endpoint into Now.
+			await page.getByRole("slider", { name: "Range end", exact: true }).press("Shift+ArrowLeft");
+			await page.waitForFunction((to) => new URLSearchParams(location.hash.split("?")[1]).get("to") === String(to), to);
+			const measure = () => page.evaluate(async () => {
+				const main = document.querySelector<HTMLElement>("main.cos-page")!;
+				const node = document.querySelector<HTMLElement>(".cos-axis")!;
+				const scale = parseFloat(getComputedStyle(document.documentElement).zoom) || 1;
+				main.scrollTop = 0;
+				await new Promise((resolve) => requestAnimationFrame(resolve));
+				main.scrollTop += (node.getBoundingClientRect().top - main.getBoundingClientRect().top) / scale;
+				await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+				const axis = node.getBoundingClientRect(), area = node.lastElementChild!.getBoundingClientRect(), screen = main.getBoundingClientRect();
+				const ticks = [...node.querySelectorAll<HTMLTimeElement>("time")].filter((tick) => tick.offsetParent);
+				const last = ticks.at(-1)!, label = last.querySelector(".cos-tick-short")!;
+				const range = document.createRange(); range.selectNodeContents(label);
+				const fragments = [...range.getClientRects()].filter((rect) => rect.width).map((rect) => ({ left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }));
+				const reveal = document.querySelector(".sidebar-reveal")!.getBoundingClientRect();
+				const visibleRows = [...document.querySelectorAll(".cos-stream-row")].map((row) => row.getBoundingClientRect()).filter((rect) => rect.top >= axis.bottom - 1 && rect.bottom <= screen.bottom + 0.5).length;
+				return { count: ticks.length, height: axis.height, areaWidth: area.width, areaLeft: area.left, areaRight: area.right, fragments,
+					lines: new Set(fragments.map((rect) => Math.round(rect.top))).size, text: label.textContent, at: last.dateTime,
+					visibleRows, tickShift: area.left - document.querySelector(".cos-stream-row > :nth-child(2)")!.getBoundingClientRect().left,
+					drawerOverlap: fragments.some((rect) => rect.left < reveal.right && rect.right > reveal.left && rect.top < reveal.bottom && rect.bottom > reveal.top) };
+		});
+		const baseline = await page.addStyleTag({ content: ".cos-axis > div { display:flex!important;container-type:normal!important;gap:8px!important } .cos-axis time { min-width:auto!important;white-space:nowrap!important;overflow-wrap:normal!important } .cos-axis time:nth-child(1), .cos-axis time:nth-child(3) { display:block!important }" });
+		const old = await measure();
+		await baseline.evaluate((node) => node.parentNode!.removeChild(node));
+		await settled(page);
+		const current = await measure();
+		t.diagnostic(JSON.stringify({ knownLimit: "P2: fixed name column constrains historical endpoint", width, overall, locale, old, current }));
+		assert.equal(old.count, 3, "the baseline reproduces main's three visible ticks");
+		assert.equal(Date.parse(current.at), to, "the brush keeps its historical endpoint");
+		assert.notEqual(current.text, "Now", "the fallback never synthesizes Now for history");
+		for (const rect of current.fragments) assert.ok(rect.left >= current.areaLeft - 0.5 && rect.right <= current.areaRight + 0.5, "every historical text fragment fits");
+		const lines = (engine === "chromium" ? chromiumLines : webkitLines)[locale === LOCALE ? 0 : 1];
+		const measuredCeiling = (16 + 24 * lines) * overall;
+		assert.ok(current.height <= measuredCeiling + 0.5, `P2 no-worsening ceiling: ${current.height}px <= measured ${measuredCeiling}px`);
+		assert.ok(current.visibleRows >= Math.ceil(5 / overall), "the known limit preserves the accepted scaled lane budget");
+		assert.ok(Math.abs(current.tickShift) <= 1, "the axis and lane origin stay aligned");
+		assert.equal(current.drawerOverlap, false, "the historical endpoint clears the drawer reserve");
+		});
+	});
+
 	test(`phone layout ${engine}: the right panel drawer covers the Session header and the sticky prompt header`, { skip: engineSkip(engine) }, async (t) => {
 		const page = await open(t, engine, type, path(), { route: SESSION, context: phone(390) });
 		// The sticky prompt header shows once the reader scrolls past a prompt, which this fixture's place never does. Only

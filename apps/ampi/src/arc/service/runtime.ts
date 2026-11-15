@@ -10,7 +10,7 @@ import { createBuilder, type BuildKind, type BuilderState, type RequestOptions, 
 import { inheritedLock, type ServiceLock } from "./lock.ts";
 import { durableJson, readJson, STORE_SCHEMA } from "./store.ts";
 import { compare, validStamp, type Stamp } from "./engine.ts";
-import { serviceSettings, sessionDirectory } from "./settings.ts";
+import { ignoredIdleHours, serviceSettings, sessionDirectory } from "./settings.ts";
 import { piSource, canonicalSessionRef } from "./source.ts";
 import { piModel } from "./model.ts";
 import { automaticSchedule, type ScheduleState } from "./schedule.ts";
@@ -20,6 +20,9 @@ import { hostAdmission } from "./admission.ts";
 export type ControlCommand = { op: "hello" | "status" | "snapshot" | "request" | "dismiss" | "offer" | "stop"; stamp?: Stamp; refreshAuth?: boolean; knownRevisions?: Record<string, number>; sessionRef?: string; requestId?: string; kind?: BuildKind; requester?: string; options?: RequestOptions; dropId?: string; toPosition?: number };
 export async function startService(options: { agentDir: string; host: string; serviceVersion: string; releaseLine?: string | null; buildOrder: number; extensionPath: string; pollMs?: number; ready?(status: unknown): void; exit(): void }) {
  const lock: ServiceLock = inheritedLock(), incarnation = randomUUID();
+ try {
+  if (ignoredIdleHours(options.agentDir)) console.warn("Arc: ampi_arc.serviceIdleHours is ignored; the no-hub grace is five minutes.");
+ } catch { /* Status reports invalid settings. */ }
  const stamp: Stamp = { id: options.serviceVersion, order: options.buildOrder, line: options.releaseLine ?? null };
  const store: Store = { load: () => readJson(join(lock.store, "builder.json")) as BuilderState | undefined, save: value => durableJson(lock, "builder.json", value) };
  let sessionsDir = join(options.agentDir, "sessions");
@@ -58,41 +61,51 @@ export async function startService(options: { agentDir: string; host: string; se
    catch { /* Status carries typed invalid-settings facts. */ }
   })().finally(() => { checking = undefined; });
  }
- let scanning = false, idleHours = 24;
+ const scanCancellation = new AbortController();
+ let scanning: Promise<void> | undefined;
+ const requests = new Set<Promise<unknown>>();
  function holdsLock() {
   try { lock.assertHeld(); return true; } catch { return false; }
  }
  function hasAuthority() { return holdsLock() && existsSync(serviceAddress(lock.store)); }
  async function tick() {
   if (!hasAuthority()) { await stop(true); return; }
+  // A missing hub also bounds update drains with unfinished model calls.
+  if (Date.now() - lastHello >= 5 * 60_000) { await stop(true, "No AmPi hub was connected for 5 minutes, so Arc cancelled this Build."); return; }
   if (draining) return;
   let settings;
-  try { settings = serviceSettings(options.agentDir); idleHours = settings.serviceIdleHours; } catch { /* retain the last valid idle bound */ }
-  if (Date.now() - lastHello >= idleHours * 3_600_000) { await stop(); return; }
+  try { settings = serviceSettings(options.agentDir); } catch { /* Status reports invalid settings. */ }
   if (!settings) return;
   if (!scanning) {
-   scanning = true;
-   try {
-    for (const snapshot of await source.scan()) scheduler.observe(snapshot, settings.auto && !draining);
+   scanning = (async () => { try {
+    const snapshots = await source.scan(scanCancellation.signal);
+    if (draining) return;
+    for (const snapshot of snapshots) scheduler.observe(snapshot, settings.auto);
     await scheduler.tick(settings.auto && !draining);
     if (settings.auto && !draining) for (const status of builder.status()) {
      if (status.state === "failed" && status.nextAt && Date.parse(status.nextAt) <= Date.now()) await builder.request(status.sessionRef, `retry:${status.buildId}:${status.nextAt}`, "incremental", "source");
     }
    } catch { if (fault) return; /* Source scans retry without advancing their durable trigger. */ }
-   finally { scanning = false; }
+   })().finally(() => { scanning = undefined; });
+   await scanning;
   }
   wake();
  }
  const sockets = new Set<Socket>();
  let interval: ReturnType<typeof setInterval> | undefined;
  let stopping: Promise<void> | undefined, cancellation: Promise<void> | undefined;
- function stop(cancelActive = false): Promise<void> {
+ function stop(cancelActive = false, reason?: string): Promise<void> {
   if (!hasAuthority()) cancelActive = true;
-  if (cancelActive) { cancellation ??= builder.cancel(); void cancellation.catch(e => { fault = (e as Error).message; }); }
+  if (cancelActive) { cancellation ??= builder.cancel(reason); void cancellation.catch(e => { fault = (e as Error).message; }); }
   if (stopping) return stopping;
   draining = true;
+  scanCancellation.abort();
+  // A later signal must take the native termination path, even if JS is stuck.
+  process.off("SIGTERM", signalStop); process.off("SIGINT", signalStop);
   authCancellation.abort();
   return stopping = (async () => {
+   await scanning;
+   await Promise.allSettled([...requests]);
    await Promise.allSettled([...active]);
    let shutdownError: unknown;
    try { await cancellation; } catch (error) { shutdownError = error; }
@@ -105,19 +118,26 @@ export async function startService(options: { agentDir: string; host: string; se
    for (const socket of sockets) if (!socket.writableEnded) socket.destroy();
    // server.close() also unlinks a Unix socket. A displaced resident must
    // leave its successor's socket untouched, including this implicit unlink.
-   if (!holdsLock()) { options.exit(); return; }
+   if (!holdsLock()) { lock.release(); options.exit(); return; }
    const closed = new Promise<void>(resolve => server.close(() => resolve()));
    await closed;
    if (holdsLock()) rmSync(serviceAddress(lock.store), { force: true });
+   lock.release();
    options.exit();
-  })().catch(error => { stopping = undefined; throw error; });
+  })().catch(error => {
+   if (holdsLock()) { process.on("SIGTERM", signalStop); process.on("SIGINT", signalStop); stopping = undefined; }
+   throw error;
+  });
+ }
+ function signalStop() {
+  void stop().catch(e => { fault = (e as Error).message; console.error(`Arc service stop failed: ${fault}`); });
  }
  const mismatch = () => ({ ...status(), state: "error", outcome: "refused", code: "build-mismatch", detail: `This AmPi is older than ${options.host}. Update it.` });
  async function handle(command: ControlCommand): Promise<unknown> {
-  if (command.op === "status") { if (command.refreshAuth !== false) await checkSignIn(); return status(); }
+  if (command.op === "status") { if (!draining && command.refreshAuth !== false) await checkSignIn(); return status(); }
   if (command.op === "hello") {
    if (!validStamp(command.stamp) || compare(command.stamp, stamp) !== "same") return mismatch();
-   if (!draining) lastHello = Date.now();
+   lastHello = Date.now();
    return status();
   }
   if (!["offer", "stop"].includes(command.op) && (!validStamp(command.stamp) || compare(command.stamp, stamp) !== "same")) return mismatch();
@@ -145,7 +165,10 @@ export async function startService(options: { agentDir: string; host: string; se
   if (draining || fault) return { outcome: "refused", code: "service", transient: true, detail: "Arc service is draining or fenced" };
   if (command.op === "dismiss") return builder.dismiss(session, command.requestId ?? "", command.dropId ?? "", command.toPosition!);
   if (command.op === "request") {
-   const result = await builder.request(session, command.requestId ?? "", command.kind!, command.requester ?? "", command.options); wake(); return result;
+   const pending = builder.request(session, command.requestId ?? "", command.kind!, command.requester ?? "", command.options);
+   requests.add(pending);
+   try { const result = await pending; wake(); return result; }
+   finally { requests.delete(pending); }
   }
   throw new Error("Unknown Arc service command");
  }
@@ -163,8 +186,7 @@ export async function startService(options: { agentDir: string; host: string; se
   });
  });
  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(serviceAddress(lock.store), () => { chmodSync(serviceAddress(lock.store), 0o600); resolve(); }); });
- process.once("SIGTERM", () => { void stop().catch(e => { fault = (e as Error).message; console.error(`Arc service stop failed: ${fault}`); }); });
- process.once("SIGINT", () => { void stop().catch(e => { fault = (e as Error).message; console.error(`Arc service stop failed: ${fault}`); }); });
+ process.on("SIGTERM", signalStop); process.on("SIGINT", signalStop);
  interval = setInterval(() => { void tick().catch(e => { fault = (e as Error).message; }); }, options.pollMs ?? 2000);
  options.ready?.(status()); void tick();
  return { stop, status, builder };

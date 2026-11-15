@@ -209,6 +209,8 @@ export function useKeepPlace(
 	 * inside the end band.
 	 */
 	const pinTop = useRef<number | undefined>(undefined);
+	const extendSequence = useRef(0);
+	const extendIntent = useRef<number | undefined>(undefined);
 	/** Whether scrollTop sits below the record only by a clamp; the record (pin and place) then still holds. */
 	const clamp = useCallback(() => {
 		const el = scroller.current;
@@ -308,6 +310,7 @@ export function useKeepPlace(
 			if ((up ? node.scrollTop > 0 : node.scrollTop + node.clientHeight < node.scrollHeight - 1) && /auto|scroll/.test(getComputedStyle(node).overflowY)) return;
 		}
 		actionPlace.current = undefined;
+		if (up) extendIntent.current = undefined;
 		if (placing.current) { placing.current = false; handOffs.current++; }
 		if (!up || !pinned.current) return;
 		pinned.current = false;
@@ -342,18 +345,26 @@ export function useKeepPlace(
 		const el = scroller.current;
 		return el ? Math.abs(el.scrollTop - top.current) >= 1 && Math.abs(scaleOf(el) - scale.current) < 0.001 && !clamp() : false;
 	}, [scroller, clamp]);
+	const cancelExtendOnUpwardMovement = useCallback((el: HTMLElement, movement: boolean) => {
+		if (movement && el.scrollTop < top.current) extendIntent.current = undefined;
+	}, []);
 	/**
-	 * The reader's own scroll keeps its place. A scroll up leaves the end (`following`); only a scroll down into the end
-	 * band follows again.
+	 * A reader move to the painted end extends when the source tail is not shown. Follow only when the source tail is
+	 * shown and the reader reaches its end band. A clamp never arms either intent.
 	 */
 	const took = useCallback(() => {
 		const el = scroller.current;
 		if (!el) return;
-		if (moved()) actionPlace.current = undefined;
+		const movement = moved();
+		if (movement) actionPlace.current = undefined;
+		cancelExtendOnUpwardMovement(el, movement);
 		if (following()) pinned.current = tail();
-		else if (el.scrollTop > top.current && atEnd(el, band) && tail()) pinned.current = true;
+		else if (movement && el.scrollTop > top.current && atEnd(el, band)) {
+			if (tail()) pinned.current = true;
+			else extendIntent.current ??= ++extendSequence.current;
+		}
 		remember();
-	}, [scroller, following, pinned, band, tail, remember, moved]);
+	}, [scroller, following, pinned, band, tail, remember, moved, cancelExtendOnUpwardMovement]);
 	const resized = useCallback(() => {
 		const el = scroller.current;
 		if (!el || (el.clientWidth === size.current.width && el.clientHeight === size.current.height && el.getBoundingClientRect().top === size.current.screenTop)) return false;
@@ -376,6 +387,8 @@ export function useKeepPlace(
 		// The reader scrolled after a capture, before its render: the rows have not changed yet, so capture here again.
 		// The render restores where the reader is now, not where they were.
 		if (pending.current) {
+			const movement = moved();
+			cancelExtendOnUpwardMovement(el, movement);
 			const { options } = pending.current;
 			pending.current = { place: capturePlace(el, selector, attribute, following(), options), top: el.scrollTop, options };
 			return;
@@ -385,7 +398,7 @@ export function useKeepPlace(
 		// A clamp's scroll event is no scroll: the pin and the place stay until the content grows back.
 		if (clamp()) return;
 		took();
-	}, [scroller, selector, attribute, following, resized, clamp, took]);
+	}, [scroller, selector, attribute, following, resized, clamp, took, moved, cancelExtendOnUpwardMovement]);
 	// Scroll anchoring stays off from mount to unmount. React runs every layout cleanup of a commit before its effects:
 	// a cleanup that turned anchoring on would let the browser move scrollTop when the restore below reads layout.
 	useLayoutEffect(() => {
@@ -401,6 +414,8 @@ export function useKeepPlace(
 		let restored = false;
 		if (pending.current) {
 			// A scroll whose event has not arrived yet is the reader's too. A clamp lands at the bottom and is no scroll.
+			const movement = moved();
+			cancelExtendOnUpwardMovement(el, movement);
 			const shift = atEnd(el, 0) || clamp() ? 0 : el.scrollTop - pending.current.top;
 			restored = restorePlace(el, selector, attribute, pending.current.place, shift);
 			pending.current = undefined;
@@ -450,5 +465,12 @@ export function useKeepPlace(
 		actionPlace.current = capturePlace(el, selector, attribute, following());
 		remember();
 	}, [scroller, selector, attribute, following, remember]);
-	return { capture, action, measure, handOff, holds, onScroll, following, follow, record };
+	const pendingExtend = useCallback(() => extendIntent.current, []);
+	const completeExtend = useCallback((token: number) => {
+		if (extendIntent.current !== token) return false;
+		extendIntent.current = undefined;
+		return true;
+	}, []);
+	const cancelExtend = useCallback(() => { extendIntent.current = undefined; }, []);
+	return { capture, action, measure, handOff, holds, onScroll, following, follow, record, pendingExtend, completeExtend, cancelExtend };
 }

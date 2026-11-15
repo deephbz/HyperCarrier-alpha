@@ -83,6 +83,25 @@ test("Arc lifetime lock: exec and SIGSTOP exclude contenders; Node death release
  } finally { if (owner.child.pid) kill(owner.child.pid); if (modelPid) kill(modelPid); await owner.done; f.clean(); }
 });
 
+test("Arc lock release is irreversible and idempotent after descriptor reuse", async () => {
+ const f = fixture();
+ writeFileSync(f.script, `import assert from 'node:assert/strict';
+ import {openSync, fstatSync} from 'node:fs';
+ import {inheritedLock} from ${JSON.stringify(lockModule)};
+ const lock = inheritedLock(), fd = Number(process.env.AMPI_ARC_LOCK_FD);
+ lock.release();
+ assert.throws(() => lock.assertHeld(), /released/);
+ let reused;
+ do { reused = openSync(lock.store + '/service.lock', 'r'); } while (reused < fd);
+ assert.equal(reused, fd, 'fixture must reuse the lock descriptor');
+ assert.throws(() => lock.assertHeld(), /released/, 'inode equality cannot restore revoked authority');
+ lock.release();
+ assert.ok(fstatSync(reused).isFile(), 'repeated release must not close a reused descriptor');
+ console.log('{}');
+ `);
+ try { await probe(f, {}); } finally { f.clean(); }
+});
+
 test("Arc build order: identity is equal; time then ID orders every pair across lines", () => {
  const a = { id: "a", order: 10, line: "stable" }, b = { id: "b", order: 10, line: "durable" };
  assert.equal(compare(a, { ...a, order: 20, line: "durable" }), "same");

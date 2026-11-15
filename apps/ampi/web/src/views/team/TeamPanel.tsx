@@ -3,7 +3,7 @@ import type { PiTeamTask, TeamValue } from "../../../../src/shared/team.ts";
 import { findHost, useHosts, useTopic } from "../../client.ts";
 import { href } from "../../util.ts";
 import { hostLabelFor } from "../../components/host-label.ts";
-import { teamModes } from "../../extensions-ui.ts";
+import { teamModes } from "../../slot-registry.ts";
 import "./team.css";
 
 type Team = TeamValue["teams"][number];

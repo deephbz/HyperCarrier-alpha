@@ -29,11 +29,17 @@ export function composerHint(state: HintState, idle?: (state: HintState) => stri
  * into whichever field focus reaches, so an action that moves focus on keydown (Restore, a quote, a palette command)
  * would otherwise hand the rest of its press to that field. Every field that sends on a key asks this first.
  */
-export const freshPress = (event: { repeat: boolean; isComposing: boolean }) => !event.repeat && !event.isComposing;
+/**
+ * IME input owns this key. Chrome marks the Enter that commits a candidate isComposing; WebKit (AmPi.app) ends the
+ * composition first and sends that Enter with isComposing false and keyCode 229. Neither may send.
+ */
+export const composing = (event: { isComposing: boolean; keyCode?: number }) => event.isComposing || event.keyCode === 229;
+
+export const freshPress = (event: { repeat: boolean; isComposing: boolean; keyCode?: number }) => !event.repeat && !composing(event);
 
 /** The Composer's submission for a key; `held` is a submission key that auto-repeats, which the Composer consumes. */
-export function composerSubmission(event: { key: string; altKey: boolean; shiftKey: boolean; repeat: boolean; isComposing: boolean }): "steer" | "followUp" | "held" | null {
-	if (event.isComposing || event.shiftKey) return null;
+export function composerSubmission(event: { key: string; altKey: boolean; shiftKey: boolean; repeat: boolean; isComposing: boolean; keyCode?: number }): "steer" | "followUp" | "held" | null {
+	if (composing(event) || event.shiftKey) return null;
 	const key = `${event.altKey ? "Alt+" : ""}${event.key}`;
 	const whenBusy = COMPOSER_KEYS.find((binding) => binding.key === key)?.whenBusy ?? null;
 	return whenBusy && !freshPress(event) ? "held" : whenBusy;

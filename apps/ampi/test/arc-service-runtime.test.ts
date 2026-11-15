@@ -328,7 +328,7 @@ for (const missing of ["store", "lock", "socket"]) test(`Arc resident exits when
  }
 });
 
-test("Arc maintenance: stopped means the prior lifetime-lock owner has exited", async t => {
+test("Arc maintenance: stopped means the prior owner has relinquished authority", async t => {
  const f = await fixture(t), live = await f.manage("ensure");
  assert.equal(live.running, true);
  const stopped = await f.manage("stop");
@@ -337,6 +337,159 @@ test("Arc maintenance: stopped means the prior lifetime-lock owner has exited", 
  const probe = launchLocked(f.store, ["-e", "process.exit(0)"], { stdio: "ignore" });
  const code = await new Promise<number | null>((resolve, reject) => { probe.once("exit", resolve); probe.once("error", reject); });
  assert.equal(code, 0, "the prior lifetime lock is free");
+});
+
+async function blockedScan(t: any, silentDrain = false) {
+ const f = await fixture(t), sessions = join(f.agent, "sessions"), reads = join(f.dir, "reads"), release = join(f.dir, "read-release");
+ mkdirSync(sessions);
+ for (let i = 0; i < 4; i++) writeFileSync(join(sessions, `${i}.jsonl`), JSON.stringify({ type: "session", version: 3, id: `scan-${i}`, timestamp: "2026-01-01T00:00:00Z", cwd: "/synthetic" }) + "\n");
+ const seam = "async function readFile(file, expected) {";
+ assert.ok(f.body.includes(seam));
+ const body = silentDrain ? f.body.replace('if (command.op === "status") {', 'if (command.op === "status") { if (draining) await new Promise(() => {});') : f.body;
+ assert.ok(!silentDrain || body !== f.body);
+ writeFileSync(f.bundle, body.replace(seam, seam + `
+  const fs = await import('node:fs');
+  fs.appendFileSync(${JSON.stringify(reads)}, 'read\\n');
+  while (!fs.existsSync(${JSON.stringify(release)})) await new Promise(resolve => setTimeout(resolve, 10));
+ `));
+ const resident = await f.manage("ensure");
+ await until(() => existsSync(reads), "source did not admit its first read");
+ return { ...f, resident, reads, release };
+}
+
+test("Arc stop admits zero new scan reads and joins its in-flight read before unlock", async t => {
+ const f = await blockedScan(t);
+ assert.equal((await controlRequest(f.store, { op: "stop" })).state, "stopping");
+ const persisted = readFileSync(join(f.store, "builder.json"), "utf8");
+ const probe = launchLocked(f.store, ["-e", "process.exit(0)"], { stdio: "ignore" });
+ assert.equal((await once(probe, "close"))[0], 73, "in-flight source work retains authority");
+ assert.equal(readFileSync(f.reads, "utf8"), "read\n");
+ writeFileSync(f.release, "release");
+ assert.equal((await f.manage("stop")).state, "stopped");
+ assert.equal(readFileSync(f.reads, "utf8"), "read\n", "stop must not admit the remaining scan files");
+ assert.equal(readFileSync(join(f.store, "builder.json"), "utf8"), persisted, "scan cancellation must not alter terminal persistence");
+});
+
+test("Arc maintenance deadline retains a fresh stopping reply and its identity", async t => {
+ const f = await blockedScan(t);
+ const reply = await f.manage("stop", { timeoutMs: 400 });
+ assert.equal(reply.state, "stopping"); assert.equal(reply.pid, f.resident.pid); assert.equal(reply.running, true);
+ assert.equal(reply.incarnation, f.resident.incarnation);
+ writeFileSync(f.release, "release");
+ assert.equal((await f.manage("stop")).state, "stopped");
+});
+
+test("Arc maintenance deadline does not reuse an earlier reply from a now-silent owner", async t => {
+ const f = await blockedScan(t, true);
+ const reply = await f.manage("stop", { timeoutMs: 400 });
+ assert.equal(reply.state, "busy"); assert.equal(reply.pid, null); assert.equal(reply.running, null);
+ writeFileSync(f.release, "release");
+ assert.equal((await f.manage("stop")).state, "stopped");
+});
+
+test("Arc stop releases authority before a blocked terminal exit and a successor builds alone", { timeout: 15000 }, async t => {
+ const f = await fixture(t), model = blockingModel(f), entered = join(f.dir, "terminal-exit");
+ const seam = "options.exit();";
+ assert.ok(f.body.includes(seam));
+ writeFileSync(f.bundle, `import {writeFileSync as markExit} from 'node:fs';\n` + f.body.replaceAll(seam,
+  `markExit(${JSON.stringify(entered)}, 'entered'); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0); ${seam}`));
+ const old = await f.manage("ensure");
+ await controlRequest(f.store, { op: "stop" });
+ await until(() => existsSync(entered), "resident never reached terminal exit");
+ assert.equal(existsSync(serviceAddress(f.store)), false, "listener must be gone before terminal exit");
+ process.kill(old.pid, 0);
+ const probe = launchLocked(f.store, ["-e", "process.exit(0)"], { stdio: "ignore" });
+ assert.equal((await once(probe, "close"))[0], 0, "a stopped resident must release its lock before blocked process teardown");
+ writeFileSync(model.release, "release");
+ const successor = await f.manage("ensure", {}, true);
+ assert.notEqual(successor.pid, old.pid); assert.equal(successor.running, true);
+ const accepted = await controlRequest(f.store, request("successor-only"));
+ assert.equal(accepted.outcome, "accepted");
+ await until(async () => (await controlRequest(f.store, { op: "snapshot" })).receipts.length === 1, "successor Build did not finish");
+ assert.equal(readFileSync(model.calls, "utf8"), "call\n", "only the successor may start a paid call");
+ const saved = readFileSync(join(f.store, "builder.json"), "utf8");
+ process.kill(old.pid, "SIGTERM");
+ await until(() => { try { process.kill(old.pid, 0); return false; } catch { return true; } }, "old terminal exit ignored SIGTERM");
+ assert.equal(readFileSync(join(f.store, "builder.json"), "utf8"), saved, "old teardown must not write after releasing authority");
+ assert.equal((await controlRequest(f.store, { op: "status", refreshAuth: false })).pid, successor.pid, "old teardown must not unlink the successor listener");
+});
+
+for (const phase of ["service-stop", "terminal-exit"]) test(`Arc SIGTERM terminates a stuck stop within a bound (${phase})`, { timeout: 10000 }, async t => {
+ const f = await fixture(t), entered = join(f.dir, "stuck-stop");
+ const seam = phase === "service-stop" ? "await Promise.allSettled([...active]);" : "options.exit();";
+ assert.ok(f.body.includes(seam));
+ writeFileSync(f.bundle, `import {writeFileSync as markStop} from 'node:fs';\n` + f.body.replaceAll(seam,
+  `markStop(${JSON.stringify(entered)}, 'entered'); ${phase === "service-stop" ? "await new Promise(() => {});" : "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);"} ${seam}`));
+ const resident = await f.manage("ensure");
+ if (phase === "service-stop") process.kill(resident.pid, "SIGINT");
+ else await controlRequest(f.store, { op: "stop" });
+ await until(() => existsSync(entered), "resident never entered stuck stop");
+ const deadline = performance.now() + 1500;
+ process.kill(resident.pid, "SIGTERM");
+ while (true) {
+  try { process.kill(resident.pid, 0); } catch { break; }
+  assert.ok(performance.now() < deadline, "SIGTERM must terminate the stopping resident within 1500 ms");
+  await new Promise(resolve => setTimeout(resolve, 20));
+ }
+});
+
+for (const heldFlush of [false, true]) test(`Arc terminal action bypasses blocked native-exit teardown (held flush=${heldFlush})`, { timeout: 10000 }, async t => {
+ const f = await fixture(t), entered = join(f.dir, "native-exit"), flush = join(f.dir, "flush");
+ writeFileSync(f.bundle, `import {writeFileSync as markNativeExit} from 'node:fs';
+ if (import.meta.url.includes('/versions/')) {
+  process.exit = () => {
+   markNativeExit(${JSON.stringify(entered)}, 'entered');
+   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+  };
+  if (${heldFlush}) for (const stream of [process.stdout, process.stderr]) {
+   const write = stream.write;
+   stream.write = function(chunk, ...args) {
+    if (chunk === '') { markNativeExit(${JSON.stringify(flush)}, 'held'); return true; }
+    return write.call(this, chunk, ...args);
+   };
+  }
+ }\n` + f.body);
+ const resident = await f.manage("ensure");
+ await controlRequest(f.store, { op: "stop" });
+ const deadline = performance.now() + 1500;
+ while (true) {
+  try { process.kill(resident.pid, 0); } catch { break; }
+  assert.ok(performance.now() < deadline, "terminal teardown must not wait for native process.exit cleanup");
+  await new Promise(resolve => setTimeout(resolve, 20));
+ }
+ assert.equal(existsSync(entered), false, "terminal action must bypass process.exit");
+ if (heldFlush) assert.equal(existsSync(flush), true, "the bound must cover a flush callback that never arrives");
+});
+
+for (const phase of ["before-rename", "after-rename"]) test(`Arc interrupted terminal persistence recovers without replay (${phase})`, { timeout: 15000 }, async t => {
+ const f = await fixture(t), model = blockingModel(f), entered = join(f.dir, "terminal-persistence");
+ const seam = "renameSync(temporary, target);";
+ assert.ok(f.body.includes(seam));
+ const hold = `if (name === 'builder.json' && Object.values(value.jobs ?? {}).some(job => job.record.state === 'cancelled')) {
+  markPersistence(${JSON.stringify(entered)}, 'entered'); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+ }`;
+ writeFileSync(f.bundle, `import {writeFileSync as markPersistence} from 'node:fs';\n` + f.body.replace(seam, phase === "before-rename" ? hold + seam : seam + hold));
+ const resident = await f.manage("ensure");
+ const accepted = await controlRequest(f.store, request("interrupted-save"));
+ await until(() => existsSync(model.pid), "model never received prompt");
+ const child = Number(readFileSync(model.pid, "utf8")); f.pids.add(child);
+ await controlRequest(f.store, { op: "stop" });
+ await until(() => existsSync(entered), "stop never reached terminal persistence");
+ process.kill(resident.pid, "SIGTERM");
+ const deadline = performance.now() + 1500;
+ while (true) {
+  try { process.kill(resident.pid, 0); } catch { break; }
+  assert.ok(performance.now() < deadline, "signal must terminate interrupted persistence");
+  await new Promise(resolve => setTimeout(resolve, 20));
+ }
+ assert.throws(() => process.kill(child, 0), { code: "ESRCH" }, "paid child must be reaped before terminal persistence");
+ const successor = await f.manage("ensure", {}, true); assert.equal(successor.running, true);
+ const saved = JSON.parse(readFileSync(join(f.store, "builder.json"), "utf8"));
+ assert.equal(saved.commands["interrupted-save"].buildId, accepted.buildId);
+ assert.equal(saved.jobs[accepted.buildId].state, phase === "before-rename" ? "uncertain" : "cancelled");
+ assert.equal(saved.jobs[accepted.buildId].record.usage.cost, null);
+ assert.equal(saved.sessions["pi:fixture-session"].status.pause, "uncertain-call");
+ assert.equal(readFileSync(model.calls, "utf8"), "call\n", "restart must not replay an unknown-charge call");
 });
 
 test("Arc maintenance: concurrent ensure and held-lock probes return plain coded results", { timeout: 20000 }, async t => {
@@ -468,7 +621,7 @@ test("Arc stop retains its lock after a valid-store save failure, then exits aft
  writeFileSync(f.bundle, f.body.replace(marker, marker + ` if(name==='builder.json' && Object.values(value.jobs??{}).some(job=>job.record.state==='cancelled')) throw new Error('synthetic terminal persistence failure');`));
  const resident = await f.manage("ensure"); await controlRequest(f.store, request("failed-terminal-save"));
  await until(() => existsSync(model.pid), "model never received prompt"); f.pids.add(Number(readFileSync(model.pid, "utf8")));
- assert.equal((await f.manage("stop", { timeoutMs: 500 })).state, "busy");
+ assert.equal((await f.manage("stop", { timeoutMs: 500 })).state, "stopping");
  process.kill(resident.pid, 0);
  assert.equal((await controlRequest(f.store, { op: "status", refreshAuth: false })).state, "stopping");
  process.kill(resident.pid, "SIGTERM"); await new Promise(resolve => setTimeout(resolve, 100));
@@ -565,12 +718,80 @@ test("Arc relays: a newer hub updates; older hub refuses; equal hubs share one s
  assert.equal((await rawControlRequest(f.store, { op: "request", stamp: older.stamp, sessionRef: "pi:s", requestId: "old", kind: "manual" })).code, "build-mismatch");
 });
 
-test("Arc bundle: idle cleanup ignores incompatible handshakes without a disable marker", { timeout: 15000 }, async t => {
- const f = await fixture(t); f.settings({ serviceIdleHours: .0005 });
- const s = await f.manage("ensure"); assert.equal(s.running, true);
+test("Arc no-hub grace cancels unfinished work and reaps its child before the service exits", { timeout: 20000 }, async t => {
+ const f = await fixture(t, true), model = blockingModel(f);
+ const resident = await f.manage("ensure");
+ const accepted = await controlRequest(f.store, request("no-hub"));
+ await until(() => existsSync(model.pid), "model never received prompt");
+ const pid = Number(readFileSync(model.pid, "utf8")); f.pids.add(pid);
+ await f.advance(300_000);
+ await until(async () => !(await f.manage("status")).running, "service exceeded its five-minute no-hub grace");
+ assert.throws(() => process.kill(pid, 0), { code: "ESRCH" }, "the model must be reaped before service exit");
+ assert.throws(() => process.kill(resident.pid, 0), { code: "ESRCH" });
+ const saved = JSON.parse(readFileSync(join(f.store, "builder.json"), "utf8"));
+ assert.equal(saved.jobs[accepted.buildId].record.state, "cancelled");
+ assert.equal(saved.sessions["pi:fixture-session"].status.pause, "uncertain-call");
+ await f.manage("ensure");
+ const status = (await controlRequest(f.store, { op: "snapshot" })).statuses[0];
+ assert.equal(status.record.reason, "No AmPi hub was connected for 5 minutes, so Arc cancelled this Build.");
+ assert.equal(status.detail, status.record.reason);
+});
+
+test("Arc no-hub grace renews on a compatible returning hub, but not an incompatible one", { timeout: 20000 }, async t => {
+ const f = await fixture(t, true), resident = await f.manage("ensure");
+ await f.advance(240_000);
+ assert.equal((await controlRequest(f.store, { op: "hello" })).pid, resident.pid);
+ await f.advance(60_000);
+ assert.equal((await f.manage("status")).pid, resident.pid, "a returning hub keeps the same service beyond the original grace");
  assert.equal((await controlRequest(f.store, { op: "hello", stamp: { ...f.stamp, id: "incompatible" } })).code, "build-mismatch");
- await new Promise(r => setTimeout(r, 2500));
- const stopped = await f.manage("status"); assert.equal(stopped.running, false);
+ await f.advance(240_000);
+ await until(async () => !(await f.manage("status")).running, "incompatible hello extended the grace");
+});
+
+test("Arc no-hub grace cancels a queued Build and retains its cause when a hub returns", { timeout: 20000 }, async t => {
+ const f = await fixture(t, true); blockingModel(f); await f.manage("ensure");
+ const accepted = await controlRequest(f.store, { ...request("queued-no-hub"), options: { nextAt: new Date(Date.now() + 3_600_000).toISOString() } });
+ assert.equal((await controlRequest(f.store, { op: "snapshot" })).statuses[0].state, "queued");
+ await f.advance(300_000);
+ await until(async () => !(await f.manage("status")).running, "queued Build retained the service past grace");
+ await f.manage("ensure");
+ const status = (await controlRequest(f.store, { op: "snapshot" })).statuses[0];
+ assert.equal(status.record.buildId, accepted.buildId);
+ assert.equal(status.record.state, "cancelled");
+ assert.equal(status.record.reason, "No AmPi hub was connected for 5 minutes, so Arc cancelled this Build.");
+ assert.equal(existsSync(join(f.dir, "calls")), false, "queued work cannot spend during shutdown or restart");
+});
+
+for (const renew of [false, true]) test(`Arc no-hub grace bounds an update drain${renew ? " after a compatible renewal" : ""}`, { timeout: 20000 }, async t => {
+ const f = await fixture(t, true), model = blockingModel(f);
+ const resident = await f.manage("ensure"); await controlRequest(f.store, request("update-no-hub"));
+ await until(() => existsSync(model.pid), "model never received prompt");
+ const pid = Number(readFileSync(model.pid, "utf8")); f.pids.add(pid);
+ assert.equal((await controlRequest(f.store, { op: "offer", stamp: { id: f.version2, order: 200, line: "stable" } })).state, "updating");
+ if (renew) {
+  await f.advance(240_000);
+  assert.equal((await controlRequest(f.store, { op: "hello" })).state, "updating");
+  await f.advance(60_000);
+  assert.equal((await f.manage("status")).pid, resident.pid, "a compatible hello renews even during an update drain");
+  process.kill(pid, 0);
+  await f.advance(240_000);
+ } else await f.advance(300_000);
+ await until(async () => !(await f.manage("status")).running, "update drain exceeded the no-hub grace");
+ assert.throws(() => process.kill(pid, 0), { code: "ESRCH" }, "expiry must reap the draining model");
+ assert.throws(() => process.kill(resident.pid, 0), { code: "ESRCH" });
+});
+
+test("Arc obsolete serviceIdleHours parses and logs once per service start, never per tick", { timeout: 20000 }, async t => {
+ const f = await fixture(t, true); f.settings({ serviceIdleHours: "obsolete" });
+ assert.equal((await f.manage("ensure")).state, "running", "the obsolete key cannot invalidate settings");
+ const warnings = () => readFileSync(join(f.store, "service.log"), "utf8").split("\n").filter(line => line.includes("ampi_arc.serviceIdleHours is ignored"));
+ await f.advance(120_000);
+ await controlRequest(f.store, { op: "hello" });
+ await f.advance(120_000);
+ assert.equal((await f.manage("status")).state, "running");
+ assert.equal(warnings().length, 1, "ticks and handshakes must not repeat the warning");
+ await f.manage("stop"); await f.manage("ensure");
+ assert.equal(warnings().length, 2, "each service start logs the obsolete key once");
 });
 
 test("Arc bundle: invalid settings and missing sign-in remain visible without paid calls", { timeout: 15000 }, async t => {
@@ -676,7 +897,7 @@ test("Arc resident answers status and stop during a long open tail with settled-
  for (const [marker, addition] of [
   ["async function manage(body, operation) {", "if(operation.op==='stop') markStop('manager-enter');"],
   ["async function lockedMain(operation, body) {", "if(operation.op==='stop') markStop('lock-owner-enter');"],
-  ["function stop(cancelActive = false) {", "if(cancelActive) markStop('resident-cancel-enter');"],
+  ["function stop(cancelActive = false, reason) {", "if(cancelActive) markStop('resident-cancel-enter');"],
   ["await checking;", "markStop('resident-children-and-cancellation-durable');"]
  ]) {
   assert.ok(instrumented.includes(marker), `missing stop marker ${marker}`);
@@ -704,10 +925,14 @@ for (const release of [false, true]) test(`Arc stop proves completion from the l
  const f = await fixture(t), marker = "stop(true).catch";
  assert.ok(f.body.includes(marker));
  writeFileSync(f.bundle, f.body.replace(marker, "for (const socket of sockets) socket.destroy(); " + (release ? marker : "Promise.resolve().catch")));
- await f.manage("ensure");
+ const resident = await f.manage("ensure");
  const stopped = await f.manage("stop", { timeoutMs: release ? 10000 : 500 });
- assert.equal(stopped.state, release ? "stopped" : "busy", "a lost control acknowledgement cannot replace the lifetime-lock proof");
- if (!release) assert.equal((await f.manage("status")).running, true, "the held owner remains alive");
+ assert.equal(stopped.state, release ? "stopped" : "running", "a lost control acknowledgement cannot replace the lifetime-lock proof");
+ if (!release) {
+  assert.notEqual(stopped.state, "stopped", "a fresh observation does not prove stop completion");
+  assert.equal(stopped.pid, resident.pid); assert.equal(stopped.running, true);
+  assert.equal((await f.manage("status")).running, true, "the held owner remains alive");
+ }
 });
 
 for (const held of [false, true]) test(`Arc stop tolerates socket loss after status and proves the lifetime lock (held=${held})`, async t => {
@@ -811,14 +1036,22 @@ for (const phase of ["lock", "startup", "legacy"] as const) test(`Arc replacemen
  const lockSeam = "flock($lock, LOCK_EX | LOCK_NB) or exit(73);";
  const seam = phase === "startup" ? "  exec {$node} $node, @args;" : lockSeam;
  assert.equal(original.split(seam).length, 2);
- // Delay phase delivery, then hold the exact phase across the unchanged deadline.
+ // Reach and observe the held phase before the unchanged deadline expires.
+ const clock = managerClock(f), observed = join(f.dir, "observed-phase");
  const record = (path: string) => `open(my $probe, '>', '${path}') or die $!; print {$probe} $$; close($probe);\n`;
- let body = original.replace("my ($store, $node, @args) = @ARGV;", "select(undef, undef, undef, 0.03);\nmy ($store, $node, @args) = @ARGV;")
-  .replace(lockSeam, () => record(guardian) + lockSeam)
-  .replace(seam, () => record(held) + "select(undef, undef, undef, 10);\n" + seam);
+ let body = original.replace(lockSeam, () => record(guardian) + lockSeam)
+  .replace(seam, () => record(held) + "pipe(my $held_read, my $held_write) or die $!;\nsysread($held_read, my $held_byte, 1);\n" + seam);
  if (phase === "legacy") body = body.replace('syswrite($parent, "W")', "1").replace('syswrite($parent, "L")', "1");
+ else {
+  const observedSeam = `phase = "${phase}";`;
+  assert.equal(body.split(observedSeam).length, 2);
+  body = body.replace(observedSeam, `{ ${observedSeam} writeFileSync(${JSON.stringify(observed)}, "observed"); }`);
+ }
  writeFileSync(path, body);
- const failed = await f.manage("ensure", { timeoutMs: 150 }, true);
+ const pending = f.manage("ensure", { timeoutMs: 150 }, true, clock.env);
+ await until(() => existsSync(held) && (phase === "legacy" || existsSync(observed)), "launcher and manager did not reach the tested phase");
+ await clock.advance(150);
+ const failed = await pending;
  assert.equal(failed.code, "replacement-failed");
  assert.match(failed.detail, phase === "lock" ? /timed out waiting for the service to drain and release its lock/ : /Arc service startup timed out/);
  for (const pidFile of [guardian, held]) {

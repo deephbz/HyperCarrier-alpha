@@ -1742,7 +1742,7 @@ export class PiHost extends EventEmitter {
 			"thread.outline": async (args) => {
 				const copy = this.#copyByThread(String(args.threadId));
 				if (!copy) throw new Error("Session unavailable");
-				return this.#store.outline(copy.path);
+				return this.#store.outline(copy.path, args.known);
 			},
 			"thread.find": async (args) => {
 				const copy = this.#copyByThread(String(args.threadId));

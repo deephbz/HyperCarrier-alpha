@@ -11,7 +11,7 @@ import { hostLabel, hostLabelFor } from "./host-label.ts";
 import { useFeeds } from "../context.ts";
 import { MOD, go } from "../util.ts";
 import { freshPress } from "../composer-keys.ts";
-import { Modal } from "./Dialogs.tsx";
+import { Modal } from "./Modal.tsx";
 import { Segmented } from "./Segmented.tsx";
 import { newId } from "../ids.ts";
 

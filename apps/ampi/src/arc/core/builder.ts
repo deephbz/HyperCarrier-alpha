@@ -19,7 +19,8 @@ export function createBuilder(options: BuilderOptions): Builder {
  const running = new Map<string, Promise<void>>(), inFlight = new Set<string>();
  const cancellation = new AbortController();
  let cancelled: Promise<void> | undefined;
- const checkCancellation = () => { if (cancellation.signal.aborted) throw error("cancelled", "Arc service stop cancelled this Build."); };
+ let cancellationReason = "Arc service stop cancelled this Build.";
+ const checkCancellation = () => { cancellation.signal.throwIfAborted(); };
  let reconciliation: Promise<Set<string>> | undefined;
  const clocks = new Map<string, { start: number; elapsed: number }>();
  const monotonic = options.monotonic ?? (() => performance.now());
@@ -307,7 +308,7 @@ export function createBuilder(options: BuilderOptions): Builder {
  }
  function cancelJob(job: BuildJob, record = job.record) {
   const session = state.sessions[job.sessionRef]!;
-  account(job, record); record.state = "cancelled"; record.endedAt = now(); record.reason = "Arc service stop cancelled this Build.";
+  account(job, record); record.state = "cancelled"; record.endedAt = now(); record.reason = cancellationReason;
   job.record = record; job.state = "cancelled"; pauseClock(job);
   if (session.active === job.buildId) session.active = undefined;
   if (session.pending === job.buildId) session.pending = undefined;
@@ -318,9 +319,10 @@ export function createBuilder(options: BuilderOptions): Builder {
    session.receipt.revision = ++state.revision;
   }
  }
- function cancel(): Promise<void> {
+ function cancel(reason = "Arc service stop cancelled this Build."): Promise<void> {
   if (cancelled) return cancelled;
-  cancellation.abort(error("cancelled", "Arc service stop cancelled this Build."));
+  cancellationReason = reason;
+  cancellation.abort(error("cancelled", reason));
   return cancelled = (async () => {
    const outcomes = await Promise.allSettled([...running.values()]);
    const rejected = outcomes.find(outcome => outcome.status === "rejected");

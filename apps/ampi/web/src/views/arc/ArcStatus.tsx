@@ -50,7 +50,9 @@ export function BuildState({ value, stale, host }: { value: ArcValue; stale: boo
 	const status = value.status;
 	const wait = status.wait;
 	let text: string | undefined;
-	if (status.pause === "uncertain-call" || status.state === "uncertain") text = PAUSE;
+	const paused = status.pause === "uncertain-call" || status.state === "uncertain";
+	if (status.record?.state === "cancelled" && (!paused || status.record.reason)) text = `${status.record.reason ?? "Arc cancelled this Build."}${paused ? " Automatic Builds are paused: the model call may have been charged. Press Build to continue; it may charge again." : " Press Build to continue."}`;
+	else if (paused) text = PAUSE;
 	else if (status.state === "waiting") {
 		if (status.waitCause === "capacity" || wait?.reason === "capacity") text = wait ? `Waiting for a model slot: ${wait.running} of ${wait.limit} in use${wait.byHost?.length ? ` (${wait.byHost.map(({ host, running }) => `${host} ${running}`).join(", ")})` : ""}.` : "Waiting for a model slot.";
 		else if (status.waitCause === "admission-unavailable") text = "Waiting: AmPi cannot check the shared model limit now.";

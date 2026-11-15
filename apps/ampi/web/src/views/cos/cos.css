@@ -103,8 +103,8 @@
 	.cos-list-head, .cos-list-row { grid-template-columns: minmax(0, 1fr) 48px 54px 64px; gap: 8px; }
 	.cos-list-row .cos-links { gap: 4px; }
 }
-/* A phone (styles.css's 600 px drawer rule). The axis shows three short labels, so it fits the screen and the page never
-   scrolls sideways (docs/ux/swipe-drawers.md). The Timeline lanes take their full height and the
+/* A phone (styles.css's 600 px drawer rule). The axis shows three short labels when the time area can hold them.
+   A narrower time area shows the endpoint alone. The page never scrolls sideways (docs/ux/swipe-drawers.md). The Timeline lanes take their full height and the
    page is the one vertical scroller, so a tall header or a large display size cannot squeeze them to nothing. The
    axis sticks to the top; nothing else in the page may stick above it. Timeline.tsx reads the lanes' offset from
    either scroller (rows.ts laneOffset). A page's name keeps its whole word; its count line wraps below. */
@@ -117,6 +117,16 @@
 	/* The stuck axis reaches the screen top, where ☰ shows: its label keeps the ☰ reserve, and its first column gives up
 	   the same width, so the ticks stay over the lanes' time column. */
 	.cos-axis { padding-left: var(--reveal-reserve); grid-template-columns: calc(142px - var(--reveal-reserve)) minmax(0, 1fr); }
+	/* Hidden ticks create no track; the existing display rules remain the tick-membership owner.
+	   Chromium/WebKit greedy line maxima: en-US 4.6706em, de-DE 4.6993em. Reserve 4.7em per line for two lines.
+	   Three tracks plus two 2/3em gaps need 3 * 4.7em + 2 * 2/3em = 15.4334em.
+	   The matrix checks this measured limit. A narrower time area keeps only the final tick. */
+	.cos-axis > div { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 0.666667em; container-type: inline-size; }
+	.cos-axis time { min-width: 0; white-space: normal; overflow-wrap: break-word; }
+	.cos-axis time:last-child { text-align: right; }
+	@container (width < 15.4334em) {
+		.cos-axis time:not(:last-child) { display: none; }
+	}
 	.cos-tick-full { display: none; }
 	.cos-tick-short { display: inline; }
 }

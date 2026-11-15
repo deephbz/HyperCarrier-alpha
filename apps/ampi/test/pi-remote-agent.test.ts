@@ -183,30 +183,35 @@ test("pi remote agent: key tokens are configurable; a changed binding is refused
 	assert.deepEqual(f.herdrCalls(), [["pane", "send-text", "w1:p1", "later"], ["agent", "send-keys", "w1:p1", "enter"]]);
 });
 
-test("pi remote agent: spawn ledger and start outcomes; close fails closed on Team state", async (t) => {
+test("pi remote agent: a Team worker's pane closes like any pane, with or without Team state", async (t) => {
+	for (const availability of ["unavailable", "available"] as const) {
+		const f = fixture();
+		// Pi Team Bright's observation: unavailable, or Session B's pane w1:p1 is a teammate.
+		const snapshotFile = join(f.dir, "snapshot.json");
+		writeFileSync(snapshotFile, JSON.stringify({
+			schema: "pi-teams-observation/1", availability, issues: availability === "unavailable" ? [{ code: "store_locked" }] : [],
+			teams: availability === "unavailable" ? [] : [{ teamName: "crew", memberships: [{
+				membershipId: "m1", memberName: "w1", coordinationRole: "teammate", lifecycle: { state: "current" },
+				terminalTarget: { backend: "herdr", kind: "pane", targetId: "w1:p1" }, session: { kind: "pi-jsonl-path", locator: f.sessionB },
+			}] }],
+		}));
+		const observation = join(f.dir, "observation.mjs");
+		writeFileSync(observation, `import { readFileSync } from "node:fs";\nexport const readObservationSnapshot = async () => JSON.parse(readFileSync(${JSON.stringify(snapshotFile)}, "utf8"));\n`);
+		const agent = Agent.start(f, { teams: true, teamsMs: 100, ptbObservation: observation });
+		t.after(() => agent.stop());
+		await agent.wait((x) => x.t === "agents" && x.agents.length > 0, "agents");
+		if (availability === "available") await agent.wait((x) => x.t === "teams" && x.members.length === 1, "teams", 0, 8000);
+		const closed = await agent.request({ t: "close", id: 1, session: f.sessionB, pane: "w1:p1" });
+		assert.equal(closed.ok, true, `${availability}: ${JSON.stringify(closed.error)}`);
+		assert.deepEqual(f.herdrCalls().at(-1), ["pane", "close", "w1:p1"], `${availability}: the close reaches Herdr`);
+	}
+});
+
+test("pi remote agent: spawn ledger and start outcomes", async (t) => {
 	const f = fixture();
-	// Pi Team Bright's observation, read from a file the test rewrites: first unavailable, then Session B's pane is a teammate.
-	const snapshotFile = join(f.dir, "snapshot.json");
-	writeFileSync(snapshotFile, JSON.stringify({ schema: "pi-teams-observation/1", availability: "unavailable", issues: [{ code: "store_locked" }], teams: [] }));
-	const observation = join(f.dir, "observation.mjs");
-	writeFileSync(observation, `import { readFileSync } from "node:fs";\nexport const readObservationSnapshot = async () => JSON.parse(readFileSync(${JSON.stringify(snapshotFile)}, "utf8"));\n`);
-	const agent = Agent.start(f, { teams: true, teamsMs: 100, ptbObservation: observation });
+	const agent = Agent.start(f, { shellReadyMs: 600 });
 	t.after(() => agent.stop());
 	await agent.wait((x) => x.t === "agents" && x.agents.length > 0, "agents");
-	// Installed but no good snapshot: any pane may be a teammate's.
-	const stale = await agent.request({ t: "close", id: 1, session: f.sessionA, pane: "w1:p2" });
-	assert.deepEqual([stale.ok, stale.error.code], [false, "team_unknown"]);
-	writeFileSync(snapshotFile, JSON.stringify({
-		schema: "pi-teams-observation/1", availability: "available", issues: [],
-		teams: [{ teamName: "crew", memberships: [{
-			membershipId: "m1", memberName: "w1", coordinationRole: "teammate", lifecycle: { state: "current" },
-			terminalTarget: { backend: "herdr", kind: "pane", targetId: "w1:p1" }, session: { kind: "pi-jsonl-path", locator: f.sessionB },
-		}] }],
-	}));
-	await agent.wait((x) => x.t === "teams" && x.members.length === 1, "teams", 0, 8000);
-	const worker = await agent.request({ t: "close", id: 2, session: f.sessionB, pane: "w1:p1" });
-	assert.deepEqual([worker.ok, worker.error.code], [false, "team_worker"]);
-	assert.deepEqual(f.herdrCalls(), [], "no Herdr call for a refused close");
 
 	// Two concurrent spawns with one requestId while Herdr is slow to split: one split; the other cannot know yet.
 	const spawn = (id: number, requestId: string) => agent.request({ t: "spawn", id, requestId, sessionId: requestId, cwd: "/work", beside: "w1:p2", name: "x" });
@@ -223,9 +228,17 @@ test("pi remote agent: spawn ledger and start outcomes; close fails closed on Te
 	const unknownRequestId = randomUUID();
 	const stuckRequestId = randomUUID();
 	const goneRequestId = randomUUID();
+	// A new pane's shell is still starting: Herdr refuses, then accepts once the prompt is up. One pane, then started.
+	const startCalls = () => f.herdrCalls().filter((c) => c[0] === "agent" && c[1] === "start").length;
+	const startsBefore = startCalls();
+	f.setState({ ...f.state, startBusyCalls: 2 });
+	const late = await spawn(11, randomUUID());
+	assert.deepEqual([late.ok, late.evidence, startCalls() - startsBefore], [true, "started", 3]);
+	// A shell that never reaches its prompt in shellReadyMs stays a refusal, and the pane is named.
 	f.setState({ ...f.state, startError: "agent_pane_busy" });
 	const busy = await spawn(5, busyRequestId);
 	assert.deepEqual([busy.ok, busy.error.code, typeof busy.pane], [false, "agent_pane_busy", "string"]);
+	assert.match(busy.error.message, /after 1 s; its shell never reached an idle prompt/);
 	f.setState({ ...f.state, startError: "agent_start_timeout" });
 	const unknown = await agent.request({ t: "spawn", id: 6, requestId: unknownRequestId, sessionId: unknownRequestId, cwd: "/work", beside: "w1:p2", prompt: "hi" });
 	assert.deepEqual([unknown.ok, unknown.via, unknown.evidence, unknown.submitted?.error?.code], [true, "herdr", "unknown", "not_started"]);
@@ -234,12 +247,12 @@ test("pi remote agent: spawn ledger and start outcomes; close fails closed on Te
 	assert.equal(statSync(join(f.agentDir, "hc-control", "spawns")).mode & 0o777, 0o700);
 	assert.equal(JSON.parse(readFileSync(ledger, "utf8")).state, "unknown");
 	// Repeats answer from the ledger; an attempt that stopped while splitting is never split again.
-	assert.equal(splits(), 3);
+	assert.equal(splits(), 4);
 	assert.deepEqual([(await spawn(7, busyRequestId)).error.code, (await spawn(8, unknownRequestId)).evidence], ["agent_pane_busy", "unknown"]);
 	writeFileSync(join(f.agentDir, "hc-control", "spawns", `${stuckRequestId}.json`), JSON.stringify({ state: "splitting" }));
 	const stuck = await spawn(9, stuckRequestId);
 	assert.deepEqual([stuck.ok, stuck.error.code], [false, "outcome_unknown"]);
-	assert.equal(splits(), 3);
+	assert.equal(splits(), 4);
 	// An explicit split refusal carries Herdr's code.
 	const gone = await agent.request({ t: "spawn", id: 10, requestId: goneRequestId, sessionId: goneRequestId, cwd: "/work", beside: "w9:none" });
 	assert.deepEqual([gone.ok, gone.error.code], [false, "pane_not_found"]);

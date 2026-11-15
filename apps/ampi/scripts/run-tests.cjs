@@ -105,7 +105,7 @@ const expected = (file) => times[name(file)] ?? (manifest.costs?.[name(file)] ??
 const queue = [...files].sort((a, b) => expected(b) - expected(a));
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), "ampi-test-runner-"));
-const env = { ...process.env };
+const env = { ...process.env, AMPI_TEST_RUNNER_ID: require("./process-owner.cjs").processIdentity(process.pid) };
 // Playwright's browser cache holds browser binaries only; a WebKit test needs it under the per-file HOME.
 env.PLAYWRIGHT_BROWSERS_PATH ??= path.join(os.homedir(), process.platform === "darwin" ? "Library/Caches/ms-playwright" : ".cache/ms-playwright");
 // The one thing a test takes from the owner's home: the installed Pi program, the anchor of test/node-prompt-parity.test.ts.

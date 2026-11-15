@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test, type TestContext } from "node:test";
@@ -10,9 +10,13 @@ import { build } from "vite";
 // @ts-ignore: shared browser discovery is plain ESM.
 import { findChrome } from "../scripts/perf/browser.mjs";
 import { stamp } from "../src/shared/build.ts";
+import { isSessionInScope, SESSION_SCOPE_MS } from "../src/shared/session-scope.ts";
+import { groupSessions, timelineRows } from "../web/src/views/cos/rows.ts";
+import type { TimelineValue } from "../src/shared/timeline.ts";
 import { engineSkip } from "./engines.ts";
 import { waitForDemoArc } from "../scripts/demo/cos.ts";
 import { maintainHost } from "../src/arc/service/client.ts";
+import { ownerAlive } from "../scripts/process-owner.cjs";
 import type { DemoDataMode } from "../scripts/demo/data/modes.ts";
 
 // The owner's resize incident (ui-resize-edges): the real App and stylesheet, built in memory from web/src, on the
@@ -53,14 +57,26 @@ process.once("exit", () => {
 	for (const pending of hubs.values()) void pending.then((hub) => hub.stop()).catch(() => {});
 });
 
+export async function waitForDemoGuardian(guardian: string, timeoutMs = 15_000): Promise<void> {
+	assert.ok(guardian, "the owner-bound demo recorded its guardian generation");
+	const deadline = Date.now() + timeoutMs;
+	while (ownerAlive(guardian)) {
+		assert.ok(Date.now() < deadline, `demo guardian ${guardian} did not end within ${timeoutMs} ms after fixture stop`);
+		await new Promise(resolve => setTimeout(resolve, 50));
+	}
+}
+
 async function startHub(mode: DemoDataMode): Promise<DemoHub> {
 	hubBuild = stamp().id;
 	const run = mkdtempSync(join(tmpdir(), "ampi-resize-"));
 	const home = join(run, "home"), demo = join(run, "demo"), log = join(run, "hub.log");
 	mkdirSync(join(home, ".ampi"), { recursive: true });
-	const env = { ...process.env, PATH: refusingPath(join(run, "bin"), process.env.PATH), HOME: home, AMPI_HOME: join(home, ".ampi"), AMPI_HUB_CONFIG: join(home, ".ampi/hub.json"), PI_CODING_AGENT_DIR: join(demo, "agent"), DEMO_DIR: demo, DEMO_WEB: "external", PORT: "0" };
+	const env = { ...process.env, PATH: refusingPath(join(run, "bin"), process.env.PATH), HOME: home, AMPI_HOME: join(home, ".ampi"), AMPI_HUB_CONFIG: join(home, ".ampi/hub.json"), PI_CODING_AGENT_DIR: join(demo, "agent"), DEMO_DIR: demo, DEMO_WEB: "external", PORT: "0", DEMO_LIFETIME: "owner", DEMO_OWNER_FD: "3",
+		// phoneTimelineFixture seeds the empty hub with Sessions dated at fixed past instants; the real-clock Session scope would drop them.
+		...(mode === "empty" ? { AMPI_DEMO_RECENT_MS: String(3650 * 86_400_000) } : {}) };
 	const args = ["scripts/pi-demo.ts", ...(mode === "demo" ? [] : ["--fixture", mode])];
-	const child = spawn(process.execPath, args, { cwd: app, detached: true, env, stdio: ["ignore", openSync(log, "a"), openSync(log, "a")] });
+	const child = spawn(process.execPath, args, { cwd: app, detached: true, env, stdio: ["ignore", openSync(log, "a"), openSync(log, "a"), "pipe"] });
+	(child.stdio[3] as import("node:net").Socket).unref();
 	child.unref();
 	let stopping: Promise<void> | undefined;
 	const stop = () => {
@@ -87,6 +103,10 @@ async function startHub(mode: DemoDataMode): Promise<DemoHub> {
 			// The resident owns a separate process group. Keep its lock until stop completes.
 			const stopped = await maintainHost({ id: "devbox", label: "devbox", kind: "pi-local", agentConfig: { agentDir: join(demo, "agent") } }, { op: "stop", timeoutMs: 10_000 });
 			assert.equal(stopped.state, "stopped", `demo Arc teardown: ${JSON.stringify(stopped)}`);
+			// A killed hub cannot await its detached guardian. Keep the sandbox until
+			// that exact generation ends; never hide a timeout from the strict runner.
+			const guardian = readFileSync(join(demo, ".demo-guardian"), "utf8");
+			await waitForDemoGuardian(guardian);
 			rmSync(run, { recursive: true, force: true });
 		})();
 	};
@@ -102,10 +122,12 @@ async function startHub(mode: DemoDataMode): Promise<DemoHub> {
 	const [, port, key] = await wait("URL", async () => readFileSync(log, "utf8").match(/demo hub: http:\/\/127\.0\.0\.1:(\d+)\/\?k=([0-9a-f]+)/) ?? undefined);
 	assert.ok(Number(port) < FORBIDDEN_PORTS[0]! || Number(port) > FORBIDDEN_PORTS[1]!, "the demo hub never takes an owner port");
 	const read = { port: Number(port), host: "devbox", auth: { bearer: key! }, timeoutMs: 3000 };
-	// The lead is live once the demo Host reads its fake Herdr; only then does a file append stream to the page.
-	await wait("live lead", async () => ((await threadsSnapshot(read)).find((t) => t.id === "pi:sess-lead")?.live ? true : undefined));
-	// A cold hub derives the lead's transcript first; a page opened before that shows "Loading…" for long.
-	await wait("lead transcript", () => topicSnapshot({ ...read, topic: { kind: "thread", threadId: "pi:sess-lead" }, timeoutMs: 10_000 }));
+	if (mode !== "empty") {
+		// The lead is live once the demo Host reads its fake Herdr; only then does a file append stream to the page.
+		await wait("live lead", async () => ((await threadsSnapshot(read)).find((t) => t.id === "pi:sess-lead")?.live ? true : undefined));
+		// A cold hub derives the lead's transcript first; a page opened before that shows "Loading…" for long.
+		await wait("lead transcript", () => topicSnapshot({ ...read, topic: { kind: "thread", threadId: "pi:sess-lead" }, timeoutMs: 10_000 }));
+	}
 	return { origin: `http://127.0.0.1:${port}`, key: key!, demo, stop };
 }
 
@@ -149,7 +171,7 @@ function phoneWidth(page: Page) {
 	}
 }
 
-export async function open(t: TestContext, engine: string, type: BrowserType, path: string | undefined, { display, route = LEAD, context: options, suppressResize = false, waitForPhoneLayout = true, recordResize = false, fixture = "demo" }: { display?: Record<string, number>; route?: string; context?: BrowserContextOptions; suppressResize?: boolean; waitForPhoneLayout?: boolean; recordResize?: boolean; fixture?: DemoDataMode } = {}): Promise<Page> {
+export async function open(t: TestContext, engine: string, type: BrowserType, path: string | undefined, { display, route = LEAD, context: options, suppressResize = false, waitForPhoneLayout = true, recordResize = false, fixture = "demo", beforeNavigate }: { display?: Record<string, number>; route?: string; context?: BrowserContextOptions; suppressResize?: boolean; waitForPhoneLayout?: boolean; recordResize?: boolean; fixture?: DemoDataMode; beforeNavigate?: (page: Page) => void | Promise<void> } = {}): Promise<Page> {
 	// A fulfilled document loses its loopback address space; Chromium's Local Network Access check then blocks the hub socket.
 	const args = engine === "chromium" ? ["--disable-features=LocalNetworkAccessChecks"] : [];
 	if (!browsers.has(engine)) browsers.set(engine, type.launch({ headless: true, args, ...(path ? { executablePath: path } : {}) }));
@@ -158,6 +180,7 @@ export async function open(t: TestContext, engine: string, type: BrowserType, pa
 	const context = await browser.newContext({ viewport: { width: 1600, height: 800 }, ...options });
 	t.after(() => context.close());
 	const page = await context.newPage();
+	await beforeNavigate?.(page);
 	page.setDefaultTimeout(20_000);
 	if (options?.isMobile && waitForPhoneLayout) phoneWidth(page);
 	const errors: string[] = [];
@@ -195,7 +218,8 @@ export async function open(t: TestContext, engine: string, type: BrowserType, pa
 	}, { display, suppressResize, recordResize });
 	await page.goto(`${hub.origin}/?k=${hub.key}${route}`);
 	if (route.includes("?p=")) await page.locator(".panel-edge").waitFor();
-	await page.locator(".transcript [data-entry]").first().waitFor({ state: "attached" });
+	if (route.includes("#/h/")) await page.locator(".transcript [data-entry]").first().waitFor({ state: "attached" });
+	else await page.locator(".main .topbar").waitFor({ state: "attached" });
 	return page;
 }
 
@@ -252,8 +276,47 @@ export async function eventually(check: () => Promise<boolean>, what: string) {
 }
 export const near = (actual: number, expected: number, what: string, tolerance = 1) => assert.ok(Math.abs(actual - expected) <= tolerance, `${what}: ${actual.toFixed(2)} vs ${expected.toFixed(2)}`);
 
+/** A phone Timeline fixture with stable, recent Session timestamps and no live or Team records. */
+export async function phoneTimelineFixture(now = Date.now(), suffix = "") {
+	const hub = await hubFor("empty");
+	const ids = Array.from({ length: 12 }, (_, i) => `devbox/pi:sess-phone-layout${suffix}-${i + 1}`);
+	for (const [index, id] of ids.entries()) {
+		const name = id.slice("devbox/pi:".length);
+		const timestamp = new Date(now - 60 * 60_000 + index * 1000).toISOString();
+		const dir = join(hub.demo, "agent/sessions", `--work-phone-layout${suffix}-${index + 1}--`);
+		mkdirSync(dir, { recursive: true });
+		const file = join(dir, `${name}.jsonl`);
+		const session = { type: "session", version: 3, id: name, timestamp, cwd: `/work/phone-layout/${index + 1}` };
+		const message = { type: "message", id: `${name}-entry`, parentId: null, timestamp, message: { role: "user", timestamp: Date.parse(timestamp), content: [{ type: "text", text: `Phone layout fixture ${index + 1}` }] } };
+		const content = `${JSON.stringify(session)}\n${JSON.stringify(message)}\n`;
+		if (!existsSync(file) || readFileSync(file, "utf8") !== content) writeFileSync(file, content);
+	}
+	return ids;
+}
+
 /** The demo agent's Session directory: a test may add Session files, and the hub reads them as new Sessions. */
 export const demoSessions = () => join(defaultHub!.demo, "agent/sessions");
+
+/** The default demo Timeline stream count, derived from the complete synthetic fixture, not a UI literal. */
+export async function timelineStreamCount() {
+	const hub = defaultHub;
+	assert.ok(hub, "the default demo hub must be running before reading its Timeline fixture");
+	const root = demoSessions();
+	const url = new URL(hub.origin);
+	const deadline = Date.now() + 15_000;
+	while (Date.now() < deadline) {
+		const snapshot = await topicSnapshot({ port: Number(url.port), host: "devbox", auth: { bearer: hub.key }, topic: { kind: "view", view: "cos.timeline" }, timeoutMs: 3_000 }) as TimelineValue;
+		const fixtureSessions = readdirSync(root, { recursive: true }).filter((path) => String(path).endsWith(".jsonl")).length;
+		if (snapshot.sessions.length + (snapshot.unreadable?.length ?? 0) === fixtureSessions) {
+			const now = Date.now(), from = now - SESSION_SCOPE_MS;
+			const sessions = snapshot.sessions.filter((session) => session.entries.length > 0 && isSessionInScope({ activityAt: session.end, live: session.live, open: false }, now)).map((session) => ({ ...session, host: "devbox" }));
+			return timelineRows(groupSessions(sessions), true, (session) => session.live || (session.end >= from && session.start <= now)).length;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+	const expected = readdirSync(root, { recursive: true }).filter((path) => String(path).endsWith(".jsonl")).length;
+	throw new Error(`Timeline fixture indexed fewer than its ${expected} Sessions`);
+}
 
 /** Streams one reply into the lead Session's file; the hub's feeds re-render App and the transcript. */
 function stream(text: string) {
