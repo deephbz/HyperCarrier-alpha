@@ -9,7 +9,7 @@ import { hydrate } from "../src/plugins.ts";
 import { RarebitDoc } from "@hypercarrier/rarebit-durable";
 import { TestClient, tempHome, writePiSettings } from "./helpers.ts";
 
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { fauxProvider, fauxAssistantMessage as answer, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { defineTask, defineTool, ToolTask } from "@earendil-works/pi-durable";
 import { createTeamRuntime, abortExpectedRun, open } from "@hypercarrier/pi-team-durable/authority";
@@ -479,12 +479,12 @@ for(const boundary of ['close','stop'] as const)for(const [kind,stage] of cases)
   worker=await thread.store.harness.commit(async(tx:any)=>JSON.parse(JSON.stringify((await open(tx)).team.current!.workers.builder)),context);
   targetId=thread.store.threadKey(worker.conversationId);
   const target=(await node.thread(targetId)).conversation;
-  thread.store.harness.subscribeCommits((p:any)=>{
+  thread.store.harness.observeCommits({advance:(p:any)=>{
    for(const c of p.changes)
     if(c.type==='task'&&doneFence&&c.value.kind==='ptb.deliver'&&
       (['terminal','sleeping','waiting'].includes(c.value.state.status)||c.value.state.checkpoint?.phase==='settle'))
      finished.resolve();
-  });
+  },end:()=>{}});
   await target.submit({type:'input',content:'matrix busy'},context);await bounded(busyStarted.promise,'busy provider');
   await runtime.core.execute('alert_send','lead',{to:'builder',kind:'attention',text:'Matrix Alert',...(kind==='interrupt'?{interrupt:true}:{})},api() as any,context);
   go.resolve();thread.store.harness.resume();await bounded(fenced.promise,'fence');await bounded(Promise.race([attempted.promise,finished.promise]),'delivery outcome');

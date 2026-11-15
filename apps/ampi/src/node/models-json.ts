@@ -1,4 +1,4 @@
-// Pi's models.json layer for the node: custom providers and overrides of built-in providers, composed as Pi 1.4's
+// Pi's models.json layer for the node: custom providers and overrides of built-in providers, composed as Pi 1.5's
 // provider-composer.js composes them without its extension layer. Values use Pi's config-value forms: a literal,
 // `$NAME` / `${NAME}` environment references, or `!command` (stdout, cached for the process).
 // Per-model `headers` resolve when models are listed: a `!command` header value runs then, through the same process-wide

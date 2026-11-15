@@ -21,7 +21,7 @@ before(async () => {
 	// client.ts opens its hub WebSocket at import; this stub never connects. Overview reads its last visit from storage.
 	const stored = new Map<string, string>();
 	const localStorage = { getItem: (k: string) => stored.get(k) ?? null, setItem: (k: string, v: string) => void stored.set(k, v), removeItem: (k: string) => void stored.delete(k) };
-	Object.assign(globalThis, { location: { protocol: "http:", host: "127.0.0.1:1", hash: "" }, WebSocket: class { send() {} close() {} }, localStorage, document: { activeElement: null } });
+	Object.assign(globalThis, { location: { protocol: "http:", host: "127.0.0.1:1", hash: "" }, WebSocket: class { send() {} close() {} }, localStorage, document: { activeElement: null, querySelector: () => null } });
 	// A Modal renders in a body portal, which the server renderer cannot hold: here it renders in place.
 	createRequire(import.meta.url)("react-dom").createPortal = (children: unknown) => children;
 	vite = await createServer({ configFile: `${web}vite.config.ts`, root: web, logLevel: "silent", server: { middlewareMode: true, hmr: false } });

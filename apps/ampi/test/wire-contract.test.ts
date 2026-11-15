@@ -9,8 +9,10 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import type { JsonValue } from "../src/node/durable-types.ts";
+import type { JsonValue } from "../src/shared/json.ts";
 import { PiHost } from "../src/pi/host.ts";
+import { READ_OPS } from "../src/shared/skew.ts";
+import { controlStamp } from "../src/shared/build.ts";
 import { replaceFile } from "./pi-fixtures.ts";
 import { setup } from "./pi-host-fixtures.ts";
 import type { OpHandlers, OpName, OpResult, Ops, PiTopicValues, ViewName, ViewTopic, ViewTopics } from "../src/shared/protocol.ts";
@@ -61,12 +63,19 @@ export const noEscape: Equal<Found, never> = true;
 
 // ---- The registry and the Host's dispatch table ----
 
-/** Every op name, checked against the registry both ways: `satisfies` refuses a missing and an extra key. */
+/**
+ * Every op name, checked against the registry both ways: `satisfies` refuses a missing and an extra key. Each op is a
+ * read or a write; a page of another build may request only the reads (skew.ts READ_OPS).
+ */
 const OP_NAMES = {
-	"thread.submit": true, "thread.abort": true, "thread.withdraw": true, "thread.commands": true, "thread.command": true, "thread.create": true, "thread.resume": true, "thread.close": true,
-	"sessions.search": true, "thread.outline": true, "thread.find": true, "thread.history": true, "thread.entry": true, "prompts.list": true, "models.list": true,
-	"view.rarebit.ask": true, "view.cos.timeline.locate": true, "view.arc.build": true,
-} satisfies Record<OpName, true>;
+	"thread.submit": "write", "thread.abort": "write", "thread.withdraw": "write", "thread.commands": "read", "thread.command": "write", "thread.create": "write", "thread.resume": "write", "thread.close": "write",
+	"sessions.search": "read", "thread.outline": "read", "thread.find": "read", "thread.history": "read", "thread.entry": "read", "prompts.list": "read", "models.list": "read",
+	"view.rarebit.ask": "write", "view.cos.timeline.locate": "read", "view.arc.build": "write", "view.arc.dismiss": "write",
+} satisfies Record<OpName, "read" | "write">;
+
+test("wire contract: a page of another build may request exactly the read ops", () => {
+	assert.deepEqual([...READ_OPS].sort(), Object.entries(OP_NAMES).filter(([, kind]) => kind === "read").map(([op]) => op).sort());
+});
 
 test("wire contract: the Host serves every registry op and nothing else", (t) => {
 	const dir = mkdtempSync(join(tmpdir(), "ampi-wire-contract-"));
@@ -84,7 +93,7 @@ test("wire contract: an unknown or unsupported request completes with its error 
 			browser.req("devbox", op, args).then(() => ({ code: "answered" }), (error: { code?: string; message: string }) => ({ code: error.code, message: error.message })),
 			new Promise<{ code: string }>((resolve) => setTimeout(() => resolve({ code: "no answer in 5 s" }), 5000).unref()),
 		]);
-	// An old or newer browser may send a name this build lacks (a slash command op hung the composer this way).
+	// A client may send a name this build lacks (a slash command op hung the composer this way).
 	assert.deepEqual(await refused("thread.slashCommands", { threadId: "pi:sess-a" }), { code: "unsupported", message: "thread.slashCommands is not available for Pi Sessions yet" });
 	assert.deepEqual(await refused("view.nope.build", {}), { code: "unsupported", message: "view.nope.build is not available" });
 	assert.deepEqual(await refused("thread.compact", { threadId: "pi:sess-a" }), { code: "unsupported", message: "thread.compact is not available for Pi Sessions yet" }, "a node-backend op");
@@ -98,7 +107,7 @@ test("wire contract: the Host's op table keeps its order: host ops, then view op
 	assert.deepEqual(host.opNames(), [
 		"thread.submit", "thread.commands", "thread.command", "thread.abort", "thread.withdraw", "thread.create", "thread.resume", "thread.close",
 		"sessions.search", "thread.outline", "thread.find", "thread.history", "thread.entry", "prompts.list", "models.list",
-		"view.rarebit.ask", "view.cos.timeline.locate", "view.arc.build",
+		"view.rarebit.ask", "view.cos.timeline.locate", "view.arc.build", "view.arc.dismiss",
 	]);
 });
 
@@ -135,7 +144,7 @@ async function dispositionlessControl(agentDir: string, sessionFile: string) {
 				const req = JSON.parse(buf.slice(0, i));
 				buf = buf.slice(i + 1);
 				const reply = req.op === "status"
-					? { id: req.id, ok: true, value: { sessionId: "sess-a", sessionFile, nonce: "n-live", idle: true, compacting: false, pending: { steer: 0, followUp: 0 }, commands: 1 } }
+					? { id: req.id, ok: true, value: { sessionId: "sess-a", sessionFile, nonce: "n-live", idle: true, compacting: false, pending: { steer: 0, followUp: 0 }, stamp: controlStamp() } }
 					: { id: req.id, ok: true, via: "control" };
 				c.write(`${JSON.stringify(reply)}\n`);
 			}

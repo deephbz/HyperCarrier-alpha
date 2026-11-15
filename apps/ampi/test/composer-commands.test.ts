@@ -7,6 +7,9 @@ import { fixture } from "./composer-fixture.ts";
 import { hydrate } from "../src/plugins.ts";
 import { engineSkip } from "./engines.ts";
 
+// A decodable 1x1 PNG: the Composer attaches only an image the browser can decode (Composer.tsx decodeImage).
+const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABpfZFQAAAAABJRU5ErkJggg==";
+
 test("Composer Enter routes durable audit and other built-ins through typed commands, never agent prose", async (t) => {
 	const { home, wire, threadId, page, input, enter, sent, received, errors, origin } = await fixture(t);
 	await enter("/export-system-prompt");
@@ -43,7 +46,7 @@ test("Composer Enter routes durable audit and other built-ins through typed comm
 	await enter("  //literal-slash  \n");
 	await wire.until<any>(thread, (v) => v.entries?.some((e: any) => e.kind === "user" && e.text === "  /literal-slash  \n"), 2000);
 	assert.deepEqual(sent.filter((f) => f.op === "thread.submit").map((f) => f.args.content), ["Hello", "  /literal-slash  \n"]);
-	// Exercise the existing Pi branch against the same typed server seam. This does not claim Pi-host parity.
+	// The same node behind a Pi Host (composer-fixture.ts, `?pi`): the Composer takes the Pi path. This does not claim Pi-host parity.
 	await page.goto(`${origin}/?thread=${encodeURIComponent(threadId)}&pi=1`);
 	await enter("/cache status");
 	await page.getByRole("status").filter({ hasText: "Cache TTL: 1h" }).waitFor();
@@ -67,18 +70,18 @@ test("durable Composer removes +Image and sends pasted images", async (t) => {
 		await f.page.getByRole("combobox", { name: "Model" }).selectOption({ label: "Sign in to more models…" });
 		await f.page.waitForFunction(() => document.body.dataset.accountsHost === "devbox");
 		await f.page.evaluate(() => delete document.body.dataset.accountsHost);
-		await f.page.evaluate(() => {
+		await f.page.evaluate((png) => {
 			const input = document.querySelector("textarea")!;
 			const transfer = new DataTransfer();
-			transfer.items.add(new File([new Uint8Array([137, 80, 78, 71])], "pasted.png", { type: "image/png" }));
+			transfer.items.add(new File([Uint8Array.from(atob(png), (c) => c.charCodeAt(0))], "pasted.png", { type: "image/png" }));
 			input.dispatchEvent(new ClipboardEvent("paste", { clipboardData: transfer, bubbles: true, cancelable: true }));
-		});
+		}, PNG);
 		await f.page.getByRole("img", { name: "pasted.png" }).waitFor();
 		await f.input.fill("Describe this image");
 		await f.input.press("Enter");
 		const submission = await f.submit(0);
 		assert.equal(submission.args.content, "Describe this image");
-		assert.deepEqual(submission.args.images, [{ data: "iVBORw==", mimeType: "image/png" }], `${browserName}: clipboard image is included in the submitted message`);
+		assert.deepEqual(submission.args.images, [{ data: PNG, mimeType: "image/png" }], `${browserName}: clipboard image is included in the submitted message`);
 	});
 });
 

@@ -3,8 +3,8 @@ import type { PiTeamTask, TeamValue } from "../../../../src/shared/team.ts";
 import { findHost, useHosts, useTopic } from "../../client.ts";
 import { href } from "../../util.ts";
 import { hostLabelFor } from "../../components/host-label.ts";
+import { teamModes } from "../../slot-registry.ts";
 import "./team.css";
-import { Messages } from "./Messages.tsx";
 
 type Team = TeamValue["teams"][number];
 const LABELS: Record<string, string> = { ready: "Ready", in_progress: "In progress", blocked: "Blocked", dependency_waiting: "Waiting on dependencies", goal_failed: "Goal failed", goal_achieved: "Goal achieved", cancelled: "Cancelled", legacy_completed: "Completed (legacy)" };
@@ -119,16 +119,18 @@ function Tasks({ team, host }: { team: Team; host: string }) {
 	</section>;
 }
 
+/** Tasks, or a registered Team view (teamModes); the toggle shows only when one is registered. */
 function TeamContent({ team, host }: { team: Team; host: string }) {
- const [mode, setMode] = useState("tasks");
- const messages = team.messages ?? { availability: "unavailable" as const, reason: "Messages unavailable: this Host does not publish message records." };
- return <>
-  <div className="ptb-toggle ptb-view-toggle" role="group" aria-label="Team view">
-   <button aria-pressed={mode === "tasks"} onClick={() => setMode("tasks")}>Tasks</button>
-   <button aria-pressed={mode === "messages"} onClick={() => setMode("messages")}>Messages</button>
-  </div>
-  {mode === "messages" ? <Messages key={messages.availability === "available" ? JSON.stringify([messages.source, messages.epoch]) : "unavailable"} value={messages} /> : <Tasks team={team} host={host} />}
- </>;
+	const [mode, setMode] = useState("tasks");
+	const Mode = teamModes.find((m) => m.key === mode)?.component;
+	if (!teamModes.length) return <Tasks team={team} host={host} />;
+	return <>
+		<div className="ptb-toggle ptb-view-toggle" role="group" aria-label="Team view">
+			<button aria-pressed={mode === "tasks"} onClick={() => setMode("tasks")}>Tasks</button>
+			{teamModes.map((m) => <button key={m.key} aria-pressed={mode === m.key} onClick={() => setMode(m.key)}>{m.label}</button>)}
+		</div>
+		{Mode ? <Mode team={team} host={host} /> : <Tasks team={team} host={host} />}
+	</>;
 }
 
 export function TeamPanel({ host, threadId }: { host: string; threadId: string }) {

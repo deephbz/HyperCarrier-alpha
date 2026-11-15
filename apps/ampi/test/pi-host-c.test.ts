@@ -8,10 +8,27 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { Hub } from "../src/hub/hub.ts";
 import { Browser } from "./helpers.ts";
-import { control, fixture, replaceFile } from "./pi-fixtures.ts";
+import { Agent, control, fixture, replaceFile } from "./pi-fixtures.ts";
 import { PI_VIEWS } from "../src/pi/views/index.ts";
-import { BOOTSTRAP, PiHost, agentLaunch, modelLimits } from "../src/pi/host.ts";
+import { BOOTSTRAP, CONTROL_PROTOCOL, PiHost, agentLaunch, modelLimits } from "../src/pi/host.ts";
+import { controlStamp, skewText, stamp, VERSION_SKEW } from "../src/shared/build.ts";
 import { TOKEN, iso, line, user, assistant, toolResult, setup } from "./pi-host-fixtures.ts";
+import { IMAGE_LIMITS } from "@hypercarrier/pi-hc-control/control";
+import { SCHEMA } from "@hypercarrier/pi-hc-control/endpoint";
+
+test("Pi agent: stop during Arc import refuses late relay startup", async t => {
+ const f = fixture(), marker = join(f.dir, "late-relay");
+ const bundle = `import { writeFileSync } from "node:fs";
+ process.stdout.write(JSON.stringify({ t: "fixture.arc-import" }) + "\\n");
+ await new Promise(resolve => process.once("SIGTERM", () => setImmediate(resolve)));
+ export function relay() { writeFileSync(${JSON.stringify(marker)}, "started"); return { close() {} }; }`;
+ const agent = Agent.start(f, { arcBundle: bundle });
+ const closed = new Promise<void>(resolve => agent.child.once("close", () => resolve()));
+ t.after(async () => { agent.stop(); await closed; });
+ await agent.wait(frame => frame.t === "fixture.arc-import", "Arc module import entered");
+ agent.stop(); await closed;
+ assert.equal(existsSync(marker), false, "shutdown must not initialize a relay after its import completes");
+});
 
 test("pi host: unreadable latest activity cannot expire an old copy", async (t) => {
  const { f, browser } = await setup(t);
@@ -101,6 +118,8 @@ async function bareControl(f: { agentDir: string }, sessionId: string, sessionFi
 	const server = createServer((c) => {
 		let buf = "";
 		c.setEncoding("utf8");
+		// Like the real endpoint (pi-hc-control endpoint.ts): a client that closes with a reply unread resets the socket.
+		c.on("error", () => {});
 		c.on("data", (d: string) => {
 			buf += d;
 			let i: number;
@@ -109,7 +128,7 @@ async function bareControl(f: { agentDir: string }, sessionId: string, sessionFi
 				buf = buf.slice(i + 1);
 				requests.push(req);
 				const reply = req.op === "status"
-					? { id: req.id, ok: true, value: { sessionId, sessionFile, nonce: `n-${sessionId}`, idle: true, compacting: false, pending: { steer: 0, followUp: 0 } } }
+					? { id: req.id, ok: true, value: { sessionId, sessionFile, nonce: `n-${sessionId}`, idle: true, compacting: false, pending: { steer: 0, followUp: 0 }, stamp: controlStamp() } }
 					: { id: req.id, ok: true, evidence: "started", entryId: "e-first" };
 				c.write(`${JSON.stringify(reply)}\n`);
 			}
@@ -292,7 +311,7 @@ test("pi host: slash text is a message only when the page marks it, before any r
 	const submit = (threadId: string, asText?: true) => browser.req("devbox", "thread.submit", { threadId, content: "/model x", whenBusy: "steer", ...(asText ? { asText } : {}) });
 	const before = f.herdrCalls().length;
 	for (const threadId of ["pi:sess-a", "pi:sess-b"])
-		await assert.rejects(submit(threadId), (e: any) => e.code === "unsupported" && e.message === "This page is older than the hub. Reload it.");
+		await assert.rejects(submit(threadId), (e: any) => e.code === "invalid" && e.message === "Slash text goes as a message only with asText; send a command with thread.command.");
 	assert.equal(ctl.requests.filter((r) => r.op === "submit").length, 0, "an unmarked slash submit reached the control");
 	assert.equal(f.herdrCalls().length, before, "an unmarked slash submit reached Herdr");
 	await submit("pi:sess-a", true);
@@ -332,63 +351,163 @@ test("pi host: with no control a name Pi does not run is refused before any keys
 
 test("pi host: the agent splits Pi's built-ins exactly as pi-hc-control does", () => {
 	const names = (source: string, list: string) => [...new RegExp(`const ${list} = \\[([\\s\\S]*?)\\];`).exec(source)![1]!.matchAll(/\[?["']([a-z-]+)["']/g)].map((m) => m[1]);
-	const control = readFileSync(new URL("../../../packages/pi-hc-control/src/control.mjs", import.meta.url), "utf8");
+	const control = readFileSync(new URL("../../../packages/pi-hc-control/src/control.ts", import.meta.url), "utf8");
 	const builtins = [...new RegExp("const BUILTINS = \\[([\\s\\S]*?)\\n\\];").exec(control)![1]!.matchAll(/^\s*\["([a-z-]+)"/gm)].map((m) => m[1]);
 	const agent = readFileSync(new URL("../src/pi/remote-agent.cjs", import.meta.url), "utf8");
 	assert.deepEqual(names(agent, "PI_BUILTINS"), builtins);
 	assert.deepEqual(names(agent, "PANE_ONLY"), names(control, "PANE_ONLY"));
 });
 
-/** An old remote agent: the same agent with its hello stripped of controlOps. */
-function oldAgent() {
-	const wrapper = join(fixture().dir, "old-agent.cjs");
-	writeFileSync(wrapper, `#!${process.execPath}
-const agent = require("child_process").spawn(process.execPath, process.argv.slice(2), { stdio: ["inherit", "pipe", "inherit"] });
-let buf = "";
-agent.stdout.setEncoding("utf8");
-agent.stdout.on("data", (d) => {
-  buf += d;
-  let i;
-  while ((i = buf.indexOf("\\n")) >= 0) {
-    const line = buf.slice(0, i); buf = buf.slice(i + 1);
-    process.stdout.write((line.includes('"t":"hello"') ? JSON.stringify({ ...JSON.parse(line), controlOps: undefined }) : line) + "\\n");
-  }
-});
-agent.on("exit", (code) => process.exit(code ?? 1));
-process.on("SIGTERM", () => { agent.kill(); process.exit(143); });
-`);
-	chmodSync(wrapper, 0o755);
-	return wrapper;
-}
+/** The pi-hc-control build these hubs expect, and a control older, newer, and with no stamp. */
+const EXPECTED = { id: "c0ffee000000", order: 20, line: "stable" } as const;
+const SKEWED = [
+	["older", { id: "0ld000000000", order: 10, line: "stable" }],
+	["newer", { id: "0ew000000000", order: 30, line: "durable" }],
+	["unstamped", null],
+] as const;
+// Nothing a test sends may reach the pane as keys while a control holds the Session.
+const typedAny = (f: any, ...texts: string[]) => f.herdrCalls().some((c: string[]) => c.some((a) => texts.some((x) => a.includes(x)) || a.startsWith("/model")));
 
-test("pi host: an old control or an old remote agent answers commands_unsupported without sending the command", async (t) => {
-	const wrapper = oldAgent();
-	for (const [label, host, commands] of [["old remote agent", { remoteNode: wrapper }, true], ["old control", {}, false]] as const) {
-		const { f, browser } = await setup(t, host);
-		const ctl = await control(f, f.sessionA, { commands });
+test("pi host: a control of another build, or of none, serves every op idle or busy, and the hub logs the drift once", async (t) => {
+	const logged: string[] = [];
+	t.mock.method(console, "log", (...args: unknown[]) => void logged.push(args.join(" ")));
+	for (const [label, stamp] of SKEWED)
+		for (const idle of [true, false]) {
+			const state = `${label}, ${idle ? "idle" : "busy"}`;
+			const { f, browser } = await setup(t, { controlStamp: EXPECTED });
+			const ctl = await control(f, f.sessionA, { commands: true, stamp, idle });
+			t.after(() => ctl.close());
+			const threads = browser.sub("devbox", { kind: "threads" });
+			await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.control === true);
+			await browser.req("devbox", "thread.commands", { threadId: "pi:sess-a" });
+			await browser.req("devbox", "thread.command", { threadId: "pi:sess-a", name: "model", args: "m2" });
+			await browser.req("devbox", "thread.submit", { threadId: "pi:sess-a", content: "steer this", whenBusy: "steer" });
+			await browser.req("devbox", "thread.submit", { threadId: "pi:sess-a", content: "queue this", whenBusy: "followUp" });
+			await browser.req("devbox", "thread.submit", { threadId: "pi:sess-a", content: "see this", images: [PNG], whenBusy: "steer" });
+			await browser.req("devbox", "thread.abort", { threadId: "pi:sess-a" });
+			const ops = ctl.requests.filter((r) => r.op !== "status").map((r) => `${r.op}${r.deliverAs ? `:${r.deliverAs}` : ""}${r.images ? "+images" : ""}`);
+			assert.deepEqual(ops, ["commands", "command", "submit:steer", "submit:followUp", "submit:steer+images", "abort"], `${state}: every op reached the control`);
+			assert.ok(!typedAny(f, "steer this", "queue this", "see this"), `${state}: nothing reached the pane as keys`);
+			const drift = logged.filter((l) => l.includes("pi-hc-control") && l.includes("sess-a"));
+			assert.equal(drift.length, 1, `${state}: one drift line per Session and stamp, not per send: ${JSON.stringify(drift)}`);
+			assert.ok(drift[0]!.includes(stamp ? stamp.id : "no stamp") && drift[0]!.includes(EXPECTED.id), `${state}: the line names both builds: ${drift[0]}`);
+			logged.length = 0;
+		}
+});
+
+test("pi host: a control on another protocol takes no op; each refusal names the one step, and nothing reaches Pi or the pane", async (t) => {
+	const cases = [
+		["hc-control/0", skewText.controlProtocol("devbox", "hc-control/0", "hc-control/1")],
+		["hc-control/2", skewText.controlProtocol("devbox", "hc-control/2", "hc-control/1")],
+	] as const;
+	assert.match(cases[0][1], /Pull pi-hc-control on devbox, then restart each Pi Session there\.$/);
+	assert.match(cases[1][1], /Pull AmPi on this machine, then restart the hub/);
+	for (const [schema, text] of cases) {
+		const { f, browser } = await setup(t, { controlStamp: EXPECTED });
+		const ctl = await control(f, f.sessionA, { commands: true, schema, stamp: EXPECTED });
 		t.after(() => ctl.close());
 		const threads = browser.sub("devbox", { kind: "threads" });
-		await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.control === true);
-		const started = Date.now();
-		await assert.rejects(browser.req("devbox", "thread.command", { threadId: "pi:sess-a", name: "model", args: "m2" }), /too old for slash commands/, label);
-		assert.ok(Date.now() - started < 2000, `${label}: answered in ${Date.now() - started} ms`);
-		assert.deepEqual(ctl.requests.filter((r) => r.op !== "status"), [], `${label}: nothing reached the control`);
-		// A Session without a control: an old agent cannot type a command into the pane, so it is too old at once.
-		await browser.until<any>(threads, (v) => v.threads["pi:sess-b"]?.live === true);
-		const old = label === "old remote agent";
-		await assert.rejects(browser.req("devbox", "thread.commands", { threadId: "pi:sess-b" }), (e: any) => e.code === (old ? "commands_unsupported" : "no_control"), `${label}: a list without a control`);
-		const asked = Date.now();
-		if (old) await assert.rejects(browser.req("devbox", "thread.command", { threadId: "pi:sess-b", name: "model", args: "m2" }), /too old/, `${label}: a command without a control`);
-		assert.ok(Date.now() - asked < 2000, `${label}: answered in ${Date.now() - asked} ms`);
-		assert.ok(!f.herdrCalls().some((c) => c.some((a) => a.startsWith("/model"))), `${label}: no command reached a pane`);
+		await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.live === true);
+		const skew = (e: any) => e.code === VERSION_SKEW && e.message === text;
+		await assert.rejects(browser.req("devbox", "thread.commands", { threadId: "pi:sess-a" }), skew, `${schema}: the command list`);
+		await assert.rejects(browser.req("devbox", "thread.command", { threadId: "pi:sess-a", name: "model", args: "m2" }), skew, `${schema}: a command`);
+		await assert.rejects(browser.req("devbox", "thread.submit", { threadId: "pi:sess-a", content: "hello", whenBusy: "steer" }), skew, `${schema}: a message`);
+		await assert.rejects(browser.req("devbox", "thread.submit", { threadId: "pi:sess-a", content: "see this", images: [PNG], whenBusy: "steer" }), skew, `${schema}: images`);
+		await assert.rejects(browser.req("devbox", "thread.abort", { threadId: "pi:sess-a" }), skew, `${schema}: abort`);
+		assert.deepEqual(ctl.requests, [], `${schema}: the agent did not speak to a control on another protocol`);
+		assert.ok(!typedAny(f, "hello", "see this"), `${schema}: nothing reached the pane as keys`);
 	}
+});
+
+test("pi host: an op the control does not know is a protocol refusal with the one step, never keys", async (t) => {
+	const text = skewText.controlUnknownOp("devbox", "hc-control/1");
+	assert.match(text, /Pull pi-hc-control on devbox, then restart each Pi Session there\.$/);
+	const { f, browser } = await setup(t, { controlStamp: EXPECTED });
+	const ctl = await control(f, f.sessionA, { commands: true, unknownOps: ["submit", "command", "commands", "abort"] });
+	t.after(() => ctl.close());
+	const threads = browser.sub("devbox", { kind: "threads" });
+	await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.control === true);
+	const skew = (e: any) => e.code === VERSION_SKEW && e.message === text;
+	await assert.rejects(browser.req("devbox", "thread.commands", { threadId: "pi:sess-a" }), skew, "the command list");
+	await assert.rejects(browser.req("devbox", "thread.command", { threadId: "pi:sess-a", name: "model", args: "m2" }), skew, "a command");
+	await assert.rejects(browser.req("devbox", "thread.submit", { threadId: "pi:sess-a", content: "hello", whenBusy: "steer" }), skew, "a message");
+	await assert.rejects(browser.req("devbox", "thread.submit", { threadId: "pi:sess-a", content: "see this", images: [PNG], whenBusy: "steer" }), skew, "images");
+	await assert.rejects(browser.req("devbox", "thread.abort", { threadId: "pi:sess-a" }), skew, "abort");
+	assert.ok(!typedAny(f, "hello", "see this"), "nothing reached the pane as keys");
+});
+
+test("pi host: the image limits are part of hc-control/1, so a control of any build on it takes what the Composer admits", () => {
+	// Changing a limit changes the wire contract: bump SCHEMA in endpoint.ts with it, then update this pin.
+	assert.equal(SCHEMA, "hc-control/1");
+	assert.deepEqual(IMAGE_LIMITS, { count: 8, totalBase64: 6 * 1024 * 1024, types: ["image/png", "image/jpeg", "image/gif", "image/webp"] });
+});
+
+test("pi host: /api/health names the hub's stamp and the control build of each Host", async (t) => {
+	const { f, hub } = await setup(t, { controlStamp: EXPECTED });
+	const health = async () => (await (await fetch(`http://127.0.0.1:${hub.port}/api/health`, { headers: { cookie: `ampi_k_${hub.port}=${TOKEN}` } })).json());
+	const first = await health();
+	assert.deepEqual(first.stamp, stamp());
+	assert.equal(first.hosts[0].controlStamp, null, "no live control: unknown");
+	const ctl = await control(f, f.sessionA, { stamp: SKEWED[0][1] });
+	t.after(() => ctl.close());
+	for (let i = 0; (await health()).hosts[0].controlStamp?.id !== SKEWED[0][1].id; i++) {
+		assert.ok(i < 100, "health never named the live control's build");
+		await new Promise((r) => setTimeout(r, 50));
+	}
+});
+
+test("pi host: /api/health names an unstamped live control null, and the expected build only when every control runs it", async (t) => {
+	const { f, hub } = await setup(t, { controlStamp: EXPECTED });
+	const health = async () => (await (await fetch(`http://127.0.0.1:${hub.port}/api/health`, { headers: { cookie: `ampi_k_${hub.port}=${TOKEN}` } })).json()).hosts[0].controlStamp;
+	const until = async (want: unknown, why: string) => {
+		for (let i = 0; JSON.stringify(await health()) !== JSON.stringify(want); i++) {
+			assert.ok(i < 100, why);
+			await new Promise((r) => setTimeout(r, 50));
+		}
+	};
+	const a = await control(f, f.sessionA, { stamp: EXPECTED });
+	t.after(() => a.close());
+	await until(EXPECTED, "one matching control: the expected build");
+	// The live Mac case: unstamped controls beside a matching one read as the expected build.
+	const unstamped = await control(f, f.sessionB, { stamp: null });
+	await until(null, "an unstamped live control beside a matching one did not read null");
+	unstamped.close();
+	const other = await control(f, f.sessionB, { stamp: SKEWED[0][1] });
+	t.after(() => other.close());
+	await until(SKEWED[0][1], "a control of another build beside a matching one did not read its build");
+});
+
+test("pi host: /api/health counts the running controls on any protocol, so no control is apart from an unstamped one", async (t) => {
+	const { f, hub } = await setup(t, { controlStamp: EXPECTED });
+	const row = async () => (await (await fetch(`http://127.0.0.1:${hub.port}/api/health`, { headers: { cookie: `ampi_k_${hub.port}=${TOKEN}` } })).json()).hosts[0];
+	const until = async (want: { controlStamp: unknown; runningControls: number; controlProtocol?: string | null }, why: string) => {
+		for (let i = 0; ; i++) {
+			const { controlStamp, runningControls, controlProtocol } = await row();
+			if (JSON.stringify({ controlProtocol, controlStamp, runningControls }) === JSON.stringify({ controlProtocol: runningControls ? CONTROL_PROTOCOL : null, ...want })) return;
+			assert.ok(i < 100, why);
+			await new Promise((r) => setTimeout(r, 50));
+		}
+	};
+	await until({ controlStamp: null, runningControls: 0 }, "no control: null and 0");
+	const unstamped = await control(f, f.sessionA, { stamp: null });
+	await until({ controlStamp: null, runningControls: 1 }, "one unstamped control: null and 1");
+	const b = await control(f, f.sessionB, { stamp: EXPECTED });
+	t.after(() => b.close());
+	await until({ controlStamp: null, runningControls: 2 }, "an unstamped and a matching control: null and 2");
+	unstamped.close();
+	await until({ controlStamp: EXPECTED, runningControls: 1 }, "the matching control alone: the expected build and 1");
+	// A control on another protocol takes no op, but it runs: the deploy row must not read "no control".
+	const foreign = await control(f, f.sessionA, { schema: "hc-control/2" });
+	t.after(() => foreign.close());
+	await until({ controlStamp: EXPECTED, runningControls: 2, controlProtocol: "hc-control/2" }, "a control on another protocol did not count, or health did not name its protocol");
+	assert.equal((await (await fetch(`http://127.0.0.1:${hub.port}/api/health`, { headers: { cookie: `ampi_k_${hub.port}=${TOKEN}` } })).json()).controlProtocol, CONTROL_PROTOCOL);
 });
 
 const PNG = { data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAwS2OUAAAAABJRU5ErkJggg==", mimeType: "image/png" };
 
-test("pi host: images go only to a control that takes them; keys, an older tier, or too large a set refuse at once", async (t) => {
+test("pi host: images go only through a live control; keys or too large a set refuse at once", async (t) => {
 	const { f, browser } = await setup(t);
-	const ctl = await control(f, f.sessionA, { images: true });
+	const ctl = await control(f, f.sessionA);
 	t.after(() => ctl.close());
 	const threads = browser.sub("devbox", { kind: "threads" });
 	await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.control === true && v.threads["pi:sess-b"]?.live === true);
@@ -408,19 +527,6 @@ test("pi host: images go only to a control that takes them; keys, an older tier,
 	await assert.rejects(browser.req("devbox", "thread.submit", { threadId: "pi:sess-b", content: "see this", images: [PNG], whenBusy: "steer" }), (e: any) => e.code === "no_control");
 	assert.ok(!f.herdrCalls().some((c) => c.includes("see this")), "no text reached a pane as keys");
 	assert.equal(ctl.requests.filter((r) => r.op === "submit").length, 2);
-});
-
-test("pi host: an old control or an old remote agent answers images_unsupported without sending the text", async (t) => {
-	for (const [label, host, images, message] of [["old remote agent", { remoteNode: oldAgent() }, true, /AmPi agent .* too old to send images/], ["old control", {}, false, /update pi-hc-control/]] as const) {
-		const { f, browser } = await setup(t, host);
-		const ctl = await control(f, f.sessionA, { images });
-		t.after(() => ctl.close());
-		const threads = browser.sub("devbox", { kind: "threads" });
-		await browser.until<any>(threads, (v) => v.threads["pi:sess-a"]?.control === true);
-		assert.equal((await browser.until<any>(threads, (v) => v.threads["pi:sess-a"])).threads["pi:sess-a"].images, undefined, `${label}: the summary offers images`);
-		await assert.rejects(browser.req("devbox", "thread.submit", { threadId: "pi:sess-a", content: "see this", images: [PNG], whenBusy: "steer" }), (e: any) => e.code === "images_unsupported" && message.test(e.message), label);
-		assert.deepEqual(ctl.requests.filter((r) => r.op !== "status"), [], `${label}: nothing reached the control`);
-	}
 });
 
 test("pi host: a model_change entry names the Session's model before any turn uses it (A27 /model)", async (t) => {

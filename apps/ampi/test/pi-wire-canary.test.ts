@@ -192,6 +192,7 @@ function scanOnce() {
 
 				"view.rarebit.ask": [{ threadId: THREAD, question: "What happened?" }],
 				"view.arc.build": [{ threadId: THREAD }],
+				"view.arc.dismiss": [{ threadId: THREAD, dropId: "synthetic-loss", toPosition: 2 }],
 				// Resume first, so the later control ops reach a pane.
 				"thread.resume": [{ threadId: THREAD, requestId: randomUUID(), place: { workspace: "new" } }],
 				"thread.submit": [{ threadId: THREAD, content: "Canary follow-up" }],
@@ -227,7 +228,7 @@ test("wire canary: no frame carries any native-field sentinel", async () => {
 	const { leaks, outcomes, sources } = await scanOnce();
 	assert.deepEqual(leaks, [], `leaks: ${leaks.join("; ")} · sources ${sources.join(", ")} · ops ${JSON.stringify(outcomes)}`);
 	// Every topic and op answered: a source that never sent a frame was not scanned.
-	assert.equal(sources.length, 32, `scanned sources: ${sources.join(", ")}`);
+	assert.equal(sources.length, 33, `scanned sources: ${sources.join(", ")}`);
 });
 
 /** The pre-bump DERIVATION_VERSION: every index row written by a build before A24 step 5 carries it. */

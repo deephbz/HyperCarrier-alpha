@@ -1,34 +1,103 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import type { ThreadOutline } from "../../../src/shared/protocol.ts";
-import { hub } from "../client.ts";
+import type { ThreadOutline, ThreadOutlineReply } from "../../../src/shared/protocol.ts";
+import { hub, refusal, useHosts } from "../client.ts";
 import { centerInList, href } from "../util.ts";
+import { readingLine } from "../keep-place.ts";
 import { Popover, hoverIntent } from "./Popover.tsx";
 import { railLayout, type RailLayout } from "./rail-layout.ts";
 
 type OutlineState = { outline?: ThreadOutline; busy: boolean; error: string };
 
+/** The outline window: the newest prompts a Host returns (src/pi/working-set.ts). */
+const OUTLINE_WINDOW = 2000;
+
+/**
+ * The page's half of the outline delta: a reply without `base` replaces the outline; a delta on the held version
+ * appends its prompts and keeps the newest 2000. A delta on any other base is unusable ("again").
+ */
+function applyOutline(held: ThreadOutline | undefined, reply: ThreadOutlineReply): ThreadOutline | "again" {
+ const { base, ...outline } = reply;
+ if (base === undefined) return outline;
+ if (base !== held?.version) return "again";
+ return { ...outline, users: [...held.users, ...outline.users].slice(-OUTLINE_WINDOW) };
+}
+
+/**
+ * One outline request in flight for a thread identity; `again` asks once more when it lands. `resets` counts the
+ * resets seen when it was sent: a request sent after the last reset, or a reply at the view's version, clears doubt
+ * about the kept dashes.
+ */
+type Flight = { identity: string; again: boolean; resets: number };
+
+/**
+ * Whether the thread's newest frame extends the one before it: it still holds that frame's newest entry. A branch
+ * change or a reindex does not, so dashes kept from before it may point off the branch.
+ */
+export function useFrameContinues(identity: string, version: string | undefined, entries: readonly { id: string }[] | undefined): boolean {
+ const frame = useRef<{ identity: string; version?: string; last?: string; continues: boolean }>(undefined);
+ const before = frame.current;
+ if (before?.identity !== identity || before.version !== version) {
+  const continues = before?.identity === identity && before.last !== undefined && Boolean(entries?.some((entry) => entry.id === before.last));
+  frame.current = { identity, version, last: entries?.at(-1)?.id ?? before?.last, continues };
+ }
+ return frame.current!.continues;
+}
+
 /**
  * The thread's prompt outline: versioned branch data. A new version replaces the outline in place when it arrives, so
- * dashes keep their nodes; until then the kept outline is busy (inert). A Host or thread change drops it at once.
+ * dashes keep their nodes. A frame that continues the one before (`continued`) moves no held dash, so the kept outline
+ * stays usable meanwhile. It is busy (inert) only while its dashes may be wrong: after a frame that does not continue
+ * (a branch change, a reindex), a delta it could not apply, a request the connection lost or a refusal, until a reply
+ * asked after that lands. Without `continued`, any newer version is busy until its outline lands.
+ * A Host or thread change drops it at once. The page names the outline it holds, so a Host answers a new version with only the new prompts (outlineSince). One
+ * request is in flight per thread; versions that arrive meanwhile collapse into one more request when it lands, from
+ * the outline held then. A lost connection re-asks once it is back.
  */
-export function useThreadOutline(host: string, threadId: string, version?: string, missingEntry?: string): OutlineState {
+export function useThreadOutline(host: string, threadId: string, version?: string, missingEntry?: string, continued?: boolean): OutlineState {
  const identity = JSON.stringify([host,threadId]);
  const [result,setResult] = useState<{identity:string;outline:ThreadOutline}>();
  const [error,setError] = useState("");
+ // The thread identity whose kept dashes may be wrong, until a reply replaces them.
+ const [doubt,setDoubt] = useState<string>();
+ const {connected} = useHosts();
+ const held = useRef(result);
+ const flight = useRef<Flight | undefined>(undefined);
+ const latest = useRef(version);
+ latest.current = version;
+ const resets = useRef(0);
+ const ask = useCallback(function ask(known: boolean, again = false) {
+  if (flight.current?.identity === identity) { flight.current.again = true; return; }
+  const mine: Flight = flight.current = { identity, again, resets: resets.current };
+  const kept = known && held.current?.identity === identity ? held.current.outline : undefined;
+  const last = kept?.users.at(-1);
+  void hub.request(host,"thread.outline",kept && last ? {threadId,known:{version:kept.version,lastId:last.id,lastOrdinal:last.ordinal}} : {threadId}).then(reply=>{
+   if (flight.current !== mine) return;
+   flight.current = undefined;
+   const next = applyOutline(kept, reply);
+   // A delta on an outline this page does not hold: ask once for the full outline.
+   if (next === "again") { setDoubt(identity); return ask(false, mine.again); }
+   held.current = {identity,outline:next};
+   setResult(held.current);setError("");
+   // A reply at the view's version was computed from the view's state, so it holds even if a reset came in flight.
+   if (mine.resets === resets.current || next.version === latest.current) setDoubt(undefined);
+   if (mine.again && latest.current && next.version !== latest.current) ask(true);
+  },failure=>{
+   if (flight.current !== mine) return;
+   flight.current = undefined;
+   setDoubt(identity);
+   // A lost connection asks again on its own when the hub is back; a refusal keeps its reason in the title.
+   if (refusal(failure) !== undefined) setError(String(failure));
+  });
+ },[host,threadId,identity]);
+ // Declared before the ask below, so a request this frame causes counts the reset.
  useEffect(() => {
-  let current = true;
-  setError("");
-  if (!version) return;
-  void hub.request(host,"thread.outline",{threadId}).then(outline=>{
-   if (!current) return;
-   if (outline.version !== version) {setError("Message positions changed; waiting for the current thread version");return;}
-   setResult({identity,outline});
-  },error=>{if(current)setError(String(error));});
-  return ()=>{current=false;};
- },[host,threadId,version,missingEntry]);
+  if (version && continued === false) { resets.current++; setDoubt(identity); }
+ },[identity,version,continued]);
+ useEffect(() => {
+  if (version && connected) ask(true);
+ },[ask,version,missingEntry,connected]);
  const outline = result?.identity === identity ? result.outline : undefined;
- // Retained dashes belong to an older version: they stay in place but take no hover or click until the current one lands.
- return { outline, busy: Boolean(version && outline?.version !== version), error };
+ return { outline, busy: Boolean(version && (!outline || doubt === identity || (continued !== true && outline.version !== version))), error };
 }
 
 /**
@@ -37,9 +106,6 @@ export function useThreadOutline(host: string, threadId: string, version?: strin
  */
 type PromptPlace = { inView: ReadonlySet<string>; current?: { id: string; text: string }; scrolledPast: boolean };
 export const NO_PLACE: PromptPlace = { inView: new Set(), scrolledPast: false };
-
-/** The reading line: the transcript's middle, where a reveal (Find, a link, a step) puts its target. */
-const readingLine = (box: DOMRect) => box.top + box.height / 2;
 
 /**
  * The reader's place as one entry: the first transcript entry whose bottom lies past the reading line. A folded group's

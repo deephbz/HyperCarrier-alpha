@@ -14,7 +14,7 @@ test("test isolation: an unbootstrapped node or Pi reader refuses before reading
 	writeFileSync(file, `import assert from "node:assert/strict";
 import { test } from "node:test";
 import { NodeRuntime } from ${JSON.stringify(join(root, "src/node/runtime.ts"))};
-import { readPiResources } from ${JSON.stringify(join(root, "src/node/pi-config.ts"))};
+import { readPiResources } from ${JSON.stringify(join(root, "src/shared/pi-config.ts"))};
 import { openModels } from ${JSON.stringify(join(root, "src/node/models.ts"))};
 test("refuses missing isolation", () => {
  for (const read of [() => new NodeRuntime(), () => readPiResources(process.env.HOME), () => openModels()])

@@ -8,7 +8,7 @@
 
 import type { CompactMethod } from "@hypercarrier/auto-compact-durable";
 import { resolveAutoCompactSettings, settingsObject } from "@hypercarrier/hc-auto-compact/resolve";
-import { type PiConfigOptions, type PiSettingsLayers, piSettingsFile, piSettingsLayers, piSettingsStamp } from "./pi-config.ts";
+import { type PiConfigOptions, type PiSettingsLayers, piSettingsFile, piSettingsLayers, piSettingsStamp } from "../shared/pi-config.ts";
 
 export type CompactSettings = {
 	enabled: boolean;

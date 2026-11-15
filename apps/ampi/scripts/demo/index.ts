@@ -4,10 +4,12 @@
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { PiTeamTask } from "../../src/shared/team.ts";
+import type { ArcAnswer } from "../../src/shared/arc.ts";
+import type { DemoDataMode } from "./data/modes.ts";
 import { cosDemo } from "./cos.ts";
 
 /** `now` is the seed clock (DEMO_NOW): every demo writer dates its files from it, so one seed writes the same bytes. */
-export type DemoContext = { dir: string; agentDir: string; now: number; sessions: Record<string, { name: string; file: string; id: string; cwd: string }> };
+export type DemoContext = { dir: string; agentDir: string; now: number; sessions: Record<string, { name: string; file: string; id: string; cwd: string }>; dataMode?: DemoDataMode; contentArcAnswer?: ArcAnswer };
 
 function teamDemo({ dir }: DemoContext): string {
 	const task = (id: string, title: string, status: string, owner: string, deps: string[] = []): PiTeamTask => ({ id, title, status, owner, deps, ready: status === "ready" });

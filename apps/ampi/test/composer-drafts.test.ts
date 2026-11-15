@@ -1,7 +1,8 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { type Custody, type Draft, type Outcome, type SendIntent, MAYBE_SENT, appendDraftText, carriedDraft, editDraft, giveBack, noticeKeyed, outcomeText, prependDraftText, restoreReturned, takeDraft } from "../web/src/composer-drafts.ts";
+import { type Custody, type Draft, type Outcome, type SendIntent, MAYBE_SENT, appendDraftText, editDraft, giveBack, noticeKeyed, outcomeText, restoreReturned, takeDraft } from "../web/src/composer-drafts.ts";
+import { carriedDraft, durableHint } from "../web/src/durable/drafts.ts";
 
 type Img = { name: string };
 const LOST: Outcome = { uncertain: true, text: "devbox did not answer." };
@@ -53,10 +54,8 @@ test("the first payload edit rekeys and drops the intent; later edits keep the n
 	assert.equal(editDraft(plain, { images: [image] }, keys()).draft.key, "k4", "a draft without a retry identity keeps its key");
 });
 
-test("returned queue text and kept edits rekey an uncertain draft", () => {
+test("kept edits rekey an uncertain draft", () => {
 	const custody: Custody<Img> = { ...empty(), draft: uncertain("Retry me") };
-	const prepended = prependDraftText(custody, "Returned", keys());
-	assert.deepEqual([prepended.draft.text, prepended.draft.key, prepended.draft.intent], ["Returned\n\nRetry me", "n1", undefined]);
 	const appended = appendDraftText(custody, "Edited", keys(), UNKNOWN_EDIT);
 	assert.deepEqual([appended.draft.text, appended.draft.key], ["Retry me\n\nEdited", "n1"]);
 	assert.deepEqual(appended.notices?.map((n) => [n.text, n.outcome]), [["Edited", UNKNOWN_EDIT]]);
@@ -97,4 +96,10 @@ test("a fork states a carried uncertain send once, without its retry promise", (
 	const carried = carriedDraft(source, undefined, () => "fork")!;
 	assert.equal(carried.notices?.length, 1, "one notice, no second fork warning");
 	assert.equal(outcomeText(lost, noticeKeyed(carried.draft, carried.notices![0]!)), `devbox did not answer. ${MAYBE_SENT}`);
+});
+
+test("durable hint: the node sends, and takes slash commands and images", () => {
+	const hint = (touch: boolean, busy: boolean, control: boolean) => durableHint({ busy, control, images: true, touch });
+	assert.equal(hint(false, false, false), "Message the agent… (Enter sends, Shift+Enter adds a line, / for commands, paste or drop images)");
+	assert.equal(hint(true, false, false), "Message · Enter sends");
 });

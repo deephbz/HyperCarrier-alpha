@@ -1,18 +1,14 @@
 // Store files around pi-durable's SQLite storage: `store.json` names the pi-durable version that last opened the store,
-// and consistent backups come only from SQLite's online backup API. pi-durable migrates stores forward only, so the
-// node backs a store up before a different (or unknown) version opens it. Never copy `harness.sqlite` alone: under WAL
-// the newest commits live in `-wal`.
+// and consistent snapshots come only from SQLite's online backup API. pi-durable migrates stores forward only, so the
+// node snapshots a store before a different (or unknown) version opens it. The snapshot is data protection only: no
+// command restores it. Never copy `harness.sqlite` alone: under WAL the newest commits live in `-wal`.
 
-import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { basename, join } from "node:path";
 import { backup, DatabaseSync } from "node:sqlite";
 import { validateSqliteSchemaPrefix } from "@earendil-works/chord/sqlite";
 import { CURRENT_SQLITE_SCHEMA_VERSION } from "@earendil-works/pi-durable/storage/sqlite";
-import { createSession } from "@earendil-works/pi-durable";
-import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { MetaDoc } from "./meta-doc.ts";
 
 /** The installed pi-durable version: `store.json` records it, so a version change is seen before the next open. */
 export const PI_DURABLE_VERSION: string = createRequire(import.meta.url)("@earendil-works/pi-durable/package.json").version;
@@ -119,46 +115,6 @@ export function validateBackup(path: string, prefix = STORE_PREFIX): { schemaVer
 		return { schemaVersion };
 	} finally {
 		database.close();
-	}
-}
-
-/**
- * Replaces a store with a backup. The caller holds the node lock, so no node has the store open. The backup must
- * validate and its committed MetaDoc.store must match, regardless of its sidecar. Identity is read through a Session
- * kernel on the staged copy; no scheduler runs and the backup stays unchanged. The current store is backed up before
- * replacement. Opening the staged copy applies this build's migrations, so store.json records the installed version.
- */
-export async function restoreStore(home: string, storeId: string, backupPath: string): Promise<{ restored: string; previous?: string }> {
-	validateBackup(backupPath);
-	let sidecar: BackupFile | undefined;
-	try {
-		sidecar = JSON.parse(readFileSync(`${backupPath}.json`, "utf8")) as BackupFile;
-	} catch {}
-	if (sidecar && sidecar.storeId !== storeId) throw new Error(`${basename(backupPath)} is a backup of store ${sidecar.storeId}, not ${storeId}`);
-	if (sidecar && sidecar.prefix !== STORE_PREFIX) throw new Error(`${basename(backupPath)} uses table prefix ${JSON.stringify(sidecar.prefix)}`);
-	const dir = storeDir(home, storeId);
-	mkdirSync(dir, { recursive: true, mode: 0o700 });
-	const temp = join(dir, "harness.sqlite.restore");
-	// A killed identity check can leave a staged WAL. It must never accompany another candidate copy.
-	for (const suffix of ["", "-wal", "-shm"]) rmSync(`${temp}${suffix}`, { force: true });
-	try {
-		writeFileSync(temp, readFileSync(backupPath), { mode: 0o600 });
-		const session = createSession(await openNodeSqliteStorage(temp));
-		try {
-			// Use the node's one document definition.
-			const identity = (await session.snapshot(MetaDoc, BACKGROUND_CONTEXT))?.store;
-			if (identity !== storeId) throw new Error(`Backup identity ${JSON.stringify(identity ?? "missing")} does not match store ${storeId}`);
-		} finally { await session.close(BACKGROUND_CONTEXT); }
-		const previous = existsSync(join(dir, "harness.sqlite")) ? await backupStore(home, storeId, "pre-restore") : undefined;
-		fsyncPath(temp);
-		// backupStore closes the final source connection and checkpoints its WAL before this replacement.
-		for (const suffix of ["-wal", "-shm"]) rmSync(join(dir, `harness.sqlite${suffix}`), { force: true });
-		renameSync(temp, join(dir, "harness.sqlite"));
-		writeStoreFile(dir);
-		fsyncPath(dir);
-		return { restored: backupPath, ...(previous ? { previous } : {}) };
-	} finally {
-		for (const suffix of ["", "-wal", "-shm"]) rmSync(`${temp}${suffix}`, { force: true });
 	}
 }
 

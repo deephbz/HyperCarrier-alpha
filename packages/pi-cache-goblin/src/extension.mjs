@@ -10,6 +10,12 @@ export const EVENTS = Object.freeze({
   unpin: "cache-goblin:unpin",
   placed: "cache-goblin:placed",
 });
+// The owner's /cache choice, as a custom entry: it never reaches the model and lasts for the Session.
+export const TTL_ENTRY = "cache-goblin:ttl";
+// A reload replaces the extension but not the process. The last real request's replay state is still true then,
+// so a reload hands it to the next instance by Session id; a new process starts without it.
+const RELOADS = (globalThis[Symbol.for("cache-goblin.reload")] ??= new Map());
+const PERSISTENCE = Symbol.for("cache-goblin.persistence");
 const CONTEXT_FILE_NAMES = ["AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
 export function defaultGlobalPaths(env = process.env) {
   if (env.PI_CACHE_GLOBAL_FILES) return env.PI_CACHE_GLOBAL_FILES.split(":").filter(Boolean);
@@ -30,6 +36,8 @@ export function createCacheGoblinExtension(userOptions = {}) {
     } catch { /* fail open */ }
   };
   return function cacheGoblinExtension(pi) {
+    // The /cache TTL survives a reload (the cache-goblin:ttl entry): pi-hc-control self-updates only when this is set.
+    globalThis[PERSISTENCE] = 1;
     let sessionTtl = options.sessionTtl;
     let pin;
     let warming = "no supported request observed";
@@ -45,15 +53,32 @@ export function createCacheGoblinExtension(userOptions = {}) {
       warming = "no supported request observed";
       setStatus(ctx);
     };
+    // The held pin never crosses a reload: its owner restarts too (Auto Compact cancels its fork).
+    const start = (event, ctx) => {
+      reset(event, ctx);
+      const id = ctx?.sessionManager?.getSessionId?.();
+      const chosen = ctx?.sessionManager?.getEntries?.()
+        .findLast((e) => e.type === "custom" && e.customType === TTL_ENTRY && TTLS.includes(e.data?.sessionTtl));
+      if (chosen) sessionTtl = chosen.data.sessionTtl;
+      const carried = event?.reason === "reload" ? RELOADS.get(id) : undefined;
+      RELOADS.clear();
+      if (carried) ({ lastTtl, replayPins, warming } = carried);
+      setStatus(ctx);
+    };
+    const shutdown = (event, ctx) => {
+      const id = ctx?.sessionManager?.getSessionId?.();
+      if (event?.reason === "reload" && id && lastTtl) RELOADS.set(id, { lastTtl, replayPins, warming });
+      reset(event, ctx);
+    };
     pi.events.on(EVENTS.pin, (data) => {
       if (typeof data?.name === "string" && data.name.trim()) pin = { name: data.name };
     });
     pi.events.on(EVENTS.unpin, (data) => {
       if (typeof data?.name === "string" && pin?.name === data.name) pin = undefined;
     });
-    pi.on("session_start", reset);
+    pi.on("session_start", start);
     pi.on("session_switch", reset);
-    pi.on("session_shutdown", reset);
+    pi.on("session_shutdown", shutdown);
 
     pi.on("before_provider_request", (event, ctx) => {
       if (!isAnthropicMessagesPayload(event.payload)) {
@@ -117,6 +142,7 @@ export function createCacheGoblinExtension(userOptions = {}) {
           const previous = sessionTtl;
           sessionTtl = arg;
           if (previous !== arg) {
+            pi.appendEntry?.(TTL_ENTRY, { sessionTtl: arg });
             warming = "stopped: TTL changed; awaiting real request";
             if (previous === "5m" && arg === "1h") ctx.ui?.notify?.(
               "cache: 5m -> 1h rewrites the session prefix at the provider's 1h cache-write rate on the next request.", "warning");

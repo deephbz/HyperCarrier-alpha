@@ -46,7 +46,7 @@ export type UiThreadView = {
 	conversationId: string;
 	parent?: { conversationId: string; at: string };
 	owner?: { conversationId: string; taskId: string };
-	/** Entries before the active context's head that this view does not carry (compacted or reset away). */
+	/** Older history entries that this view's window does not carry; `thread.history` pages them. */
 	hiddenBefore: boolean;
 	entries: UiEntry[];
 	live: JsonValue;

@@ -89,12 +89,11 @@ for (const engine of ["chromium", "webkit"] as const) {
 		assert.deepEqual(threadSubs, [DURABLE.link], "the thread subscribed once, to the durable source");
 	});
 
-	test(`session route app (${engine}): a durable thread under the bare Host ID opens the durable source, and an older link-key cite arrives as the one route`, { skip: engineSkip(engine) }, async (t) => {
+	test(`session route app (${engine}): a durable link-key thread cite stays as typed, names no Host, and subscribes nothing`, { skip: engineSkip(engine) }, async (t) => {
 		const { page, frames } = await open(t, engine);
 		await page.goto(`${ORIGIN}/#/v/overview`);
 		await page.waitForTimeout(500);
-		const start = await page.evaluate(() => history.length);
-		// A cite an older build stored in Arc or Rarebit text, by the durable link key.
+		// A cite stored in Arc or Rarebit text by the durable link key.
 		await page.evaluate((thread) => {
 			const a = document.createElement("a");
 			a.href = `#/h/devbox%23durable/t/${thread}?e=e0`;
@@ -103,13 +102,10 @@ for (const engine of ["chromium", "webkit"] as const) {
 			document.body.append(a);
 		}, THREAD);
 		await page.locator("#old-cite").click();
-		await composer(page).waitFor();
-		assert.deepEqual(await page.evaluate(() => ({ hash: location.hash, entries: history.length })), { hash: `${ROUTE}?e=e0`, entries: start + 1 });
-		const threadSubs = frames.filter((f) => f.t === "sub" && f.topic?.kind === "thread").map((f) => f.host);
-		assert.ok(threadSubs.length > 0 && threadSubs.every((host) => host === DURABLE.link), `the thread subscribed to the durable source only: ${threadSubs}`);
-		await page.evaluate(() => history.back());
-		await page.waitForFunction(() => location.hash === "#/v/overview");
-		assert.equal(await page.evaluate(() => history.length), start + 1, "Back left the Session in one step");
+		await unresolved(page).filter({ hasText: "This Host is not listed" }).waitFor();
+		assert.equal(await page.evaluate(() => location.hash), `#/h/devbox%23durable/t/${THREAD}?e=e0`, "the cite stays as typed");
+		assert.equal(await composer(page).count(), 0, "no Session view mounts");
+		assert.deepEqual(frames.filter((f) => f.t === "sub" && f.topic?.kind === "thread"), [], "no thread subscribed");
 	});
 
 	test(`session route app (${engine}): when the hub drops the Session's source, its view unmounts and says why`, { skip: engineSkip(engine) }, async (t) => {

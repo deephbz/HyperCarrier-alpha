@@ -1,20 +1,59 @@
 // Model access for one node: pi-ai's built-in providers with Pi's models.json layer (custom providers and overrides)
 // and credentials shared with pi (auth.json and the usual environment variables), plus the offline ampi-sim provider.
 // The node home's own models.json, when present, layers over Pi's for this node only.
+// Pi's models-store.json (the catalogs `pi update --models` saves) layers under both, over the built-in providers.
+// A list re-reads the files when one changed (a magpie sync, a catalog update, an edit), so the node needs no restart.
 
 import type { ModelChoice } from "../shared/models.ts";
 import type { CredentialStore } from "@earendil-works/pi-ai";
 import { createModels, type MutableModels } from "@earendil-works/pi-ai/models";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
+import { statSync } from "node:fs";
 import { join } from "node:path";
 import { FileCredentialStore } from "./credentials.ts";
 import { layerModelsJson, readModelsJson, withModelsJson } from "./models-json.ts";
-import { piAgentDir, type PiSettings } from "./pi-config.ts";
+import { modelsStorePath, readModelsStore, withModelsStore } from "./models-store.ts";
+import { piAgentDir, type PiSettings } from "../shared/pi-config.ts";
 import { SIM_MODEL, SIM_PROVIDER, simProvider } from "./sim.ts";
 import { assertTestIsolation, isTestMode } from "./test-mode.ts";
 
 const stores = new WeakMap<MutableModels, CredentialStore>();
 const configErrors = new WeakMap<MutableModels, string[]>();
+/** What openModels composed from, so a later list sees changed files. `ids` are the providers it set. */
+const sources = new WeakMap<MutableModels, { agentDir: string; home?: string; stamp: string; ids: Set<string> }>();
+
+const fileStamp = (paths: string[]) =>
+	paths.map((path) => { try { const s = statSync(path); return `${s.mtimeMs}:${s.size}`; } catch { return "-"; } }).join("|");
+const modelsJsonPaths = (agentDir: string, home?: string) => [modelsStorePath(agentDir), join(agentDir, "models.json"), ...(home ? [join(home, "models.json")] : [])];
+
+/**
+ * Sets the providers that Pi's saved catalogs and models.json (and the node home's) compose to, and drops the ones a
+ * removed entry made.
+ * On a refresh, a file that does not parse (caught mid-write) changes nothing: undefined, and the next list reads again.
+ */
+function composeProviders(models: MutableModels, agentDir: string, home: string | undefined, previous: Set<string>, refresh = false): Set<string> | undefined {
+	const store = readModelsStore(agentDir), piModels = readModelsJson(agentDir), homeModels = home ? readModelsJson(home) : undefined;
+	if (refresh && (store.error || piModels.error || homeModels?.error)) return undefined;
+	const { providers, errors } = withModelsJson(withModelsStore(builtinProviders(), store), homeModels ? layerModelsJson(piModels, homeModels) : piModels);
+	if (store.error) errors.push(store.error);
+	configErrors.set(models, errors);
+	const ids = new Set(providers.map((p) => p.id));
+	for (const id of previous) if (!ids.has(id)) models.deleteProvider(id);
+	for (const provider of providers) models.setProvider(provider);
+	return ids;
+}
+
+/** Re-reads the saved catalogs and models.json when a file changed since the last read: a sync needs no node restart. */
+export function refreshModels(models: MutableModels): void {
+	const source = sources.get(models);
+	if (!source) return;
+	const stamp = fileStamp(modelsJsonPaths(source.agentDir, source.home));
+	if (stamp === source.stamp) return;
+	const ids = composeProviders(models, source.agentDir, source.home, source.ids, true);
+	if (!ids) return;
+	source.ids = ids;
+	source.stamp = stamp;
+}
 
 /** models.json errors from openModels: each names the provider whose layer was skipped. */
 export function modelsJsonErrors(models: MutableModels): string[] {
@@ -34,10 +73,8 @@ export function openModels(
 	const credentials = new FileCredentialStore(options.authPath ?? join(agentDir, "auth.json"));
 	const models: MutableModels = createModels({ credentials });
 	stores.set(models, credentials);
-	const piModels = readModelsJson(agentDir);
-	const { providers, errors } = withModelsJson(builtinProviders(), options.home ? layerModelsJson(piModels, readModelsJson(options.home)) : piModels);
-	configErrors.set(models, errors);
-	for (const provider of providers) models.setProvider(provider);
+	const stamp = fileStamp(modelsJsonPaths(agentDir, options.home));
+	sources.set(models, { agentDir, home: options.home, stamp, ids: composeProviders(models, agentDir, options.home, new Set())! });
 	models.setProvider(simProvider(options.sim));
 	return models;
 }
@@ -70,13 +107,15 @@ export function testSafeModels(inner: MutableModels, testProviders: readonly str
 			return typeof value === "function" ? value.bind(target) : value;
 		},
 	});
-	const credentials = stores.get(inner), errors = configErrors.get(inner);
+	const credentials = stores.get(inner), errors = configErrors.get(inner), source = sources.get(inner);
 	if (credentials) stores.set(guarded, credentials);
 	if (errors) configErrors.set(guarded, errors);
+	if (source) sources.set(guarded, source);
 	return guarded;
 }
 
 export async function listModels(models: MutableModels): Promise<ModelChoice[]> {
+	refreshModels(models);
 	const available = new Set<string>();
 	try {
 		for (const model of await models.getAvailable()) available.add(`${model.provider}/${model.id}`);

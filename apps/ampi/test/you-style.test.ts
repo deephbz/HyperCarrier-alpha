@@ -26,7 +26,7 @@ async function componentBundle(): Promise<{ script: string; css: string }> {
 			name: "you-style-test",
 			resolveId: (id) => id === entry ? `\0${entry}` : undefined,
 			load: (id) => id === `\0${entry}` ? `
-				import React from 'react';
+				import React from 'react'; import ${JSON.stringify(join(web, "src/extensions-ui.ts"))};
 				import { createRoot } from 'react-dom/client';
 				import { ThreadView } from ${JSON.stringify(join(web, "src/components/ThreadView.tsx"))};
 				import { RarebitView } from ${JSON.stringify(join(web, "src/views/rarebit/View.tsx"))};

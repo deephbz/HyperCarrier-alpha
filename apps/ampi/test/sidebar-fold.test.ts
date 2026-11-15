@@ -18,7 +18,7 @@ test("sidebar fold: only team/count fold, titles navigate, keys and Worker contr
  const result = await build({ configFile: false, root: web, logLevel: "silent", define: { "process.env.NODE_ENV": '"production"' }, plugins: [react(), {
   name: "sidebar-fold-test", resolveId: id => id === entry ? `\0${entry}` : undefined,
   load: id => id === `\0${entry}` ? `
-   import React from 'react'; import {createRoot} from 'react-dom/client';
+   import React from 'react'; import ${JSON.stringify(join(web, "src/extensions-ui.ts"))}; import {createRoot} from 'react-dom/client';
    import {PiHostSection} from ${JSON.stringify(join(web, "src/components/PiSidebar.tsx"))};
    import {handleSidebarKeyDown} from ${JSON.stringify(join(web, "src/components/sidebar-keys.ts"))};
    const kind = new URLSearchParams(location.search).get('kind');

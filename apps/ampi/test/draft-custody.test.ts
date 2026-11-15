@@ -1,7 +1,7 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { type Custody, type Outcome, MAYBE_SENT, editDraft, giveBack, isEmpty, noticeKeyed, outcomeText, restoreReturned, takeDraft } from "../web/src/composer-drafts.ts";
+import { type Custody, type Outcome, MAYBE_SENT, editDraft, giveBack, isEmpty, messageText, noticeKeyed, outcomeText, restoreReturned, takeDraft } from "../web/src/composer-drafts.ts";
 
 type Img = { name: string };
 const LOST: Outcome = { uncertain: true, text: "devbox did not answer." };
@@ -89,4 +89,15 @@ test("outcome: a rekey ends the retry promise and keeps the uncertainty", () => 
 	const partial = restoreReturned({ ...giveBack(sent, { ...first, images: [{ name: "a.png" }] }, { id: "r1", outcome: lost, newKey: keys(), hold: true }) }, "r1", () => ({ accepted: [], rejected: [{ name: "a.png" }] }), keys());
 	assert.equal(outcomeText(lost, !!partial.returned[0]!.intent), unsure, "a held remainder");
 	assert.equal(outcomeText({ uncertain: false, text: "Not sent: no." }, false), "Not sent: no.", "a refusal has no promise to end");
+});
+
+// A Host kind's ComposerSurface decides the message text; Pi sets no slot and keeps the trimmed text.
+test("message text: a kind with literalText sends it as typed; Pi trims it", () => {
+	// Fake ComposerSurface slots (shell-slots.ts): the web types stay out of the root project.
+	const literal: { literalText?: true } = { literalText: true };
+	const pi: { literalText?: true } = {};
+	assert.equal(messageText("  //literal-slash  \n", literal.literalText, true), "  /literal-slash  \n");
+	assert.equal(messageText("  Hello  \n", literal.literalText), "  Hello  \n");
+	assert.equal(messageText("  //literal-slash  \n", pi.literalText, true), "/literal-slash");
+	assert.equal(messageText("  Hello  \n", pi.literalText), "Hello");
 });

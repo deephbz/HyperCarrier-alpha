@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Provider } from "@earendil-works/pi-ai/models";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { defineExtension, defineTool, GenerationTask, hook, type TaskId, ToolTask, UsageDoc } from "@earendil-works/pi-durable";
 import { runDaemon } from "../src/node/daemon.ts";
 import type { NodePlugin } from "../src/node/runtime.ts";

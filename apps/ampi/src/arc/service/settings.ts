@@ -1,0 +1,22 @@
+// Reuse the canonical Pi settings parser. The service owns only its extra keys.
+import { join, resolve } from "node:path";
+import { homedir } from "node:os";
+import { arcSettings, settingsError, strictArcSettings } from "../../shared/pi-config.ts";
+export function sessionDirectory(agentDir: string): string {
+ const setting = process.env.PI_CODING_AGENT_SESSION_DIR ?? strictArcSettings(join(agentDir, "settings.json")).sessionDir;
+ if (setting === undefined) return join(agentDir, "sessions");
+ if (typeof setting !== "string" || !setting) throw settingsError(join(agentDir, "settings.json"), "sessionDir", "must be a directory path");
+ return resolve(setting.startsWith("~/") ? join(homedir(), setting.slice(2)) : setting);
+}
+export function serviceSettings(agentDir: string) {
+ const file = join(agentDir, "settings.json"), base = arcSettings(file);
+ sessionDirectory(agentDir);
+ const block = (strictArcSettings(file).ampi_arc ?? {}) as Record<string, unknown>;
+ const { concurrency = 8 } = block;
+ if (!Number.isSafeInteger(concurrency) || Number(concurrency) < 1 || Number(concurrency) > 256) throw settingsError(file, "ampi_arc.concurrency", "must be an integer from 1 to 256");
+ return { ...base, concurrency: Number(concurrency) };
+}
+// The five-minute no-hub grace replaced this key. Startup names it once instead of failing.
+export function ignoredIdleHours(agentDir: string): boolean {
+ return Object.hasOwn((strictArcSettings(join(agentDir, "settings.json")).ampi_arc ?? {}) as object, "serviceIdleHours");
+}

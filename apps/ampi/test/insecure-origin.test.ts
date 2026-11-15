@@ -62,7 +62,7 @@ for (const engine of ["chromium", "webkit"] as const) {
 				} else if (frame.t === "req" || frame.t === "hub") send({ t: "res", id: frame.id, ok: false, error: { code: "unsupported", message: "not in this test" } });
 			});
 		});
-		await page.goto(`${ORIGIN}/#/h/${encodeURIComponent(HOST.link)}/t/${THREAD}`);
+		await page.goto(`${ORIGIN}/#/h/${HOST.id}/t/${THREAD}`);
 		assert.deepEqual(await page.evaluate(() => ({ secure: window.isSecureContext, uuid: typeof (crypto as { randomUUID?: unknown }).randomUUID })), { secure: false, uuid: "undefined" }, "the page runs in an insecure context");
 		const input = page.getByRole("textbox", { name: "Message the agent" });
 		// A missing secure-context API throws while rendering; report that error, not the wait's timeout.

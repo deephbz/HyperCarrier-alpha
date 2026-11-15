@@ -47,6 +47,26 @@ async function session(h: ReturnType<typeof hub>, reading?: string) {
 	return { find, revealed, n, view: () => find.get() };
 }
 
+test("find session: its first query keeps the entry from before the Find bar changes geometry", async () => {
+	const h = hub(600);
+	let reading = "e450";
+	const find = new FindSession({ find: h.find, reading: () => reading, reveal() {}, settleMs: 0 });
+	find.show();
+	reading = "e451";
+	find.setQuery("e");
+	await flush();
+	assert.deepEqual(h.asks, [{ from: "e450" }]);
+	find.setQuery("changed");
+	await flush();
+	assert.deepEqual(h.asks.at(-1), { from: "e451" }, "later queries use the current reader place");
+	find.close();
+	reading = "e452";
+	find.show();
+	reading = "e453";
+	await flush();
+	assert.deepEqual(h.asks.at(-1), { from: "e452" }, "reopening records a fresh place before the bar mounts");
+});
+
 test("find session: a result opens at the reader's entry, and a step past the window's edge asks once and stays contiguous", async () => {
 	const h = hub(600);
 	const { find, revealed, n } = await session(h, "e450");

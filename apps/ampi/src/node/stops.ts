@@ -26,8 +26,9 @@ export type StopOutcome =
 export type Marked = { conversations: Set<string>; tasks: Set<string>; submissions: ControlSubmission[]; spareBackground?: boolean };
 
 /**
- * Marks the work without starting the scheduler. In pi-durable 1.4.0, abortTask commits before it joins a live
- * invocation. Enqueue every abort, then verify their marks on the same commit line. Cancel only the join waiters.
+ * Marks the work without starting the scheduler. pi-durable's abortTask commits the abort mark, then joins the live run
+ * invocation as a separate wait, so awaiting each abort in turn would join each run before the next is marked. Enqueue
+ * every abort, then verify their marks on the same commit line. Cancel only the join waiters.
  * Safe before resume(); settlement is separate.
  */
 /**

@@ -6,7 +6,7 @@
 
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
-import { piResources, type PiConfigOptions } from "./pi-config.ts";
+import { piResources, type PiConfigOptions } from "../shared/pi-config.ts";
 
 /** One selectable role, in durable-team's `ModelRole` shape. */
 export type ModelRole = { name: string; use: string; model: { provider: string; modelId: string }; thinking: string };

@@ -4,8 +4,8 @@ import { test } from "node:test";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { runDaemon } from "../src/node/daemon.ts";
-import { projectViewFields } from "../src/node/projection.ts";
-import { topics, type TopicHandler } from "../src/node/server.ts";
+import { projectView, projectViewFields } from "../src/node/projection.ts";
+import { ops, topics, type TopicHandler } from "../src/node/server.ts";
 import { Hub } from "../src/hub/hub.ts";
 import { Browser, tempHome } from "./helpers.ts";
 
@@ -99,4 +99,58 @@ test("durable thread fields: the fields projection reads no entry, and the node 
 	const daemon = await runDaemon({ home: tempHome() });
 	t.after(() => daemon.stop());
 	await assert.rejects(topics.get("thread")!({ kind: "thread", threadId: "x.1", fields: ["entries"] } as never, daemon.runtime), /thread topic fields are live, inbox/);
+});
+
+test("durable thread window: with two compactions, the node's window and its history pages give the whole history in order", { timeout: 60_000 }, async (t) => {
+	const home = tempHome();
+	const daemon = await runDaemon({ home });
+	t.after(() => daemon.stop());
+	const { threadId } = await ops.get("thread.create")!({ cwd: home, model: SIM }, daemon.runtime) as { threadId: string };
+	const { store, conversation } = await daemon.runtime.thread(threadId);
+	const conversationId = Number(conversation.id);
+	// Large answers give each compaction an older range to summarize.
+	const append = (n: number, tag: string) => store.harness.commit(async (tx: any) => {
+		for (let i = 0; i < n; i++) await tx.appendEntry(conversationId, { kind: "pi.assistant", model: [fauxAssistantMessage(`${tag}${i} ${"w".repeat(8000)}`)] });
+	}, context);
+	const history = async () => {
+		const out: any[] = [];
+		let cursor;
+		do {
+			const page: any = await conversation.entries({ order: "ascending" }, 200, cursor, context);
+			out.push(...page.items);
+			cursor = page.next;
+		} while (cursor);
+		return out;
+	};
+	const compactions = async () => (await history()).filter((e) => e.kind === "pi.compaction").length;
+	for (const [round, tag] of ["a", "b"].entries()) {
+		await append(30, tag);
+		await conversation.compact(undefined, context);
+		const deadline = Date.now() + 30_000;
+		while ((await compactions()) < round + 1) {
+			assert.ok(Date.now() < deadline, `compaction ${round + 1} placed`);
+			await new Promise((r) => setTimeout(r, 50));
+		}
+	}
+	await append(10, "c");
+
+	const source = await topics.get("thread")!({ kind: "thread", threadId } as never, daemon.runtime);
+	t.after(() => source.dispose?.());
+	const value = source.value as any;
+	assert.equal(value.hiddenBefore, true, "the window does not start the history");
+	const older: any[] = [];
+	for (let before = value.entries[0].id, more = true; more; ) {
+		const page = await ops.get("thread.history")!({ threadId, before, limit: 40 }, daemon.runtime) as { entries: any[]; more: boolean };
+		older.unshift(...page.entries);
+		more = page.more;
+		before = page.entries[0]?.id ?? before;
+		if (!page.entries.length) break;
+	}
+	const shown = [...older, ...value.entries].map((e) => e.id);
+	const all = await history();
+	assert.deepEqual(shown, all.map((e) => String(e.id)), "every entry once, in history order");
+	assert.equal(all.filter((e) => e.kind === "pi.compaction").length, 2);
+	const kinds = [...older, ...value.entries].map((e) => e.kind);
+	assert.equal(kinds.filter((k) => k === "compaction").length, 2, "both compaction summaries in place");
+	assert.equal(projectView({ conversation: { id: 1 }, entries: [], docs: {} } as never).hiddenBefore, false, "a window that starts the history hides nothing");
 });

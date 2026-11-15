@@ -1,19 +1,19 @@
-// The side panel beside a Session: one tab per registered panel view (views/registry.ts). A durable thread shows the
-// Pi panels in the same order, then its own Changes and Info.
+// The side panel beside a Session: one tab per registered panel view (views/registry.ts), then the panels of its Host
+// kind (ThreadSurface.panels).
 
 import { useState } from "react";
 import type { ThreadSummary } from "../../../src/shared/protocol.ts";
-import { DURABLE_PANELS, PI_PANELS } from "./registry.ts";
+import { PI_PANELS, type PanelView } from "./registry.ts";
 import { PANEL_DEFAULT_KEY } from "./panel-preference.ts";
 
-export function piPanels(summary: ThreadSummary | undefined, durable = false) {
-	return [...PI_PANELS, ...(durable ? DURABLE_PANELS : [])].filter((p) => !p.available || p.available(summary));
+export function piPanels(summary: ThreadSummary | undefined, extra: readonly PanelView[] = []) {
+	return [...PI_PANELS, ...extra].filter((p) => !p.available || p.available(summary));
 }
 
-export function PiPanel({ name, host, threadId, summary, entry, durable = false, setPanel }: { name: string; host: string; threadId: string; summary?: ThreadSummary; entry?: string; durable?: boolean; setPanel: (p?: string) => void }) {
+export function PiPanel({ name, host, threadId, summary, entry, extra, setPanel }: { name: string; host: string; threadId: string; summary?: ThreadSummary; entry?: string; extra?: readonly PanelView[]; setPanel: (p?: string) => void }) {
 	// ★ marks the ⌘L default; state makes a click show at once (focus R17).
 	const [preferred, setPreferred] = useState(() => localStorage.getItem(PANEL_DEFAULT_KEY));
-	const tabs = piPanels(summary, durable);
+	const tabs = piPanels(summary, extra);
 	const view = tabs.find((p) => p.name === name);
 	if (!view) return null;
 	const View = view.component;

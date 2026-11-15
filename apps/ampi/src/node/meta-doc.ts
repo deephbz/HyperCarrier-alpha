@@ -16,7 +16,8 @@ export type MetaState = {
 /**
  * One conversation's AmPi metadata. `tab` and `order` place it (node-design.md, Tabs); stores written before tabs
  * have none and show unplaced. `closed` is the stored Close intent: the thread is read-only from then on. Its
- * `attention` keeps the reasons of the runs that were parked at Close, because Close removes their tasks.
+ * `attention` keeps the reasons the thread needed the owner for at Close (blocked tasks, a run that ended), because
+ * Close removes the tasks.
  */
 export type ConvMeta = {
 	kind: ThreadSummary["kind"];

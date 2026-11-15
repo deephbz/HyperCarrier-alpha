@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "sourceRepository": "HyperCarrier",
-  "sourceCommit": "e532393b6fbf511dfb1fb365f80c2b4f988384fc",
-  "sourceTree": "ed2d0ab6547a2436158615c73190b57917252504",
+  "sourceCommit": "8d0691b5c5fa736b6e7d15d92a29e5dca72f3707",
+  "sourceTree": "9a39f1736f106785788aa2b611de6d2611cd24d7",
   "sourceWorktreeDirty": false,
-  "exportContentSha256": "5303402ab9d93ac61d609bb35ccc3ff021dc9c27c855f407cf8a9307483286de",
-  "exportManifestSha256": "8c0d76e38d959849533dbffb62da2ff13f827786a7a0c7badaa817a14dbfe671",
+  "exportContentSha256": "16c44542ec822393d4fb6ffb8ad4625e37f3b7378c01016f357597d361bdeeeb",
+  "exportManifestSha256": "04b4dee9805b395f3e606ed6bde43bda2bed9159e58d9dc5ff41b901c7b0a4d1",
   "dependencies": [],
   "submodules": [
     {
@@ -60,8 +60,8 @@
       "name": "apps/trace-analytics",
       "path": "apps/trace-analytics",
       "repository": "https://github.com/deephbz/trace-analytics.git",
-      "commit": "ad0d126869c491c30eba67ac54abfc47165e78aa",
-      "tree": "f3528d51b89cb60d32adb793a39b6efbc334d66c",
+      "commit": "b5cbc2d2a3a437ab11b02c743541153d0b621759",
+      "tree": "bdf2f43ace423e791b682bd2e6692ef93dfbddf3",
       "identity": {
         "kind": "npm-package",
         "name": "trace-analytics",
@@ -72,36 +72,36 @@
       "name": "packages/rarebit-durable",
       "path": "packages/rarebit-durable",
       "repository": "https://github.com/deephbz/rarebit-durable.git",
-      "commit": "46d06e572a32ab5ede5803cd128f615d4430f1f2",
-      "tree": "ce62424cc3b6581ad4b1b59b9efa911afe319711",
+      "commit": "60f658d74c4d8dcb5ec90309df76c84b07d2309c",
+      "tree": "0f432b32a82dac11ae05b48e8cf65b0786e20897",
       "identity": {
         "kind": "npm-package",
         "name": "@hypercarrier/rarebit-durable",
-        "version": "0.1.2"
+        "version": "0.1.3"
       }
     },
     {
       "name": "packages/auto-compact-durable",
       "path": "packages/auto-compact-durable",
       "repository": "https://github.com/deephbz/auto-compact-durable.git",
-      "commit": "6bf465a258aa6b3bef5623c9a67d9aac4e4582ca",
-      "tree": "8a08f8773cfc94ae61be37319eb525e62165dd78",
+      "commit": "166a621418244392c258b3db6bb7c93e9885b8a7",
+      "tree": "ed0c3148793d71e9bd5a22b0ffd005964e4623c6",
       "identity": {
         "kind": "npm-package",
         "name": "@hypercarrier/auto-compact-durable",
-        "version": "0.1.2"
+        "version": "0.1.3"
       }
     },
     {
       "name": "packages/pi-team-durable",
       "path": "packages/pi-team-durable",
       "repository": "https://github.com/deephbz/pi-team-durable.git",
-      "commit": "c6ca466f82accd1b2073c3819390b104b3617ad9",
-      "tree": "c9d313dcf2815385270077125261b7b274700eae",
+      "commit": "68c77cc795815ecbfc4b91ccfa4e339d455658d1",
+      "tree": "2aabf6d00e8ffa903269265b794538b34799e711",
       "identity": {
         "kind": "npm-package",
         "name": "@hypercarrier/pi-team-durable",
-        "version": "0.1.0-rc.3"
+        "version": "0.1.0-rc.4"
       }
     }
   ],

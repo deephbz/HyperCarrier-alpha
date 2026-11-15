@@ -31,9 +31,11 @@ export function ChapterTimeline({ chapters, series, unit, hover, flash, onHover,
 		setHiddenTicks(old => old.size === hidden.size && [...old].every(i => hidden.has(i)) ? old : hidden);
 	}, [pixels, chapters, series]);
 	if (!chapters.length) return null;
-	const from = Date.parse(chapters[0]!.firstAt);
-	const to = Math.max(from + 1, Date.parse(chapters.at(-1)!.lastAt), (series?.buckets.at(-1)?.[0] ?? from) + (series?.bucketMs ?? 0));
-	const spans = chapters.map((c, i) => ({ from: Date.parse(c.firstAt), to: i + 1 < chapters.length ? Date.parse(chapters[i + 1]!.firstAt) : to }));
+	const times = chapters.map(c => ({ from: c.firstAt === null ? NaN : Date.parse(c.firstAt), to: c.lastAt === null ? NaN : Date.parse(c.lastAt) }));
+	const timed = times.every(t => Number.isFinite(t.from) && Number.isFinite(t.to));
+	const from = timed ? times[0]!.from : 0;
+	const to = timed ? Math.max(from + 1, times.at(-1)!.to, (series?.buckets.at(-1)?.[0] ?? from) + (series?.bucketMs ?? 0)) : chapters.length;
+	const spans = times.map((t, i) => timed ? { from: t.from, to: times[i + 1]?.from ?? to } : { from: i, to: i + 1 });
 	const minimum = Math.min(WIDTH / chapters.length, 8 / Math.max(1, pixels) * WIDTH);
 	let remaining = WIDTH, duration = to - from;
 	const widths = spans.map(() => 0);
@@ -53,29 +55,29 @@ export function ChapterTimeline({ chapters, series, unit, hover, flash, onHover,
 		return offsets[i]! + (at - spans[i]!.from) / Math.max(1, spans[i]!.to - spans[i]!.from) * widths[i]!;
 	};
 	const peak = Math.max(0, ...series?.buckets.map((b) => b[unit]) ?? []) || 1;
-	const stream = series?.buckets.map((b) => {
+	const stream = timed ? series?.buckets.map((b) => {
 		const h = Math.max(0, b[unit]) / peak * 34;
 		return `M${x(b[0])},${52 - h}H${x(b[0] + series.bucketMs)}V${52 + h}H${x(b[0])}Z`;
-	}).join(" ");
+	}).join(" ") : undefined;
 	const ticks: number[] = [];
 	const d = new Date(from); d.setMinutes(0, 0, 0); d.setHours(Math.ceil(d.getHours() / 6) * 6);
 	if (d.getTime() < from) d.setHours(d.getHours() + 6);
-	while (d.getTime() <= to) { ticks.push(d.getTime()); d.setHours(d.getHours() + 6); }
+	while (timed && d.getTime() <= to) { ticks.push(d.getTime()); d.setHours(d.getHours() + 6); }
 	return <div className="arc-timeline">
 		<div className="arc-timeline-grid">
-			<div className="arc-gutter"><span>Chapter</span><span>{unit === 1 ? "Tokens" : "$"}<br />/ 15 min</span></div>
+			<div className="arc-gutter"><span>Chapter</span><span>{timed ? <>{unit === 1 ? "Tokens" : "$"}<br />/ 15 min</> : "Time unavailable"}</span></div>
 			<svg ref={svg} viewBox={`0 0 ${WIDTH} ${HEIGHT}`} preserveAspectRatio="none" aria-label="Chapter usage timeline">
 				{chapters.map((c, i) => <g key={c.n}>
-					<rect data-band={c.n} className={`arc-band ${i % 2 ? "alt" : ""} ${hover === c.n ? "hover" : ""}`} x={x(Date.parse(c.firstAt))} y={0} width={widths[i]} height={HEIGHT} role="button" tabIndex={0} aria-label={`Open chapter ${c.n}: ${c.label}`} {...hoverIntent(() => onHover(c.n))} onMouseLeave={() => onHover(undefined)} onFocus={() => onHover(c.n)} onBlur={() => onHover(undefined)} onClick={() => onOpen(c.n)} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(c.n); } }} />
-					{flash?.n === c.n && <rect key={flash.key} className="arc-band-flash" x={x(Date.parse(c.firstAt))} width={widths[i]} height={HEIGHT} />}
+					<rect data-band={c.n} className={`arc-band ${i % 2 ? "alt" : ""} ${hover === c.n ? "hover" : ""}`} x={offsets[i]} y={0} width={widths[i]} height={HEIGHT} role="button" tabIndex={0} aria-label={`Open chapter ${c.n}: ${c.label}`} {...hoverIntent(() => onHover(c.n))} onMouseLeave={() => onHover(undefined)} onFocus={() => onHover(c.n)} onBlur={() => onHover(undefined)} onClick={() => onOpen(c.n)} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(c.n); } }} />
+					{flash?.n === c.n && <rect key={flash.key} className="arc-band-flash" x={offsets[i]} width={widths[i]} height={HEIGHT} />}
 				</g>)}
 				{ticks.map((t, i) => !hiddenTicks.has(i) && <line key={t} className={`arc-tick ${new Date(t).getHours() === 0 ? "day" : ""}`} x1={x(t)} x2={x(t)} y1={0} y2={HEIGHT} />)}
 				<path className="arc-stream" d={stream} />
 			</svg>
 			<div className="arc-chapter-numbers" aria-hidden="true">{chapters.map((c, i) => widths[i]! / WIDTH * pixels >= 14 && <span key={c.n} data-number={c.n} className={hover === c.n ? "hover" : ""} style={{ left: `${(offsets[i]! + widths[i]! / 2) / WIDTH * 100}%` }}>{c.n}</span>)}</div>
-			<span className="arc-time-label">Time</span>
+			<span className="arc-time-label">{timed ? "Time" : "Order"}</span>
 			<div ref={tickLabels} className="arc-time-ticks">{ticks.map((t, i) => <span key={t} className={new Date(t).getHours() === 0 ? "day" : ""} style={{ left: `${x(t) / WIDTH * 100}%`, visibility: hiddenTicks.has(i) ? "hidden" : "visible" }}>{new Date(t).toLocaleTimeString("en-US", { hour: "numeric", hour12: true })}{new Date(t).getHours() === 0 && <><br />{new Date(t).toLocaleDateString([], { month: "short", day: "numeric" })}</>}</span>)}</div>
 		</div>
-		<p className="arc-hint">{hover !== undefined ? `Chapter ${hover} · ${chapters.find(c => c.n === hover)?.label ?? ""}. Click to open.` : series ? "Hover to locate a chapter. Click a band to open it." : "Usage unavailable. Click a band to open its chapter."}</p>
+		<p className="arc-hint">{!timed ? "Chapter times unavailable. Bands show chapter order. Click a band to open its chapter." : hover !== undefined ? `Chapter ${hover} · ${chapters.find(c => c.n === hover)?.label ?? ""}. Click to open.` : series ? "Hover to locate a chapter. Click a band to open it." : "Usage unavailable. Click a band to open its chapter."}</p>
 	</div>;
 }

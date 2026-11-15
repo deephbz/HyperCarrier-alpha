@@ -1,18 +1,17 @@
 // The sidebar section of a Host source (D15): Sessions arranged the way Herdr arranges them (workspace → tab → pane),
 // with a Team's lead and its workers as a thread and its subthreads. Herdr's layout is auxiliary data; the Session's
-// identity is its Host plus its Session ID, so a Session without a pane still shows, under "Not in a pane". A durable
-// Host names that group "Archived".
-// A durable node sends the same layout: one workspace per tab, whose panes are the open thread IDs in tab order
-// (node-design.md, "Tabs and placement").
+// identity is its Host plus its Session ID, so a Session without a pane still shows, under "Not in a pane". Another
+// Host kind keeps this section and fills its sidebar slot (HostKindUi.sidebar in shell-slots.ts).
 
 import { useEffect, useState } from "react";
 import type { ThreadSummary } from "../../../src/shared/protocol.ts";
 import { type HostState, useNow } from "../client.ts";
-import { ago } from "../util.ts";
+import { hostKind } from "../host-kinds.ts";
+import { kindUi } from "../shell-slots.ts";
 import type { HostThreads } from "./Sidebar.tsx";
-import { LinkNotes, NodeNotes, ThreadRow } from "./SidebarRows.tsx";
+import { LinkNotes, ThreadRow } from "./SidebarRows.tsx";
 import { hostMeta, linkView, readHostFold, saveHostFold } from "./host-fold.ts";
-import { hostLabel, isPiHost } from "./host-label.ts";
+import { hostLabel } from "./host-label.ts";
 import { arrangeByLayout } from "./sidebar-layout.ts";
 import { projectTeamRows } from "./team-nesting.ts";
 
@@ -22,22 +21,13 @@ function staleReadsNote({ reopened, behind, refused }: NonNullable<HostThreads["
 	return `Stale cache reads: ${parts.join(", ")}. The hub log names each one.`;
 }
 
-/** A bounded page keeps a large Host cheap without dropping its Herdr order or Team nesting. */
+/** Keep Herdr order and Team nesting while rendering every Session in the Host group. */
 function SessionRows({ list, host, active, expandedLeaders, toggleLeader, parentNavId }: { list: ThreadSummary[]; host: string; active?: string; expandedLeaders: Set<string>; toggleLeader: (id: string) => void; parentNavId: string }) {
 	const rows = projectTeamRows(list, expandedLeaders);
-	const activePage = Math.floor(Math.max(0, rows.findIndex(({ row }) => row.id === active)) / 80);
-	const [page, setPage] = useState(activePage);
-	useEffect(() => setPage(activePage), [active, activePage]);
-	const start = Math.min(page * 80, Math.max(0, Math.ceil(rows.length / 80) - 1) * 80);
 	return <>
-		{rows.slice(start, start + 80).map(({ row, child, hasChildren, open, count, leaderId }) => <div key={row.id}>
+		{rows.map(({ row, child, hasChildren, open, count, leaderId }) => <div key={row.id}>
 			<ThreadRow t={row} host={host} active={active === row.id} child={child} hasChildren={hasChildren} open={open} toggle={hasChildren ? () => toggleLeader(leaderId) : undefined} workerCount={count} navParentId={child ? leaderId : parentNavId} />
 		</div>)}
-		{rows.length > 80 && <div className="list-page">
-			<button className="btn ghost small" disabled={start === 0} onClick={() => setPage(Math.max(0, page - 1))} aria-label="Previous Sessions">←</button>
-			<span className="hint">{start + 1}–{Math.min(start + 80, rows.length)} of {rows.length.toLocaleString()}</span>
-			<button className="btn ghost small" disabled={start + 80 >= rows.length} onClick={() => setPage(page + 1)} aria-label="Next Sessions">→</button>
-		</div>}
 	</>;
 }
 
@@ -47,10 +37,16 @@ function upgradeNote({ updated, total }: { updated: number; total: number }): st
 	return `Updating ${left.toLocaleString()} ${left === 1 ? "Session" : "Sessions"} after upgrade`;
 }
 
-export function PiHostSection({ data, hosts, route, showArchived }: { data: HostThreads; hosts: HostState[]; route: { host?: string; thread?: string }; showArchived: boolean }) {
+const allRows = (threads: ThreadSummary[]) => threads;
+
+export function PiHostSection({ data, hosts, route }: { data: HostThreads; hosts: HostState[]; route: { host?: string; thread?: string } }) {
 	const { host } = data;
-	const pi = isPiHost(host);
+	const kind = hostKind(host);
+	const ui = kindUi(host).sidebar ?? {};
 	const label = hostLabel(host, hosts);
+	const Notes = ui.Notes;
+	// A kind's useRows is a hook; one Host keeps one kind, so the call order is stable.
+	const threads = (ui.useRows ?? allRows)(data.threads);
 	const [collapsed, setCollapsed] = useState<Record<string, boolean>>({ unplaced: true });
 	// The Host fold persists, so a Host that is away on purpose stays folded with its error across reloads.
 	const [fold, setFold] = useState(() => readHostFold(host.id));
@@ -67,7 +63,7 @@ export function PiHostSection({ data, hosts, route, showArchived }: { data: Host
 		try { localStorage.setItem(leadersKey, JSON.stringify([...next])); } catch { /* The Teams stay expanded for this page only. */ }
 		return next;
 	};
-	const { groups, unplaced } = arrangeByLayout({ threads: data.threads.filter((t) => showArchived || !t.archived), layout: data.layout });
+	const { groups, unplaced } = arrangeByLayout({ threads, layout: data.layout }, ui.paneOf);
 	// No agents list since the Host connected: saved rows stay listed, unplaced and not live, under this note.
 	const looking = data.listing && host.status !== "disconnected";
 	// After a failed working-set init no copy is readable; host.error says why.
@@ -84,7 +80,7 @@ export function PiHostSection({ data, hosts, route, showArchived }: { data: Host
 	const allCollapsed = teamIds.length > 0 && teamIds.every((id) => !expandedLeaders.has(id));
 	const collapseAll = () => setExpandedLeaders(saveLeaders(allCollapsed ? new Set(teamIds) : new Set()));
 	return (
-		<div className="side-section" data-host={host.id} data-backend={pi ? "pi" : "durable"}>
+		<div className="side-section" data-host={host.id} data-backend={kind.source}>
 			<div className="side-head">
 				<button className="host-collapse" onClick={() => setFold(saveHostFold(host, !fold.collapsed))} aria-expanded={!fold.collapsed} title={label}>
 					<span className={`dot ${host.status}`} />
@@ -95,7 +91,7 @@ export function PiHostSection({ data, hosts, route, showArchived }: { data: Host
 				</button>
 				{teamIds.length > 0 && <button className="host-collapse-all" data-host-collapse-all={host.id} onClick={collapseAll} aria-label={`${allCollapsed ? "Expand" : "Collapse"} all Teams for ${label}`} title={`${allCollapsed ? "Expand" : "Collapse"} all Teams`}>{allCollapsed ? "Expand all" : "Collapse all"}</button>}
 			</div>
-			{!fold.collapsed && !pi && <NodeNotes host={host} />}
+			{!fold.collapsed && Notes && <Notes host={host} />}
 			{!fold.collapsed && host.status === "disconnected" && <div className="host-note">{status}</div>}
 			{!fold.collapsed && <LinkNotes view={view} />}
 			{/* Cache health, apart from the link: a connected Host keeps its green dot. */}
@@ -118,13 +114,13 @@ export function PiHostSection({ data, hosts, route, showArchived }: { data: Host
 				<div data-group="unplaced">
 					<button className="row group-row" onClick={() => toggle("unplaced")} data-nav-row data-nav-id="unplaced" tabIndex={-1} data-sidebar-toggle="unplaced" aria-expanded={!collapsed.unplaced}>
 						<span className="twisty">{collapsed.unplaced ? "▸" : "▾"}</span>
-						<span className="title group-label">{data.listing ? "Not placed yet" : pi ? "Not in a pane" : "Archived"} ({unplaced.length.toLocaleString()})</span>
+						<span className="title group-label">{data.listing ? "Not placed yet" : (ui.unplacedLabel ?? "Not in a pane")} ({unplaced.length.toLocaleString()})</span>
 					</button>
 					{!collapsed.unplaced && <SessionRows list={unplaced} host={host.link} active={route.host === host.link ? route.thread : undefined} expandedLeaders={expandedLeaders} toggleLeader={toggleLeader} parentNavId="unplaced" />}
 				</div>
 			)}
 			{!fold.collapsed && groups.length === 0 && unplaced.length === 0 && host.status === "connected" && (
-				<div className="host-note">{data.stale || data.indexing ? (pi ? "Reading Pi Sessions…" : "Reading threads…") : pi ? "No Pi Sessions found. Start an agent to begin." : "No threads yet. Start a thread to begin."}</div>
+				<div className="host-note">{data.stale || data.indexing ? (ui.readingNote ?? "Reading Pi Sessions…") : (ui.emptyNote ?? "No Pi Sessions found. Start an agent to begin.")}</div>
 			)}
 		</div>
 	);

@@ -21,11 +21,11 @@ async function eventually(check: () => Promise<boolean>, what: string) {
 const hubOp = (page: Page, op: string, args: object) => page.evaluate(([op, args]) => new Promise<{ ok: boolean; pins: { host: string; threadId: string }[] }>((done, fail) => {
 	const ws = new WebSocket(`ws://${location.host}/ws`);
 	let pins: any;
-	ws.onopen = () => ws.send(JSON.stringify({ t: "hub", id: 1, op, args }));
+	// The page's build, as its own client says it first; the hub serves writes only to a page of its build.
+	ws.onopen = () => { ws.send(JSON.stringify({ t: "hello", build: document.querySelector<HTMLMetaElement>('meta[name="ampi-build"]')?.content })); ws.send(JSON.stringify({ t: "hub", id: 1, op, args })); };
 	ws.onmessage = (e) => { const f = JSON.parse(e.data); if (f.t === "pins") pins = f.pins; if (f.t === "res") { ws.close(); done({ ok: f.ok, pins }); } };
 	ws.onerror = () => fail(new Error("hub socket failed"));
 }), [op, args] as const);
-// An unpin needs no host; the host here lets the same test run on an older hub for a red check.
 const pinsNow = async (page: Page) => (await hubOp(page, "pins.set", { host: "verify", threadId: "verify:none", pinned: false })).pins;
 const unpin = (page: Page) => hubOp(page, "pins.set", { host: "verify", threadId: LEAD, pinned: false });
 
@@ -70,7 +70,7 @@ test(`pin intent ${engine}: a late hint after an unpin does not pin the Session 
 		await unpin(a);
 		for (const { g } of late) g.out = true;
 		// A pin under a Host id that no longer lists the Session: every window repairs the hint.
-		assert.equal((await hubOp(a, "pins.set", { host: "verify-old-host", threadId: LEAD, pinned: true, intent: "owner" })).ok, true);
+		assert.equal((await hubOp(a, "pins.set", { host: "verify-old-host", threadId: LEAD, pinned: true })).ok, true);
 		await eventually(async () => late.every(({ g }) => g.heldOut.length > 0), "windows B and C did not send their hint repair");
 		await eventually(async () => (await pinsNow(a)).some((p) => p.threadId === LEAD && p.host !== "verify-old-host"), "window A did not repair the hint");
 		// The owner unpins in A; then the hints of B and C arrive.
@@ -115,26 +115,6 @@ test(`pin intent ${engine}: a stale window's star sends the state it shows, and 
 		await pressed(b, "false", "the stale Unpin click in B pinned the Session");
 		assert.ok(!(await pinsNow(a)).some((p) => p.threadId === LEAD), "the hub kept the pin");
 		await pressed(a, "false", "window A shows the pin again");
-	} finally { await unpin(a); }
-});
-
-test(`pin intent ${engine}: an old page cannot recreate a new page's removed pin`, { skip: engineSkip(engine) }, async (t) => {
-	const a = await open(t, engine, type, path()), old = await open(t, engine, type, path());
-	try {
-		await unpin(a);
-		await pressed(a, "false", "new page starts unpinned");
-		await star(a).click();
-		await pressed(old, "true", "old page sees the new pin");
-		assert.equal((await hubOp(old, "pins.set", { host: "old-route", threadId: LEAD, pinned: true })).ok, true);
-		assert.equal((await hubOp(old, "pins.set", { host: "old-route", threadId: LEAD, pinned: false })).ok, true);
-		await pressed(a, "false", "old page can unpin");
-		assert.equal((await hubOp(old, "pins.set", { host: "old-route", threadId: LEAD, pinned: true })).ok, false, "old repair cannot create");
-		assert.equal((await hubOp(old, "pins.hint", { host: "old-route", threadId: LEAD })).ok, true);
-		assert.ok(!(await pinsNow(a)).some(p => p.threadId === LEAD));
-		await a.reload();
-		await pressed(a, "false", "reload keeps the old page's unpin");
-		await star(a).click();
-		await pressed(old, "true", "a current owner action still creates");
 	} finally { await unpin(a); }
 });
 }

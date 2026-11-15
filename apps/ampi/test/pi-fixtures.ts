@@ -1,12 +1,25 @@
 // Fixtures for the Pi backend tests: a fake Herdr CLI, synthetic Pi Session files, and a fake control socket.
 import { type ChildProcess, spawn } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { createServer, type Server } from "node:net";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { agentModules } from "../src/pi/agent-modules.ts";
+import { controlStamp, type Stamp } from "../src/shared/build.ts";
+import { SCHEMA as CONTROL_PROTOCOL } from "@hypercarrier/pi-hc-control/endpoint";
 import { tempHome } from "./helpers.ts";
+import { after } from "node:test";
+import { maintainHost } from "../src/arc/service/client.ts";
+const arcStores = new Set<string>();
+export async function stopFixture(f: { agentDir: string }): Promise<void> {
+ const result = await maintainHost({ id: "synthetic", label: "Synthetic", kind: "pi-local", agentConfig: { agentDir: f.agentDir } }, { op: "stop", timeoutMs: 2000 });
+ if (result.state !== "stopped") throw new Error(`Synthetic Arc service did not stop: ${JSON.stringify(result)}`);
+ arcStores.delete(join(realpathSync(f.agentDir), "ampi-arc"));
+}
+after(async () => {
+ for (const store of arcStores) await stopFixture({ agentDir: dirname(store) });
+});
 
 export const AGENT = fileURLToPath(new URL("../src/pi/remote-agent.cjs", import.meta.url));
 
@@ -117,6 +130,8 @@ else if (a === "agent" && b === "get") {
   const p = paneOf(opt("--pane"));
   if (!p) refuse("pane_not_found", "no pane");
   if (state.startError) refuse(state.startError, "fake start error");
+  // A new pane whose shell is still starting: Herdr refuses and runs nothing.
+  if (state.startBusyCalls > 0) { state.startBusyCalls--; save(); refuse("agent_pane_busy", "agent target pane is not an available shell"); }
   if (state.startDelayMs) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, state.startDelayMs);
   const rest = argv.slice(argv.indexOf("--") + 1);
   const at = (flag) => (rest.includes(flag) ? rest[rest.indexOf(flag) + 1] : undefined);
@@ -146,6 +161,9 @@ export function fixture(): Fixture {
 	const agentDir = join(dir, "agent");
 	const sessions = join(agentDir, "sessions", "--work--");
 	mkdirSync(sessions, { recursive: true });
+ arcStores.add(join(realpathSync(agentDir), "ampi-arc"));
+ // Non-Arc fixtures never schedule model work; teardown stops their service.
+ writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ ampi_arc: { auto: false } }));
 	const sessionA = join(sessions, "a.jsonl");
 	const sessionB = join(sessions, "b.jsonl");
 	writeFileSync(sessionA, `${JSON.stringify({ type: "session", id: "sess-a", cwd: "/work" })}\n`);
@@ -205,7 +223,7 @@ export class Agent {
 		});
 	}
 	static start(f: Fixture, extra: Record<string, unknown> = {}): Agent {
-		const cfg = { ...agentModules(), agentDir: f.agentDir, pollMs: 30, discoverMs: 150, teams: false, controlStatusMs: 300, ...extra };
+		const cfg = { ...agentModules(), agentDir: f.agentDir, pollMs: 30, discoverMs: 150, teams: false, controlStatusMs: 300, controlProtocol: CONTROL_PROTOCOL, ...extra };
 		const child = spawn(process.execPath, [AGENT], {
 			stdio: ["pipe", "pipe", "inherit"],
 			env: {
@@ -242,7 +260,11 @@ export class Agent {
 
 // A tiny hc-control server (contract section 1) plus its descriptor.
 // With `queue`, it tracks submissions as pi-hc-control does: submit queues one, abort returns all to the editor.
-export async function control(f: Fixture, session: string, opts: { nonce?: string; descriptorNonce?: string; idle?: boolean; queue?: boolean; commands?: boolean; images?: boolean; trackPending?: boolean; settleOnAbort?: boolean } = {}) {
+// `stamp` is the build its status reports; default the one the hub expects (build.ts controlStamp).
+// `schema` is the protocol its descriptor names; default pi-hc-control's (endpoint.ts SCHEMA). `unknownOps` it
+// answers with unknown_op, as a control that lacks them does.
+export async function control(f: Fixture, session: string, opts: { nonce?: string; descriptorNonce?: string; idle?: boolean; queue?: boolean; commands?: boolean; trackPending?: boolean; settleOnAbort?: boolean; stamp?: Stamp | null; schema?: string; unknownOps?: string[] } = {}) {
+	const stamp = opts.stamp === undefined ? controlStamp() : opts.stamp;
 	const dir = join(f.agentDir, "hc-control");
 	mkdirSync(dir, { recursive: true, mode: 0o700 });
 	const nonce = opts.nonce ?? "n-live";
@@ -251,7 +273,7 @@ export async function control(f: Fixture, session: string, opts: { nonce?: strin
 	const requests: Frame[] = [];
 	const submissions: { submission: string; deliverAs: string; state: string; at: number; text: string }[] = [];
 	let idle = opts.idle ?? false;
-	// Mirrors pi-hc-control/src/control.mjs abort(): it waits for isIdle before replying; status() reports it.
+	// Mirrors pi-hc-control/src/control.ts abort(): it waits for isIdle before replying; status() reports it.
 	const settleAfterAbort = () => {
 		if (!opts.settleOnAbort) return;
 		idle = true;
@@ -262,7 +284,7 @@ export async function control(f: Fixture, session: string, opts: { nonce?: strin
 	const server: Server = createServer((c) => {
 		let buf = "";
 		c.setEncoding("utf8");
-		// Like the real endpoint (pi-hc-control endpoint.mjs): a client that closes with a reply unread resets the socket.
+		// Like the real endpoint (pi-hc-control endpoint.ts): a client that closes with a reply unread resets the socket.
 		c.on("error", () => {});
 		c.on("data", (d: string) => {
 			buf += d;
@@ -272,7 +294,8 @@ export async function control(f: Fixture, session: string, opts: { nonce?: strin
 				buf = buf.slice(i + 1);
 				requests.push(req);
 				const reply =
-					req.op === "status" ? { id: req.id, ok: true, value: { sessionId, sessionFile: session, nonce, idle, compacting: false, pending: opts.trackPending ? { steer: submissions.filter(s => s.state === "queued" && s.deliverAs === "steer").length, followUp: submissions.filter(s => s.state === "queued" && s.deliverAs === "followUp").length } : { steer: 0, followUp: 1 }, ...(opts.queue ? { submissions } : {}), ...(opts.commands ? { commands: 1 } : {}), ...(opts.images ? { images: 1 } : {}) } }
+					opts.unknownOps?.includes(req.op) ? { id: req.id, ok: false, error: { code: "unknown_op", message: "op must be status, submit, abort, commands, or command." } }
+					: req.op === "status" ? { id: req.id, ok: true, value: { sessionId, sessionFile: session, nonce, idle, compacting: false, pending: opts.trackPending ? { steer: submissions.filter(s => s.state === "queued" && s.deliverAs === "steer").length, followUp: submissions.filter(s => s.state === "queued" && s.deliverAs === "followUp").length } : { steer: 0, followUp: 1 }, ...(opts.queue ? { submissions } : {}), stamp } }
 					: req.op === "commands" && opts.commands ? { id: req.id, ok: true, value: { commands: [{ name: "model", source: "builtin", supported: true }, { name: "reload", source: "builtin", supported: false }, { name: "review", source: "extension", supported: true }], models: [{ ref: "p/m2" }], model: "p/m1", thinkingLevels: ["off"], thinking: "off" } }
 					: req.op === "command" && opts.commands && req.name === "model" && req.args === "m2" ? { id: req.id, ok: true, disposition: "handled", notice: "Model: p/m2", effect: { model: "p/m2" } }
 					: req.op === "command" && opts.commands && req.name === "model" ? { id: req.id, ok: false, error: { code: "bad_args", message: "ambiguous", matches: ["p/x", "q/x"] } }
@@ -295,9 +318,9 @@ export async function control(f: Fixture, session: string, opts: { nonce?: strin
 		});
 	});
 	await new Promise<void>((resolve) => server.listen(socket, resolve));
-	// Like the real endpoint (pi-hc-control endpoint.mjs), the descriptor appears whole: the agent may scan meanwhile.
+	// Like the real endpoint (pi-hc-control endpoint.ts), the descriptor appears whole: the agent may scan meanwhile.
 	replaceFile(join(dir, `${sessionId}.json`), JSON.stringify({
-		schema: "hc-control/1", sessionId, sessionFile: session, pid: process.pid, nonce: opts.descriptorNonce ?? nonce, startedAt: Date.now(), version: "test",
+		schema: opts.schema ?? CONTROL_PROTOCOL, sessionId, sessionFile: session, pid: process.pid, nonce: opts.descriptorNonce ?? nonce, startedAt: Date.now(), version: "test",
 	}));
 	return { requests, submissions, close: () => server.close() };
 }

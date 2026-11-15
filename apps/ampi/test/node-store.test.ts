@@ -1,18 +1,15 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { copyFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { runDaemon } from "../src/node/daemon.ts";
 import { parseThreadKey } from "../src/node/runtime.ts";
-import { listBackups, PI_DURABLE_VERSION, readStoreFile, restoreStore, validateBackup } from "../src/node/store-file.ts";
+import { listBackups, PI_DURABLE_VERSION, readStoreFile } from "../src/node/store-file.ts";
 import { TestClient, tempHome } from "./helpers.ts";
 
 const SIM = { provider: "ampi-sim", modelId: "sim-1" };
-const BIN = fileURLToPath(new URL("../bin/ampi.mjs", import.meta.url));
 
 /** Starts a node on `home`, runs `body` with a client, and stops the node. */
 async function withNode<T>(home: string, body: (client: TestClient, daemon: Awaited<ReturnType<typeof runDaemon>>) => Promise<T>, options: Parameters<typeof runDaemon>[0] = {}): Promise<T> {
@@ -59,46 +56,6 @@ test("store: store.json records the version; a missing or different version back
 	assert.equal(readStoreFile(dir)?.piDurable, PI_DURABLE_VERSION, "the open records this build's version");
 	const [, last] = listBackups(home, storeId);
 	assert.equal(JSON.parse(readFileSync(`${last}.json`, "utf8")).piDurable, "0.0.1", "the sidecar names the version the copy came from");
-});
-
-test("store: restore puts back the store as it was at the backup, and refuses a running node, another store's backup, a non-SQLite file, and another table prefix", async () => {
-	const home = tempHome();
-	let backup = "";
-	const threadId = await withNode(home, async (client) => {
-		const id = await newThread(client, home, "s-restore");
-		[{ path: backup }] = await client.req("node.backup", { storeId: parseThreadKey(id).storeId });
-		await client.req("thread.submit", { threadId: id, content: "/sim long 1" });
-		assert.equal(await userEntries(client, id, 2), 2);
-
-		// The CLI takes the node lock and refuses while the node holds it.
-		const refused = spawnSync(process.execPath, [BIN, "node", "restore", parseThreadKey(id).storeId, backup], { env: { ...process.env, AMPI_HOME: home }, encoding: "utf8" });
-		assert.equal(refused.status, 1);
-		assert.match(refused.stderr, /Stop it first/);
-		return id;
-	});
-	const { storeId } = parseThreadKey(threadId);
-	assert.equal(validateBackup(backup).schemaVersion > 0, true);
-
-	const other = join(home, "other.sqlite");
-	copyFileSync(backup, other);
-	writeFileSync(`${other}.json`, JSON.stringify({ ...JSON.parse(readFileSync(`${backup}.json`, "utf8")), storeId: "tother" }));
-	await assert.rejects(restoreStore(home, storeId, other), /is a backup of store tother/);
-	writeFileSync(`${other}.json`, JSON.stringify({ ...JSON.parse(readFileSync(`${backup}.json`, "utf8")), prefix: "x_" }));
-	await assert.rejects(restoreStore(home, storeId, other), /uses table prefix "x_"/);
-	assert.throws(() => validateBackup(backup, "x_"), /no pi-durable tables with prefix "x_"/);
-	const text = join(home, "text.sqlite");
-	writeFileSync(text, "not a database at all, just text");
-	await assert.rejects(restoreStore(home, storeId, text), /is not a SQLite database/);
-	assert.deepEqual(reasons(home, storeId), ["manual"], "a refused restore changes nothing");
-
-	const result = await restoreStore(home, storeId, backup);
-	assert.match(result.previous ?? "", /pre-restore/);
-	await withNode(home, async (client) => {
-		assert.equal(await userEntries(client, threadId, 1), 1, "the input after the backup is gone");
-		const row = await client.until<any>(client.sub({ kind: "threads" }), (v) => v.threads[threadId]);
-		assert.equal(row.threads[threadId].lastError, undefined);
-	});
-	assert.deepEqual(reasons(home, storeId), ["manual", "pre-restore"], "the restored store records the backup's version: no migration backup");
 });
 
 test("store: a store that fails its cold open shows its threads with the failure, and they return when it opens", async () => {

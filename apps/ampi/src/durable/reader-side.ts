@@ -23,8 +23,8 @@ import { durableSpend } from "../../../trace-analytics/src/sources/spend.mjs";
 import { historySpend, spendLabel, type Spend } from "../shared/spend.ts";
 import type { FleetSearchResult, OpHandlers, PiThreadView, ThreadSummary, Topic, UsageBucket, ViewOps } from "../shared/protocol.ts";
 import type { SearchResult } from "../shared/search.ts";
-import { PI_VIEWS, viewOps } from "../pi/views/index.ts";
-import { arcOpened, arcPanel, closeArcs, startArcs } from "../pi/views/arc.ts";
+import { PI_VIEWS, VIEWS } from "../pi/views/index.ts";
+import { arcOpened, arcPanel, closeArcs, startArcs, arcView, type DurableViewContext, type DurableViewSession } from "./arc-sidecar.ts";
 import type { HostedView, PiRecordedMember, PiTeamsFrame, PiViewContext, PiViewSession } from "../pi/views/types.ts";
 import type { Derived, Source } from "../pi/working-set-types.ts";
 import { WorkingSet } from "../pi/working-set.ts";
@@ -67,6 +67,7 @@ type DurableViewsConfig = {
  nodeSummary?: (threadId: string) => Partial<ThreadSummary> | undefined;
  command?: PiViewContext["command"];
  ask?: PiViewContext["ask"];
+ preflight?: DurableViewContext["preflight"];
  model?: PiViewContext["model"];
  views?: HostedView[];
  /** Records larger than this reach the copy as stubs; their bytes stay on the node (raw export). */
@@ -99,9 +100,9 @@ export class DurableViews extends EventEmitter {
  #views: Map<string, HostedView>;
  #stopped = false;
  #owner: CacheOwner;
- readonly context: PiViewContext;
+ readonly context: DurableViewContext;
  /** Session search, thread navigation, and every view op. */
- readonly ops: OpHandlers<"sessions.search" | "thread.outline" | "thread.find" | "thread.history" | "thread.entry" | keyof ViewOps>;
+ readonly ops: OpHandlers<"sessions.search" | "thread.outline" | "thread.find" | "thread.history" | "thread.entry" | Exclude<keyof ViewOps, "view.arc.dismiss">>;
 
  constructor(config: DurableViewsConfig) {
   super();
@@ -110,12 +111,14 @@ export class DurableViews extends EventEmitter {
   // A second hub on this cache throws here, before it reads or writes any cache file.
   this.#owner = claimCacheDir(this.cacheDir);
   this.#store = new WorkingSet(config.host, config.cacheDir);
-  this.#views = new Map((config.views ?? PI_VIEWS).map((v) => [v.name, v]));
+  this.#views = new Map((config.views ?? PI_VIEWS.map(view => view.name === "arc" ? arcView : view)).map((v) => [v.name, v]));
   const unavailable = () => Promise.reject(Object.assign(new Error("Not available on this node"), { code: "unavailable" }));
   this.context = {
    host: config.host,
+   assertOwned: () => this.#owner.assertHeld(),
+   preflight: config.preflight ?? (async () => undefined),
    stateDir: (view) => { const dir = join(this.cacheDir, "views", view); mkdirSync(dir, { recursive: true, mode: 0o700 }); return dir; },
-   sessions: () => this.projection(() => [...this.#copies.values()].map((c) => this.#viewSession(c)).filter((s): s is PiViewSession => Boolean(s))),
+   sessions: () => this.projection(() => [...this.#copies.values()].map((c) => this.#viewSession(c)).filter((s): s is DurableViewSession => Boolean(s))),
    session: (threadId) => { const c = this.#copies.get(threadId); return c ? this.#viewSession(c) : undefined; },
    snapshot: (read) => this.#store.snapshot(read),
    // A no-op port: durable copies have no retention pass to defer, and untrack and forget do not wait for a lease.
@@ -131,7 +134,11 @@ export class DurableViews extends EventEmitter {
   };
   rmSync(join(this.cacheDir, "views", "cos.arc"), { recursive: true, force: true });
   startArcs(this.context);
-  this.ops = { ...this.#readOps(), ...viewOps(this.context) };
+  this.ops = { ...this.#readOps(),
+   "view.rarebit.ask": args => VIEWS.rarebit.ops.ask(this.context, args),
+   "view.cos.timeline.locate": args => VIEWS["cos.timeline"].ops.locate(this.context, args),
+   "view.arc.build": args => arcView.ops.build(this.context, args),
+  };
  }
 
  /** Start reading `threadId` (`<storeId>.<conversationId>`) into its copy; resolves after the first sync. */
@@ -151,7 +158,7 @@ export class DurableViews extends EventEmitter {
  /**
   * Keep `threadId`'s node handle and watch open until the hold is released, so the copy follows the node live.
   * Holds count: each holder releases once. An unheld thread syncs only when asked, and closes its handle after
-  * each sync, because a pi-durable 1.4.0 handle keeps the whole conversation in node memory.
+  * each sync. An open handle keeps a node watch that resyncs the copy on every change, so only held threads keep one.
   */
  hold(threadId: string): () => void {
   const copy = this.#copies.get(threadId);
@@ -258,6 +265,14 @@ export class DurableViews extends EventEmitter {
   });
  }
 
+ /** Row fields use the same carrier registry as view subscriptions. */
+ summarize(threadId: string): Partial<ThreadSummary> {
+  const session = this.context.session(threadId);
+  const fields: Partial<ThreadSummary> = {};
+  if (session) for (const view of this.#views.values()) if (view.summarize) Object.assign(fields, view.summarize(this.context, session));
+  return fields;
+ }
+
  /** The thread topic's reader part. DurableHost adds `live` and `inbox` from the node. */
  threadValue(threadId: string): DurableThreadValue | undefined {
   const copy = this.#copies.get(threadId);
@@ -333,7 +348,7 @@ export class DurableViews extends EventEmitter {
  close(): Promise<void> { return (this.#closing ??= this.#close()); }
  async #close(): Promise<void> {
   this.#stopped = true;
-  closeArcs(this.context);
+  await closeArcs(this.context);
   for (const copy of this.#copies.values()) copy.reader?.close();
   await Promise.allSettled([...this.#copies.values()].map((c) => c.syncing));
   await this.#store.close();
@@ -352,7 +367,7 @@ export class DurableViews extends EventEmitter {
   return { host: this.host, cacheDir: this.cacheDir, file: copy.file, path: copy.sessionId, harness: "pi-durable", ...(rawExport ? { rawExport } : {}) };
  }
 
- #viewSession(copy: Copy): PiViewSession | undefined {
+ #viewSession(copy: Copy): DurableViewSession | undefined {
   const data = copy.data;
   if (!data) return undefined;
   const fields = this.summaryFields(copy.threadId);
@@ -397,7 +412,7 @@ export class DurableViews extends EventEmitter {
  }
 
  #notify(copies: Copy[]): void {
-  const sessions = this.projection(() => copies.map((c) => this.#viewSession(c)).filter((s): s is PiViewSession => Boolean(s)));
+  const sessions = this.projection(() => copies.map((c) => this.#viewSession(c)).filter((s): s is DurableViewSession => Boolean(s)));
   for (const view of this.#views.values()) {
    try { view.changed?.(this.context, sessions); } catch (error) { console.error(`durable views ${this.host}: view ${view.name} failed:`, error); }
   }

@@ -1,7 +1,7 @@
 // HyperCarrier adapters installed into every node: Team (Pi Team Bright semantics), Rarebit, and Auto Compact.
 import { type CompactSettingsPort, compactSettingsPort } from "./node/compact-settings.ts";
 import { type ModelRolePort, modelRolePort } from "./node/model-roles.ts";
-import type { PiConfigOptions } from "./node/pi-config.ts";
+import type { PiConfigOptions } from "./shared/pi-config.ts";
 import type { NodePlugin } from "./node/runtime.ts";
 import { compactPlugin } from "./plugins/compact.ts";
 import { rarebitPlugin } from "./plugins/rarebit.ts";

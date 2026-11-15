@@ -46,6 +46,7 @@ The shell uses the same local hub as the CLI. It owns the window, menu bar, noti
 ## Architecture
 
 - [Pi backend and control contract](docs/pi-backend.md)
+- [Arc service, build matching and operations](docs/arc.md)
 - [HC Control package](../../packages/pi-hc-control/README.md)
 - [Durable Team package](../../packages/pi-team-durable/README.md)
 - [Durable Rarebit package](../../packages/rarebit-durable/README.md)

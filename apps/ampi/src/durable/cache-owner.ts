@@ -7,11 +7,11 @@
 // A second connection fails at once, in another process or in this one. `owner.json` names the holder
 // for the error message only; it grants nothing. `held` keeps each open handle reachable until release:
 // garbage collection finalizes an unreachable DatabaseSync and so drops the lock while the process lives.
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-export type CacheOwner = { release(): void };
+export type CacheOwner = { assertHeld(): void; release(): void };
 
 const held = new Set<DatabaseSync>();
 
@@ -30,6 +30,14 @@ export function claimCacheDir(dir: string): CacheOwner {
  }
  writeFileSync(join(dir, "owner.json"), JSON.stringify({ pid: process.pid, at: Date.now() }), { mode: 0o600 });
  held.add(db);
+ const identity = statSync(join(dir, "owner.lock"));
  let released = false;
- return { release() { if (!released) { released = true; held.delete(db); db.close(); } } };
+ return {
+  assertHeld() {
+   if (released || !held.has(db)) throw new Error("Durable cache ownership ended");
+   const current = statSync(join(dir, "owner.lock"));
+   if (current.dev !== identity.dev || current.ino !== identity.ino) throw new Error("Durable cache lock identity changed");
+  },
+  release() { if (!released) { released = true; held.delete(db); db.close(); } },
+ };
 }

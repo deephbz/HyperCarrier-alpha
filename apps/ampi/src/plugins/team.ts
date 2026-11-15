@@ -65,9 +65,9 @@ export function teamPlugin(modelRoles:ModelRolePort=NO_ROLES):NodePlugin {
    try{while(dirty&&!disposed){dirty=false;const next=await store.harness.commit(tx=>teamView(tx,storeId),BACKGROUND_CONTEXT) as unknown as JsonValue;if(JSON.stringify(next)!==JSON.stringify(current)){current=next;for(const listener of listeners)listener(current);}}}
    finally{refreshing=false;}
   };
-  const unsubscribe=store.harness.subscribeCommits(p=>{if(p.changes.some(c=>c.type==='document'&&c.record.kind.startsWith('ptb.')))void refresh();});
+  const commits=store.harness.observeCommits({advance:p=>{if(p.changes.some(c=>c.type==='document'&&c.record.kind.startsWith('ptb.')))void refresh();},end:end=>node.observerEnded(store,'the Team view',end)});
   await refresh();
-  return {get value(){return current;},subscribe(listener){listeners.add(listener);return()=>listeners.delete(listener);},dispose(){disposed=true;unsubscribe();listeners.clear();}} satisfies TopicSource;
+  return {get value(){return current;},subscribe(listener){listeners.add(listener);return()=>listeners.delete(listener);},dispose(){disposed=true;commits.detach();listeners.clear();}} satisfies TopicSource;
  });
  const plugin:NodePlugin={extensions:runtime.extensions,optIn:[runtime.worker],
   attach(_store,runtime){node=runtime;},

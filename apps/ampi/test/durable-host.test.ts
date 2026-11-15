@@ -42,9 +42,9 @@ test("durable host: rows take the reader's spend and citation; the thread topic 
 	const { threadId } = await b.req("devbox", "thread.create", { requestId: "dh", cwd: home, model: SIM, prompt: "Hello", place: { workspace: "new", label: "main" } });
 	// Every row value the browser sees: a row states no cost fact before the copy derived it.
 	const seen: any[] = [];
-	const list = await b.until<any>(threads, (v) => { if (v.threads[threadId]) seen.push(v.threads[threadId]); return v.threads[threadId]?.activity === "idle" && v.threads[threadId].spend?.usd === 0; });
-	// Before the first priced response a row reads "no price reported"; no row is left without a label for the web to print as $0.
-	assert.ok(seen.every((r) => r.spend === undefined ? r.spendLabel === undefined : r.spendLabel === (r.spend.usd === null ? "no price reported" : "$0")), JSON.stringify(seen.map((r) => [r.spend, r.spendLabel])));
+	const list = await b.until<any>(threads, (v) => { if (v.threads[threadId]) seen.push(v.threads[threadId]); return v.threads[threadId]?.activity === "idle" && v.threads[threadId].spend?.usd === 0 && !v.threads[threadId].spend.unread; });
+	// Before the reader derives a row, it counts as unread; then it reads "no price reported" until the first priced response.
+	assert.ok(seen.every((r) => r.spend.unread ? r.spendLabel === undefined && r.spend.covers.length === 0 : r.spendLabel === (r.spend.usd === null ? "no price reported" : "$0")), JSON.stringify(seen.map((r) => [r.spend, r.spendLabel])));
 	const row = list.threads[threadId];
 	assert.equal(row.ref, `devbox/pi-durable:${threadId}`);
 	assert.equal(row.spendLabel, "$0");

@@ -76,22 +76,21 @@ test("hub: replicas stay exact through compaction, a repeated sub never doubles 
 	}
 });
 
-test("hub helper models: the per-call model, else hub.json models.<purpose>, else none; no env var or default; a bad entry names the file; unread keys and env vars are named; loading keeps models (failure: a built-in default or AMPI_RAREBIT_ASK_MODEL chose the model)", () => {
+test("hub helper models: the per-call model, else hub.json models.<purpose>, else none; no default; a bad entry names the file; an unknown key is named once; loading keeps models (failure: a built-in default chose the model)", () => {
 	const dir = mkdtempSync(join(tmpdir(), "ampi-models-")), file = join(dir, "hub.json"), none = join(dir, "missing.json");
 	const write = (body: unknown) => writeFileSync(file, typeof body === "string" ? body : JSON.stringify(body));
-	const saved = process.env.AMPI_RAREBIT_ASK_MODEL, warn = console.warn, warned: string[] = [];
+	const warn = console.warn, warned: string[] = [];
 	console.warn = (m: string) => { warned.push(m); };
 	try {
-		write({ hosts: [], models: { rarebitAsk: "p/hub" } });
-		process.env.AMPI_RAREBIT_ASK_MODEL = "p/env";
+		write({ hosts: [], models: { rarebitAsk: "p/hub", askModel: "p/typo" } });
 		assert.equal(helperModel("rarebitAsk", "p/arg", file), "p/arg");
 		assert.equal(helperModel("rarebitAsk", "", file), "p/hub", "an empty per-call model is no choice");
-		assert.equal(helperModel("rarebitAsk", undefined, none), null, "the env var is not read");
-		assert.deepEqual(warned, [`ampi hub: AMPI_RAREBIT_ASK_MODEL is ignored; set models.rarebitAsk in ${file}.`, `ampi hub: AMPI_RAREBIT_ASK_MODEL is ignored; set models.rarebitAsk in ${none}.`]);
-		helperModel("rarebitAsk", undefined, none);
-		assert.equal(warned.length, 2, "a note is logged once until the notes change");
-		delete process.env.AMPI_RAREBIT_ASK_MODEL;
+		assert.equal(warned.length, 1, warned.join("\n"));
+		assert.match(warned[0]!, /^ampi hub: models\.askModel is not a model key; use models\.rarebitAsk/);
+		helperModel("rarebitAsk", undefined, file);
+		assert.equal(warned.length, 1, "a note is logged once until the notes change");
 		assert.equal(helperModel("rarebitAsk", undefined, none), null);
+		write({ hosts: [], models: { rarebitAsk: "p/hub" } });
 		assert.deepEqual(loadHubConfig(file).models, { rarebitAsk: "p/hub" });
 		write({ hosts: [], models: { rarebitAsk: 5 } });
 		assert.throws(() => helperModel("rarebitAsk", undefined, file), /models.rarebitAsk/);
@@ -99,7 +98,6 @@ test("hub helper models: the per-call model, else hub.json models.<purpose>, els
 		assert.throws(() => helperModel("rarebitAsk", undefined, file), (e: Error) => e.message.includes(file));
 	} finally {
 		console.warn = warn;
-		if (saved === undefined) delete process.env.AMPI_RAREBIT_ASK_MODEL; else process.env.AMPI_RAREBIT_ASK_MODEL = saved;
 	}
 });
 

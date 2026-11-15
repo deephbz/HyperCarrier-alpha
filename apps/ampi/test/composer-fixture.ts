@@ -36,7 +36,7 @@ async function componentScript(): Promise<string> {
 			name: "composer-test",
 			resolveId: (id) => id === entry ? `\0${entry}` : undefined,
 			load: (id) => id === `\0${entry}` ? `
-				import React from 'react';
+				import React from 'react'; import ${JSON.stringify(join(root, "src/extensions-ui.ts"))};
 				import { createRoot } from 'react-dom/client';
 				import { Composer } from ${JSON.stringify(join(root, "src/components/Composer.tsx"))};
 				import { useHosts, useTopic } from ${JSON.stringify(join(root, "src/client.ts"))};
@@ -58,11 +58,10 @@ async function componentScript(): Promise<string> {
 						React.createElement(Composer, {
 						// ThreadView keeps one Composer across threads; \`unkeyed\` models that.
 						key: new URLSearchParams(location.search).has('unkeyed') ? undefined : threadId, host: 'devbox', threadId,
-						pi: new URLSearchParams(location.search).has('pi'),
 						view,
 						// \`summary\` passes the thread's row, as ThreadView does; other tests keep the summaryless composer.
 						...(new URLSearchParams(location.search).has('summary') ? { summary: threads?.threads?.[threadId] } : {}),
-						models: [], actions: { panel, openPanel(name) { setPanelCalls(n => n + 1); setPanel(name); }, follow() {} }
+						actions: { panel, openPanel(name) { setPanelCalls(n => n + 1); setPanel(name); } }
 					}));
 				}
 				createRoot(document.getElementById('root')).render(React.createElement(Fixture));
@@ -77,6 +76,24 @@ async function componentScript(): Promise<string> {
 let bundle: Promise<string> | undefined;
 const browsers = new Map<string, ReturnType<typeof chromium.launch>>();
 after(async () => { await Promise.all([...browsers.values()].map(async (browser) => (await browser).close())); });
+/**
+ * `?pi`: the page sees the Host as a Pi Host (`pi-local`), so the Composer takes main's Pi path over the same node.
+ * It rewrites the hub's hosts frame before client.ts reads it; requests still reach the durable node.
+ */
+const PI_HOSTS = `if (new URLSearchParams(location.search).has("pi")) {
+	const Socket = WebSocket;
+	window.WebSocket = class extends Socket {
+		set onmessage(handle) {
+			super.onmessage = (event) => {
+				const frame = JSON.parse(String(event.data));
+				if (frame.t !== "hosts") return handle.call(this, event);
+				frame.hosts = frame.hosts.map((host) => ({ ...host, kind: "pi-local" }));
+				handle.call(this, { data: JSON.stringify(frame) });
+			};
+		}
+	};
+}`;
+
 export async function fixture(t: TestContext, simTokensPerSecond = 100_000, pi = false, holdQueueAck = false, transport?: (client: WebSocketRoute) => void, nodeOptions: { transport?: (socket: Socket) => void; prompts?: Record<string, string>; plugins?: NodePlugin[]; models?: NodeOptions["models"]; stopWaitMs?: number } = {}, browserName: "chromium" | "webkit" = "chromium") {
 	const script = await (bundle ??= componentScript());
 	const home = tempHome();
@@ -113,11 +130,14 @@ export async function fixture(t: TestContext, simTokensPerSecond = 100_000, pi =
 	// The intercepted page shell needs permission to reach its disposable loopback hub in Chrome.
 	if (browserName === "chromium") await page.context().grantPermissions(["local-network-access"], { origin });
 	await page.context().addCookies([{ name: `ampi_k_${port}`, value: token, url: origin }]);
+	// The page says its build in its first frame (web/src/client.ts PAGE_BUILD); the hub serves writes only to its own build.
 	await page.route("**/*", (route) => {
+		// WebKit routes blob: loads too, and a blob URL has the page's origin: the Composer decodes images through one.
+		if (route.request().url().startsWith("blob:")) return route.continue();
 		const url = new URL(route.request().url());
 		if (url.origin !== origin) return route.abort();
 		if (url.pathname === "/component.js") return route.fulfill({ contentType: "text/javascript; charset=utf-8", body: script });
-		if (url.pathname === "/") return route.fulfill({ contentType: "text/html; charset=utf-8", body: '<meta charset="utf-8"><div id="root"></div><script src="/component.js"></script>' });
+		if (url.pathname === "/") return route.fulfill({ contentType: "text/html; charset=utf-8", body: `<meta charset="utf-8"><meta name="ampi-build" content="${hub.stamp.id}"><div id="root"></div><script>${PI_HOSTS}</script><script src="/component.js"></script>` });
 		return route.abort();
 	});
 	if (transport) await page.routeWebSocket("**/ws", transport);

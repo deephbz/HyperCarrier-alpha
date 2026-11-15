@@ -28,7 +28,7 @@ async function componentBundle(): Promise<{ script: string; css: string }> {
 			name: "display-units-test",
 			resolveId: (id) => id === entry ? `\0${entry}` : undefined,
 			load: (id) => id === `\0${entry}` ? `
-				import React from 'react';
+				import React from 'react'; import ${JSON.stringify(join(web, "src/extensions-ui.ts"))};
 				import { createRoot } from 'react-dom/client';
 				import * as display from ${JSON.stringify(join(web, "src/display.ts"))};
 				import { ThreadView } from ${JSON.stringify(join(web, "src/components/ThreadView.tsx"))};

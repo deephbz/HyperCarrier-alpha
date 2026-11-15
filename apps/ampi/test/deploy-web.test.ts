@@ -94,7 +94,7 @@ test("deploy-web cache lookup: the newest matching entry wins, and an entry with
 test("smoke row b: the served index and its assets must equal the keyed dist", async (t) => {
 	const { checkout, cache } = scratch(t);
 	put(checkout, "app.ts", "v1");
-	const html = (js: string) => `<script type="module" src="/assets/${js}"></script><link rel="stylesheet" href="/assets/s.css">`;
+	const html = (js: string) => `<head><script type="module" src="/assets/${js}"></script><link rel="stylesheet" href="/assets/s.css"></head>`;
 	const v1 = entry(cache, checkout, ["app.ts"], 60, { "index.html": html("index-v1.js"), "assets/index-v1.js": "js v1", "assets/s.css": "css" });
 	// The hub's web/dist: what the server answers at request time.
 	const served = join(checkout, "dist");
@@ -104,9 +104,17 @@ test("smoke row b: the served index and its assets must equal the keyed dist", a
 			put(served, rel, readFileSync(join(cache, key, "dist", rel), "utf8"));
 		}
 	};
+	// Like hub.ts #serve: /api/health tells the hub's build, and index.html gets `meta` before </head>.
+	const hubBuild = "0123456789ab";
+	let keyed = true;
+	let meta = (id: string) => `<meta name="ampi-build" content="${id}" />\n`;
 	const server = createServer((req, res) => {
+		if (req.url === "/api/health") { res.end(JSON.stringify(keyed ? { ok: true, stamp: { id: hubBuild } } : { ok: true })); return; }
 		const file = join(served, req.url === "/" ? "index.html" : String(req.url));
-		try { res.end(readFileSync(file)); } catch { res.statusCode = 404; res.end(); }
+		try {
+			const body = readFileSync(file);
+			res.end(req.url === "/" ? String(body).replace("</head>", `${meta(hubBuild)}</head>`) : body);
+		} catch { res.statusCode = 404; res.end(); }
 	}).listen(0, "127.0.0.1");
 	await once(server, "listening");
 	t.after(() => server.close());
@@ -114,7 +122,26 @@ test("smoke row b: the served index and its assets must equal the keyed dist", a
 	const row = () => servedBundle({ port, checkout, cacheDir: cache });
 
 	serve(v1);
-	assert.deepEqual(await row(), { ok: true, line: `served = ${v1.slice(0, 12)} index+2 assets` });
+	assert.deepEqual(await row(), { ok: true, line: `served = ${v1.slice(0, 12)} index+2 assets, build ${hubBuild}` });
+
+	// The page must tell the hub's own build, once.
+	meta = () => `<meta name="ampi-build" content="ba9876543210" />\n`;
+	assert.match((await row()).line, /: \/ \(build meta ba9876543210 is not the hub's 0123456789ab\)$/);
+	meta = () => "";
+	assert.match((await row()).line, /: \/ \(0 build meta lines\)$/);
+	meta = (id) => `<meta name="ampi-build" content="${id}" />\n`.repeat(2);
+	assert.match((await row()).line, /: \/ \(2 build meta lines\)$/);
+	meta = (id) => `<meta name="ampi-build" content="${id}" />\n`;
+
+	// Without the key, /api/health has no stamp.
+	keyed = false;
+	assert.match((await row()).line, /no hub build stamp/);
+	keyed = true;
+
+	// Same build meta, but other index bytes.
+	put(served, "index.html", `${html("index-v1.js")}\n`);
+	assert.match((await row()).line, /: \/$/);
+	serve(v1);
 
 	// The target changes a web input, and the web step is skipped: no keyed build exists for it.
 	put(checkout, "app.ts", "v2");

@@ -15,9 +15,11 @@ import { linkKey } from "./hosts.ts";
 import type { HostConfig, HostState } from "../shared/hosts.ts";
 import { type HubHome, newHubToken } from "./home.ts";
 import { Pins } from "./pins.ts";
-import { PiHost, type PiHostConfig } from "../pi/host.ts";
+import { READ_OPS, skewText, type Stamp, stamp, VERSION_SKEW } from "../shared/build.ts";
+import { CONTROL_PROTOCOL, PiHost, type PiHostConfig } from "../pi/host.ts";
+import type { Stamp as ArcStamp } from "../arc/service/engine.ts";
+import { serviceTarget } from "../arc/service/client.ts";
 import { deriveQueue } from "../pi/derive-queue.ts";
-import { arcQueue } from "../pi/views/arc.ts";
 import { sweepAskScratch } from "../pi/ask.ts";
 import { complete, instant, nowUs, span, tracing } from "../trace.ts";
 import { loopWindow, watched } from "../loop-watch.ts";
@@ -78,6 +80,28 @@ const HEADER_OVERFLOW_PAGE = `<!doctype html><meta charset="utf-8"><title>AmPi: 
 export function hubProof(token: string): string {
 	return createHash("sha256").update(`ampi-hub:${token}`).digest("hex").slice(0, 32);
 }
+/**
+ * The `/api/health` body. An unauthenticated caller gets only `ok` and `proof`. An authorized one also gets the hub's
+ * build `stamp` and, per Host link, the pi-hc-control build it sees: the first live control that is unstamped (null)
+ * or of another build, else the expected one; null without a live control. `runningControls` counts the controls that run on any
+ * protocol, so 0 tells that null from an unstamped control. `controlProtocol` names the protocol this hub speaks and,
+ * per Host, the first running control's protocol that differs from it, else the hub's; null with no running control. `arcTarget` names the shipped Arc bundle;
+ * null until its build succeeds. Each Host reports its running `arcStamp`. The route below builds exactly this shape.
+ */
+export type HealthBody =
+	| { ok: true; proof: string }
+	| {
+			ok: true;
+			proof: string;
+			stamp: Stamp;
+			controlProtocol: string;
+			arcTarget: ArcStamp | null;
+			hosts: (HostState & { controlStamp: Stamp | null; runningControls: number; controlProtocol: string | null; arcStamp: ArcStamp | null })[];
+			derive: ReturnType<typeof deriveQueue>;
+			builds: { pending: number; done: number };
+			loop: ReturnType<typeof loopWindow> | null;
+			missedInputs: number;
+	  };
 const MAX_BUFFERED = 32 * 1024 * 1024;
 
 function same(a: string, b: string): boolean {
@@ -89,7 +113,7 @@ function same(a: string, b: string): boolean {
 /**
  * The hub's Hosts (D15, D26). This machine is always a Pi Host and a durable Host, both named by its own Host ID
  * (`self`, else AMPI_SELF, else this machine's `hostname`), so its node starts with the hub. hub.json lists every
- * other Host. A `"backend"` field from older hub.json files loads and changes nothing; `ampi doctor` notes it.
+ * other Host.
  */
 export function loadHubConfig(path = hubConfigPath()): HubConfig & { self: string } {
 	const parsed = existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as Partial<HubConfig>) : {};
@@ -106,6 +130,8 @@ class BrowserClient {
 	readonly ws: WebSocket;
 	readonly hub: Hub;
 	readonly subs = new Map<number, BrowserSub>();
+	/** The build the page says it is (its `hello` frame); undefined until it says. */
+	build: string | undefined;
 	/** Requests in flight per host: host request id → browser request id. */
 	readonly pending = new Map<string, Map<number, number>>();
 
@@ -141,6 +167,8 @@ export class Hub {
 	readonly config: HubConfig;
 	readonly configPath: string | undefined;
 	readonly pins: Pins;
+	/** This hub's build. Its version goes into the served page and every hosts frame; a page of another build only reads. */
+	readonly stamp: Stamp;
 	server?: Server;
 	#nextHostId = 1;
 	/** host sid → owner, per host. */
@@ -158,9 +186,11 @@ export class Hub {
 	/**
 	 * `home`: the AmPi home this hub owns, where its pins, key and Pi copies persist. Without it (demo and test hubs)
 	 * pins last as long as this hub, the key is `token` or a new one, and every Pi Host names its own `cacheDir`.
+	 * `stamp`: this hub's build for tests; the default is the checkout's (build.ts stamp()).
 	 */
-	constructor(config: HubConfig, options: { configPath?: string; token?: string; persistentCookie?: boolean; home?: HubHome } = {}) {
+	constructor(config: HubConfig, options: { configPath?: string; token?: string; persistentCookie?: boolean; home?: HubHome; stamp?: Stamp } = {}) {
 		this.config = config;
+		this.stamp = options.stamp ?? stamp();
 		this.#home = options.home;
 		this.pins = new Pins(options.home);
 		this.persistentCookie = options.persistentCookie ?? config.persistentCookie === true;
@@ -223,12 +253,12 @@ export class Hub {
 		return "key" in route ? this.links.get(route.key) : undefined;
 	}
 
-	hostStates(): HostState[] {
-		return [...this.links].map(([key, link]) => ({ ...link.state, link: key }));
+	hostStates(): (HostState & { arcStamp: import("../arc/service/engine.ts").Stamp | null })[] {
+		return [...this.links].map(([key, link]) => ({ ...link.state, link: key, arcStamp: link instanceof PiHost ? link.arcStamp : null }));
 	}
 
 	#hostsFrame(): HostsFrame {
-		return { t: "hosts", hosts: this.hostStates(), ...(this.configPath ? { config: this.configPath } : {}) };
+		return { t: "hosts", build: this.stamp.id, hosts: this.hostStates(), ...(this.configPath ? { config: this.configPath } : {}) };
 	}
 
 	#broadcastHosts(): void {
@@ -277,6 +307,16 @@ export class Hub {
 	}
 
 	#fromBrowser(client: BrowserClient, frame: BrowserFrame): void {
+		if (frame.t === "hello") {
+			client.build = typeof frame.build === "string" ? frame.build : undefined;
+			return;
+		}
+		// A page of another build reads, and nothing it sends changes state (P1). A page that never said its build is
+		// another build: the hub fails closed.
+		if ((frame.t === "hub" || (frame.t === "req" && !READ_OPS.has(frame.op))) && client.build !== this.stamp.id) {
+			client.send({ t: "res", id: frame.id, ok: false, error: { code: VERSION_SKEW, message: skewText.page, skew: "page" } });
+			return;
+		}
 		if (frame.t === "hub") {
 			void this.#hubOp(client, frame.id, frame.op, frame.args ?? {});
 			return;
@@ -357,7 +397,7 @@ export class Hub {
 				case "pins.set": {
 					const threadId = String(args.threadId ?? "");
 					if (!threadId) throw new Error("A pin needs a threadId");
-					const pins = this.pins.set(threadId, args.pinned === true, String(args.host ?? ""), String(args.title ?? "").slice(0, 200), args.intent === "owner");
+					const pins = this.pins.set(threadId, args.pinned === true, String(args.host ?? ""), String(args.title ?? "").slice(0, 200));
 					for (const each of this.clients) each.send({ t: "pins", pins } satisfies PinsFrame);
 					client.send({ t: "res", id, ok: true, value: {} satisfies HubOps["pins.set"]["result"] });
 					return;
@@ -533,7 +573,7 @@ export class Hub {
 		if (url.pathname === "/api/health") {
 			// Unauthenticated callers learn only that this hub answers and a proof that it holds the key, so the app hands
 			// the key only to the real hub, never to another process that took the port.
-			const body = this.#authorized(req) ? { ok: true, proof: hubProof(this.token), hosts: this.hostStates(), derive: deriveQueue(), builds: arcQueue(), loop: loopWindow() ?? null, missedInputs: [...this.links.values()].reduce((n, l) => n + (l instanceof PiHost ? l.missedInputs : 0), 0) } : { ok: true, proof: hubProof(this.token) };
+			const body: HealthBody = this.#authorized(req) ? { ok: true, proof: hubProof(this.token), stamp: this.stamp, controlProtocol: CONTROL_PROTOCOL, arcTarget: serviceTarget(), hosts: [...this.links].map(([key, link]) => ({ ...link.state, link: key, arcStamp: link instanceof PiHost ? link.arcStamp : null, controlStamp: link instanceof PiHost ? link.controlStamp : null, runningControls: link instanceof PiHost ? link.runningControls : 0, controlProtocol: link instanceof PiHost ? link.controlProtocol : null })), derive: deriveQueue(), builds: [...this.links.values()].reduce((sum, link) => { const q = link instanceof PiHost ? link.arcQueue : { pending: 0, done: 0 }; return { pending: sum.pending + q.pending, done: sum.done + q.done }; }, { pending: 0, done: 0 }), loop: loopWindow() ?? null, missedInputs: [...this.links.values()].reduce((n, l) => n + (l instanceof PiHost ? l.missedInputs : 0), 0) } : { ok: true, proof: hubProof(this.token) };
 			res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(body));
 			return;
 		}
@@ -553,7 +593,9 @@ export class Hub {
 			"content-type": MIME[extname(file)] ?? "application/octet-stream",
 			"cache-control": path === "/index.html" ? "no-cache" : "public, max-age=31536000, immutable",
 		});
-		res.end(readFileSync(file));
+		// The page learns its build from the hub that served it and says it in its first frame (web/src/client.ts).
+		if (path === "/index.html") res.end(String(readFileSync(file)).replace("</head>", `<meta name="ampi-build" content="${this.stamp.id}" />\n</head>`));
+		else res.end(readFileSync(file));
 	}
 
 	async close(): Promise<void> {

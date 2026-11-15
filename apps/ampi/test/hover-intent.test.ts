@@ -73,8 +73,10 @@ for (const [engine, type, path] of ENGINES) {
 		for (const [name, target] of [["title", '[aria-label="Thread title"]'], ["model", ".model-hud-trigger"]] as const) {
 			// Shift+Tab, then Tab: the target takes focus from the keyboard, so it matches :focus-visible.
 			await page.locator(target).first().focus();
+			const card = name === "model" ? page.getByRole("region", {name:"Session HUD",exact:true}) : page.getByRole("region", {name:"Session details",exact:true});
 			await page.keyboard.press("Shift+Tab");
-			await page.locator(".session-metadata").waitFor({ state: "detached", timeout: BUDGET });
+			if (name === "model") await card.waitFor({ state: "detached", timeout: BUDGET });
+			else await page.locator(".session-metadata").waitFor({ state: "detached", timeout: BUDGET });
 			await page.keyboard.press("Tab");
 			assert.ok(await page.locator(target).first().evaluate((el) => el.matches(":focus-visible")), `${name}: keyboard focus`);
 			await page.locator(".session-metadata").waitFor({ timeout: BUDGET });

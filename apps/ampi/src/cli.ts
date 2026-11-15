@@ -16,11 +16,13 @@ const USAGE = `usage: ampi [command]
                             otherwise it ends with the browser session
   open [--open]             print the link to the running hub, with its access key
   doctor                    check this machine and every host, and say how to fix problems
+  arc status [--host ID] [--json] | stop (--host ID | --all)
+                            Stopping Arc drains Builds for every client. A linked hub restarts it within seconds.
+                            exit 0: success; 1: bad/unknown Host state; 2: usage
+                            --json: smoke checks each Host state; unreachable can be report-only
   status                    show this machine's node
   stop                      stop this machine's node (running work resumes on the next start)
   version                   print the version and build
-  node backup [STORE]       copy every thread store, or one, under ~/.ampi/backups (safe while the node runs)
-  node restore STORE FILE   replace a thread store with a backup; stop the node first
   node install-service      run the node under launchd (Mac) or systemd (Linux); it restarts after a failure
   node uninstall-service [--no-autostart]
                             remove that service; the node then starts on demand again.
@@ -60,6 +62,7 @@ switch (command) {
 	case "open":
 	case "doctor":
 	case "version":
+	case "arc":
 		await (await import("./commands.ts")).hubCommand(command, rest);
 		break;
 	case "status": {
@@ -102,40 +105,12 @@ switch (command) {
 		process.exit(2);
 }
 
-/** `ampi node <sub>`: store backups and the OS service. These never start a node. */
+/** `ampi node <sub>`: the OS service and the store inventory. These never start a node. */
 async function nodeCommand(sub: string, args: string[]): Promise<void> {
 	const home = ampiHome();
 	const store = await import("./node/store-file.ts");
 	const supervisor = await import("./node/supervisor.ts");
 	switch (sub) {
-		case "backup": {
-			// SQLite's backup API copies a consistent state even while the node writes, so no lock is needed.
-			const { existsSync: exists, readdirSync } = await import("node:fs");
-			const threads = join(home, "threads");
-			const ids = args[0] ? [args[0]] : exists(threads) ? readdirSync(threads).filter((name) => exists(join(threads, name, "harness.sqlite"))).sort() : [];
-			for (const id of ids) console.log(await store.backupStore(home, id, "manual"));
-			if (ids.length === 0) console.log("No thread stores to back up.");
-			return;
-		}
-		case "restore": {
-			const [storeId, file] = args;
-			if (!storeId || !file) {
-				console.error("usage: ampi node restore STORE FILE");
-				process.exit(2);
-			}
-			const held = lock(home);
-			if ("owner" in held) {
-				console.error(`The node runs (pid ${held.owner}). Stop it first: ampi stop`);
-				process.exit(1);
-			}
-			try {
-				const result = await store.restoreStore(home, storeId, file);
-				console.log(`Restored ${storeId} from ${result.restored}.${result.previous ? ` The replaced store is in ${result.previous}.` : ""}`);
-			} finally {
-				held.release();
-			}
-			return;
-		}
 		case "install-service": {
 			const marker = supervisor.installService(home);
 			console.log(`Installed ${marker.unitPath}. ${marker.platform === "launchd" ? "launchd restarts a failed node every 10 s without a limit." : "systemd restarts a failed node at most 5 times in 5 minutes."}`);

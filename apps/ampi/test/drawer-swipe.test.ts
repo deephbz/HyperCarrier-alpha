@@ -149,6 +149,7 @@ for (const [engine, type, path] of ENGINES) {
 		await drag(page, [60, 420], [130, 420], { steps: 4, ms: 400 });
 		assert.equal((await state(page)).sidebar, false, "a slow short drag settles back");
 		await drag(page, [60, 420], [130, 420], { steps: 4, ms: 60 });
+		await page.waitForFunction(() => !document.querySelector(".app")!.classList.contains("sidebar-hidden"));
 		assert.equal((await state(page)).sidebar, true, "a flick opens");
 		await drag(page, [300, 420], [100, 420], { steps: 10, ms: 400 });
 		assert.equal((await state(page)).sidebar, false, "a slow drag past half closes");

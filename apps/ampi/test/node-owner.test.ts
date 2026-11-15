@@ -6,13 +6,11 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { runDaemon, NodeOwnerError } from "../src/node/daemon.ts";
-import { NodeRuntime, parseThreadKey } from "../src/node/runtime.ts";
-import { backupStore } from "../src/node/store-file.ts";
 import { tempHome } from "./helpers.ts";
 
 const fixture = fileURLToPath(new URL("./fixtures/node-owner-child.ts", import.meta.url));
-function actor(mode: string, home: string, store = "", backup = "") {
-	const child = spawn(process.execPath, [fixture, mode, home, store, backup], {
+function actor(mode: string, home: string) {
+	const child = spawn(process.execPath, [fixture, mode, home], {
 		stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, AMPI_HOME: home, PI_CODING_AGENT_DIR: join(home, "agent") },
 	});
 	const events: string[] = [];
@@ -88,15 +86,10 @@ test("atomic owner: failed socket startup releases the owner lock and restores u
 	}
 });
 
-for (const slowMode of ["slow", "restore"]) test(`atomic owner: a contender cannot steal ownership before PID publication (${slowMode})`, { timeout: 10_000 }, async () => {
+test("atomic owner: a contender cannot steal ownership before PID publication", { timeout: 10_000 }, async () => {
 	const home = tempHome();
-	const seed = new NodeRuntime({ home, agentDir: join(home, "agent") });
-	const created = await seed.createThread({ cwd: home, model: { provider: "ampi-sim", modelId: "sim-1" } });
-	await seed.close();
-	const store = parseThreadKey(created.threadId).storeId;
-	const backup = await backupStore(home, store, "owner-test");
 	writeFileSync(join(home, "node.pid"), "2147483647\n");
-	const slow = actor(slowMode, home, store, backup);
+	const slow = actor("slow", home);
 	let fast: ReturnType<typeof actor> | undefined;
 	try {
 		assert.equal(await slow.next(), "before-pid-write");
@@ -105,7 +98,7 @@ for (const slowMode of ["slow", "restore"]) test(`atomic owner: a contender cann
 		assert.equal(a, "refused", "the transaction owns the store before its PID is published");
 		slow.advance();
 		const b = await slow.next();
-		assert.ok(b === "owned" || b === "restored",
+		assert.equal(b, "owned",
 			"one actor owns the store even when its diagnostic PID still names a stale process");
 	} finally {
 		for (const active of [slow, fast]) if (active && active.child.exitCode === null) active.child.kill("SIGKILL");

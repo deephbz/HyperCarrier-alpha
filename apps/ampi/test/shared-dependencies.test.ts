@@ -45,6 +45,8 @@ test("shared value types do not depend on producers", () => {
 		"src/shared/protocol.ts -> src/pi/views/rarebit.ts",
 		// PromptAuditSnapshot remains owned by the durable prompt-audit plugin.
 		"src/shared/protocol.ts -> src/plugins/prompt-audit.ts",
+		// The durable node's test-isolation guard stays with the node; pi-config.ts calls it before it reads Pi config.
+		"src/shared/pi-config.ts -> src/node/test-mode.ts",
 	]));
 });
 

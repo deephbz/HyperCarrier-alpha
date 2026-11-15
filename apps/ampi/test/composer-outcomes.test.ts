@@ -5,7 +5,7 @@ import { hostErrorMessage, sendOutcome } from "../web/src/composer-outcomes.ts";
 import { hostLabelFor } from "../web/src/components/host-label.ts";
 
 test("Composer final refusals drop retry identity and explain the kept draft without doubled punctuation", () => {
-	for (const code of ["key_conflict", "bad_request", "bad_args", "unsupported", "unsupported_command", "unknown_command", "commands_unsupported", "command_choice", "busy", "busy_compacting", "audit_empty"]) {
+	for (const code of ["key_conflict", "bad_request", "bad_args", "unsupported", "unsupported_command", "unknown_command", "version_skew", "command_choice", "busy", "busy_compacting", "audit_empty", "control_reloading"]) {
 		for (const message of ["Fix this", "Fix this.", "Fix this.  "])
 			assert.deepEqual(sendOutcome({ code, message }, "Workbench"), {
 				uncertain: false, text: "Not sent: Fix this. Your draft is kept; fix it and send again.",
@@ -14,7 +14,7 @@ test("Composer final refusals drop retry identity and explain the kept draft wit
 });
 
 test("Composer unknown outcomes keep retry identity, name the Host label, and hide raw transport details", () => {
-	const host = { id: "devbox", link: "devbox#durable", label: "Workbench", kind: "local" as const };
+	const host = { id: "devbox", link: "devbox#durable", label: "Workbench", kind: "pi-local" as const };
 	const label = hostLabelFor(host.link, [host]);
 	for (const code of [undefined, "host_disconnected", "timeout", "not_found", "future_transport_error"]) {
 		const outcome = sendOutcome({ code, message: "devbox#durable disconnected" }, label);

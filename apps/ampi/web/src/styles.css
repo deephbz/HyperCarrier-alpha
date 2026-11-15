@@ -291,7 +291,7 @@ kbd {
 html[data-input="keyboard"] .resize-edge:focus::after { left: 2px; width: 4px; background: var(--accent); }
 @media (max-width: 600px) {
 	/* Below the desktop acceptance sizes the sidebar itself becomes an overlay. */
-	/* App reads --side-overlay: the side panels are drawers, one side shows at a time, and the drawer state is not saved. */
+	/* App follows this breakpoint: the side panels are drawers, one side shows at a time, and the drawer state is not saved. */
 	:root { --side-overlay: 1; }
 	/* A drawer opens over the page and changes nothing under it: the header keeps ☰'s reserve while a drawer is open. */
 	.main-slot > .main > :first-child { padding-left: var(--reveal-reserve); }
@@ -1262,42 +1262,49 @@ details[open] > .disclosure::before,
 	background: transparent;
 	resize: none;
 	outline: none;
-	padding: 12px 12px 4px;
-	min-height: 48px;
+	padding: 8px 10px 4px;
+	min-height: 34px;
 	max-height: min(24vh, 200px);
 	font-size: var(--font-body);
 	line-height: normal;
 }
 .composer-bar {
 	line-height: var(--line-ui);
-	display: flex;
-	flex-wrap: wrap;
+	display: grid;
+	grid-template-columns: var(--hit) 6em minmax(0, 1fr) auto;
 	align-items: center;
-	gap: 4px 8px;
-	padding: 4px 8px 8px 12px;
-	font-size: var(--font-ui);
+	gap: 6px;
+	padding: 2px 8px 6px;
+	font-size: 11px;
 	color: var(--text-3);
 }
-.composer-bar select {
-	border: 1px solid transparent;
-	background: transparent;
-	border-radius: 4px;
-	padding: 4px;
-	font-size: 12px;
-	color: var(--text-2);
-	max-width: min(220px, 100%);
-	min-width: 0;
+.composer-card-trigger, .composer-bar .model-hud-trigger {
+	border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer;
+	min-height: var(--hit); padding: 0; border-radius: 3px;
 }
-.composer-bar select:hover {
-	border-color: var(--border);
+.composer-card-trigger { display: inline-flex; align-items: center; justify-content: space-between; gap: 6px; width: 100%; }
+.composer-help .composer-card-trigger { justify-content: center; position: relative; }
+.composer-help .composer-card-trigger::before { content: ""; position: absolute; width: 22px; height: 22px; border: 1px solid var(--border); border-radius: 50%; }
+.composer-help { display: flex; }
+.composer-model-controls { display: flex; align-items: center; min-width: 0; gap: 3px; }
+.composer-model-controls > select { flex: 1; min-width: 0; width: 0; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; min-height: var(--hit); }
+.composer-model-options { position: relative; flex: none; }
+.composer-model-options > summary { cursor: pointer; list-style: none; }
+.composer-model-options[open] > select { position: absolute; bottom: 100%; right: 0; z-index: 10; background: var(--bg); }
+.composer-actions { display: flex; flex-wrap: nowrap; gap: 3px; }
+.composer-actions .btn.small { padding: 2px 5px; font-size: 11px; min-height: var(--hit); }
+@media (pointer: coarse) {
+	.composer-wrap { padding-inline: 12px; }
+	.composer-bar { grid-template-columns: var(--hit) 62px minmax(90px, 1fr) auto; gap: 3px; padding-inline: 4px; }
+	.composer-actions .btn.small { width: 44px; min-width: 44px; min-height: 40px; padding: 0; border: 0; background: transparent; }
+	.composer-actions .btn { --action-bg: transparent; --action-color: var(--text); }
+	.composer-actions .btn.primary { --action-bg: var(--accent); --action-color: var(--accent-text); }
+	.composer-actions .btn.danger { --action-color: var(--err); }
+	.composer-actions .action-label { background: var(--action-bg); color: var(--action-color); display: flex; align-items: center; justify-content: center; min-height: 28px; border: 1px solid var(--border); border-radius: 4px; font-size: 11px; }
 }
-.composer-bar .grow {
-	flex: 1;
-}
-.composer-bar > .hint { min-width: 0; overflow-wrap: anywhere; }
-.composer-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-left: auto; }
-.composer-feedback { padding: 4px 12px; font-size: 12px; overflow-wrap: anywhere; color: var(--text-2); max-height: 96px; overflow-y: auto; }
+.composer-feedback { padding: 4px 12px; font-size: 12px; overflow-wrap: anywhere; white-space: pre-line; color: var(--text-2); max-height: 96px; overflow-y: auto; }
 .composer-feedback.error { color: var(--err); }
+.image-admission-feedback { font-size: 11px; line-height: 1.15; }
 .composer-feedback.uncertain { color: var(--attn); }
 .composer-feedback.outcome { display: flex; align-items: center; gap: 6px; }
 .composer-feedback.outcome > span { flex: 1; }
@@ -1669,6 +1676,9 @@ details[open] > .disclosure::before,
 }
 /* Popovers (Popover.tsx): every menu, card and outline. The component writes left, top and size limits. */
 .popover { position: fixed; z-index: 50; }
+.quote-selection blockquote { margin: 0 0 6px; max-width: 32rem; max-height: 6em; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.quote-selection form { max-width: 100%; }
+.quote-selection input { max-width: 100%; }
 /* Dialog */
 .modal-back {
 	position: fixed;
@@ -1790,6 +1800,23 @@ details[open] > .disclosure::before,
 	z-index: 20;
 	max-width: 420px;
 }
+/* The hub runs another build than this page: it only reads until the owner reloads (client.ts skew). */
+.skew-banner {
+	position: fixed;
+	top: 10px;
+	left: 50%;
+	transform: translateX(-50%);
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	background: var(--text);
+	color: var(--bg);
+	border-radius: 10px;
+	padding: 7px 8px 7px 14px;
+	font-size: 13px;
+	box-shadow: var(--shadow);
+	z-index: 30;
+}
 .toast.settings-notice { bottom: auto; top: 18px; }
 .settings-notice p { margin: 0; }
 .settings-notice p + p { margin-top: 6px; }
@@ -1853,13 +1880,38 @@ details[open] > .disclosure::before,
 	outline-offset: 2px;
 }
 .slash-menu {
+	display: flex;
+	flex-direction: column;
 	border: 1px solid var(--border);
 	border-radius: 8px;
 	box-shadow: var(--shadow);
 	background: var(--bg-elev);
 	padding: 4px;
 	max-height: min(40vh, 320px);
+	overflow: hidden;
+}
+.slash-options {
+	flex: 1 1 auto;
+	min-height: var(--slash-option-floor, 2.6em);
 	overflow-y: auto;
+}
+.slash-menu-whole-scroll {
+	overflow-y: auto;
+}
+.slash-menu-whole-scroll .slash-options {
+	flex: 0 0 auto;
+	overflow: visible;
+}
+.slash-option-list {
+	display: flex;
+	flex-direction: column;
+	min-height: 100%;
+}
+.slash-placeholder {
+	flex: 1 0 28px;
+	min-height: 28px;
+	border-radius: 4px;
+	background: linear-gradient(to bottom, transparent 0, transparent 45%, var(--border) 45%, var(--border) 48%, transparent 48%);
 }
 .slash-item {
 	display: flex;
@@ -1877,7 +1929,12 @@ details[open] > .disclosure::before,
 	flex: 1;
 }
 .slash-foot {
-	padding: 4px 8px 2px;
+	box-sizing: border-box;
+	flex: 0 0 auto;
+	height: auto;
+	min-height: 1.5em;
+	overflow: visible;
+	padding: 4px 8px 5px;
 	border-top: 1px solid var(--border);
 	margin-top: 4px;
 }
@@ -2088,8 +2145,17 @@ details[open] > .disclosure::before,
 .session-copy svg { flex: none; }
 .session-title:hover .session-copy, .session-title:focus-within .session-copy { opacity: 1; pointer-events: auto; }
 .session-metadata { width: 520px; max-height: calc(100vh - 100px); overflow: auto; padding: 12px; background: var(--bg-elev); color: var(--text); border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--shadow); font-size: var(--font-ui); }
+.session-metadata > :first-child { margin-top: 0; }
+.session-metadata > :last-child { margin-bottom: 0; }
 /* The composer's model label opens SessionTitle's card surface (hover-card.tsx). */
-.composer-bar .model-hud-card { display: inline-flex; min-width: 0; }
+.composer-bar .model-hud-card { display: block; min-width: 0; }
+.composer-bar .model-hud-trigger { display: block; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.composer-bar .meter { font-size: inherit; width: 100%; font-variant-numeric: tabular-nums; }
+.composer-bar .meter .bar { position: relative; width: 26px; height: 13px; padding: 1px; border: 1px solid var(--text-3); border-radius: 4px; overflow: visible; flex: none; background: transparent; }
+.composer-bar .meter .bar::after { content: ""; position: absolute; left: calc(100% + 1px); top: 3px; width: 2px; height: 5px; border-radius: 0 2px 2px 0; background: var(--text-3); }
+.composer-bar .meter .bar > div { border-radius: 2px; max-width: 100%; background: var(--text-2); }
+.composer-bar .meter .bar.warn > div { background: var(--warn); }
+.composer-bar .meter .bar.err > div { background: var(--err); }
 .composer-bar .model-hud-trigger { cursor: help; text-decoration: underline dotted; text-decoration-thickness: 1px; text-underline-offset: 2px; }
 .composer-bar .model-hud-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* hc-hud's footer roles: path and accounting dim. */
@@ -2138,7 +2204,12 @@ details[open] > .disclosure::before,
 .attn-note > div > * { font-size: 13px; }
 .attn-note strong { color: var(--attn); font-weight: 500; }
 /* Overlay panel (narrow windows): only over the transcript, so the topbar and composer stay usable. */
-.panel-overlay .panel-slot { top: var(--transcript-top, 0px); bottom: var(--transcript-bottom, 0px); border-left: 1px solid var(--border); }
+.panel-overlay .panel-slot { top: var(--transcript-top, 0px); bottom: var(--transcript-bottom, 0px); border-left: 1px solid var(--border); container: panel-slot / size; }
+/* A short transcript slot cannot fit the panel's vertical padding or a pinned status. Let both scroll. */
+@container panel-slot (max-height: 200px) {
+	.panel-body { padding-block: 0; }
+	.arc-status { position: static; }
+}
 /* A focused region or page root draws its ring only after keyboard input (App's data-input). A pointer, a touch, or a
    script's move before any input draws none: :focus-visible matches a script's focus on a fresh page. */
 :is([data-region], [data-page-root], [data-page-focus]):focus { outline: none; }

@@ -1,5 +1,5 @@
 import type { ThreadSummary } from "../../../../src/shared/protocol.ts";
-import { historySpend, spendLabel, sumSpend, summarySpend, type Spend } from "../../../../src/shared/spend.ts";
+import { historySpend, spendLabel, sumSpend, type Spend } from "../../../../src/shared/spend.ts";
 
 /** `[start, tokens, dollars]`; index 1 or 2 selects the unit. */
 export type Bucket = [number, number, number];
@@ -47,6 +47,6 @@ export function laneSpend(members: { priced?: boolean }[], usd: number): Spend {
  * it cannot count yet (unreadSpend). The label names that count.
  */
 export function activeSpend(threads: ThreadSummary[], since: number): { label: string; updating: number } {
-	const spend = sumSpend(threads.filter((t) => t.updatedAt > since).map(summarySpend));
+	const spend = sumSpend(threads.filter((t) => t.updatedAt > since).map((t) => t.spend));
 	return { label: spendLabel(spend), updating: spend.unread ?? 0 };
 }

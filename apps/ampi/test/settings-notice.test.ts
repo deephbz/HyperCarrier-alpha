@@ -11,6 +11,7 @@ import react from "@vitejs/plugin-react";
 import { findChrome } from "../scripts/perf/browser.mjs";
 import type { SettingsNotice } from "../src/shared/protocol.ts";
 import { engineSkip } from "./engines.ts";
+import { unscriptedValue } from "./view-defaults.ts";
 
 // A durable node that ignored invalid Pi settings says so once per settings stamp, as Pi's Auto Compact warns: the
 // real App with its stylesheet, and a script on the page's WebSocket as the hub.
@@ -27,7 +28,7 @@ async function appScript(): Promise<string> {
 			name: "settings-notice-test",
 			resolveId: (id) => id === entry ? `\0${entry}` : undefined,
 			load: (id) => id === `\0${entry}` ? `
-				import React from 'react';
+				import React from 'react'; import ${JSON.stringify(join(web, "src/extensions-ui.ts"))};
 				import { createRoot } from 'react-dom/client';
 				import { App } from ${JSON.stringify(join(web, "src/App.tsx"))};
 				createRoot(document.getElementById('root')).render(React.createElement(App));
@@ -66,7 +67,7 @@ test("settings notice: one per Host and stamp, kept across a reload, ended by a 
 			if (frame.t === "sub" && frame.topic?.kind === "threads") {
 				publish = () => send({ t: "snap", sid: frame.sid, value: { threads: {}, backend: "durable", ...(notice ? { settingsNotice: notice } : {}) } });
 				publish();
-			} else if (frame.t === "sub") send({ t: "snap", sid: frame.sid, value: {} });
+			} else if (frame.t === "sub") send({ t: "snap", sid: frame.sid, value: unscriptedValue(frame.topic) });
 			else if (frame.t === "req" || frame.t === "hub") send({ t: "res", id: frame.id, ok: false, error: { code: "unsupported", message: "not in this test" } });
 		});
 	});

@@ -13,6 +13,7 @@ import { UsageDoc } from "@earendil-works/pi-durable";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { DurableViews } from "../src/durable/reader-side.ts";
 import { hudView } from "../web/src/hud.ts";
+import { modelLabel } from "../web/src/model-label.ts";
 // @ts-ignore: plain ESM test fixtures over a real pi-durable 1.4.0 store.
 import { openFixtureStore } from "../../trace-analytics/test/fixtures/durable-store.mjs";
 // @ts-ignore: the real reader service behind a JSON round-trip, as on the wire.
@@ -67,20 +68,25 @@ test("durable usage: the thread topic carries pi.usage by model with cache count
 const web = fileURLToPath(new URL("../web/", import.meta.url));
 let vite: ViteDevServer;
 let controls: (props: object) => unknown;
+let piCard: (props: object) => unknown;
 before(async () => {
 	// client.ts opens its hub WebSocket at import; this stub never connects.
 	Object.assign(globalThis, { location: { protocol: "http:", host: "127.0.0.1:1", hash: "" }, WebSocket: class { send() {} close() {} }, window: globalThis, localStorage: { getItem: () => null, setItem() {}, removeItem() {} } });
 	vite = await createServer({ configFile: `${web}vite.config.ts`, root: web, logLevel: "silent", server: { middlewareMode: true, hmr: false } });
-	controls = (await vite.ssrLoadModule("/src/components/Composer.tsx")).ModelControls;
+	controls = (await vite.ssrLoadModule("/src/durable/composer-surface.tsx")).ModelControls;
+	// A Pi Session has no model control slot: the Composer draws the HUD card itself.
+	piCard = (await vite.ssrLoadModule("/src/components/ModelHudCard.tsx")).ModelHudCard;
 });
 after(async () => { await vite?.close(); });
 
 test("durable usage: the durable Composer offers the Session HUD beside its pickers; a Pi Session keeps its model label", () => {
 	const summary = { id: "tree-a.7", title: "t", createdAt: 0, updatedAt: 0, kind: "thread", activity: "idle", queued: 0, costUsd: 0.13, model: MODEL, cacheHit: 97.3 };
-	const html = (pi: boolean) => renderToStaticMarkup(createElement(controls as never, { host: "devbox#durable", threadId: "tree-a.7", summary, models: [], model: MODEL, closed: false, pi }));
+	const html = (pi: boolean) => renderToStaticMarkup(pi ? createElement(piCard as never, { summary }) : createElement(controls as never, { host: "devbox#durable", threadId: "tree-a.7", summary, view: { entries: [] }, closed: false }));
 	const durable = html(false);
 	assert.match(durable, /title="Model"/, "the model picker stays");
 	assert.match(durable, /class="model-hud-trigger hint"[^>]*>HUD</, "the HUD trigger shows on a durable thread");
-	assert.match(html(true), /class="model-hud-trigger hint"[^>]*>magpie\/claude\/claude-opus-5-5</, "a Pi Session's trigger is its model");
+	// The compact Composer shows the short model label; the HUD card keeps the full model ID.
+	const label = modelLabel(MODEL).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	assert.match(html(true), new RegExp(`class="model-hud-trigger hint"[^>]*>${label}<`), "a Pi Session's trigger is its model label");
 	assert.doesNotMatch(html(true), /title="Model"/);
 });

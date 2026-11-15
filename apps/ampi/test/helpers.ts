@@ -10,6 +10,7 @@ import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
 import WebSocket from "ws";
 import { HubHome } from "../src/hub/home.ts";
+import { stamp } from "../src/shared/build.ts";
 import { simProvider } from "../src/node/sim.ts";
 import { encodeFrame, lineReader } from "../src/shared/framing.ts";
 import type { NodeFrame, Topic } from "../src/shared/protocol.ts";
@@ -198,6 +199,8 @@ export class Browser {
 	hosts: any[] = [];
 	/** The hosts frame's `config`: the hub.json the hub read at start. */
 	config: string | undefined;
+	/** The hosts frame's `build`: the hub's build version. */
+	build: string | undefined;
 	stale = new Set<number>();
 	/** The last `end` or `pending` frame of each subscription. */
 	closing = new Map<number, { t: "end" | "pending"; reason: string }>();
@@ -210,7 +213,7 @@ export class Browser {
 		ws.on("message", (data) => {
 			const frame = JSON.parse(String(data));
 			if (frame.t === "res") this.#waiters.get(frame.id)?.(frame);
-			else if (frame.t === "hosts") (this.hosts = frame.hosts), (this.config = frame.config);
+			else if (frame.t === "hosts") (this.hosts = frame.hosts), (this.config = frame.config), (this.build = frame.build);
 			else if (frame.t === "stale") this.stale.add(frame.sid);
 			else if (frame.t === "end" || frame.t === "pending") this.closing.set(frame.sid, { t: frame.t, reason: frame.reason });
 			else if (frame.t === "snap") {
@@ -227,13 +230,17 @@ export class Browser {
 			for (const listener of this.#listeners) listener();
 		});
 	}
-	static open(port: number, origin: string | undefined = `http://127.0.0.1:${port}`, cookie?: string): Promise<Browser> {
+	/** `build`: what the page says in its first frame (null: no build); the default is a test hub's own stamp. */
+	static open(port: number, origin: string | undefined = `http://127.0.0.1:${port}`, cookie?: string, build: string | null = stamp().id): Promise<Browser> {
 		return new Promise((resolve, reject) => {
 			const headers: Record<string, string> = {};
 			if (origin !== undefined) headers.origin = origin;
 			if (cookie !== undefined) headers.cookie = cookie;
 			const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers });
-			ws.once("open", () => resolve(new Browser(ws)));
+			ws.once("open", () => {
+				ws.send(JSON.stringify({ t: "hello", ...(build === null ? {} : { build }) }));
+				resolve(new Browser(ws));
+			});
 			ws.once("error", reject);
 			ws.once("unexpected-response", (_req, res) => reject(new Error(`HTTP ${res.statusCode}`)));
 		});
@@ -243,6 +250,14 @@ export class Browser {
 		return new Promise((resolve, reject) => {
 			this.#waiters.set(id, (frame) => (frame.ok ? resolve(frame.value) : reject(Object.assign(new Error(frame.error.message), frame.error))));
 			this.ws.send(JSON.stringify({ t: "req", id, host, op, args }));
+		});
+	}
+	/** An op the hub serves itself (HubOps). */
+	hub(op: string, args: unknown = {}): Promise<any> {
+		const id = this.#id++;
+		return new Promise((resolve, reject) => {
+			this.#waiters.set(id, (frame) => (frame.ok ? resolve(frame.value) : reject(Object.assign(new Error(frame.error.message), frame.error))));
+			this.ws.send(JSON.stringify({ t: "hub", id, op, args }));
 		});
 	}
 	sub(host: string, topic: unknown, sid = this.#id++): number {

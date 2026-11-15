@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { runDaemon } from "../src/node/daemon.ts";
 import { Hub } from "../src/hub/hub.ts";
 import { arrangeByLayout } from "../web/src/components/sidebar-layout.ts";
+import { tabPane } from "../web/src/durable/kind.ts";
 import { href, threadRef } from "../web/src/util.ts";
 import { Browser, tempHome } from "./helpers.ts";
 import { fixture } from "./pi-fixtures.ts";
@@ -84,7 +85,7 @@ test("durable tabs in the sidebar: a tab is one group in tab order, its label sh
 	const side = { id: "tab-2", label: "side" };
 	const threads = [row("s.3", main), row("s.1", main), row("s.2", side), row("s.4")] as never;
 	const layout = { workspaces: [{ id: "tab-1", label: "main", tabs: [{ id: "tab-1", label: "main", panes: ["s.1", "s.3"] }] }, { id: "tab-2", label: "side", tabs: [{ id: "tab-2", label: "side", panes: ["s.2"] }] }] };
-	const { groups, unplaced } = arrangeByLayout({ threads, layout });
+	const { groups, unplaced } = arrangeByLayout({ threads, layout }, tabPane);
 	assert.deepEqual(groups.map((g) => [g.label, g.rows.map((r) => r.id)]), [["main", ["s.1", "s.3"]], ["side", ["s.2"]]]);
 	assert.deepEqual(unplaced.map((r) => r.id), ["s.4"]);
 });

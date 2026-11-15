@@ -1,4 +1,3 @@
-import { newId } from "./ids.ts";
 /**
  * How a submission went out: its busy mode and the request that carried it. A draft carries it only while its key
  * names a send with an unknown outcome, so a retry repeats the same request under the same key.
@@ -28,6 +27,25 @@ export function outcomeText(outcome: Outcome, keyed: boolean): string {
 	return outcome.once ? `${outcome.text} ${keyed ? outcome.once : MAYBE_SENT}` : outcome.text;
 }
 
+/**
+ * An open quote note is Session draft input, keyed by host/thread outside the view.
+ * Only Enter (append to the draft) or explicit Escape/cancel ends it. Transcript updates,
+ * scroll, reflow, re-render, view reload, control flicker and Session switch-and-back never discard it.
+ * Like Composer custody, this store lasts for the page lifetime; it holds no DOM nodes.
+ */
+export type QuoteDraft = { text: string; note: string; entry: string; fragment: string; right: number; bottom: number };
+const quoteDrafts = new Map<string, QuoteDraft>();
+const quoteListeners = new Set<() => void>();
+export const quoteDraftOf = (key: string): QuoteDraft | undefined => quoteDrafts.get(key);
+export const subscribeQuoteDrafts = (listener: () => void) => {
+	quoteListeners.add(listener);
+	return () => void quoteListeners.delete(listener);
+};
+export function setQuoteDraft(key: string, value: QuoteDraft | undefined): void {
+	if (value) quoteDrafts.set(key, value);
+	else quoteDrafts.delete(key);
+	for (const listener of quoteListeners) listener();
+}
 /** Quotes are free draft text; appending leaves the rest of the draft unchanged. */
 export function appendDraftQuote<D extends { text: string }>(draft: D, selection: string, note: string): D {
 	if (!selection.trim()) return draft;
@@ -108,32 +126,20 @@ export function editDraft<I>(custody: Custody<I>, change: { text?: string; image
 	return { ...custody, draft: next, ...(custody.notices ? { notices } : {}) };
 }
 
+/**
+ * The message a draft's text sends. `literal` (ComposerSurface.literalText) keeps the text as typed; otherwise it is
+ * trimmed. `escaped`: the text starts with the `//` escape, which loses one slash.
+ */
+export function messageText(text: string, literal: boolean | undefined, escaped = false): string {
+	const content = literal ? text : text.trim();
+	return escaped ? content.replace(/^(\s*)\//, "$1") : content;
+}
+
 /** Adds `text` after the draft; `outcome` stays with it until the text leaves the draft. */
 export function appendDraftText<I>(custody: Custody<I>, text: string, newKey: () => string, outcome?: Outcome): Custody<I> {
 	const current = custody.draft.text;
 	const next = editDraft(custody, { text: current ? `${current}\n\n${text}` : text }, newKey);
-	return outcome ? { ...next, notices: [...(next.notices ?? []), { id: newId(), text, key: next.draft.key, outcome }] } : next;
-}
-
-/** Puts `text` ahead of the draft: returned queue text, which has no retry identity. */
-export function prependDraftText<I>(custody: Custody<I>, text: string, newKey: () => string): Custody<I> {
-	return editDraft(custody, { text: [text, custody.draft.text].filter((t) => t.trim()).join("\n\n") }, newKey);
-}
-
-/**
- * The custody a fork starts with, or `undefined` when the fork keeps its own. The draft's text, images, and notices
- * carry over under a new key; held messages and retry intents stay with the source, so the fork never retries the
- * source's sends. A draft with an intent may already be in the source's history, so the fork warns about it once: a
- * carried notice on that send already says so, because the new key ends its retry promise. The source is not changed.
- */
-export function carriedDraft<I>(source: Custody<I> | undefined, destination: Custody<I> | undefined, newKey: () => string): Custody<I> | undefined {
-	if (!source || isEmpty(source.draft)) return undefined;
-	if (destination && (!isEmpty(destination.draft) || destination.returned.length)) return undefined;
-	const notices = (source.notices ?? []).map((notice) => ({ ...notice }));
-	const key = newKey();
-	const stated = notices.some((notice) => noticeKeyed(source.draft, notice) && notice.outcome.once);
-	if (source.draft.intent && !stated) notices.push({ id: newId(), text: source.draft.text, key, outcome: { uncertain: true, text: MAYBE_SENT } });
-	return { draft: { text: source.draft.text, images: [...source.draft.images], key }, returned: [], ...(notices.length ? { notices } : {}) };
+	return outcome ? { ...next, notices: [...(next.notices ?? []), { id: newKey(), text, key: next.draft.key, outcome }] } : next;
 }
 
 export function dismissNotice<I>(custody: Custody<I>, id: string): Custody<I> {

@@ -7,15 +7,40 @@ import { spawn } from "node:child_process";
 import { hubConfigPath, Hub, hubProof, loadHubConfig } from "./hub/hub.ts";
 import { HubHome, newHubToken, readHubToken, RootOwned } from "./hub/home.ts";
 import { ampiHome } from "./shared/home.ts";
-import { doctor, hubPort, versionLine } from "./doctor.ts";
+import { doctor, hubPort, versionLine, webBuild } from "./doctor.ts";
 
-/** `ampi hub | open | doctor | version`. */
+/** `ampi hub | open | doctor | version | arc`. */
 export async function hubCommand(command: string, rest: string[]): Promise<void> {
 	const flag = (name: string): string | undefined => {
 		const index = rest.indexOf(`--${name}`);
 		return index >= 0 ? rest[index + 1] : undefined;
 	};
 	switch (command) {
+ case "arc": {
+  const { parseArcArgs, maintainHost } = await import("./arc/service/client.ts");
+  const { serviceError, serviceText } = await import("./arc/service/status.ts");
+  let parsed = false;
+  try {
+   const args = parseArcArgs(rest); parsed = true;
+   const config = loadHubConfig(args.config ?? hubConfigPath());
+   const hosts = config.hosts.filter((host): host is import("./pi/host.ts").PiHostConfig => (host.kind === "pi-local" || host.kind === "pi-ssh") && (!args.host || host.id === args.host));
+   if (!hosts.length) {
+    parsed = false;
+    throw new Error(`No Pi Host matches ${args.host ?? "the configuration"}. Hosts: ${config.hosts.filter(h => h.kind === "pi-local" || h.kind === "pi-ssh").map(h => h.id).join(", ") || "(none)"}.`);
+   }
+   if (args.op === "stop" && !args.json) console.error("Stopping Arc drains Builds for every client. A linked hub restarts it within seconds.");
+   const results = await Promise.all(hosts.map(async host => {
+    try {
+     const result = await maintainHost(host, { op: args.op });
+     if (["error", "unreachable", "cannot-start", "fault", "busy", "invalid-settings", "no-sign-in"].includes(result.state)) process.exitCode = 1;
+     return { ...result, host: host.id };
+    } catch (error) { process.exitCode = 1; return serviceError(host.id, error); }
+   }));
+   if (args.json) console.log(JSON.stringify(results));
+   else for (const result of results) console.log(serviceText(result));
+  } catch (error) { console.error((error as Error).message); process.exitCode = parsed ? 1 : 2; }
+  break;
+ }
 		case "hub": {
 			nameProcess("hub");
 			instant("modules-loaded");
@@ -66,6 +91,8 @@ export async function hubCommand(command: string, rest: string[]): Promise<void>
 					? `AmPi is running. Open this link (it carries this machine's access key):\n\n  ${url}\n\nAgents keep working after you close the window or stop the hub. Stop with Ctrl-C.`
 					: `AmPi is running: http://127.0.0.1:${port}/?k=… (ampi open prints the full link). Agents keep working after the hub stops.`,
 			);
+			const web = webBuild();
+			if (!web.ok) console.warn(`The window this hub serves is stale: ${web.detail}`);
 			if (rest.includes("--open") || rest.includes("--launch")) launch(url);
 			const stop = async () => {
 				instant("stop-requested");

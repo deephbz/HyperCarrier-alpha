@@ -5,7 +5,7 @@
 //
 // Out: hello, reset/chunk (Session bytes), agents {agents, panes, layout}, teams, limits, ack, live, beat, status.
 // In:  {t:'submit', id, session, pane?, text, deliverAs: 'steer'|'followUp', images?: [{data, mimeType}]}
-//        images go only through a live control that announces them (status.images); text may then be empty
+//        images go only through a live control; text may then be empty
 //      {t:'submit', id, pane, expectSession, text, deliverAs}   a spawned Session with no file yet (pane from the ledger)
 //      {t:'abort', id, session, pane?}
 //      {t:'commands', id, session}           slash commands, models and thinking levels from the live control
@@ -29,6 +29,8 @@
 //   pollMs, discoverMs, teamsMs, teams, ptbObservation, herdrSession
 //   agentDir        Pi agent dir (default $PI_CODING_AGENT_DIR or ~/.pi/agent)
 //   autoCompactResolve  hc-auto-compact's settings resolver as a data: module URL, from the hub (agent-modules.ts)
+//   controlStamp    the pi-hc-control build the hub expects; each status op names it as `expect`, and a control on
+//                   the same protocol updates itself to it (pi-hc-control update.ts)
 //   controlStatusMs status query timeout per socket (default 500)
 //   controlSubmitMs submit/abort reply timeout (default 130000; the extension waits up to 120 s on compaction)
 //   keys.typeArgv   Herdr argv that types literal text without submitting.
@@ -36,6 +38,7 @@
 //   keys.followUp   key tokens that queue the typed text as a follow-up. Default ['alt+enter'].
 //   keys.interrupt  key tokens that interrupt a turn. Default ['esc'].
 //   agentStartMs    `herdr agent start --timeout` (default 30000); the process gets a few seconds more.
+//   shellReadyMs    how long a pane this agent just made may stay `agent_pane_busy` while its shell starts (default 15000)
 const fs = require('fs');
 const cp = require('child_process');
 const net = require('net');
@@ -43,6 +46,11 @@ const path = require('path');
 const os = require('os');
 
 const cfg = JSON.parse(Buffer.from(process.env.HCM_CFG || 'e30=', 'base64').toString());
+// Consume transport payload before any child starts. The Arc bundle can exceed
+// Linux's 128 KiB limit for one environment or argv string.
+delete process.env.HCM_CFG;
+// The pi-hc-control protocol this AmPi speaks (host.ts sends endpoint.ts SCHEMA).
+const CONTROL_PROTOCOL = cfg.controlProtocol;
 
 // ---- perf trace ----
 // With AMPI_TRACE=<runDir> the agent records Chrome Trace Event spans on the Unix-epoch µs clock: frames sent, Herdr
@@ -67,8 +75,7 @@ function traceFlush() {
 }
 if (tracing) {
   process.on('exit', traceFlush);
-  // The hub stops a local agent with SIGTERM; exit through the handler so the trace is written.
-  for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => process.exit(0));
+  // quit() exits after Arc launch work drains; the exit hook writes the trace.
 }
 const offsets = cfg.offsets || {};
 const tailBytes = cfg.tailBytes || 0;
@@ -80,6 +87,7 @@ const controlDir = path.join(agentDir, 'hc-control');
 const controlStatusMs = cfg.controlStatusMs ?? 500;
 const controlSubmitMs = cfg.controlSubmitMs ?? 130_000;
 const agentStartMs = cfg.agentStartMs ?? 30_000;
+const shellReadyMs = cfg.shellReadyMs ?? 15_000;
 const keys = {
   typeArgv: ['pane', 'send-text', '{pane}', '{text}'],
   followUp: ['alt+enter'],
@@ -100,15 +108,19 @@ let outBytes = 0, outBusy = false, outRetry = 0;
 const outHigh = 8 << 20; // pump() waits above this backlog
 const outMax = 1 << 30; // the hub stopped reading
 const transient = new Set(['EAGAIN', 'EWOULDBLOCK', 'ENOBUFS', 'ENOMEM', 'EINTR']);
-function quit(code, reason) {
+let arcRelay, quitting = false;
+async function quit(code, reason) {
+  if (quitting) return;
+  quitting = true;
   try { fs.writeSync(2, `remote-agent exit ${code}: ${reason}\n`); } catch {}
-  process.exit(code);
+  try { await (await arcRelay)?.close(); } finally { process.exit(code); }
 }
 for (const [sig, n] of [['SIGTERM', 15], ['SIGHUP', 1], ['SIGINT', 2]]) process.on(sig, () => quit(128 + n, sig));
 function out(o) {
+  if (quitting) return;
   const ts = tracing ? traceNow() : 0;
   const b = Buffer.from(JSON.stringify(o) + '\n');
-  (o.t === 'ack' ? ackQ : outQ).push(b); outBytes += b.length;
+  (o.t === 'ack' || o.t === 'arc.ack' || o.t === 'arc.status' || o.t === 'arc.hello' ? ackQ : outQ).push(b); outBytes += b.length;
   if (outBytes > outMax) quit(1, `stdout backlog ${outBytes} bytes; the hub stopped reading`);
   flush();
   // The span covers serialize and enqueue; the write itself is asynchronous.
@@ -363,7 +375,7 @@ function readDescriptors() {
   for (const f of files) {
     try {
       const d = JSON.parse(fs.readFileSync(path.join(controlDir, f), 'utf8'));
-      if (d?.schema !== 'hc-control/1' || typeof d.sessionFile !== 'string' || typeof d.nonce !== 'string') continue;
+      if (!/^hc-control\/\d+$/.test(d?.schema) || typeof d.sessionFile !== 'string' || typeof d.nonce !== 'string') continue;
       d.socket = typeof d.socket === 'string' ? d.socket : path.join(controlDir, `${d.sessionId}.sock`);
       d.sessionFile = path.resolve(d.sessionFile);
       list.push(d);
@@ -373,11 +385,13 @@ function readDescriptors() {
 }
 const pidAlive = (pid) => { if (!Number.isInteger(pid)) return true; try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
 
-// Live means: the descriptor's socket answers `status` with the descriptor's nonce and file.
+// Live means: the descriptor's socket answers `status` with the descriptor's nonce and file. A control on another
+// protocol is never asked anything: a live process makes it `{ protocol }`, which takes no op (foreign()).
 async function probe(d) {
   if (!pidAlive(d.pid)) return null;
+  if (d.schema !== CONTROL_PROTOCOL) return { descriptor: d, value: null, protocol: d.schema };
   try {
-    const r = await controlRequest(d.socket, { id: `s${++controlSeq}`, op: 'status' }, controlStatusMs);
+    const r = await controlRequest(d.socket, { id: `s${++controlSeq}`, op: 'status', ...(cfg.controlStamp ? { expect: cfg.controlStamp } : {}) }, controlStatusMs);
     const v = r?.ok ? r.value : null;
     if (!v || v.nonce !== d.nonce || path.resolve(v.sessionFile || '') !== d.sessionFile) return null;
     // A new control endpoint (a restart or /reload) can serve other commands: forget the old list.
@@ -391,20 +405,56 @@ async function liveControls() {
   for (const r of res) if (r) map.set(r.descriptor.sessionFile, r);
   return map;
 }
+// A control that reloads (pi-hc-control endpoint.ts close({ reloading })) leaves its descriptor as
+// `state: "reloading"` until its new endpoint opens. While its pid lives, a send for that Session never becomes keys.
+// Before the deadline it waits for the new endpoint, in FIFO turns, at most RELOAD_HOLD_MAX at a time; the wait ends
+// with a live control or a refusal (`refused`, code control_reloading: nothing was sent). After the deadline it is
+// refused at once, until a live descriptor replaces this one or the pid dies (a restart): a Pi hung mid-reload, or one
+// reloaded without pi-hc-control, must not get keys. The turn lasts until the caller sends and calls
+// `release`, so held sends reach Pi in order.
+const RELOAD_HOLD_MAX = 8;
+const RELOAD_HOLD_MS = 10000;
+const reloadHolds = new Map(); // sessionFile -> { count, tail }
 async function liveControlFor(session) {
   const file = path.resolve(session);
-  for (const d of readDescriptors()) if (d.sessionFile === file) { const r = await probe(d); if (r) return r; }
-  return null;
+  // Later sends queue behind held ones, even once the new endpoint answers.
+  if (reloadHolds.has(file)) return holdForReload(file, null);
+  let reloading = null;
+  for (const d of readDescriptors()) if (d.sessionFile === file) {
+    if (d.state === 'reloading') { if (pidAlive(d.pid)) reloading = d; continue; }
+    const r = await probe(d);
+    if (r) return r;
+  }
+  return reloading ? holdForReload(file, reloading) : null;
 }
-const controlView = (r) => r ? {
-  live: true, idle: !!r.value.idle, compacting: !!r.value.compacting,
-  // The control serves typed slash commands (pi-hc-control `commands`/`command`).
-  ...(r.value.commands === 1 ? { commands: true } : {}),
-  // Its submit carries images (pi-hc-control status.images).
-  ...(r.value.images === 1 ? { images: true } : {}),
+async function holdForReload(file, d) {
+  const hold = reloadHolds.get(file) ?? { count: 0, tail: Promise.resolve(), descriptor: d, since: Date.now() };
+  if (hold.count >= RELOAD_HOLD_MAX) return { refused: { code: 'control_reloading', message: `pi-hc-control on this Host is reloading and already holds ${RELOAD_HOLD_MAX} sends for this Session. Send again in a few seconds` } };
+  hold.count++;
+  reloadHolds.set(file, hold);
+  let release;
+  const done = new Promise((resolve) => { release = resolve; });
+  const turn = hold.tail;
+  hold.tail = turn.then(() => done);
+  const finish = () => { if (--hold.count === 0 && reloadHolds.get(file) === hold) reloadHolds.delete(file); release(); };
+  await turn;
+  const target = hold.descriptor.targetStamp?.id ?? null;
+  const until = Math.min(Number(hold.descriptor.deadline) || 0, hold.since + RELOAD_HOLD_MS);
+  while (Date.now() < until) {
+    for (const n of readDescriptors()) {
+      if (n.sessionFile !== file || n.state === 'reloading') continue;
+      const r = await probe(n);
+      if (r && (!target || r.value.stamp?.id === target)) return { ...r, release: finish };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  finish();
+  return { refused: { code: 'control_reloading', message: 'pi-hc-control on this Host began a reload and did not return within 10 s. Restart this Pi Session' } };
+}
+const controlView = (r) => r?.protocol ? { live: false, protocol: r.protocol } : r ? {
+  live: true, idle: !!r.value.idle, compacting: !!r.value.compacting, stamp: r.value.stamp ?? null,
   pending: { steer: r.value.pending?.steer ?? 0, followUp: r.value.pending?.followUp ?? 0 },
-  // An older control extension tracks no submissions: leave the key out, so absence proves nothing.
-  ...(Array.isArray(r.value.submissions) ? { submissions: r.value.submissions.map(submissionView) } : {}),
+  submissions: Array.isArray(r.value.submissions) ? r.value.submissions.map(submissionView) : [],
 } : null;
 // The endpoint's start: a Session with no file yet has no other age.
 const startedOf = (r) => { const at = Date.parse(r.descriptor.startedAt); return at ? { startedAt: at } : {}; };
@@ -511,14 +561,14 @@ async function discover() {
     for (const [file, r] of controls) {
       if (seen.has(file)) continue;
       // Pi writes the file only with the first message; the descriptor alone makes the Session present until then.
-      agents.push(blankAgent(file, { status: r.value.idle ? 'idle' : 'working', source: 'control', control: controlView(r), ...startedOf(r) }));
+      agents.push(blankAgent(file, { status: r.value ? (r.value.idle ? 'idle' : 'working') : 'unknown', source: 'control', control: controlView(r), ...startedOf(r) }));
     }
     // Recent files no pane or control socket shows: copied and listed, with no pane and no live state.
     const listed = new Set(agents.map((a) => path.resolve(a.session)));
     for (const file of recentSessionFiles()) if (!listed.has(path.resolve(file))) agents.push(blankAgent(file, { source: 'recent', control: null }));
     for (const a of agents) {
       track(a.session, !!(a.pane || a.control?.live));
-      const id = a.control ? controls.get(path.resolve(a.session))?.value.sessionId : undefined;
+      const id = a.control ? controls.get(path.resolve(a.session))?.value?.sessionId : undefined;
       a.sessionId = id || sessionIdOf(a.session);
       try { a.bytes = fs.statSync(a.session).size; } catch {} // lets the hub detect a stalled copy
     }
@@ -543,6 +593,18 @@ function ackOf(msg, via, r) {
   out({ t: 'ack', id: msg.id, via, at: Date.now(), ...r });
 }
 const fail = (msg, via, code, message) => ackOf(msg, via, { ok: false, error: { code, message } });
+// The gate is the wire protocol (cfg.controlProtocol, pi-hc-control endpoint.ts SCHEMA). A control of another build
+// on the same protocol serves every op; the hub logs the drift. A control on another protocol gets no op, and no keys
+// either: the refusal carries its protocol, and the hub words the one step (build.ts controlProtocolSkew).
+function foreign(msg, r) {
+  if (!r.protocol) return false;
+  ackOf(msg, 'control', { ok: false, error: { code: 'version_skew', message: `pi-hc-control speaks ${r.protocol}`, protocol: r.protocol } });
+  return true;
+}
+// A control that names this protocol but does not know one of its ops is a protocol fault too: the same refusal.
+const refusalOf = (rep, r, op) => rep.error?.code === 'unknown_op'
+  ? { code: 'version_skew', message: `pi-hc-control lacks the ${op} op`, protocol: r.descriptor.schema, unknownOp: op }
+  : rep.error || { code: 'control_error', message: 'control refused' };
 
 // Exact pane<->Session binding on the named Herdr server. Never inferred from a pane ID alone.
 async function boundPane(msg) {
@@ -575,13 +637,18 @@ const fill = (argv, vars) => argv.map((x) => x.replace(/\{(pane|text)\}/g, (_, k
 async function viaControl(msg, req, r) {
   r ??= await liveControlFor(msg.session);
   if (!r) return false;
+  if (r.refused) { fail(msg, 'control', r.refused.code, r.refused.message); return true; }
+  try { return await sendViaControl(msg, req, r); } finally { r.release?.(); }
+}
+async function sendViaControl(msg, req, r) {
+  if (foreign(msg, r)) return true;
   try {
     const rep = await controlRequest(r.descriptor.socket, { id: `c${++controlSeq}`, ...req }, controlSubmitMs);
     if (rep.ok) ackOf(msg, 'control', {
       ok: true, evidence: rep.evidence, entryId: rep.entryId, submission: rep.submission,
       ...(Array.isArray(rep.submissions) ? { submissions: rep.submissions.map(submissionView) } : {}),
     });
-    else ackOf(msg, 'control', { ok: false, error: rep.error || { code: 'control_error', message: 'control refused' } });
+    else ackOf(msg, 'control', { ok: false, error: refusalOf(rep, r, req.op) });
   } catch (e) {
     // The socket was live a moment ago; the input may or may not have landed. Never retry through keys.
     fail(msg, 'control', 'control_unconfirmed', String(e.message || e));
@@ -597,7 +664,11 @@ async function viaCommandControl(msg, req, typed) {
   const r = msg.session ? await liveControlFor(msg.session) : null;
   if (!r && typed) return commandKeys(msg, typed);
   if (!r) return fail(msg, 'control', 'no_control', 'This Session has no live control socket, so AmPi cannot run slash commands; use the Pi pane');
-  if (r.value.commands !== 1) return fail(msg, 'control', 'commands_unsupported', "This Pi's control is too old for slash commands: update pi-hc-control and /reload in the Pi pane");
+  if (r.refused) return fail(msg, 'control', r.refused.code, r.refused.message);
+  try { await commandViaControl(msg, req, r); } finally { r.release?.(); }
+}
+async function commandViaControl(msg, req, r) {
+  if (foreign(msg, r)) return;
   try {
     const rep = await controlRequest(r.descriptor.socket, { id: `c${++controlSeq}`, ...req }, controlSubmitMs);
     if (rep.ok) {
@@ -605,7 +676,7 @@ async function viaCommandControl(msg, req, typed) {
       if (req.op === 'commands' && Array.isArray(result.value?.commands))
         seenCommands.set(r.descriptor.sessionFile, { nonce: r.descriptor.nonce, names: new Set(result.value.commands.filter((c) => c?.supported !== false).map((c) => c?.name)) });
       ackOf(msg, 'control', { ok: true, ...result });
-    } else ackOf(msg, 'control', { ok: false, error: rep.error || { code: 'control_error', message: 'control refused' } });
+    } else ackOf(msg, 'control', { ok: false, error: refusalOf(rep, r, req.op) });
   } catch (e) {
     // A command may have run; the outcome is unknown, so it is never retried here.
     fail(msg, 'control', 'control_unconfirmed', String(e.message || e));
@@ -662,11 +733,10 @@ async function submit(msg) {
   const images = Array.isArray(msg.images) && msg.images.length ? msg.images : null;
   if (typeof msg.text !== 'string' || (!msg.text && !images)) return fail(msg, null, 'bad_request', 'text required');
   const deliverAs = msg.deliverAs === 'followUp' ? 'followUp' : 'steer';
-  // Keys cannot carry an image, and an older control drops the field: never send the text without its images.
+  // Keys cannot carry an image: never send the text without its images.
   if (images) {
     const r = msg.session ? await liveControlFor(msg.session) : null;
     if (!r) return fail(msg, 'control', 'no_control', 'This Session has no live control socket, so AmPi cannot send images; paste them in the Pi pane');
-    if (r.value.images !== 1) return fail(msg, 'control', 'images_unsupported', "This Pi's control is too old for images: update pi-hc-control and /reload in the Pi pane");
     return void await viaControl(msg, { op: 'submit', text: msg.text, deliverAs, images: images.map(({ data, mimeType }) => ({ data, mimeType })) }, r);
   }
   if (msg.session && await viaControl(msg, { op: 'submit', text: msg.text, deliverAs })) return;
@@ -811,7 +881,17 @@ async function spawnAgent(msg) {
   if (renamed.error) warning = `pane not named: ${renamed.error.code}: ${renamed.error.message}`.slice(0, 300);
   // The Session id is bound before Herdr runs anything: Pi creates the Session with exactly this id.
   const piArgs = resume ? ['--session', resume] : ['--session-id', sessionId];
-  const start = await herdrCall(['agent', 'start', name, '--kind', 'pi', '--pane', pane, '--timeout', String(agentStartMs), '--', ...piArgs], agentStartMs + 5000);
+  // A new pane's shell runs its startup files and prompt hooks in the foreground first (starship init and prompt take
+  // ~0.5 s idle, longer under load). Until its prompt is up, Herdr answers agent_pane_busy and runs nothing. For this
+  // pane, which no one else has used yet, that refusal is transient: ask again until the shell is ready.
+  let start;
+  for (const until = Date.now() + shellReadyMs; ;) {
+    start = await herdrCall(['agent', 'start', name, '--kind', 'pi', '--pane', pane, '--timeout', String(agentStartMs), '--', ...piArgs], agentStartMs + 5000);
+    if (start.error?.code !== 'agent_pane_busy' || Date.now() >= until) break;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  if (start.error?.code === 'agent_pane_busy')
+    start.error = { ...start.error, message: `${start.error.message} after ${Math.round(shellReadyMs / 1000)} s; its shell never reached an idle prompt` };
   rediscover();
   const base = { pane, name, ...(warning ? { warning } : {}) };
   if (start.error && START_REFUSALS.includes(start.error.code)) {
@@ -837,20 +917,9 @@ async function spawnAgent(msg) {
   ackOf(msg, 'herdr', { ok: true, evidence: state, ...base, ...(submitted ? { submitted } : {}), ...(start.error ? { fact: `${start.error.code}: ${start.error.message}`.slice(0, 300) } : {}) });
 }
 
-// Pi Team Bright installed here, as far as this agent can tell. Its absence of state must not read as "no Team".
-function ptbInstalled() {
-  if (cfg.teams === false) return false;
-  return ptb === undefined ? !!ptbObservationFile() : !!ptb;
-}
-
 async function closePane(msg) {
   if (!(typeof msg.session === 'string' && msg.session) && !msg.expectSession || typeof msg.pane !== 'string' || !msg.pane) return fail(msg, 'herdr', 'bad_request', 'session (or expectSession) and pane required');
-  // Fail closed: without a recent Team snapshot, any pane may be a teammate's.
-  if (ptbInstalled() && Date.now() - goodAt > 30_000)
-    return fail(msg, 'herdr', 'team_unknown', 'Pi Team Bright state is unavailable, so this pane may belong to a Team; retry shortly or close it in Herdr');
-  const member = teamOf.get(msg.pane);
-  if (member && member.role !== 'lead')
-    return fail(msg, 'herdr', 'team_worker', "Pi Team Bright owns this worker's pane; ask its lead to stop it");
+  // Any pane closes, as in Herdr itself: a Team tracks its own members' exits.
   if (!herdr) return fail(msg, 'herdr', 'no_route', 'herdr not found on this host');
   if (!await checkSession()) return fail(msg, 'herdr', 'herdr_unavailable', `Herdr session ${herdrSession} not running`);
   // Ordered get -> list -> recheck -> close. A change between the recheck and the close is not excluded.
@@ -873,7 +942,16 @@ async function closePane(msg) {
   ackOf(msg, 'herdr', { ok: true, evidence: 'closed' });
 }
 
+// The self-contained bundle owns service discovery; this agent only relays frames.
+function loadArc(bundle, known) {
+  if (quitting) return;
+  if (arcRelay) return arcRelay;
+  return arcRelay = import('data:text/javascript;base64,' + Buffer.from(bundle).toString('base64')).then(m => quitting ? null : m.relay(bundle, { host: cfg.host || os.hostname(), agentDir, known: known || {}, emit: out })).catch(e => { out({ t: 'arc.error', detail: String(e?.message || e) }); return null; });
+}
+if (cfg.arcBundle) loadArc(cfg.arcBundle, cfg.arcKnown);
 async function command(msg) {
+  if (msg.t === 'arc.bundle') { if (typeof msg.bundle === 'string') await loadArc(msg.bundle, msg.known); return; }
+  if (msg.t === 'arc.request') { const relay = await arcRelay; if (relay) return relay.command(msg); out({ t: 'arc.ack', requestId: msg.requestId, result: { outcome: 'unknown' } }); return; }
   if (msg.t === 'forget') {
     const p = msg.path;
     if (typeof p !== 'string' || !tracked.has(p) && !forgotten.has(p)) return fail(msg, null, 'source_unknown', 'Source is not tracked; keep the local copy');
@@ -1021,7 +1099,7 @@ function report(status, codes = []) {
 // providers are not visible. Sent only when the files change.
 // The Auto Compact budget is hc-auto-compact's own resolution (resolve.mjs), which the hub sends as a data: module
 // (cfg.autoCompactResolve; apps/ampi/src/pi/agent-modules.ts). Each file's stamp is `mtime:size`, or `-` when it is
-// absent, as AmPi's fileStamp (src/node/pi-config.ts).
+// absent, as AmPi's fileStamp (src/shared/pi-config.ts).
 let limitsKey = '', limitsSent = '', resolveAutoCompact = null;
 function readLimits() {
   const files = ['models-store.json', 'models.json', 'settings.json'].map((f) => path.join(agentDir, f));
@@ -1048,7 +1126,7 @@ function readLimits() {
 }
 
 if (tracing) traceEvents.push({ ph: 'i', s: 'p', name: 'hello', cat: 'startup', ts: traceNow(), pid: process.pid, tid: 0 });
-out({ t: 'hello', host: cfg.host || os.hostname(), pid: process.pid, herdr: !!herdr, herdrSession, controlOps: ['commands', 'command', 'command.keys', 'submit.images'], control: (() => { try { return fs.readdirSync(controlDir).some((f) => f.endsWith('.json')); } catch { return false; } })(), at: Date.now() });
+out({ t: 'hello', host: cfg.host || os.hostname(), pid: process.pid, herdr: !!herdr, herdrSession, control: (() => { try { return fs.readdirSync(controlDir).some((f) => f.endsWith('.json')); } catch { return false; } })(), at: Date.now() });
 for (const p of Object.keys(offsets)) track(p);
 discover();
 setInterval(discover, discoverMs);

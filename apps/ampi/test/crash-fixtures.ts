@@ -30,6 +30,27 @@ export async function startNode(home: string, tps: number, env: Record<string, s
 	}
 }
 
+/**
+ * Kills the node each time the thread streams, until the thread shows attention instead. pi-durable counts a model
+ * request in flight at a crash as a failed attempt, so only kills while streaming end the run. The node that remains
+ * streams fast.
+ */
+export async function killWhileStreaming(home: string, child: ChildProcess, client: TestClient, threadId: string): Promise<{ child: ChildProcess; client: TestClient; kills: number }> {
+	for (let kills = 0; ; kills++) {
+		const threads = client.sub({ kind: "threads" });
+		const row = (await client.until<any>(threads, (v) => v.threads[threadId]?.activity === "streaming" || v.threads[threadId]?.attention, 30_000)).threads[threadId];
+		if (row.attention) {
+			client.close();
+			await kill(child);
+			return { ...(await startNode(home, 5000)), kills };
+		}
+		assert.ok(kills < 8, "the run ends within 8 kills");
+		client.close();
+		await kill(child);
+		({ child, client } = await startNode(home, 5));
+	}
+}
+
 export function kill(child: ChildProcess): Promise<void> {
 	return new Promise((resolve) => {
 		if (child.exitCode !== null || child.signalCode !== null) return resolve();

@@ -37,6 +37,71 @@ function sideways(page: Page) {
 }
 
 for (const [engine, type, path] of ENGINES) {
+	test(`phone layout ${engine}: follows the narrow rule without a resize event`, { skip: engineSkip(engine) }, async (t) => {
+		const page = await open(t, engine, type, path(), { context: { viewport: { width: 980, height: 844 }, hasTouch: true, isMobile: true }, suppressResize: true, waitForPhoneLayout: false });
+		await page.setViewportSize({ width: 390, height: 844 });
+		await page.waitForFunction(() => getComputedStyle(document.documentElement).getPropertyValue("--side-overlay").trim() === "1");
+		assert.equal(await page.locator(".app").evaluate((el) => el.classList.contains("side-overlay")), true, "App follows the CSS drawer rule without a resize event");
+	});
+
+	test(`phone breakpoint ${engine}: CSS and App agree at edges and display zoom`, { skip: engineSkip(engine) }, async (t) => {
+		const page = await open(t, engine, type, path(), { display: { overall: 1.25 }, context: { viewport: { width: 980, height: 844 }, hasTouch: true, isMobile: true }, suppressResize: true, waitForPhoneLayout: false });
+		for (const width of [599, 600, 601]) {
+			await page.setViewportSize({ width, height: 844 });
+			await page.waitForFunction(() => {
+				const css = getComputedStyle(document.documentElement).getPropertyValue("--side-overlay").trim() === "1";
+				const app = document.querySelector(".app");
+				return app && app.classList.contains("side-overlay") === css;
+			});
+			const state = await page.evaluate(() => ({ width: innerWidth, zoom: getComputedStyle(document.documentElement).zoom, css: getComputedStyle(document.documentElement).getPropertyValue("--side-overlay").trim(), app: document.querySelector(".app")?.classList.contains("side-overlay") }));
+			assert.equal(state.width, width, `viewport width ${width}`);
+			assert.equal(state.zoom, "1.25", `display zoom at ${width}`);
+			assert.equal(state.app, state.css === "1", `App and CSS agree at ${width}`);
+		}
+	});
+
+	test(`phone panel ${engine}: entering narrow layout closes the desktop panel`, { skip: engineSkip(engine) }, async (t) => {
+		const page = await open(t, engine, type, path(), { route: "#/h/devbox/t/pi%3Asess-lead", context: { viewport: { width: 980, height: 844 }, hasTouch: true, isMobile: true }, suppressResize: true, waitForPhoneLayout: false });
+		await page.waitForFunction(() => innerWidth === 980 && localStorage.getItem("ampi.panel") === "arc");
+		const initial = await page.evaluate(() => ({ width: innerWidth, sideOverlay: document.querySelector(".app")?.classList.contains("side-overlay"), hasPanel: document.querySelector(".app")?.classList.contains("has-panel"), savedPanel: localStorage.getItem("ampi.panel") }));
+		t.diagnostic(`desktop first render: ${JSON.stringify(initial)}`);
+		assert.equal(initial.width, 980, "App starts at the desktop layout viewport");
+		await page.setViewportSize({ width: 390, height: 844 });
+		await page.waitForFunction(() => getComputedStyle(document.documentElement).getPropertyValue("--side-overlay").trim() === "1");
+		await page.waitForFunction(() => !document.querySelector(".app")?.classList.contains("has-panel") && localStorage.getItem("ampi.panel") === "arc");
+		const state = await page.evaluate(() => ({ sideOverlay: document.querySelector(".app")?.classList.contains("side-overlay"), hasPanel: document.querySelector(".app")?.classList.contains("has-panel"), savedPanel: localStorage.getItem("ampi.panel") }));
+		assert.equal(state.sideOverlay, true);
+		assert.equal(state.hasPanel, false, "the phone's initial-layout panel rule applies after the viewport narrows");
+		assert.equal(state.savedPanel, "arc", "narrow mode keeps the desktop panel preference");
+	});
+
+	test(`phone first render ${engine}: keep the saved desktop panel preference`, { skip: engineSkip(engine) }, async (t) => {
+		const page = await open(t, engine, type, path(), { route: "#/h/devbox/t/pi%3Asess-lead", context: PHONE });
+		assert.equal(await page.locator(".app").evaluate((el) => el.classList.contains("side-overlay")), true);
+		assert.equal(await page.evaluate(() => localStorage.getItem("ampi.panel")), "arc");
+		assert.equal(await page.locator(".app").evaluate((el) => el.classList.contains("has-panel")), false);
+	});
+
+	test(`desktop panel ${engine}: restore after narrow mode without changing its preference`, { skip: engineSkip(engine) }, async (t) => {
+		const page = await open(t, engine, type, path(), { route: "#/h/devbox/t/pi%3Asess-lead", context: { viewport: { width: 1280, height: 844 } } });
+		await page.waitForFunction(() => document.querySelector(".app")?.classList.contains("has-panel"));
+		assert.equal(await page.evaluate(() => localStorage.getItem("ampi.panel")), "arc");
+		await page.setViewportSize({ width: 390, height: 844 });
+		await page.waitForFunction(() => document.querySelector(".app")?.classList.contains("side-overlay") && !document.querySelector(".app")?.classList.contains("has-panel"));
+		assert.equal(await page.evaluate(() => localStorage.getItem("ampi.panel")), "arc", "narrow mode leaves the desktop preference untouched");
+		await page.setViewportSize({ width: 1280, height: 844 });
+		await page.waitForFunction(() => !document.querySelector(".app")?.classList.contains("side-overlay") && document.querySelector(".app")?.classList.contains("has-panel"));
+		assert.equal(await page.evaluate(() => localStorage.getItem("ampi.panel")), "arc");
+	});
+
+	if (engine === "webkit") test("phone startup webkit: observe the 980 px meta-viewport transition", { skip: engineSkip(engine) }, async (t) => {
+		const page = await open(t, engine, type, path(), { route: "#/h/devbox/t/pi%3Asess-lead", context: PHONE, recordResize: true });
+		const observed = await page.evaluate(() => ({ initialWidth: (window as Window & { __initialInnerWidth?: number }).__initialInnerWidth, width: innerWidth, resizeEvents: (window as Window & { __resizeEvents?: number }).__resizeEvents ?? 0, sideOverlay: document.querySelector(".app")?.classList.contains("side-overlay") }));
+		t.diagnostic(`real phone startup: ${JSON.stringify(observed)}`);
+		assert.equal(observed.width, 390);
+		assert.equal(observed.sideOverlay, true);
+	});
+
 	const cases = [
 		["phone", { route: "#/h/devbox/t/pi%3Asess-lead", context: PHONE }, true],
 		["phone without a rail", { route: "#/h/devbox/t/pi%3Asess-solo", context: PHONE }, false],

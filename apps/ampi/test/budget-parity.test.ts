@@ -9,7 +9,7 @@ import { utilizationAtOrAboveThreshold } from "../../../packages/hc-auto-compact
 import { AgentDoc } from "@earendil-works/pi-durable";
 import { resolveAutoCompactSettings } from "@hypercarrier/hc-auto-compact/resolve";
 import { type CompactSettingsPort, compactSettingsPort, resolveCompactSettings } from "../src/node/compact-settings.ts";
-import { fileStamp, piResources, piSettings } from "../src/node/pi-config.ts";
+import { fileStamp, piResources, piSettings } from "../src/shared/pi-config.ts";
 import type { NodeRuntime, Store } from "../src/node/runtime.ts";
 import { modelLimits } from "../src/pi/host.ts";
 import { budgetOptions, compactPlugin } from "../src/plugins/compact.ts";

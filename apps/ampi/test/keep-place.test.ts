@@ -7,7 +7,7 @@ function fixture() {
 	let scrollTop = 100;
 	let rows = [{ id: "a", y: 80 }, { id: "b", y: 140 }, { id: "c", y: 200 }];
 	const nodes = () => rows.map((row) => ({ getAttribute: () => row.id, getBoundingClientRect: () => ({ top: row.y - scrollTop + 20, bottom: row.y - scrollTop + 70, height: 50 }) }));
-	const el = { get scrollTop() { return scrollTop; }, set scrollTop(value) { scrollTop = value; }, scrollHeight: 1000, getBoundingClientRect: () => ({ top: 20 }), querySelectorAll: nodes } as unknown as HTMLElement;
+	const el = { get scrollTop() { return scrollTop; }, set scrollTop(value) { scrollTop = value; }, scrollHeight: 1000, clientHeight: 100, getBoundingClientRect: () => ({ top: 20, height: 100 }), querySelectorAll: nodes } as unknown as HTMLElement;
 	return { el, rows, remove: (id: string) => { rows = rows.filter((r) => r.id !== id); } };
 }
 
@@ -31,9 +31,9 @@ test("keep-place falls forward to a surviving anchor", () => {
 test("keep-place follows the bottom and tolerates no surviving anchor", () => {
 	const { el } = fixture();
 	restorePlace(el, "[data-id]", "data-id", { bottom: true, anchors: [] });
-	assert.equal(el.scrollTop, 1000);
+	assert.equal(el.scrollTop, 900);
 	restorePlace(el, "[data-id]", "data-id", { bottom: false, anchors: [{ id: "gone", offset: 0 }] });
-	assert.equal(el.scrollTop, 1000);
+	assert.equal(el.scrollTop, 900);
 });
 
 test("keep-place tracks a rendered fragment when an entry ID occurs more than once", () => {
@@ -42,7 +42,7 @@ test("keep-place tracks a rendered fragment when an entry ID occurs more than on
 	// These fragments carry no fragment key: only their entry ID, which repeats.
 	const attribute = (id: string) => (name: string) => name === "data-fragment" ? null : id;
 	let nodes = rows.map(row => ({ getAttribute: attribute(row.id), getBoundingClientRect: () => ({ top: row.y-scrollTop, bottom: row.y-scrollTop+row.height, height: row.height }) }));
-	const el = { get scrollTop() { return scrollTop; }, set scrollTop(value) { scrollTop=value; }, getBoundingClientRect: () => ({top:0}), querySelectorAll: () => nodes } as unknown as HTMLElement;
+	const el = { get scrollTop() { return scrollTop; }, set scrollTop(value) { scrollTop=value; }, getBoundingClientRect: () => ({top:0,height:80}), querySelectorAll: () => nodes } as unknown as HTMLElement;
 	const place = capturePlace(el, "[data-id]", "data-id", false);
 	restorePlace(el, "[data-id]", "data-id", place);
 	assert.equal(scrollTop,100,"an unchanged second fragment must not restore to the first fragment");
@@ -68,7 +68,7 @@ test("keep-place restores a remounted fragment by its fragment key, never by its
 	const run = (after: { key: string; y: number }[]) => {
 		let scrollTop = 100;
 		let rows = [{ key: "e:0", y: 0 }, { key: "e:2", y: 120 }];
-		const el = { get scrollTop() { return scrollTop; }, set scrollTop(value) { scrollTop = value; }, getBoundingClientRect: () => ({ top: 0 }),
+		const el = { get scrollTop() { return scrollTop; }, set scrollTop(value) { scrollTop = value; }, getBoundingClientRect: () => ({ top: 0, height: 80 }),
 			querySelectorAll: () => rows.map((row) => ({ getAttribute: (name: string) => name === "data-fragment" ? row.key : "e", getBoundingClientRect: () => ({ top: row.y - scrollTop, bottom: row.y - scrollTop + 40, height: 40 }) })) } as unknown as HTMLElement;
 		const place = capturePlace(el, "[data-id]", "data-id", false);
 		rows = after;

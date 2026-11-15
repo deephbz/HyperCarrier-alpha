@@ -9,8 +9,8 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { AgentDoc, CompactionTask, type ConversationId, defineDoc, type EntryRecord, LiveDoc } from "@earendil-works/pi-durable";
-import type { CommandAck, SlashCommand, SlashCommands } from "../shared/protocol.ts";
+import { AgentDoc, CompactionTask, ConversationBusy, type ConversationId, defineDoc, type EntryRecord, LiveDoc } from "@earendil-works/pi-durable";
+import type { CommandAck, SlashCommand, SlashCommands, Wire } from "../shared/protocol.ts";
 import { expandTemplate } from "../shared/prompt-template.ts";
 import { frontmatter, loadPrompts, loadSkills } from "./core-extension.ts";
 import { NodeError } from "./errors.ts";
@@ -28,7 +28,7 @@ const BUILTINS: [name: string, description: string, argsHint: string][] = [
 	["compact", "Compact the thread's context", "[instructions]"],
 	["auto-compact", "Show or change this thread's compaction policy", "status|run|on|off|budget|threshold|help"],
 	["rarebit", "Read Rarebits or derive a Title", "status|title|view|menu|help"],
-	["retry", "Run parked work again, or reopen a failed storage", ""],
+	["retry", "Continue a failed run, or reopen a failed storage", ""],
 	["cache", "Show or set the prompt cache TTL", "status|5m|1h"],
 	["ptb", "Read the bound Team", "help|status|sync|graph|doctor|settings"],
 	["export-system-prompt", "Save the effective system prompt and tools for review", "[file.json]"],
@@ -41,7 +41,7 @@ const NAME = /^[A-Za-z0-9][\w:.-]*$/;
 const KEEP_KEYS = 200;
 
 /** One keyed command: its intent, committed before the effect, and its reply, committed after it. */
-type CommandRecord = { name: string; args: string; at: number; after: number | null; reply?: CommandAck };
+type CommandRecord = { name: string; args: string; at: number; after: number | null; reply?: Wire<CommandAck> };
 type CommandsState = { keys: Record<string, CommandRecord>; retired?: Record<string, true> };
 /** Admission returns the wait as data, so Close never queues behind a provider. */
 export type CommandResult = CommandAck | { completion: Promise<CommandAck> };
@@ -245,24 +245,23 @@ async function execute(runtime: NodeRuntime, thread: Thread, frame: CommandArgs,
 			return reply;
 		}
 		case "retry": {
-			// Only tasks the restart limit parked; a task blocked for another reason needs the node or registry fixed.
-			const inspection = await thread.store.harness.inspect(BACKGROUND_CONTEXT);
-			const parked = inspection.tasks.filter(
-				({ record, state }) => state.kind === "blocked" && state.reason === "restart_limit" && String(record.conversationId) === thread.conversationId,
-			);
-			for (const { record } of parked) await thread.store.harness.retryTask(record.id, BACKGROUND_CONTEXT);
-			// A failed model run keeps the inputs queued behind it (pi-durable `afterFailedRun: "keep"`) until the next
-			// input or queued write. An empty edit is a queued write that changes no context, so it places them now.
-			const kept = inspection.submissions.some((s) => s.status === "queued" && s.type === "input" && String(s.conversationId) === thread.conversationId);
-			const live = await thread.store.harness.snapshot(LiveDoc, Number(thread.conversationId) as ConversationId, BACKGROUND_CONTEXT);
-			if (parked.length === 0 && kept && !live?.run) {
-				await thread.conversation.submit({ type: "write", entry: { kind: "ampi.retry", edits: [] } }, BACKGROUND_CONTEXT);
-				runtime.refresh(thread.store, thread.conversationId);
-				return { ...handled("Running the queued input"), evidence: "retried" };
+			// A run that ended without an answer keeps `pi.live.runFailure` until the next run starts. /retry continues it on
+			// the context as it is; inputs a failed run left queued are placed first and join the run.
+			const live = await thread.store.harness.snapshot(LiveDoc, id, BACKGROUND_CONTEXT);
+			const continuing = { ...handled("Continuing the run"), evidence: "continued" };
+			// A retried command whose first attempt already started the run must not continue it twice.
+			if (retried && (live?.run !== undefined || (await newestEntry(thread)) !== retried.after)) return continuing;
+			if (live?.run !== undefined) throw new NodeError("busy", "The run is still going; /retry works after it ends.");
+			const failure = live?.runFailure;
+			if (!failure || failure.reason === "nothing_to_answer") return { ...handled("Nothing to continue"), evidence: "nothing_to_continue" };
+			try {
+				await thread.conversation.submit({ type: "continue" }, BACKGROUND_CONTEXT);
+			} catch (error) {
+				if (error instanceof ConversationBusy) throw new NodeError("busy", "The run is still going; /retry works after it ends.");
+				throw error;
 			}
 			runtime.refresh(thread.store, thread.conversationId);
-			if (parked.length === 0) return { ...handled("Nothing is parked in this thread"), evidence: "nothing_parked" };
-			return { ...handled(`Retried ${parked.length} parked task${parked.length === 1 ? "" : "s"}`), evidence: "retried" };
+			return continuing;
 		}
 		case "cache": {
 			if (args === "" || args === "status") {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, type HTMLAttributes, type PointerEvent as ReactPointerEvent, type ReactNode, type Ref } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, type HTMLAttributes, type PointerEvent as ReactPointerEvent, type ReactNode, type Ref, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { scaleOf } from "../display.ts";
 
@@ -66,6 +66,8 @@ type PopoverProps = {
 	 * focus where it is: a hover card, an outline, a combobox's list.
 	 */
 	menu?: boolean;
+	onPlaced?: (el: HTMLDivElement) => void;
+	style?: CSSProperties;
 	ref?: Ref<HTMLDivElement>;
 	children: ReactNode;
 } & Omit<HTMLAttributes<HTMLDivElement>, "style" | "children">;
@@ -80,10 +82,10 @@ type PopoverProps = {
  * Focus moves without scrolling. Placement reads viewport px and converts once, at the
  * popover, by its measured scale (display.ts); callers never compute `left` or `top`.
  */
-export function Popover({ anchor, side = "below", align = "start", gap = 0, bounds, fit, owner, onClose, menu, ref, className, children, ...rest }: PopoverProps) {
+export function Popover({ anchor, side = "below", align = "start", gap = 0, bounds, fit, owner, onClose, menu, onPlaced, style, ref, className, children, ...rest }: PopoverProps) {
 	const node = useRef<HTMLDivElement | null>(null);
-	const props = useRef({ anchor, side, align, gap, bounds, fit, owner, onClose, menu });
-	props.current = { anchor, side, align, gap, bounds, fit, owner, onClose, menu };
+	const props = useRef({ anchor, side, align, gap, bounds, fit, owner, onClose, menu, onPlaced, style });
+	props.current = { anchor, side, align, gap, bounds, fit, owner, onClose, menu, onPlaced, style };
 	const setRef = useCallback((el: HTMLDivElement | null) => {
 		node.current = el;
 		if (typeof ref === "function") ref(el);
@@ -92,8 +94,16 @@ export function Popover({ anchor, side = "below", align = "start", gap = 0, boun
 	const place = useCallback(() => {
 		const el = node.current, p = props.current, box = p.anchor();
 		if (!el || !box) return;
+		Object.assign(el.style, p.style);
 		placePopover(el, box, p);
 		el.style.visibility = "";
+		props.current.onPlaced?.(el);
+		// A caller may add a content floor after placement; the measured room still owns the outer minimum.
+		const availableHeight = Number.parseFloat(el.style.maxHeight);
+		const minimumHeight = Number.parseFloat(el.style.minHeight);
+		if (Number.isFinite(availableHeight) && Number.isFinite(minimumHeight) && minimumHeight > availableHeight) {
+			el.style.minHeight = `${availableHeight}px`;
+		}
 	}, []);
 	// Each render may move the anchor or change the content.
 	useLayoutEffect(place);

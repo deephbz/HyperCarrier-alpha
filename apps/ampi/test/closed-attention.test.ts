@@ -28,7 +28,7 @@ before(async () => {
 	badges = (await vite.ssrLoadModule("/src/components/ThreadStatus.tsx")).ThreadBadges;
 	notices = (await vite.ssrLoadModule("/src/attention.ts")).notices;
 	// The Composer itself uses client-only stores; Composer.tsx renders this note for a closed durable thread.
-	feedback = (await vite.ssrLoadModule("/src/components/Composer.tsx")).ClosedFeedback;
+	feedback = (await vite.ssrLoadModule("/src/durable/composer-surface.tsx")).ClosedFeedback;
 });
 after(async () => { await vite?.close(); });
 

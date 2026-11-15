@@ -13,7 +13,7 @@ import { repairReplicaTail } from "./replica-file.ts";
 import { indexEntry, indexText, readIndex, replaceFile } from "./copy-index-file.ts";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { diffRevisions } from "@earendil-works/chord/delta";
+import { diffRevisions, type JsonValue } from "@earendil-works/chord/delta";
 import { workingBudget } from "@hypercarrier/auto-compact-durable/budget";
 import { negotiating, withStatus } from "../hub/hosts.ts";
 import type { ErrorClass, HostBase, HostState, LinkStatus } from "../shared/hosts.ts";
@@ -21,9 +21,12 @@ import { StalePackageBuild } from "../shared/build.ts";
 import type { ClientFrame, ControlSubmission, Every, HostOps, PiQueuedItem, OpHandlers, OpName, OpResult, Ops, Placement, PiHostFrame, PiThreadView, PiTopicValue, ThreadCreated, ThreadResumed, ThreadsState, ThreadSummary, Topic } from "../shared/protocol.ts";
 import { INDEXING, NOT_FOUND, STALE_VERSION, type ImageLimits } from "../shared/protocol.ts";
 import { admitImages, rejectionLine } from "../shared/image-admission.ts";
+import { controlProtocolSkew, controlSkew, controlStamp, type Stamp, VERSION_SKEW } from "../shared/build.ts";
 import { ackResult, type AgentAck, commandFrame, commandResult, controlSubmissions, defined, isOpRequest, submitArgs, threadOf, UUID } from "./host-wire.ts";
-// @ts-ignore: pi-hc-control is plain ESM.
 import { IMAGE_LIMITS as CONTROL_IMAGE_LIMITS } from "@hypercarrier/pi-hc-control/control";
+import { SCHEMA as CONTROL_PROTOCOL } from "@hypercarrier/pi-hc-control/endpoint";
+/** The pi-hc-control protocol this AmPi speaks; /api/health reports it. */
+export { CONTROL_PROTOCOL };
 import { historySpend, spendLabel, unreadSpend } from "../shared/spend.ts";
 import { SESSION_SCOPE_MS } from "../shared/session-scope.ts";
 import { reconnectDelay, sshOptions } from "../shared/host-transport.ts";
@@ -34,7 +37,10 @@ import { piModelRegistry } from "./model-registry.ts";
 import { complete, instant, nowUs, span, spanAsync, tracing } from "../trace.ts";
 import { watched } from "../loop-watch.ts";
 import { PI_VIEWS, viewOps } from "./views/index.ts";
-import { arcOpened, arcPanel, closeArcs, startArcs } from "./views/arc.ts";
+import { ArcReplica } from "../hub/arc-replica.ts";
+import type { ArcFrame } from "../arc/link.ts";
+import { serviceBundle } from "../arc/service/client.ts";
+import { hostname } from "node:os";
 import type { HostedView, PiRecordedMember, PiTeamMember, PiTeamsFrame, PiViewContext, PiViewSession } from "./views/types.ts";
 import type { WorkingSet } from "./working-set.ts";
 import type { Derived, SessionIdentity, Source as CopySource } from "./working-set-types.ts";
@@ -64,6 +70,8 @@ export type PiHostConfig = {
 	recentMs?: number;
 	/** Replaces Pi for views' model calls (ask.ts): argv that reads the prompt on stdin and prints the answer. */
 	askCommand?: string[];
+	/** The pi-hc-control build this Host serves. Default: the package in this checkout (build.ts controlStamp); tests. */
+	controlStamp?: Stamp;
 };
 
 type RemoteAgent = {
@@ -81,10 +89,10 @@ type RemoteAgent = {
 	/** When a control descriptor alone names the Session: the endpoint's start, so a file-less Session has a stable age. */
 	startedAt?: number;
 	/**
-	 * `commands`: the control serves typed slash commands. `images`: its submit carries images. `submissions` are raw
-	 * wire records; controlSubmission reads them.
+	 * `stamp`: the control's build, null when it has none. `submissions` are raw wire records; controlSubmission reads
+	 * them. `protocol`: set only for a live control on another protocol, which is not `live` and takes no op.
 	 */
-	control?: { live: boolean; idle: boolean; compacting: boolean; commands?: boolean; images?: boolean; pending?: { steer: number; followUp: number }; submissions?: unknown[] } | null;
+	control?: { live: boolean; idle?: boolean; compacting?: boolean; stamp?: Stamp | null; protocol?: string; pending?: { steer: number; followUp: number }; submissions?: unknown[] } | null;
 };
 /**
  * This hub's record of one queued submission. `unknown`: the live control no longer reports it (Pi restarted or
@@ -104,10 +112,12 @@ type TeamMember = PiTeamMember;
 type HostIndex = { recorded: Map<string, PiRecordedMember[]>; workspaces: Map<string | undefined, Layout["workspaces"][number]> };
 /** Frames from the remote agent (pi-backend.md §2), one JSON object per stdout line. */
 type AgentMessage =
-	| { t: "hello"; host?: string; pid?: number; controlOps?: string[] }
+ | ArcFrame
+ | { t: "arc.error"; detail: string }
+	| { t: "hello"; host?: string; pid?: number }
 	| { t: "beat" }
 	| { t: "reset"; path: string; offset: number }
-	| { t: "chunk"; path: string; offset: number; data: string; size?: number }
+	| { t: "chunk"; path: string; offset: number; data: string; size: number }
 	| { t: "agents"; agents?: RemoteAgent[]; layout?: Layout; panes?: RemotePane[] }
 	| PiTeamsFrame
 	| { t: "limits"; windows?: Record<string, number>; budget?: ModelLimits["budget"] }
@@ -132,8 +142,8 @@ type Copy = {
 };
 
 const AGENT_SCRIPT = fileURLToPath(new URL("./remote-agent.cjs", import.meta.url));
-/** What a Pi control with `images: 1` takes in one message (pi-hc-control owns the values). */
-const IMAGE_LIMITS: ImageLimits = CONTROL_IMAGE_LIMITS;
+/** What a live Pi control takes in one message (pi-hc-control owns the values). */
+const IMAGE_LIMITS: ImageLimits = { ...CONTROL_IMAGE_LIMITS, types: [...CONTROL_IMAGE_LIMITS.types] };
 
 /** Reads the first stdin line `{ cfg, code }`, then runs the agent with the rest of stdin as its command stream. */
 export const BOOTSTRAP = Buffer.from(
@@ -244,8 +254,11 @@ export class PiHost extends EventEmitter {
 	#timer?: ReturnType<typeof setTimeout>;
 	#attempts = 0;
 	#nextCmd = 1;
-	/** Frame ops the connected remote agent serves beyond the base set; an older agent sends none. */
-	#controlOps = new Set<string>();
+	/** The pi-hc-control build this Host expects. A control of another build is served; its drift is logged once. */
+	#controlExpected: Stamp;
+	/** Session and stamp pairs whose drift the hub has logged. */
+	#driftLogged = new Set<string>();
+ #arcBundle?: string;
 	#pending = new Map<number, { resolve: (value: AgentAck) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
 	/** Live subscriptions by sid: the topic, its last value, and how many ops frames were sent. */
 	#subs = new Map<number, { topic: Topic; previous: PiTopicValue | undefined; n: number; at?: number; pending?: string }>();
@@ -284,6 +297,8 @@ export class PiHost extends EventEmitter {
 	#inputsGrace = 0;
 	/** Audit differences found since start: inputs that change marking missed (reported in /api/health). */
 	missedInputs = 0;
+	/** Agents frames handled since start: a test waits for discovery passes on it instead of a clock. */
+	agentsFrames = 0;
 	/** Queued submissions by ID, until delivered or dismissed; the full text when this hub sent it. */
 	#queued = new Map<string, QueuedInput>();
 	#panes?: RemotePane[];
@@ -326,6 +341,7 @@ export class PiHost extends EventEmitter {
 	constructor(config: PiHostConfig & { cacheDir: string }) {
 		super();
 		this.config = config;
+		this.#controlExpected = config.controlStamp ?? controlStamp();
 		this.#viewContext.host = config.id;
 		this.cacheDir = join(config.cacheDir, digest(config.id).slice(0, 16));
 		rmSync(join(this.cacheDir, "views", "cos.arc"), { recursive: true, force: true });
@@ -342,6 +358,9 @@ export class PiHost extends EventEmitter {
 		};
 	}
 
+  get arcStamp() { return this.#viewContext.arc?.stamp ?? null; }
+  get arcQueue() { return this.#viewContext.arc?.queue() ?? { pending: 0, done: 0 }; }
+
 	// ---- link surface shared with HostLink ----
 
 	start(): void {
@@ -353,7 +372,10 @@ export class PiHost extends EventEmitter {
 			const { WorkingSet } = await spanAsync("import-working-set", "startup", () => import("./working-set.ts"));
 			await mkdir(this.cacheDir, { recursive: true, mode: 0o700 });
 			this.#store = new WorkingSet(this.config.id, this.cacheDir);
-			startArcs(this.#viewContext);
+   this.#viewContext.arc = new ArcReplica({ dir: join(this.cacheDir, "arc-replica"), host: this.config.id, requester: hostname(), changed: () => this.#viewContext.invalidate("arc"), send: command => {
+    if (!this.#child?.stdin?.writable || this.state.status !== "connected") return false;
+    this.#child.stdin.write(JSON.stringify(command) + "\n"); return true;
+   } });
 			// The index loads from saved heads while the derive Worker starts. The threads and node snapshots need only
 			// the index; every other step waits for both.
 			ready = spanAsync("working-set-ready", "startup", () => this.#store.ready);
@@ -368,7 +390,7 @@ export class PiHost extends EventEmitter {
 			this.#initialized = true;
 			instant("host-loaded", { copies: this.#copies.size });
 		})();
-		void this.#loaded.then(() => {
+		void this.#loaded.then(async () => {
 			if (this.#stopped) return;
 			this.#sweep = setInterval(() => void this.#evictExpired(), 60_000);
 			this.#sweep.unref();
@@ -376,6 +398,14 @@ export class PiHost extends EventEmitter {
 			// change, not a missed input.
 			this.#audit = setInterval(() => { this.#auditDue = true; this.#markHostChanges(); this.#schedulePublish(); }, PiHost.AUDIT_MS);
 			this.#audit.unref();
+   // Arc preparation must not delay transport or cold-copy derivation.
+   void serviceBundle().then(bundle => {
+    if (this.#stopped) return;
+    this.#arcBundle = bundle;
+    if (this.#child?.stdin?.writable) this.#child.stdin.write(JSON.stringify({ t: "arc.bundle", bundle, known: this.#viewContext.arc?.known() }) + "\n");
+   }).catch(() => {
+    if (!this.#stopped) this.#viewContext.arc?.linkError("Arc service bundle could not be built. Run npm run build:arc in apps/ampi, then retry.");
+   });
 			this.#connect();
 			const started = Date.now();
 			span("refresh-all", "startup", () => {
@@ -424,7 +454,7 @@ export class PiHost extends EventEmitter {
 	}
 
 	stop(): Promise<void> {
-		closeArcs(this.#viewContext);
+  this.#viewContext.arc?.disconnect();
 		if (this.#stopping) return this.#stopping;
 		this.#stopped = true;
 		clearInterval(this.#sweep);
@@ -440,11 +470,17 @@ export class PiHost extends EventEmitter {
 			pending.reject(new Error("Host stopped"));
 		}
 		this.#pending.clear();
-		this.#child?.kill();
+  const child = this.#child;
+  const exited = !child || child.exitCode !== null || child.signalCode !== null ? Promise.resolve() : new Promise<void>(resolve => {
+   const timer = setTimeout(() => child.kill("SIGKILL"), 5000); timer.unref();
+   child.once("close", () => { clearTimeout(timer); resolve(); });
+   child.kill();
+  });
 		this.#child = undefined;
 		return this.#stopping = (async () => {
 			try {
 				await this.#loaded;
+    await exited;
 				if (this.#initialized) await this.#writeIndex();
 			} finally { await this.#store?.close(); }
 		})();
@@ -698,8 +734,7 @@ export class PiHost extends EventEmitter {
  #addSub(sid: number, sub: { topic: Topic; previous: PiTopicValue | undefined; n: number; pending?: string }): void {
   const id = this.#openThread(sub.topic), copy = id ? this.#byThread.get(id) : undefined, held = copy && this.#held(copy);
   this.#subs.set(sid, sub);
-  if (id && sub.topic.kind === "view" && sub.topic.view === "arc") arcPanel(this.#viewContext, id, true);
-  if (id) { this.#openCount.set(id, (this.#openCount.get(id) ?? 0) + 1); arcOpened(this.#viewContext, id, true); }
+  if (id) this.#openCount.set(id, (this.#openCount.get(id) ?? 0) + 1);
   // Opening an updating Session moves its re-derive ahead of the cold backlog.
   if (copy?.updating) this.#promote(copy);
   if (copy && this.#held(copy) !== held) { this.#dirty.add(copy.path); this.#schedulePublish(); }
@@ -712,10 +747,9 @@ export class PiHost extends EventEmitter {
   const id = this.#openThread(sub.topic), copy = id ? this.#byThread.get(id) : undefined, held = copy && this.#held(copy);
   this.#subs.delete(sid);
   if (!id) return;
-  if (sub.topic.kind === "view" && sub.topic.view === "arc") arcPanel(this.#viewContext, id, [...this.#subs.values()].some(s => s.topic.kind === "view" && s.topic.view === "arc" && s.topic.threadId === id));
   const left = (this.#openCount.get(id) ?? 1) - 1;
   if (left > 0) this.#openCount.set(id, left);
-  else { this.#openCount.delete(id); arcOpened(this.#viewContext, id, false); }
+  else this.#openCount.delete(id);
   if (!copy) return;
   if (!left) copy.lastOpenAt = Date.now();
   if (this.#held(copy) !== held) { this.#dirty.add(copy.path); this.#schedulePublish(); }
@@ -794,7 +828,7 @@ export class PiHost extends EventEmitter {
 		this.#set({ attempts: ++this.#attempts }, negotiating(this.state, "transport", ssh ? `Starting the Pi agent over ssh on ${ssh}.` : "Starting the Pi agent."));
 		instant("agent-spawn", { attempt: this.#attempts, kind: this.config.kind });
 		const offsets = Object.fromEntries([...this.#copies].map(([path, c]) => [path, c.offset]));
-		const cfg = Buffer.from(JSON.stringify({ offsets, forgotten: this.#store.forgotten(), tailBytes: 0, herdrSession: this.config.herdrSession ?? "default", recentMs: this.#recentMs(), ...agentModules(), ...this.config.agentConfig })).toString("base64");
+		const cfg = Buffer.from(JSON.stringify({ host: this.config.id, arcBundle: this.#arcBundle, arcKnown: this.#viewContext.arc?.known(), offsets, forgotten: this.#store.forgotten(), tailBytes: 0, herdrSession: this.config.herdrSession ?? "default", recentMs: this.#recentMs(), controlProtocol: CONTROL_PROTOCOL, controlStamp: this.#controlExpected, ...agentModules(), ...this.config.agentConfig })).toString("base64");
 		const code = readFileSync(AGENT_SCRIPT).toString("base64");
 		// The command line stays small and fixed: the agent and its config (offsets grow with every copy) arrive as
 		// stdin's first line, under the argument-length limit and out of the Host's process list.
@@ -844,6 +878,7 @@ export class PiHost extends EventEmitter {
 		let buffer = "";
 		child.stdout!.setEncoding("utf8");
 		child.stdout!.on("data", (data: string) => {
+   if (child !== this.#child) return;
 			if (this.state.status === "connecting" && this.state.phase === "transport")
 				this.#set({}, negotiating(this.state, "hello", "The Pi agent runs; waiting for its hello."));
 			const start = tracing ? nowUs() : 0;
@@ -883,6 +918,7 @@ export class PiHost extends EventEmitter {
 	#closed(child: ChildProcess, reason: string, hint: string): void {
 		if (child !== this.#child) return;
 		this.#child = undefined;
+  this.#viewContext.arc?.disconnect();
 		const delay = reconnectDelay(this.#attempts);
 		const now = Date.now();
 		this.#set({}, { status: "disconnected", since: now, error: reason, errorClass: "reachability", hint, ...(this.#stopped ? {} : { retryAt: now + delay }) });
@@ -918,10 +954,13 @@ export class PiHost extends EventEmitter {
 	#fromAgent(msg: AgentMessage): void {
 		if (this.#stopped) return;
 		switch (msg.t) {
+   case "arc.hello": case "arc.status": case "arc.receipt": case "arc.ack":
+    this.#viewContext.arc?.receive(msg); return;
+   case "arc.error":
+    this.#viewContext.arc?.linkError(msg.detail); return;
 			case "hello": {
 				instant("agent-hello");
 				this.#attempts = 0;
-				this.#controlOps = new Set(Array.isArray(msg.controlOps) ? msg.controlOps.map(String) : []);
 				this.#set({
 					attempts: 0,
 					node: {
@@ -974,6 +1013,7 @@ export class PiHost extends EventEmitter {
 				this.#agentsByPath = new Map();
 				for (const a of this.#agents) if (!this.#agentsByPath.has(a.session)) this.#agentsByPath.set(a.session, a);
 				this.#listed = true;
+				this.#logDrift();
 				if (msg.layout) this.#layout = msg.layout;
 				// Without a pane list (Herdr unavailable) absence proves nothing.
 				this.#panes = Array.isArray(msg.panes) ? msg.panes : undefined;
@@ -990,6 +1030,7 @@ export class PiHost extends EventEmitter {
 				this.#reconcileQueued();
 				this.#markHostChanges();
 				void this.#evictExpired();
+				this.agentsFrames++;
 				return;
 			}
 			case "teams":
@@ -1009,6 +1050,15 @@ export class PiHost extends EventEmitter {
 				if (msg.ok) pending.resolve(msg);
 				else {
 					const error = typeof msg.error === "object" && msg.error ? msg.error : { code: "refused", message: String(msg.error ?? "The Host refused the action") };
+					const protocol = (error as { protocol?: unknown }).protocol;
+					if (error.code === VERSION_SKEW && typeof protocol === "string") {
+						// The agent refused a control on another protocol; the hub words the one step.
+						const unknownOp = (error as { unknownOp?: unknown }).unknownOp;
+						const skew = controlProtocolSkew(CONTROL_PROTOCOL, protocol, this.config.label, typeof unknownOp === "string" ? unknownOp : undefined);
+						console.log(`hub: ${skew.detail}`);
+						pending.reject(skew);
+						return;
+					}
 					pending.reject(
 						Object.assign(new Error(String(error.message)), {
 							code: String(error.code ?? "refused"),
@@ -1131,7 +1181,7 @@ export class PiHost extends EventEmitter {
 			// Closed Sessions remain recent for one retention window; crossing its edge hides an unlisted row.
 			recent: !copy.updatedAt || this.#inputsAt - Math.max(copy.updatedAt, copy.closedAt ?? 0) < this.#inputsWindow,
 			agent: agent && { pane: agent.pane, workspace: agent.workspace, workspaceLabel: workspace?.label, tab: agent.tab, tabLabel: tab?.label, title: agent.title, name: agent.name, cwd: agent.cwd, status: agent.status, live: Boolean(agent.pane || agent.control?.live) },
-			control: control && { idle: control.idle, compacting: control.compacting, steer: control.pending?.steer ?? 0, followUp: control.pending?.followUp ?? 0, images: Boolean(this.#imageLimits(control)) },
+			control: control && { idle: control.idle, compacting: control.compacting, steer: control.pending?.steer ?? 0, followUp: control.pending?.followUp ?? 0, images: true },
 			team: member && { team: member.team, role: member.role, member: member.member },
 			limits: modelLimits(copy.model, this.#limits, copy.budgetOverride),
 			livenessKnown: this.#livenessKnown,
@@ -1180,7 +1230,6 @@ export class PiHost extends EventEmitter {
     return value.around?.found === "missing" && (copy.refreshing || copy.refreshAgain) ? { ...value, around: { ...value.around, found: "indexing" } } : value;
    },
    rarebitSnapshot: (maxChars) => this.#store.rarebitSnapshot(copy.path, maxChars),
-   arcSource: () => this.#store.arcSource(copy.path, `${this.config.id}/${id}`, data.version),
    nearest: (at) => this.#store.nearest(copy.path, at),
    entryTimes: (ids) => this.#store.entryTimes(copy.path, ids),
   };
@@ -1242,7 +1291,8 @@ export class PiHost extends EventEmitter {
 			// Live means a pane or a control socket runs it; a recent file alone is not.
 			live: Boolean(agent?.live),
 			control: Boolean(control),
-			...(control && this.#imageLimits(control) ? { images: this.#imageLimits(control) } : {}),
+			// A live control takes images; keys cannot type one.
+			...(control ? { images: IMAGE_LIMITS } : {}),
 		} as ThreadSummary;
 	}
 
@@ -1297,7 +1347,8 @@ export class PiHost extends EventEmitter {
 			...(where ? { location: defined({ workspace: where.workspace, workspaceLabel: workspace?.label, tab: where.tab, tabLabel: tab?.label, pane: where.pane }) } : {}),
 			live: true,
 			control: Boolean(control),
-			...(control && this.#imageLimits(control) ? { images: this.#imageLimits(control) } : {}),
+			// A live control takes images; keys cannot type one.
+			...(control ? { images: IMAGE_LIMITS } : {}),
 		} as ThreadSummary;
 	}
 
@@ -1534,7 +1585,8 @@ export class PiHost extends EventEmitter {
 				if (value === undefined) continue;
 				// No value sent yet: the first one goes as a snapshot.
 				if (sub.previous === undefined) { sub.previous = value; this.#emitFrame({ t: "snap", sid, value }); continue; }
-				const ops = diffRevisions(sub.previous, value);
+				// Protocol interfaces carry no index signature, so a topic value is JSON by contract, not by its type.
+				const ops = diffRevisions(sub.previous as JsonValue, value as JsonValue);
 				sub.previous = value;
 				// A change marked during this publish (data adopted while computing) is explained; the next publish carries it.
 				const explained = sub.topic.kind === "thread" ? this.#dirty.has(this.#byThread.get(sub.topic.threadId)?.path ?? "") : this.#dirty.size > 0 || this.#hostChanged;
@@ -1609,7 +1661,8 @@ export class PiHost extends EventEmitter {
 				return this.#noteSubmission(String(args.threadId), deliverAs, text, ackResult(ack));
 			},
 			"thread.commands": async (args) => {
-				const ack = await this.#slash(String(args.threadId), { t: "commands" }, 10_000);
+				// 15 s: the agent may hold the read up to 10 s while the control reloads (remote-agent.cjs holdForReload).
+				const ack = await this.#slash(String(args.threadId), { t: "commands" }, 15_000);
 				if (!ack.value) throw Object.assign(new Error("The control sent no command list"), { code: "control_error" });
 				return ack.value;
 			},
@@ -1706,7 +1759,7 @@ export class PiHost extends EventEmitter {
 			"thread.outline": async (args) => {
 				const copy = this.#copyByThread(String(args.threadId));
 				if (!copy) throw new Error("Session unavailable");
-				return this.#store.outline(copy.path);
+				return this.#store.outline(copy.path, args.known);
 			},
 			"thread.find": async (args) => {
 				const copy = this.#copyByThread(String(args.threadId));
@@ -1825,22 +1878,49 @@ export class PiHost extends EventEmitter {
 	}
 
 	/**
-	 * Images reach Pi only through a live control that takes them (pi-hc-control `status.images`): keys cannot type
-	 * an image, and an older tier would drop it and send the text alone. Refuses at once with the tier to update.
+	 * The pi-hc-control build this Host's live controls run: the first one that is unstamped (null) or of another build,
+	 * else the expected build; null with no live control. /api/health reports it beside liveControls.
 	 */
-	/**
-	 * The Session's image capability: the control's `images: 1` names pi-hc-control's IMAGE_LIMITS, and the Host's
-	 * agent must forward images. The same checks as #imagesFor, so the Composer offers images only where a send can succeed.
-	 */
-	#imageLimits(control: { images?: boolean }): ImageLimits | undefined {
-		return control.images && this.#controlOps.has("submit.images") ? IMAGE_LIMITS : undefined;
+	get controlStamp(): Stamp | null {
+		const live = this.#agents.flatMap((a) => (a.control?.live ? [a.control.stamp ?? null] : []));
+		if (!live.length) return null;
+		const off = live.find((s) => s?.id !== this.#controlExpected.id);
+		return off === undefined ? this.#controlExpected : off;
+	}
+
+	/** One log line per Session and control build that is not the expected one; drift never refuses an op. */
+	#logDrift(): void {
+		for (const a of this.#agents) {
+			if (!a.control?.live) continue;
+			const skew = controlSkew(this.#controlExpected, a.control.stamp ?? null, this.config.label);
+			const key = `${a.session}\0${a.control.stamp?.id ?? ""}`;
+			if (!skew || this.#driftLogged.has(key)) continue;
+			this.#driftLogged.add(key);
+			console.log(`hub: pi:${a.sessionId ?? a.session} runs another control build. ${skew.detail} AmPi serves it.`);
+		}
+	}
+
+	/** A live control on another protocol takes no op: the refusal names the one step. */
+	#refuseForeign(agent: RemoteAgent | undefined): void {
+		const protocol = agent?.control?.protocol;
+		if (protocol && protocol !== CONTROL_PROTOCOL) throw controlProtocolSkew(CONTROL_PROTOCOL, protocol, this.config.label);
+	}
+
+	/** How many of this Host's Sessions run a control on any protocol; 0 tells "no control" from an unstamped one. */
+	get runningControls(): number {
+		return this.#agents.filter((a) => a.control?.live || a.control?.protocol).length;
+	}
+
+	/** The protocol of the first running control that speaks another, else this AmPi's; null with no running control. */
+	get controlProtocol(): string | null {
+		if (!this.runningControls) return null;
+		return this.#agents.find((a) => a.control?.protocol && a.control.protocol !== CONTROL_PROTOCOL)?.control?.protocol ?? CONTROL_PROTOCOL;
 	}
 
 	#imagesFor<I extends { data: string; mimeType: string }>(agent: RemoteAgent, images: I[]): I[] {
 		const refuse = (code: string, message: string) => Object.assign(new Error(message), { code });
+		this.#refuseForeign(agent);
 		if (!agent.control?.live) throw refuse("no_control", "This Session has no live control socket, so AmPi cannot send images; paste them in the Pi pane");
-		if (!this.#controlOps.has("submit.images")) throw refuse("images_unsupported", `The AmPi agent on ${this.config.label} is too old to send images; it updates when AmPi reconnects to the Host`);
-		if (!agent.control.images) throw refuse("images_unsupported", "This Pi's control is too old for images: update pi-hc-control and /reload in the Pi pane");
 		// The Composer's own admission, as defense: a client that skipped it still gets the reason.
 		const line = rejectionLine(admitImages([], images.map((image, i) => ({ name: `image ${i + 1}`, type: image.mimeType, base64: image.data.length })), IMAGE_LIMITS).rejected);
 		if (line) throw refuse("too_large", line);
@@ -1848,16 +1928,13 @@ export class PiHost extends EventEmitter {
 	}
 
 	/**
-	 * A slash-command frame to the remote agent. Refuses at once when any tier it knows of lacks the ops. The list
-	 * needs a live control. A command goes to the agent with the pane whatever this Host last saw of the control:
-	 * the agent checks the control again when it sends, and with none types the command into the pane.
+	 * A slash-command frame to the remote agent. The list needs a live control. A command goes to the agent with the
+	 * pane whatever this Host last saw of the control: the agent checks the control and its build again when it
+	 * sends, and with no control types the command into the pane.
 	 */
 	#slash(threadId: string, cmd: Record<string, unknown>, timeoutMs: number): Promise<AgentAck> {
 		const { path, agent } = this.#target(threadId);
-		const unsupported = (message: string) => Promise.reject(Object.assign(new Error(message), { code: "commands_unsupported" }));
-		if (!this.#controlOps.has(String(cmd.t))) return unsupported(`The AmPi agent on ${this.config.label} is too old for slash commands; it updates when AmPi reconnects to the Host`);
-		if (agent.control?.live && !agent.control.commands) return unsupported("This Pi's control is too old for slash commands: update pi-hc-control and /reload in the Pi pane");
-		if (cmd.t === "command" && !agent.control?.live && !this.#controlOps.has("command.keys")) return unsupported(`The AmPi agent on ${this.config.label} is too old to type slash commands into the Pi pane; it updates when AmPi reconnects to the Host`);
+		if (cmd.t === "commands") this.#refuseForeign(agent);
 		if (cmd.t === "commands" && !agent.control?.live) return Promise.reject(Object.assign(new Error("This Session has no live control socket, so AmPi cannot list slash commands; Enter types a command into the Pi pane"), { code: "no_control" }));
 		return this.#command({ ...cmd, session: path, pane: agent.pane }, timeoutMs);
 	}

@@ -1,6 +1,8 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
 import { type ChildProcess, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { socketPath } from "../src/node/daemon.ts";
@@ -11,9 +13,13 @@ test("crash: a SIGKILLed node resumes an interrupted run after restart", async (
 	const home = tempHome();
 	let { child, client } = await startNode(home, 2000);
 	try {
-		const { threadId } = await client.req("thread.create", { cwd: home, model: SIM, prompt: "/sim bash sleep 3; echo slept\n/sim bash echo second-step" });
+		const started = join(home, "bash-started");
+		const ended = join(home, "bash-ended");
+		const { threadId } = await client.req("thread.create", { cwd: home, model: SIM, prompt: `/sim bash touch '${started}'; sleep 3; touch '${ended}'; echo slept\n/sim bash echo second-step` });
 		let view = client.sub({ kind: "thread", threadId });
-		await client.until<any>(view, (v) => (v.live?.tools ?? []).some((t: any) => t.status === "running"), 10_000);
+		// A slot shows `running` before its execution intent is stored; only the command itself proves the call executes.
+		for (const deadline = Date.now() + 10_000; !existsSync(started); await new Promise((r) => setTimeout(r, 20)))
+			assert.ok(Date.now() < deadline, "bash starts");
 		await kill(child);
 		({ child, client } = await startNode(home, 2000));
 		view = client.sub({ kind: "thread", threadId });
@@ -26,6 +32,9 @@ test("crash: a SIGKILLed node resumes an interrupted run after restart", async (
 		assert.match(results[1].text, /second-step/);
 		assert.deepEqual(client.gaps, []);
 		client.close();
+		// The SIGKILL orphans the started command; it ends on its own. Wait for it so the file leaves no process behind.
+		for (const deadline = Date.now() + 10_000; !existsSync(ended); await new Promise((r) => setTimeout(r, 50)))
+			assert.ok(Date.now() < deadline, "the orphaned command ends");
 	} finally {
 		await kill(child);
 	}

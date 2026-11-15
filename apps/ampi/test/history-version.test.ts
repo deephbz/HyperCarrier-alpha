@@ -78,17 +78,6 @@ test("history version: a version that never arrives stops after the refresh read
 	assert.equal(await page.locator(".err-box").count(), 0);
 });
 
-test("history version: an old node's generic stale reply says the node may need the new build", async (t) => {
-	const { page, reads } = await jump(t, (_version, reply) => reply(refuse("error", "History changed; refresh this Session")));
-	const box = page.locator(".err-box", { hasText: "may need the new build" });
-	await box.waitFor();
-	assert.deepEqual(reads, ["e20:v1"], "a generic code is not retried");
-	const text = await box.innerText();
-	assert.doesNotMatch(text, /Error:|\(|History changed/, "owner words; the node's raw reply stays out of the text");
-	assert.equal(await box.locator("[title]").getAttribute("title"), "History changed; refresh this Session", "the raw reply is one hover away");
-	assert.equal(await missing(page), 0);
-});
-
 test("history version: Retry on a failed citation jump reads again with fresh bounds and clears the box on success", async (t) => {
 	let settled = false;
 	const { page, reads, subs } = await jump(t, (version, reply) => reply(settled ? around(version) : STALE));

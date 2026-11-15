@@ -17,6 +17,8 @@ before(async () => {
 	// client.ts opens its hub WebSocket at import; this stub never connects.
 	Object.assign(globalThis, { location: { protocol: "http:", host: "127.0.0.1:1", hash: "" }, WebSocket: class { send() {} close() {} } });
 	vite = await createServer({ configFile: `${web}vite.config.ts`, root: web, logLevel: "silent", server: { middlewareMode: true, hmr: false } });
+	// The durable kind registers in extensions-ui.ts, which only the app entry loads.
+	await vite.ssrLoadModule("/src/extensions-ui.ts");
 	notice = (await vite.ssrLoadModule("/src/components/ThreadView.tsx")).NoticeEntry;
 });
 after(async () => { await vite?.close(); });

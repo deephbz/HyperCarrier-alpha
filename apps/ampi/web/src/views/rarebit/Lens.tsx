@@ -20,7 +20,7 @@ export function useRarebitLens(host: string, threadId: string, reader: boolean, 
 		window.addEventListener("keydown", key);
 		return () => window.removeEventListener("keydown", key);
 	}, [reader, state.lens, host, threadId, beforeChange]);
-	return state.lens;
+	return reader && state.lens;
 }
 
 const MODES: readonly Segment<"full" | "chat">[] = [

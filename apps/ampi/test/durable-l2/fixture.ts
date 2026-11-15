@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { createRegistry, defineExtension, defineTask, defineTool, Harness, type TaskId } from "@earendil-works/pi-durable";
@@ -87,9 +87,9 @@ const h = await Harness.open(await openNodeSqliteStorage(join(dir, "store.sqlite
 	// The host explicitly resumes due sleeps; no wall-clock sleep participates in this fixture.
 	onWake: () => {},
 	settings: { restartLimit: caseName === "park" ? 2 : 5, afterFailedRun: "keep", retry: { maxRetries: 0 } },
-	onReport: (error, info) => { reports.push({ error: String(error), info }); },
+	onReport: ({ error, ...info }) => { reports.push({ error: String(error), info }); },
 }, ctx);
-h.subscribeCommits((commit) => appendFileSync(join(dir, "commits.jsonl"), JSON.stringify({ mode, ...commit }) + "\n"));
+h.observeCommits({ advance: (commit) => appendFileSync(join(dir, "commits.jsonl"), JSON.stringify({ mode, ...commit }) + "\n"), end: () => {} });
 const root = await h.root(ctx, { agent: { model: agent } });
 async function snapshot() {
 	return {
@@ -140,13 +140,10 @@ try {
 			send({ type: "before", value: await snapshot() });
 		} else taskId = loadIds().taskId;
 		if (caseName === "park" && mode === "recovered") {
-			const parked = await snapshot();
-			assert.ok(parked.inspection.tasks.some((t) => t.record.id === taskId && t.state.kind === "blocked" && t.state.reason === "restart_limit"));
-			const parkedWake = h.wake();
-			assert.equal(parkedWake.active, false, "parked work must not demand a restart loop");
-			await h.retryTask(taskId, ctx);
+			// pi-durable 1.5.0: a task cut off `restartLimit` times ends `faulted` instead of parking; nothing retries it.
+			h.resume();
 			const settled = await h.waitForTask(taskId, ctx);
-			await result({ parked, parkedWake, settled, after: await snapshot() });
+			await result({ settled, after: await snapshot() });
 		} else {
 			h.resume();
 			const settled = await h.waitForTask(taskId, ctx);

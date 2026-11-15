@@ -37,7 +37,7 @@ test("durable ownership summaries: root lead, a Worker that also owns work, an u
 	const rootFields = (team?: object) => ({ costUsd: 0, spend: { usd: null, covers: ["responses", "failed"] }, spendLabel: "no price reported",
 		ref: `demo/pi-durable:${ids.root}`, model: "fixture-sim/sim-1", ...(team ? { team } : {}) });
 	const workerFields = (id: string, team: object) => ({ costUsd: 0, spend: { usd: 0, covers: ["responses", "failed", "compaction", "tools"] }, spendLabel: "$0",
-		ref: `demo/pi-durable:${id}`, model: "fixture-sim/sim-1", contextTokens: 102, cacheHit: 0, preview: "answer to: worker task: report the build",
+		ref: `demo/pi-durable:${id}`, model: "fixture-sim/sim-1", contextTokens: 63, cacheHit: 0, preview: "answer to: worker task: report the build",
 		createdAt: "<time>", updatedAt: "<time>", team });
 	const summary = (id: string, kind: string, fields: object) => ({ id, title: "", cwd: "", createdAt: 0, updatedAt: 0, kind, activity: "idle", queued: 0, ...fields });
 

@@ -2,7 +2,7 @@ import "./bound.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { devices, type Page } from "playwright";
-import { ENGINES, open } from "./resize-edges-fixture.ts";
+import { ENGINES, open, seededArc } from "./resize-edges-fixture.ts";
 import { engineSkip } from "./engines.ts";
 import { composerHint } from "../web/src/composer-keys.ts";
 
@@ -15,33 +15,17 @@ import { composerHint } from "../web/src/composer-keys.ts";
 const SESSION = "#/h/devbox/t/pi%3Asess-lead";
 const COMPOSER = '[data-region="composer"] textarea';
 /** Every empty-composer hint for a desktop (false) or a touch device (true). */
-const hints = (touch: boolean) => [true, false].flatMap(busy => [true, false].flatMap(pi => [true, false].flatMap(control => [true, false]
-	.map(images => composerHint({ busy, pi, control, images, touch })))));
-/**
- * The hints that wrap in the composer of the engine under test. The textarea lays each one out as typed text at the
- * placeholder's size, so the engine's own font and line breaking decide.
- */
-const wrapped = (page: Page, texts: string[]) => page.locator(COMPOSER).evaluate((el: HTMLTextAreaElement, texts) => {
-	const { value, style } = el, size = style.fontSize;
-	style.fontSize = getComputedStyle(el, "::placeholder").fontSize;
-	el.value = "x";
-	const line = el.scrollHeight;
-	const out = texts.filter(text => { el.value = text; return el.scrollHeight > line + 1; });
-	el.value = value;
-	style.fontSize = size;
-	return out;
-}, texts);
-/**
- * The hints that fill more than `share` of the composer's text width in the placeholder's font. macOS draws system-ui
- * in SF, the iPhone's font; the margin covers the iPhone's own text rendering.
- */
-const crowded = (page: Page, texts: string[], share: number) => page.locator(COMPOSER).evaluate((el, [texts, share]) => {
-	const style = getComputedStyle(el), hint = getComputedStyle(el, "::placeholder"), context = document.createElement("canvas").getContext("2d")!;
-	context.font = `${hint.fontStyle} ${hint.fontWeight} ${hint.fontSize} ${hint.fontFamily}`;
-	const room = el.clientWidth - Number.parseFloat(style.paddingLeft) - Number.parseFloat(style.paddingRight);
-	return texts.map(text => ({ text, share: context.measureText(text).width / room })).filter(hint => hint.share > share)
-		.map(hint => `${hint.text} (${Math.round(hint.share * 100)}%)`);
-}, [texts, share] as const);
+const hints = (touch: boolean) => [true, false].flatMap(busy => [true, false].flatMap(control => [true, false]
+	.map(images => composerHint({ busy, control, images, touch }))));
+/** The help card owns the device-specific input hint; the textarea stays generic. */
+async function helpHint(page: Page) {
+	await page.getByRole("button", { name: "Composer help", exact: true }).click();
+	const card = page.getByRole("region", { name: "Composer help", exact: true });
+	const hint = await card.locator("p").first().textContent();
+	assert.ok(await card.evaluate(el => el.scrollWidth <= el.clientWidth), "the help card keeps its width");
+	await page.keyboard.press("Escape");
+	return hint!;
+}
 const frames = (p: Page) => p.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
 type Field = { name: string; kind: string; css: number; rendered: number };
 
@@ -104,6 +88,7 @@ async function surfaces(page: Page): Promise<Map<string, Field>> {
 		await page.keyboard.press("Escape");
 		await page.getByLabel(expect[0], { exact: true }).waitFor({ state: "detached" }).catch(() => {});
 	}
+	await seededArc();
 	await page.evaluate(route => { location.hash = route; }, `${SESSION}?p=arc`);
 	await page.getByLabel("Key point scope").waitFor();
 	await take("Arc", ["Key point scope"]);
@@ -120,7 +105,7 @@ for (const [engine, type, path] of ENGINES) {
 	test(`field size: every editable field renders at 16 px or more on a phone, at every display size, ${engine}`, { skip: engineSkip(engine), timeout: 180_000 }, async t => {
 		const desktop = await open(t, engine, type, path(), { display: { overall: 1.6 }, route: SESSION });
 		assert.equal(await desktop.evaluate(() => matchMedia("(pointer: coarse)").matches), false, "a desktop pointer is fine");
-		assert.ok(hints(false).includes((await desktop.locator(COMPOSER).getAttribute("placeholder"))!), "a desktop shows the full composer hint");
+		assert.ok(hints(false).includes(await helpHint(desktop)), "desktop help shows the full composer hint");
 		const own = await surfaces(desktop);
 		assert.ok(Math.abs(own.get("Message the agent")!.css - 13) < 0.01, "a desktop keeps the composer's own 13 px");
 		await desktop.context().close();
@@ -132,14 +117,8 @@ for (const [engine, type, path] of ENGINES) {
 			// A region root that mounts after App's first apply gets its zoom on the next ampi:display, as from the Display dialog.
 			await page.evaluate(() => window.dispatchEvent(new Event("ampi:display")));
 			if (display.composer) assert.equal(await page.locator('[data-region="composer"]').evaluate(el => getComputedStyle(el).zoom), "0.7", `${label}: the composer region takes its own zoom`);
-			assert.ok(hints(true).includes((await page.locator(COMPOSER).getAttribute("placeholder"))!), `${label}: a phone shows a short composer hint`);
-			const composer = await page.locator(COMPOSER).evaluate(el => Number.parseFloat(getComputedStyle(el).fontSize));
-			if (Math.abs(composer * (display.overall ?? 1) * (display.composer ?? 1) - 16) < 0.1) {
-				// The guard: a hint too long for one line measures as wrapped, also at the smaller placeholder size.
-				assert.deepEqual(await wrapped(page, [hints(false)[0]!]), [hints(false)[0]], `${label}: a desktop hint wraps on 375 px`);
-				assert.deepEqual(await wrapped(page, hints(true)), [], `${label}: short hints that wrap on 375 px`);
-				if (process.platform === "darwin") assert.deepEqual(await crowded(page, hints(true), 0.85), [], `${label}: short hints over 85% of the composer's width in SF on 375 px`);
-			}
+			assert.ok(hints(true).includes(await helpHint(page)), `${label}: phone help shows a short composer hint`);
+
 			const seen = await surfaces(page);
 			assert.deepEqual([...seen.keys()].sort(), [...own.keys()].sort(), `${label}: the phone and the desktop reach the same fields`);
 			const small = [...seen.values()].filter(f => f.rendered < 15.99).map(f => `${f.name} (${f.kind}) ${f.rendered.toFixed(2)} px`);
@@ -209,12 +188,12 @@ for (const [engine, type, path] of ENGINES) {
 		});
 		await page.reload();
 		await page.locator(".transcript [data-entry]").first().waitFor({ state: "attached" });
-		assert.ok(hints(false).includes((await page.locator(COMPOSER).getAttribute("placeholder"))!), "the touch rule off at mount: the full hint");
+		assert.ok(hints(false).includes(await helpHint(page)), "the touch rule off at mount: help shows the full hint");
 		await page.evaluate(() => {
 			document.adoptedStyleSheets = [];
 			for (const listener of (window as unknown as { __coarse: EventListener[] }).__coarse) listener(new Event("change"));
 		});
-		await page.waitForFunction(([selector, short]) => short.includes(document.querySelector(selector)!.getAttribute("placeholder")!), [COMPOSER, hints(true)] as const, { timeout: 2000 }).catch(() => {});
-		assert.ok(hints(true).includes((await page.locator(COMPOSER).getAttribute("placeholder"))!), "a pointer media change reads the touch rule again: the short hint");
+		await frames(page);
+		assert.ok(hints(true).includes(await helpHint(page)), "a pointer media change reads the touch rule again: help shows the short hint");
 	});
 }

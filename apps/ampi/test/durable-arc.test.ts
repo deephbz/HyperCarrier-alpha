@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { runDaemon } from "../src/node/daemon.ts";
 import { Hub } from "../src/hub/hub.ts";
-import { piSettingsFile } from "../src/node/pi-config.ts";
+import { piSettingsFile } from "../src/shared/pi-config.ts";
 import { Browser, tempHome } from "./helpers.ts";
 
 const SIM = { provider: "ampi-sim", modelId: "sim-1" };

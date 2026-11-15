@@ -1,11 +1,8 @@
-// The rows and Host notes that every sidebar section draws: `ThreadRow`, `LinkNotes` and `NodeNotes`.
+// The rows and Host notes that every sidebar section draws: `ThreadRow` and `LinkNotes`.
 // Sidebar.tsx and PiSidebar.tsx both compose them, so this module imports neither.
 
 import type { ThreadSummary } from "../../../src/shared/protocol.ts";
-import { type HostState, hub } from "../client.ts";
 import type { LinkView } from "./host-fold.ts";
-import { hasRealModel, useModels } from "../models.ts";
-import { openAccounts } from "./Accounts.tsx";
 import { ago, go, href } from "../util.ts";
 import { openPinMenu } from "./Pinned.tsx";
 import { ActivityIcon, ThreadBadges } from "./ThreadStatus.tsx";
@@ -67,47 +64,5 @@ export function ThreadRow({
 			</button>}
 			<span className="sub">{ago(t.updatedAt)}</span>
 		</div>
-	);
-}
-
-/**
- * A durable node's own notes: signed-in models, the offline simulator, and a node on another AmPi build.
- * A Pi Host has no node, so it shows none of them.
- */
-export function NodeNotes({ host }: { host: HostState }) {
-	const real = hasRealModel(useModels(host.link, host.status === "connected"));
-	if (host.status !== "connected") return null;
-	return (
-		<>
-			{real === false ? (
-				<div className="host-note warn" data-no-model={host.id}>
-					No model is signed in here, so threads use the offline simulator.{" "}
-					<a
-						href="#"
-						onClick={(e) => {
-							e.preventDefault();
-							openAccounts(host.link);
-						}}
-					>
-						Set up models
-					</a>
-				</div>
-			) : null}
-			{host.buildMismatch && (
-				<div className="host-note warn" data-build-mismatch={host.id}>
-					This node needs the new build ({host.node?.build ?? "unknown"}).{" "}
-					<a
-						href="#"
-						onClick={(e) => {
-							e.preventDefault();
-							void hub.request(host.link, "node.restart").catch((error) => alert((error as Error).message));
-						}}
-					>
-						Restart it
-					</a>{" "}
-					— running work resumes.
-				</div>
-			)}
-		</>
 	);
 }

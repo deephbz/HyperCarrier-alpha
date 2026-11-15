@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Records Pi's first model request for the synthetic setup in test/request-parity-fixture.ts into
 // test/fixtures/pi-request.json, the reference node-request-parity.test.ts compares the durable node against.
-// Run it after a Pi or Pi Team Bright upgrade: `node scripts/capture-pi-request.mjs [--pi <pi binary>]`.
+// Run it after a Pi or Pi Team Bright upgrade: `node scripts/capture-pi-request.mjs [--pi <pi binary>]`. The default Pi
+// is the pinned one in the checkout's node_modules, the Pi the node ships with.
 // Pi runs in RPC mode with a disposable HOME, the fixture's settings, and the repository's Pi Team Bright and Cache
 // Goblin extensions, the two the node also carries into the first request;
 // a local endpoint answers with a synthetic stream, so the run costs nothing and sends nothing out.
@@ -10,7 +11,7 @@ import { once } from "node:events";
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PARITY_MODEL, PARITY_PROMPT, PARITY_PROVIDER, requestShape, writeParityFixture } from "../test/request-parity-fixture.ts";
@@ -19,10 +20,9 @@ const app = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repo = resolve(app, "..", "..");
 const args = process.argv.slice(2);
 const flag = (name) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
-const install = join(homedir(), ".pi", "agent");
-const pi = flag("--pi") ?? join(install, "bin", "pi");
-const version = readFileSync(join(install, "install", "current-version"), "utf8").trim();
-const piPackage = join(install, "install", "releases", version, "node_modules", "@earendil-works", "pi-coding-agent");
+const piPackage = resolve(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "..");
+const pi = flag("--pi") ?? join(piPackage, "dist", "bundle", "cli.js");
+const version = JSON.parse(readFileSync(join(piPackage, "package.json"), "utf8")).version;
 const ptb = join(repo, "packages", "pi-team-bright");
 const goblin = join(repo, "packages", "pi-cache-goblin", "src", "extension.mjs");
 const out = join(app, "test", "fixtures", "pi-request.json");

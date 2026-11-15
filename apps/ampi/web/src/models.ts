@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { hub } from "./client.ts";
-import type { ModelChoice } from "./components/ThreadView.tsx";
+
+/** One model a host offers, as `models.list` returns it. */
+export type ModelChoice = { provider: string; id: string; name: string; reasoning: boolean; contextWindow: number; default?: true };
 
 const SIM = "ampi-sim";
 const cache = new Map<string, ModelChoice[]>();

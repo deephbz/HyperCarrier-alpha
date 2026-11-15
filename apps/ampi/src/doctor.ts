@@ -12,9 +12,12 @@ import { ampiHome } from "./shared/home.ts";
 import type { HostConfig } from "./shared/hosts.ts";
 import { connectSocket, socketPath } from "./node/daemon.ts";
 import { buildId, sameBuild } from "./shared/build.ts";
+// @ts-ignore: a plain ESM script without types
+import { webDistCurrent } from "../scripts/web-inputs.mjs";
 
 const run = promisify(execFile);
 const WEB_INDEX = fileURLToPath(new URL("../web/dist/index.html", import.meta.url));
+const CHECKOUT = fileURLToPath(new URL("../../../", import.meta.url));
 
 type Level = "ok" | "warn" | "fail";
 const MARK: Record<Level, string> = { ok: "✓", warn: "!", fail: "✗" };
@@ -64,13 +67,16 @@ export function versionLine(): string {
 }
 
 /**
- * What the hub does with leftovers of the retired backend choice. They change nothing at runtime, so only doctor says it:
- * a `"backend"` field or AMPI_BACKEND, and durable threads under AMPI_HOME that no listed durable Host serves.
+ * Whether web/dist was built from this checkout's web inputs (scripts/web-inputs.mjs). The hub serves web/dist as it
+ * is, so a stale build shows an older window under this hub's build stamp; `ampi doctor` and the hub start log say it.
  */
-export function configNotes(raw: { backend?: unknown }, env: NodeJS.ProcessEnv, home: string, hosts: readonly { kind: string }[], self: string): { what: string; fix: string }[] {
+export function webBuild(): { ok: boolean; detail: string } {
+	return webDistCurrent(CHECKOUT) as { ok: boolean; detail: string };
+}
+
+/** Durable threads under AMPI_HOME that no listed durable Host serves. They change nothing at runtime, so only doctor says it. */
+export function configNotes(home: string, hosts: readonly { kind: string }[], self: string): { what: string; fix: string }[] {
 	const notes: { what: string; fix: string }[] = [];
-	if (raw.backend !== undefined) notes.push({ what: 'hub.json sets "backend"; the hub ignores it', fix: 'This machine\'s Pi Sessions always show. Remove the "backend" line from hub.json.' });
-	if (env.AMPI_BACKEND !== undefined) notes.push({ what: "AMPI_BACKEND is set; the hub ignores it", fix: "This machine's Pi Sessions always show. Unset AMPI_BACKEND." });
 	let threads = 0;
 	try {
 		threads = readdirSync(join(home, "threads")).length;
@@ -91,7 +97,9 @@ export async function doctor(): Promise<number> {
 	if (major > 22 || (major === 22 && minor >= 19)) report("ok", `Node ${process.versions.node}`);
 	else report("fail", `Node ${process.versions.node} is too old`, "Install Node 22.19 or newer (it runs AmPi's TypeScript directly).");
 
-	if (existsSync(WEB_INDEX)) report("ok", "Window built");
+	const web = existsSync(WEB_INDEX) ? webBuild() : undefined;
+	if (web?.ok) report("ok", "Window built");
+	else if (web) report("warn", "The window (web UI) was built from other files", web.detail);
 	else report("fail", "The window (web UI) is not built", "npm run build:web -w @hypercarrier/ampi (from the repository root), or run apps/ampi/scripts/setup.sh");
 
 	// The durable node runs for the `local` Host; on this line this machine always has one.
@@ -140,11 +148,7 @@ export async function doctor(): Promise<number> {
 		else report("ok", `Hub not running; start it with: ampi hub`);
 	}
 
-	let raw: { backend?: unknown } = {};
-	try {
-		raw = JSON.parse(readFileSync(hubConfigPath(), "utf8")) as { backend?: unknown };
-	} catch {}
-	for (const note of configNotes(raw, process.env, ampiHome(), config.hosts, config.self)) report("warn", note.what, note.fix);
+	for (const note of configNotes(ampiHome(), config.hosts, config.self)) report("warn", note.what, note.fix);
 	const remotes = config.hosts.filter((h): h is HostConfig => h.kind === "ssh");
 	if (remotes.length) console.log("\nRemote hosts");
 	await Promise.all(

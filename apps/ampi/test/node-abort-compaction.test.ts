@@ -71,7 +71,7 @@ test("Stop cancels a background threshold compaction that conversation.abort lea
 		const thread = await daemon.runtime.thread(threadId);
 		const live = () => thread.store.harness.snapshot(LiveDoc, Number(thread.conversationId) as ConversationId, BACKGROUND_CONTEXT);
 		await until(async () => !(await live())?.run, "the run ends");
-		assert.deepEqual((await live())?.compactions?.map((c) => [c.reason, c.blocking]), [["threshold", false]]);
+		assert.deepEqual((await live())?.compactions?.map((c) => [c.trigger, c.blocking]), [["threshold", false]]);
 		const ack = await client.req("thread.abort", { threadId });
 		assert.equal(ack.evidence, "aborted");
 		assert.deepEqual(ack.compactions?.map((c: any) => [c.reason, c.outcome]), [["threshold", "aborted"]]);

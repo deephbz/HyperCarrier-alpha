@@ -4,7 +4,7 @@
 
 import type { UiBlock, UiEntry, UiThreadView } from "../shared/durable-entry.ts";
 import { clipInjected } from "../shared/entry-shapes.ts";
-import type { Activity, Every, PiQueuedItem, QueueOrigin, ThreadField } from "../shared/protocol.ts";
+import type { Activity, Every, PiQueuedItem, QueueOrigin, ThreadField, Wire } from "../shared/protocol.ts";
 import { TOOL_TEXT_LIMIT } from "../shared/tool-text-limit.ts";
 import type { ConversationView, EntryRecord, JsonValue } from "./durable-types.ts";
 import { noticeMessage, queueOrigin } from "../shared/team-origin.ts";
@@ -184,9 +184,9 @@ export { queueOrigin, TEAM_TASK_ID_LIMIT } from "../shared/team-origin.ts";
  * from `pi.inbox`; passive writes are not owner input and stay out. Each item keeps the origin its entry data names.
  */
 /** The one projection of an inbox item: typed with Every, so it names each PiQueuedItem field. */
-const queuedItem = (item: Every<PiQueuedItem>): PiQueuedItem => Object.fromEntries(Object.entries(item).filter(([, value]) => value !== undefined)) as PiQueuedItem;
+const queuedItem = (item: Every<PiQueuedItem>): Wire<PiQueuedItem> => Object.fromEntries(Object.entries(item).filter(([, value]) => value !== undefined)) as Wire<PiQueuedItem>;
 
-function projectInbox(inbox: JsonValue | undefined, returned: ReturnedState | undefined): { items: PiQueuedItem[] } {
+function projectInbox(inbox: JsonValue | undefined, returned: ReturnedState | undefined): { items: Wire<PiQueuedItem>[] } {
 	// biome-ignore lint: native inbox items are loosely typed here
 	const queued = (((inbox as any)?.items ?? []) as any[])
 		.filter((item) => item.mode !== "write")
@@ -212,8 +212,14 @@ function trimLive(live: JsonValue | undefined): JsonValue {
 				}),
 			)
 		: undefined;
-	return { ...value, ...(tools ? { tools } : {}) };
+	// pi.live names what started a compaction `trigger`; the wire keeps `reason`, which ThreadView renders.
+	const compactions = Array.isArray(value.compactions) ? value.compactions.map(wireCompaction) : undefined;
+	const compactionFailure = value.compactionFailure ? wireCompaction(value.compactionFailure) : undefined;
+	return { ...value, ...(tools ? { tools } : {}), ...(compactions ? { compactions } : {}), ...(compactionFailure ? { compactionFailure } : {}) };
 }
+
+// biome-ignore lint: LiveState is loosely typed at this boundary
+const wireCompaction = ({ trigger, ...rest }: any) => ({ reason: trigger, ...rest });
 
 /** Removes undefined fields so the value is strict JSON for chord's diff and the wire. */
 export function strip<T extends object>(value: T): T {
@@ -232,7 +238,6 @@ export function projectViewFields(view: ConversationView, returned: ReturnedStat
 /** `returned` is the node's own `ampi.returned` document; the view mounts only pi-durable's built-in documents. */
 export function projectView(view: ConversationView, returned?: ReturnedState): UiThreadView {
 	const record = view.conversation;
-	const first = view.entries[0];
 	return strip({
 		conversationId: String(record.id),
 		parent: record.parent
@@ -241,7 +246,9 @@ export function projectView(view: ConversationView, returned?: ReturnedState): U
 		owner: record.owner
 			? { conversationId: String(record.owner.conversationId), taskId: String(record.owner.taskId) }
 			: undefined,
-		hiddenBefore: first !== undefined && first.head !== undefined && first.kind !== "pi.user",
+		// The view is a window over the whole history, with compaction summaries in place; `before` names the entry just
+		// before it. Older entries come from `thread.history`.
+		hiddenBefore: view.before !== undefined,
 		entries: view.entries.map(projectEntry),
 		live: trimLive(view.docs["pi.live"] as JsonValue),
 		inbox: projectInbox(view.docs["pi.inbox"] as JsonValue, returned),

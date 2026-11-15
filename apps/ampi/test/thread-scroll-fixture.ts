@@ -23,7 +23,7 @@ export async function componentScript(): Promise<string> {
 			name: "thread-scroll-test",
 			resolveId: (id) => id === entry ? `\0${entry}` : undefined,
 			load: (id) => id === `\0${entry}` ? `
-				import React from 'react';
+				import React from 'react'; import ${JSON.stringify(join(web, "src/extensions-ui.ts"))};
 				import { createRoot } from 'react-dom/client';
 				import { ThreadView } from ${JSON.stringify(join(web, "src/components/ThreadView.tsx"))};
 				import { arriveEntry, installNavLinks, navigate } from ${JSON.stringify(join(web, "src/nav.ts"))};
@@ -31,7 +31,7 @@ export async function componentScript(): Promise<string> {
 				installKeymapDispatcher();
 				installNavLinks(); arriveEntry(); window.addEventListener('hashchange', arriveEntry);
 				const threadId = window.THREAD;
-				const summary = { id: threadId, title: 'Scroll hold', createdAt: 0, updatedAt: 0, kind: 'thread', activity: 'idle', queued: 0, costUsd: 0 };
+				const summary = { control: window.CONTROL, id: threadId, title: 'Scroll hold', createdAt: 0, updatedAt: 0, kind: 'thread', activity: 'idle', queued: 0, costUsd: 0 };
 				const root = createRoot(document.getElementById('root'));
 				// Like App: a linked entry arrives as a route, which requests its reveal (nav.ts).
 				let routed;
@@ -66,8 +66,9 @@ export const view = (n: number, tail = "", from = 0) => {
 
 let bundle: Promise<string> | undefined;
 let chrome: Promise<Browser> | undefined;
+let chromeWithScrollbars: Promise<Browser> | undefined;
 let safari: Promise<Browser> | undefined;
-after(async () => { await (await chrome)?.close(); await (await safari)?.close(); });
+after(async () => { await (await chrome)?.close(); await (await chromeWithScrollbars)?.close(); await (await safari)?.close(); });
 export type Engine = "chromium" | "webkit";
 export const ENGINES: Engine[] = ["chromium", "webkit"];
 
@@ -81,9 +82,9 @@ export const THREADS = { pi: THREAD, durable: "tree-a.8" };
  */
 /** Answers one request frame with `reply` and returns true, or returns false to refuse it as unsupported. */
 export type Answer = (frame: { op: string; args: Record<string, unknown> }, reply: (result: { ok: true; value: unknown } | { ok: false; error: { code: string; message: string } }) => void) => boolean;
-export async function open(t: TestContext, count: number, backend: keyof typeof HOSTS = "pi", engine: Engine = "chromium", zoom = 1, region = 1, size = { width: 1000, height: 700 }): Promise<{ page: Page; publish: Publish; send: (value: unknown) => void; answer: (handler: Answer) => void; hold: (value: unknown) => void; subs: () => number }> {
+export async function open(t: TestContext, count: number, backend: keyof typeof HOSTS = "pi", engine: Engine = "chromium", zoom = 1, region = 1, size = { width: 1000, height: 700 }, control = false, visibleScrollbars = false): Promise<{ page: Page; publish: Publish; send: (value: unknown) => void; answer: (handler: Answer) => void; hold: (value: unknown) => void; subs: () => number }> {
 	const script = await (bundle ??= componentScript());
-	const browser = await (engine === "webkit" ? (safari ??= webkit.launch({ headless: true })) : (chrome ??= chromium.launch({ headless: true, executablePath: findChrome() })));
+	const browser = await (engine === "webkit" ? (safari ??= webkit.launch({ headless: true })) : visibleScrollbars ? (chromeWithScrollbars ??= chromium.launch({ headless: true, executablePath: findChrome(), ignoreDefaultArgs: ["--hide-scrollbars"], args: ["--disable-features=OverlayScrollbar"] })) : (chrome ??= chromium.launch({ headless: true, executablePath: findChrome() })));
 	const page = await browser.newPage({ viewport: { width: Math.round(size.width * zoom), height: Math.round(size.height * zoom) } });
 	t.after(() => page.context().close());
 	page.setDefaultTimeout(3000);
@@ -93,7 +94,7 @@ export async function open(t: TestContext, count: number, backend: keyof typeof 
 		const url = new URL(route.request().url());
 		if (url.origin !== ORIGIN) return route.abort();
 		if (url.pathname === "/component.js") return route.fulfill({ contentType: "text/javascript; charset=utf-8", body: script });
-		if (url.pathname === "/") return route.fulfill({ contentType: "text/html; charset=utf-8", body: `<meta charset="utf-8"><style>${css}${region === 1 ? "" : `[data-region=transcript]{zoom:${region}}`}</style><div id="root"></div><script>document.documentElement.style.zoom = ${JSON.stringify(String(zoom))}; window.THREAD = ${JSON.stringify(THREADS[backend])}; window.SLOT = ${size.height - 100}</script><script src="/component.js"></script>` });
+		if (url.pathname === "/") return route.fulfill({ contentType: "text/html; charset=utf-8", body: `<meta charset="utf-8"><style>${css}${region === 1 ? "" : `[data-region=transcript]{zoom:${region}}`}</style><div id="root"></div><script>document.documentElement.style.zoom = ${JSON.stringify(String(zoom))}; window.THREAD = ${JSON.stringify(THREADS[backend])}; window.SLOT = ${size.height - 100}; window.CONTROL = ${JSON.stringify(control)}</script><script src="/component.js"></script>` });
 		return route.abort();
 	});
 	let send: ((frame: unknown) => void) | undefined;

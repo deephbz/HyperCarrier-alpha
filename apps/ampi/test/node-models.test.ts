@@ -9,7 +9,7 @@ import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { runDaemon } from "../src/node/daemon.ts";
 import { readModelRoles } from "../src/node/model-roles.ts";
 import { layerModelsJson } from "../src/node/models-json.ts";
-import { modelsJsonErrors, openModels, startModel } from "../src/node/models.ts";
+import { listModels, modelsJsonErrors, openModels, startModel } from "../src/node/models.ts";
 import { TestClient, tempHome } from "./helpers.ts";
 
 /** An OpenAI chat-completions endpoint that streams one fixed reply and records each request. */
@@ -110,6 +110,52 @@ test("models: a models.json custom provider is listed, starts new threads, and s
 		fake.close();
 		delete process.env.AMPI_TEST_FAKECO_KEY;
 	}
+});
+
+test("models: a list re-reads a changed models.json, so a synced catalog needs no node restart", async () => {
+	const home = tempHome();
+	const fakeco = (ids: string[]) => ({ baseUrl: "http://127.0.0.1:9", api: "openai-completions", apiKey: "literal-key", models: ids.map((id) => ({ id })) });
+	const agentDir = agentFixture(home, { fakeco: fakeco(["m1"]) }, {});
+	const models = openModels({ agentDir });
+	const ids = async () => (await listModels(models)).filter((m) => m.provider !== "ampi-sim").map((m) => `${m.provider}/${m.id}`).sort();
+	assert.deepEqual(await ids(), ["fakeco/m1"]);
+	// A sync adds a model and a provider: the next list has both.
+	writeFileSync(join(agentDir, "models.json"), JSON.stringify({ providers: { fakeco: fakeco(["m1", "m2-new"]), newco: fakeco(["n1"]) } }));
+	assert.deepEqual(await ids(), ["fakeco/m1", "fakeco/m2-new", "newco/n1"]);
+	// A file caught mid-write changes nothing; the next good read applies, and a removed provider goes.
+	writeFileSync(join(agentDir, "models.json"), '{"providers": {"fakeco"');
+	assert.deepEqual(await ids(), ["fakeco/m1", "fakeco/m2-new", "newco/n1"]);
+	writeFileSync(join(agentDir, "models.json"), JSON.stringify({ providers: { fakeco: fakeco(["m1", "m2-new"]) } }));
+	assert.deepEqual(await ids(), ["fakeco/m1", "fakeco/m2-new"]);
+});
+
+test("models: Pi's saved catalogs (models-store.json) restore over the built-in providers, under models.json, and a change needs no restart", async () => {
+	const home = tempHome();
+	const builtin = builtinProviders().find((p) => p.id === "anthropic")!.getModels()[0]!;
+	const saved = (provider: string, id: string) => ({ ...builtin, provider, id, name: id });
+	const agentDir = agentFixture(home, { anthropic: { modelOverrides: { "claude-saved-2": { contextWindow: 4242 } } } }, {});
+	const store = (entries: object | string) => writeFileSync(join(agentDir, "models-store.json"), typeof entries === "string" ? entries : JSON.stringify(entries));
+	const future = Date.now() + 365 * 86_400_000;
+	store({
+		anthropic: { models: [saved("anthropic", "claude-saved-1"), saved("other", "not-anthropic")], lastModified: future, checkedAt: Date.now() },
+		openai: { models: [saved("openai", "older-than-builtins")], lastModified: 1 },
+		openrouter: { models: [saved("openrouter", "only-this")] },
+	});
+	const models = openModels({ agentDir });
+	assert.ok(models.getModel("anthropic", "claude-saved-1"), "a saved catalog newer than the built-in data adds its models");
+	assert.ok(models.getModel("anthropic", builtin.id), "the built-in models stay");
+	assert.equal(models.getModel("anthropic", "not-anthropic"), undefined, "an entry for another provider is ignored");
+	assert.equal(models.getModel("openai", "older-than-builtins"), undefined, "a catalog older than the built-in data is ignored");
+	assert.deepEqual(models.getModels().filter((m) => m.provider === "openrouter").map((m) => m.id), ["only-this"], "openrouter's saved catalog replaces its built-ins");
+	// `pi update --models` saves a newer catalog while the node runs: the next list has it, with models.json on top.
+	store({ anthropic: { models: [saved("anthropic", "claude-saved-1"), saved("anthropic", "claude-saved-2")], lastModified: future } });
+	await listModels(models);
+	assert.equal(models.getModel("anthropic", "claude-saved-2")?.contextWindow, 4242, "models.json overrides apply to saved models");
+	assert.ok(models.getModels().some((m) => m.provider === "openrouter" && m.id !== "only-this"), "without a saved catalog, openrouter is built-in again");
+	// A store caught mid-write changes nothing.
+	store('{"anthropic": {"models"');
+	await listModels(models);
+	assert.ok(models.getModel("anthropic", "claude-saved-2"));
 });
 
 test("models: Pi's start order, thinking levels, overrides of a built-in provider, and models.json errors", async () => {

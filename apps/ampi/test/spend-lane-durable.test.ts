@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { DurableViews } from "../src/durable/reader-side.ts";
-import { ALL_COVERS, HISTORY_COVERS, historySpend, spendLabel, sumSpend, summarySpend } from "../src/shared/spend.ts";
+import { ALL_COVERS, HISTORY_COVERS, historySpend, spendLabel, sumSpend } from "../src/shared/spend.ts";
 import { laneSpend } from "../web/src/views/cos/totals.ts";
 // @ts-ignore: plain ESM test fixtures over a real pi-durable 1.4.0 store.
 import { buildFixture, openFixtureStore } from "../../trace-analytics/test/fixtures/durable-store.mjs";
@@ -54,5 +54,5 @@ test("spend label: a durable thread whose pi.usage records no request and whose 
  assert.equal(row.spendLabel, "no price reported", "an absent price never reads as a priced $0");
  assert.deepEqual(row.spend, historySpend(null), "the history is the figure, as without the document");
  assert.deepEqual(row.spend?.covers, [...HISTORY_COVERS]);
- assert.equal(spendLabel(sumSpend([summarySpend(row as never)])), "no price reported", "a total of unpriced Sessions has no amount");
+ assert.equal(spendLabel(sumSpend([row.spend!])), "no price reported", "a total of unpriced Sessions has no amount");
 });

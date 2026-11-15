@@ -8,6 +8,7 @@ import WebSocket from "ws";
 import type { HubHome } from "../src/hub/home.ts";
 import { Hub } from "../src/hub/hub.ts";
 import { save } from "../src/hub/pins.ts";
+import { stamp } from "../src/shared/build.ts";
 import { ownHome as own } from "./helpers.ts";
 import type { Pin } from "../src/shared/protocol.ts";
 
@@ -24,6 +25,7 @@ async function open(port: number) {
 		if (frame.t === "res") waiters.get(frame.id)?.(frame);
 	});
 	await new Promise((resolve, reject) => { ws.once("open", resolve); ws.once("error", reject); });
+	ws.send(JSON.stringify({ t: "hello", build: stamp().id }));
 	let id = 1;
 	const hubOp = (op: string, args: unknown) => new Promise<any>((resolve) => { const n = id++; waiters.set(n, resolve); ws.send(JSON.stringify({ t: "hub", id: n, op, args })); });
 	const when = async (predicate: () => boolean) => { for (let i = 0; i < 200 && !predicate(); i++) await new Promise((r) => setTimeout(r, 10)); assert.ok(predicate(), JSON.stringify(state)); };
@@ -42,16 +44,16 @@ test("pins: every browser gets the list on connect and after each change, and a 
 		await a.when(() => a.state.pins !== undefined);
 		assert.deepEqual(a.state.pins, []);
 
-		assert.equal((await a.hubOp("pins.set", { host: "devbox", threadId: "t1", pinned: true, intent: "owner", title: "deploy lead" })).ok, true);
+		assert.equal((await a.hubOp("pins.set", { host: "devbox", threadId: "t1", pinned: true, title: "deploy lead" })).ok, true);
 		await b.when(() => b.state.pins?.length === 1);
 		assert.deepEqual(b.state.pins!.map((p) => [p.host, p.threadId, p.title]), [["devbox", "t1", "deploy lead"]]);
-		await a.hubOp("pins.set", { host: "devbox", threadId: "t2", pinned: true, intent: "owner", title: "perf" });
+		await a.hubOp("pins.set", { host: "devbox", threadId: "t2", pinned: true, title: "perf" });
 		// A repeated pin renames in place; unpinning an unknown pin changes nothing.
 		await a.hubOp("pins.set", { host: "devbox", threadId: "t1", pinned: true, title: "deploy lead 2" });
 		await a.hubOp("pins.set", { host: "devbox", threadId: "nope", pinned: false });
 		await b.when(() => b.state.pins?.[0]?.title === "deploy lead 2");
 		assert.deepEqual(b.state.pins!.map((p) => p.threadId), ["t1", "t2"]);
-		const refused = await a.hubOp("pins.set", { host: "", threadId: "t3", pinned: true, intent: "owner" });
+		const refused = await a.hubOp("pins.set", { host: "", threadId: "t3", pinned: true });
 		assert.equal(refused.ok, false);
 
 		a.ws.close(); b.ws.close();
@@ -86,7 +88,7 @@ test("pins: an unreadable pins.json moves aside and the hub starts with no pins"
 		await a.when(() => a.state.pins !== undefined);
 		assert.deepEqual(a.state.pins, []);
 		assert.ok(readdirSync(home).some((name) => name.startsWith("pins.json.unreadable-")), "the unreadable file is kept");
-		await a.hubOp("pins.set", { host: "devbox", threadId: "t1", pinned: true, intent: "owner" });
+		await a.hubOp("pins.set", { host: "devbox", threadId: "t1", pinned: true });
 		await a.when(() => a.state.pins?.length === 1);
 		a.ws.close();
 		await hub.close();
@@ -109,12 +111,12 @@ const stored = (pinsPath: string) => JSON.parse(readFileSync(pinsPath, "utf8"));
 test("pins: one pin per threadId; a pin from another Host route keeps the pin, its hint and its place", () => withHome(undefined, async (home, pinsPath) => {
 	const hub = new Hub({ hosts: [] }, { token, home });
 	const a = await open(await hub.listen(0));
-	await a.hubOp("pins.set", { host: "devbox", threadId: "pi:s1", pinned: true, intent: "owner", title: "lead" });
-	await a.hubOp("pins.set", { host: "devbox", threadId: "pi:s2", pinned: true, intent: "owner", title: "perf" });
+	await a.hubOp("pins.set", { host: "devbox", threadId: "pi:s1", pinned: true, title: "lead" });
+	await a.hubOp("pins.set", { host: "devbox", threadId: "pi:s2", pinned: true, title: "perf" });
 	// The row menu pinned it on one route; the star on another route sees the same Session. The intent is already met.
 	assert.equal((await a.hubOp("pins.set", { host: "devbox#pi", threadId: "pi:s1", pinned: true })).ok, true);
 	assert.deepEqual(a.state.pins!.map((p) => [p.host, p.threadId, p.title]), [["devbox", "pi:s1", "lead"], ["devbox", "pi:s2", "perf"]]);
-	assert.deepEqual(stored(pinsPath), { version: 1, pins: a.state.pins }, "the file holds one key form and no at field");
+	assert.deepEqual(stored(pinsPath), { version: 1, pins: a.state.pins }, "the file holds one pin per Session");
 	// Unpinning on any route, with or without a host, removes the one pin.
 	await a.hubOp("pins.set", { threadId: "pi:s1", pinned: false });
 	await a.when(() => a.state.pins?.length === 1);
@@ -122,7 +124,7 @@ test("pins: one pin per threadId; a pin from another Host route keeps the pin, i
 	await hub.close();
 }));
 
-test("pins: an older file with one Session under two Host ids loads as one pin: first place, newest hint", () => withHome({ version: 1, pins: [
+test("pins: a pre-b12 file with one Session under two Host ids loads as one pin: first place, newest hint", () => withHome({ version: 1, pins: [
 	{ host: "devbox", threadId: "pi:s1", title: "old title", at: 5 },
 	{ host: "devbox", threadId: "pi:s2", title: "two", at: 6 },
 	{ host: "devbox#pi", threadId: "pi:s1", title: "", at: 7 },
@@ -136,12 +138,24 @@ test("pins: an older file with one Session under two Host ids loads as one pin: 
 	await hub.close();
 }));
 
+test("pins: a version 1 file loads as written, in its order", () => withHome({ version: 1, pins: [
+	{ host: "devbox", threadId: "pi:s1", title: "one" },
+	{ host: "devbox", threadId: "pi:s2", title: "two" },
+] }, async (home) => {
+	const hub = new Hub({ hosts: [] }, { token, home });
+	const a = await open(await hub.listen(0));
+	await a.when(() => a.state.pins !== undefined);
+	assert.deepEqual(a.state.pins, [{ host: "devbox", threadId: "pi:s1", title: "one" }, { host: "devbox", threadId: "pi:s2", title: "two" }]);
+	a.ws.close();
+	await hub.close();
+}));
+
 test("pins: a file of another version stays untouched and pins.set refuses", () => withHome({ version: 2, pins: [{ id: "pi:s1" }] }, async (home, pinsPath) => {
 	const before = readFileSync(pinsPath, "utf8");
 	const hub = new Hub({ hosts: [] }, { token, home });
 	const a = await open(await hub.listen(0));
 	await a.when(() => a.state.pins !== undefined);
-	const refused = await a.hubOp("pins.set", { host: "devbox", threadId: "pi:s1", pinned: true, intent: "owner" });
+	const refused = await a.hubOp("pins.set", { host: "devbox", threadId: "pi:s1", pinned: true });
 	assert.equal(refused.ok, false);
 	assert.match(JSON.stringify(refused), /version 2/);
 	assert.equal(readFileSync(pinsPath, "utf8"), before);
@@ -155,7 +169,7 @@ test("pins: an unreadable file that cannot move aside makes this run refuse writ
 	const a = await open(await hub.listen(0));
 	await a.when(() => a.state.pins !== undefined);
 	chmodSync(home.dir, 0o700);
-	const refused = await a.hubOp("pins.set", { host: "devbox", threadId: "pi:s1", pinned: true, intent: "owner" });
+	const refused = await a.hubOp("pins.set", { host: "devbox", threadId: "pi:s1", pinned: true });
 	assert.equal(refused.ok, false);
 	assert.match(JSON.stringify(refused), /could not be moved aside/);
 	assert.equal(readFileSync(pinsPath, "utf8"), "{ not json");
@@ -186,7 +200,7 @@ test("pins: a host hint moves only an existing pin; a late hint after an unpin l
 	// A hint for a Session that is not pinned creates nothing.
 	assert.equal((await a.hubOp("pins.hint", { host: "devbox", threadId: "pi:s1" })).ok, true);
 	assert.deepEqual(a.state.pins, []);
-	await a.hubOp("pins.set", { host: "old-host", threadId: "pi:s1", pinned: true, intent: "owner", title: "lead" });
+	await a.hubOp("pins.set", { host: "old-host", threadId: "pi:s1", pinned: true, title: "lead" });
 	await a.when(() => a.state.pins?.length === 1);
 	// Two windows send the same hint: the first moves the hint, keeping the place and title; the second changes nothing.
 	const frames = a.state.frames;
@@ -219,28 +233,3 @@ test("pins: only an owner action changes membership; every setPin call in the we
 	}
 	assert.ok(calls >= 3, `the star, the menu and the × call setPin (${calls})`);
 });
-
-test("pins: an unmarked create from a page older than the hub is refused; an unmarked unpin or repeated pin applies", () => withHome(undefined, async (home, pinsPath) => {
-	const hub = new Hub({ hosts: [] }, { token, home });
-	const a = await open(await hub.listen(0));
-	await a.hubOp("pins.set", { host: "devbox", threadId: "pi:s1", pinned: true, intent: "owner", title: "lead" });
-	await a.when(() => a.state.pins?.length === 1);
-	// An old page's hint repair is an unmarked pin: on an existing pin it changes nothing.
-	assert.equal((await a.hubOp("pins.set", { host: "devbox#pi", threadId: "pi:s1", pinned: true })).ok, true);
-	assert.deepEqual(a.state.pins, [{ host: "devbox", threadId: "pi:s1", title: "lead" }]);
-	// An old page's star unpins without the marker.
-	assert.equal((await a.hubOp("pins.set", { host: "devbox", threadId: "pi:s1", pinned: false })).ok, true);
-	assert.deepEqual(a.state.pins, []);
-	const before = readFileSync(pinsPath, "utf8");
-	// The old page's late hint repair arrives after the unpin.
-	const refused = await a.hubOp("pins.set", { host: "devbox#pi", threadId: "pi:s1", pinned: true });
-	assert.equal(refused.ok, false);
-	assert.match(refused.error?.message ?? "", /This page is older than the hub\. Reload it\./);
-	assert.deepEqual(a.state.pins, []);
-	assert.equal(readFileSync(pinsPath, "utf8"), before, "a refused create leaves pins.json unchanged");
-	// A marked owner click creates the pin.
-	assert.equal((await a.hubOp("pins.set", { host: "devbox", threadId: "pi:s1", pinned: true, intent: "owner" })).ok, true);
-	assert.deepEqual(a.state.pins, [{ host: "devbox", threadId: "pi:s1", title: "" }]);
-	a.ws.close();
-	await hub.close();
-}));

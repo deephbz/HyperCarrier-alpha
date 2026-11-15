@@ -1,7 +1,6 @@
-import { useState } from "react";
-import type { HerdrLayout, ThreadSummary, ThreadsState } from "../../../src/shared/protocol.ts";
+import { DURABLE_RELEASE, type HerdrLayout, type ThreadSummary, type ThreadsState } from "../../../src/shared/protocol.ts";
 import { PiHostSection } from "./PiSidebar.tsx";
-import type { HostState } from "../client.ts";
+import { type HostState, useHosts, useSkippedHosts } from "../client.ts";
 import { MOD, href } from "../util.ts";
 import { PAGES } from "../views/registry.ts";
 import { dispatchKeyAction } from "../keymap.ts";
@@ -9,13 +8,28 @@ import { handleSidebarKeyDown } from "./sidebar-keys.ts";
 import { setThemeChoice, useThemeChoice, type ThemeChoice } from "../theme.ts";
 import { PinMenu, PinnedSection } from "./Pinned.tsx";
 import { Segmented } from "./Segmented.tsx";
+import { sidebarFooter } from "../slot-registry.ts";
 
-/** `error`: why the Host ended or holds this list (pending or end frame); an ended list never loads further. */
-export type HostThreads = { host: HostState; threads: ThreadSummary[]; stale: boolean; layout?: HerdrLayout; error?: string } & Pick<ThreadsState, "indexing" | "listing" | "updating" | "settingsNotice">;
+/**
+ * `error`: why the Host ended or holds this list (pending or end frame); an ended list never loads further. The list
+ * carries every other ThreadsState field as the Host sent it, so an augmented field reaches its view.
+ */
+export type HostThreads = { host: HostState; threads: ThreadSummary[]; stale: boolean; layout?: HerdrLayout; error?: string } & Omit<ThreadsState, "threads" | "layout" | "backend">;
 
 /** Why the browser has no hub, and the owner's next step; the client reconnects by itself (client.ts). */
 export function HubNotConnected() {
 	return <>Not connected to the hub. If it is running, open the link that <code>ampi open</code> prints: it carries this machine's access key.</>;
+}
+
+/** One line for the hub.json rows this hub skips: their Hosts and threads need the durable release. */
+function SkippedHosts() {
+	const skipped = useSkippedHosts();
+	if (!skipped.length) return null;
+	return (
+		<div className="host-note warn" data-skipped-hosts={skipped.map((host) => host.id).join(" ")}>
+			Not shown: {skipped.map((host) => host.label).join(", ")}. {DURABLE_RELEASE}
+		</div>
+	);
 }
 
 /** ☰ for Show and Hide sidebar: a 16 px icon like the header's Find, so it matches the header icons in size and centre. */
@@ -38,8 +52,6 @@ export function Sidebar({
 	onHostSetup: () => void;
 	onToggle: () => void;
 }) {
-	const [showArchived, setShowArchived] = useState(false);
-	const archivedCount = data.reduce((count, host) => count + host.threads.filter((thread) => thread.archived).length, 0);
 	const activePage = route.page ?? (!route.host ? (PAGES.some((p) => p.name === "timeline") ? "timeline" : "overview") : undefined);
 	return (
 		<aside className="side quiet-scroll" onKeyDown={(event) => handleSidebarKeyDown(event.nativeEvent, event.currentTarget)}>
@@ -78,16 +90,13 @@ export function Sidebar({
 					</div>
 				))}
 				<PinnedSection data={data} />
-				{data.map((d) => (
-					<PiHostSection key={d.host.link} data={d} hosts={data.map((other) => other.host)} route={route} showArchived={showArchived} />
-				))}
+				{data.map((d) => <PiHostSection key={d.host.link} data={d} hosts={data.map((other) => other.host)} route={route} />)}
+				<SkippedHosts />
 				<div className="side-footer">
 					<button className="btn ghost small" title="How to add a remote host: a prompt for your coding agent" onClick={onHostSetup}>
 						Remote host (?)
 					</button>
-					<button className="btn ghost small" onClick={() => setShowArchived(!showArchived)}>
-						{showArchived ? "Hide archived" : `Show archived (${archivedCount})`}
-					</button>
+					{sidebarFooter.map((Footer, i) => <Footer key={i} data={data} />)}
 					<button className="btn ghost small" title="Keys and help (?)" onClick={() => dispatchKeyAction("help", new KeyboardEvent("keydown"))}>
 						?
 					</button>

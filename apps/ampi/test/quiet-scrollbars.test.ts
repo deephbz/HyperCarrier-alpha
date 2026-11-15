@@ -28,19 +28,21 @@ const ORIGIN = "http://localhost";
 const REGIONS: Record<string, RegExp | string> = {
 	".side": /<aside className="side /, ".side-scroll": /<div className="side-scroll /, ".panel-tabs > .seg": /<div className="seg quiet/,
 	".panel-body": /<div className="panel-body /, ".modal": /className="modal /, ".dirlist": /<div className="dirlist /,
-	".slash-menu": /<Popover className="slash-menu /, ".accounts .provider-list": /<div className="provider-list /,
+	".slash-menu": /<Popover className="slash-menu /, ".slash-menu-whole-scroll": /<Popover className="slash-menu quiet-scroll"/,
+	".slash-options": /<div className="slash-options quiet-scroll">/, ".accounts .provider-list": /<div className="provider-list /,
 	".session-metadata": /<Popover className="session-metadata /, ".tool-body": /<div className="tool-body /,
 	".rb-header": /<header className="rb-header /, ".rb-scroll": /<div className="rb-scroll /, ".rb-band": /<div className="rb-band /,
 	".rb-tools summary": /<summary className="quiet-scroll">\{run\.entries/, ".cos-scroll": /<div className="cos-scroll /,
 	".ptb-graph-scroll": /<div className="ptb-graph-scroll /,
 	".composer textarea": /^\t+ref=\{ref\}\n\t+className="quiet-scroll"\n\t+data-scrollbar="none"/m, ".queue": /<div className="queue /,
-	".composer-feedback": /composer-feedback/, ".prompt-outline": /<Popover className="prompt-outline quiet-scroll" /,
+	".composer-feedback": /composer-feedback(?! error image-admission-feedback)/, ".composer-feedback.image-admission-feedback": /className="composer-feedback error image-admission-feedback quiet-scroll"/, ".prompt-outline": /<Popover className="prompt-outline quiet-scroll" /,
 	".scroll": "transcript: owned by Task ui-transcript-strip",
 	".main": "page column: its children scroll, it does not",
 	".md pre": "generated Markdown: inherits its region's bar in Chromium, native in WebKit",
 	".md table": "generated Markdown: inherits its region's bar in Chromium, native in WebKit",
 	".rb-message .md pre": "generated Markdown: inherits its region's bar in Chromium, native in WebKit",
 	".graph": "unused selector",
+	".quote-selection blockquote": /<blockquote className="quiet-scroll">/,
 };
 const BARE = new Set([".composer textarea", ".queue", ".composer-feedback"]);
 /** Scrollers styled inline, not by a stylesheet rule. */

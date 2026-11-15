@@ -13,6 +13,7 @@
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { ampiHome } from "../shared/home.ts";
+import { unreadSpend } from "../shared/spend.ts";
 import type { ServerResponse } from "node:http";
 import { join } from "node:path";
 import { applyImmutable, diffRevisions } from "@earendil-works/chord/delta";
@@ -20,8 +21,9 @@ import { applyImmutable, diffRevisions } from "@earendil-works/chord/delta";
 import { exportDurableRecords, responseWriter, sessionIdOf } from "../../../trace-analytics/src/sources/durable.mjs";
 import { DurableViews, type DurableReaderNode } from "../durable/reader-side.ts";
 import { ask } from "../pi/ask.ts";
+import { piAgentDir } from "../shared/pi-config.ts";
+import { checkPiModel } from "../arc/preflight.ts";
 import { piModelRegistry } from "../pi/model-registry.ts";
-import { PI_VIEWS } from "../pi/views/index.ts";
 import type { PiRecordedMember, PiTeamsFrame } from "../pi/views/types.ts";
 import type { PiTeamTask } from "../shared/team.ts";
 import { resolveHelperModel } from "./helper-models.ts";
@@ -97,6 +99,7 @@ export class DurableHost extends EventEmitter {
 			hostStatus: () => this.state.status,
 			// Helper models are hub state: Arc Builds and asks call the same hub path as a Pi Host (node-design.md, R2).
 			ask: (req) => ask(req, config.askCommand),
+			preflight: (model, signal) => config.askCommand?.length ? Promise.resolve(undefined) : checkPiModel(model, { agentDir: piAgentDir(), signal }),
 			model: (purpose, override) => resolveHelperModel(purpose, override, config.askCommand?.length ? undefined : piModelRegistry),
 			rawExportUrl: (threadId) => `/raw/pi-durable:${threadId}?host=${encodeURIComponent(linkKey(config))}`,
 		});
@@ -397,10 +400,13 @@ export class DurableHost extends EventEmitter {
 				const fields = this.views.summaryFields(threadId) as Record<string, unknown> | undefined;
 				const merged: Record<string, unknown> = { ...row };
 				for (const key of READER_FIELDS) if (fields?.[key] !== undefined) merged[key] = fields[key];
+				// Until the reader derives the row, the node's figure is no cost fact: the row counts as unread, so a sum over it reads as partial.
+				if (fields?.spend === undefined) {
+					Object.assign(merged, { costUsd: 0, spend: unreadSpend() });
+					delete merged.spendLabel;
+				}
 				for (const key of FALLBACK_FIELDS) if (merged[key] === undefined && fields?.[key] !== undefined) merged[key] = fields[key];
-				// Each view's row fields (for example the Arc receipt head), as a Pi Host adds them to its rows.
-				const session = this.views.context.session(threadId);
-				if (session) for (const view of PI_VIEWS) if (view.summarize) Object.assign(merged, view.summarize(this.views.context, session));
+				Object.assign(merged, this.views.summarize(threadId));
 				threads[threadId] = merged as Row;
 			}
 			return { ...node, threads };

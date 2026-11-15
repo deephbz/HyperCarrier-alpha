@@ -11,6 +11,7 @@ import type { CompactRecord } from "@hypercarrier/auto-compact-durable";
 // @ts-ignore: shared browser discovery is plain ESM.
 import { findChrome } from "../scripts/perf/browser.mjs";
 import { engineSkip } from "./engines.ts";
+import { unscriptedValue } from "./view-defaults.ts";
 
 // The collapsed compaction rows, in their longest forms (three-digit counts, manual, low cache), stay on one line
 // in the transcript column at the owner's 130 % display size, in Chromium and WebKit. The page is the real App with
@@ -30,7 +31,7 @@ async function appScript(): Promise<string> {
 			name: "compaction-row-zoom-test",
 			resolveId: (id) => id === entry ? `\0${entry}` : undefined,
 			load: (id) => id === `\0${entry}` ? `
-				import React from 'react';
+				import React from 'react'; import ${JSON.stringify(join(web, "src/extensions-ui.ts"))};
 				import { createRoot } from 'react-dom/client';
 				import { App } from ${JSON.stringify(join(web, "src/App.tsx"))};
 				createRoot(document.getElementById('root')).render(React.createElement(App));
@@ -91,12 +92,12 @@ for (const engine of ["chromium", "webkit"] as const) {
 			send({ t: "hosts", hosts: [HOST] });
 			client.onMessage((message) => {
 				const frame = JSON.parse(String(message));
-				if (frame.t === "sub") send({ t: "snap", sid: frame.sid, value: frame.topic?.kind === "thread" ? view : frame.topic?.kind === "threads" ? { threads: { [THREAD]: thread } } : {} });
+				if (frame.t === "sub") send({ t: "snap", sid: frame.sid, value: frame.topic?.kind === "thread" ? view : frame.topic?.kind === "threads" ? { threads: { [THREAD]: thread } } : unscriptedValue(frame.topic) });
 				else if (frame.t === "req" && frame.op === "compact.records") send({ t: "res", id: frame.id, ok: true, value: { records: RECORDS } });
 				else if (frame.t === "req" || frame.t === "hub") send({ t: "res", id: frame.id, ok: false, error: { code: "unsupported", message: "not in this test" } });
 			});
 		});
-		await page.goto(`${ORIGIN}/#/h/${encodeURIComponent(HOST.link)}/t/${THREAD}`);
+		await page.goto(`${ORIGIN}/#/h/${encodeURIComponent(HOST.id)}/t/${THREAD}`);
 		await page.locator(`.compaction[data-entry="44"][title]`).waitFor();
 		// The app's zoom keys: six steps of 5 % from 100 %.
 		for (let i = 0; i < 6; i++) await page.keyboard.press("Meta+Shift+Equal");

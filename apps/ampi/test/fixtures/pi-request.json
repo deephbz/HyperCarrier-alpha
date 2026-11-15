@@ -1,7 +1,7 @@
 {
 	"source": {
 		"pi": "1.4.0",
-		"piTeamBright": "0.24.0-rc.7"
+		"piTeamBright": "0.25.1"
 	},
 	"request": {
 		"betas": [

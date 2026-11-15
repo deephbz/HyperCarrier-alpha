@@ -22,7 +22,7 @@ export const noEscape: Equal<Found, never> = true;
 
 /** Every node op name, checked against `NodeOps` both ways. */
 const NODE_OPS = {
-	"node.info": true, "node.restart": true, "node.health": true, "node.backup": true, "audit.snapshot": true, "store.reopen": true, "models.list": true, "prompts.list": true,
+	"node.info": true, "node.restart": true, "node.health": true, "audit.snapshot": true, "store.reopen": true, "models.list": true, "prompts.list": true,
 	"accounts.list": true, "accounts.login": true, "accounts.answer": true, "accounts.cancel": true, "accounts.logout": true,
 	"thread.create": true, "thread.submit": true, "thread.abort": true, "thread.withdraw": true, "thread.editQueued": true, "thread.close": true, "thread.compact": true,
 	"thread.commands": true, "thread.command": true,

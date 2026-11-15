@@ -23,6 +23,8 @@ export const PROTOCOL = "ampi/1";
 
 /** Browser → hub frames: node frames addressed to one host, plus hub operations. */
 export type BrowserFrame =
+	/** The page's first frame: the build of the hub that served it (`<meta name="ampi-build">`). */
+	| { t: "hello"; build?: string }
 	| { t: "req"; id: number; host: string; op: string; args?: unknown }
 	| { t: "sub"; sid: number; host: string; topic: Topic }
 	| { t: "unsub"; sid: number }
@@ -35,7 +37,7 @@ export type BrowserFrame =
 export type RequestFrame = { t: "req"; id: number; op: string; args?: unknown };
 export type ResponseFrame<V = unknown> =
 	| { t: "res"; id: number; ok: true; value?: V }
-	| { t: "res"; id: number; ok: false; error: { code: string; message: string; pane?: string; matches?: string[] } };
+	| { t: "res"; id: number; ok: false; error: { code: string; message: string; pane?: string; matches?: string[]; skew?: "page" } };
 
 /** Open a subscription to a topic; the node answers with one `snap` and then `ops` frames until `unsub`. */
 export type SubscribeFrame = { t: "sub"; sid: number; topic: Topic };
@@ -72,7 +74,8 @@ export type Topic =
 	/** The reader watch of one handle this connection opened (`reader.open`): each frame is a WatchFrame. */
 	| { kind: "reader"; handle: string }
 	/** A hub-side view of a Pi Host (src/pi/views): `view` names it; `threadId` scopes it to one Session. */
-	| ViewTopic;
+	| ViewTopic
+	| ExtraTopics[keyof ExtraTopics];
 
 export type ClientFrame = RequestFrame | SubscribeFrame | UnsubscribeFrame | { t: "ping" };
 /** What a host link emits, with its op results `R` and topic values `V`. */
@@ -107,8 +110,17 @@ export type NodeInfo = {
 /** Execution activity of a thread, derived from committed pi.live and pi.inbox (P5: one axis only). */
 export type Activity = "idle" | "thinking" | "streaming" | "tools" | "retrying" | "compacting" | "waiting";
 
+/**
+ * The thread backends this build serves, as a key set. Main registers `pi`; the durable line adds its backend by
+ * interface augmentation in src/shared/protocol-durable.ts. A key here never changes a Pi type.
+ */
+export interface BackendNames {
+	pi: true;
+	durable: true;
+}
+
 /** One row of the thread index, as clients see it. */
-export type ThreadSummary = {
+export interface ThreadSummary {
 	id: string;
 	title: string;
 	cwd: string;
@@ -134,7 +146,7 @@ export type ThreadSummary = {
 	/** The cost figure with what it leaves out under the one spend rule (trace-analytics spend.mjs spendLabel). */
 	spendLabel?: string;
 	/** The figure behind `spendLabel` and the classes it counts, so a view can sum Sessions across backends. */
-	spend?: Spend;
+	spend: Spend;
 	contextTokens?: number;
 	contextWindow?: number;
 	workingBudget?: number;
@@ -164,7 +176,7 @@ export type ThreadSummary = {
 	 * `owner thread` otherwise); it is read-only and has no Resume. A fork continues it.
 	 */
 	closed?: { at: number; by: string };
-};
+}
 
 /**
  * A carrier's image limits for one message, in the units it checks (base64 characters as sent). The carrier owns
@@ -190,10 +202,9 @@ export const threadSource = (id: string): "pi" | "durable" => (isPiThreadId(id) 
  * state only and an empty list proves no absence. `listing`: no agents list since the Host connected, so no row has
  * liveness or a pane yet. `updating`: the startup refresh of saved copies still runs.
  */
-/** Invalid Pi settings a Host ignored, and the stamp of the settings files they come from: one notice per stamp. */
 /** Invalid values a node ignored in its global Pi settings; `file` is that file's absolute path on the node. */
 export type SettingsNotice = { stamp: string; errors: string[]; file: string };
-export type ThreadsState = { threads: { [id: PiThreadId]: ThreadSummary }; layout?: HerdrLayout; backend?: "pi" | "durable"; indexing?: true; listing?: true; updating?: true; settingsNotice?: SettingsNotice };
+export interface ThreadsState { threads: { [id: PiThreadId]: ThreadSummary }; layout?: HerdrLayout; backend?: keyof BackendNames; indexing?: true; listing?: true; updating?: true; settingsNotice?: SettingsNotice }
 
 // ---- Pi entry shapes (docs/wire-boundary.md, design 4 and 5) ----
 // The projection (src/pi/projection.ts) and the versioned index rows are their only constructors. They carry no
@@ -254,7 +265,7 @@ export type QueueOrigin = { kind: "team"; delivery: "task" | "alert" | "stop" | 
 /** Each field of `T`, optional ones included: a projection typed with it fails to compile when it leaves a field out. */
 export type Every<T> = { [K in keyof Required<T>]: T[K] | undefined };
 /** One undelivered submission as the composer shows it. `images`: how many images it carried; Pi returns text only, so a returned message loses them. */
-export type PiQueuedItem = { id: string; mode: string; content: string; state: ControlSubmission["state"] | "unknown"; truncated?: boolean; images?: number; origin?: QueueOrigin };
+export interface PiQueuedItem { id: string; mode: string; content: string; state: ControlSubmission["state"] | "unknown"; truncated?: boolean; images?: number; origin?: QueueOrigin }
 /** A Pi Session's thread topic. `live.run` is present while the Session runs a turn. */
 export type PiThreadView = {
 	/** Content key for bounded Pi pages and body reads. */
@@ -304,7 +315,7 @@ export type ControlSubmission = { submission: string; deliverAs: "steer" | "foll
  * `stale` (cut before the current context), or `none` (nothing to summarize).
  */
 export type ControlCompaction = { taskId: string; reason: string; outcome: string; summary?: "placed" | "pending" | "stale" | "none" };
-export type ActionAck = { via?: string; evidence?: string; entryId?: string; submission?: string; submissions?: ControlSubmission[]; compactions?: ControlCompaction[] };
+export interface ActionAck { via?: string; evidence?: string; entryId?: string; submission?: string; submissions?: ControlSubmission[]; compactions?: ControlCompaction[] }
 /**
  * A Pi Session's slash commands, from its live control (packages/pi-hc-control README, Slash commands).
  * `supported: false`: a TUI-only built-in that runs only in the Pi pane.
@@ -316,7 +327,7 @@ export type SlashCommands = { commands: SlashCommand[]; models: { ref: string; n
  * template became a message, as for submit. `dispatched`: Pi has the extension command; its result shows in the pane.
  * `effect` is advisory: the model card reads the Session file.
  */
-export type CommandAck = {
+export interface CommandAck {
 	via?: string;
 	disposition: "handled" | "started" | "queued" | "dispatched";
 	notice?: string;
@@ -329,17 +340,32 @@ export type CommandAck = {
 	evidence?: string;
 	entryId?: string;
 	submission?: string;
-};
+}
 /** Where Herdr puts a new pane: beside a running Session's pane, or in a new workspace. */
 export type Placement = { beside: string; direction?: "right" | "down" } | { workspace: "new"; label?: string };
 /** What became of a create's first prompt: typed into the pane, or the reason it was not. */
 export type SubmittedPrompt = { via?: string; evidence?: string; error?: { code: string; message: string } };
+/**
+ * `thread.create`'s reply per backend. A Pi Session always has a pane; another backend declares its own reply type
+ * here by augmentation, so `ThreadCreated.pane` stays required for Pi.
+ */
+export interface ThreadCreatedReplies {
+	pi: ThreadCreated;
+}
+export type ThreadCreatedReply = ThreadCreatedReplies[keyof ThreadCreatedReplies];
 /** `pending`: Pi has not written the Session file yet; the thread is listed from the create. */
 /** `pane`: the Herdr pane of a Pi Session. `tab`: the tab a durable thread joined; a durable thread has no pane. */
-export type ThreadCreated = { threadId: string; pane?: string; tab?: { id: string; label: string }; evidence?: string; submitted?: SubmittedPrompt; warning?: string; pending?: true };
+export interface ThreadCreated { threadId: string; pane?: string; tab?: { id: string; label: string }; evidence?: string; submitted?: SubmittedPrompt; warning?: string; pending?: true }
 export type ThreadResumed = { threadId: string; pane?: string; evidence?: string; warning?: string };
 /** Compact navigation over the whole current branch. Ordinals are zero-based among projectable entries (non-null ui) on that branch. */
 export type ThreadOutline = { version: string; totalEntries: number; users: { id: string; ordinal: number; firstLine: string }[]; truncated: boolean };
+/** What a page holds of a thread's outline: its version and its last prompt. */
+export type OutlineKnown = { version: string; lastId: string; lastOrdinal: number };
+/**
+ * A `thread.outline` reply. With `base` it is a delta on the outline the page holds at version `base`: `users` holds only
+ * the prompts after the held last prompt. Without `base` it is the full outline (an old Host, a reset, nothing held).
+ */
+export type ThreadOutlineReply = ThreadOutline & { base?: string };
 
 export type HistoryPage = { entries: PiEntry[]; more: boolean; version?: string };
 /**
@@ -368,7 +394,8 @@ export type PromptList = { prompts: { name: string; description: string; body: s
 export type HostOps = {
 	/**
 	 * `asText: true` marks plain text that starts with `/` as the owner's choice to send it as a message (the composer's
-	 * `//` escape or "Send as text"). The Host refuses an unmarked one with "This page is older than the hub. Reload it."
+	 * `//` escape or "Send as text"). The Host refuses an unmarked one with "Slash text goes as a message only with
+	 * asText; send a command with thread.command."
 	 */
 	"thread.submit": OpSpec<{ threadId: string; content: string; whenBusy?: "steer" | "followUp"; requestId?: string; images?: { data: string; mimeType: string }[]; asText?: true }, ActionAck>;
 	"thread.abort": OpSpec<{ threadId: string }, ActionAck>;
@@ -376,11 +403,11 @@ export type HostOps = {
 	"thread.commands": OpSpec<{ threadId: string }, SlashCommands>;
 	/** `key` makes a retry return the first reply; `abort` lets /compact stop a running turn. */
 	"thread.command": OpSpec<{ threadId: string; name: string; args?: string; key?: string; abort?: boolean; whenBusy?: "steer" | "followUp" }, CommandAck>;
-	"thread.create": OpSpec<{ requestId: string; cwd: string; place: Placement; name?: string; prompt?: string }, ThreadCreated>;
+	"thread.create": OpSpec<{ requestId: string; cwd: string; place: Placement; name?: string; prompt?: string }, ThreadCreatedReply>;
 	"thread.resume": OpSpec<{ requestId: string; threadId: string; place: Placement; cwd?: string; name?: string }, ThreadResumed>;
 	"thread.close": OpSpec<{ threadId: string; lastPane?: boolean }, ActionAck>;
 	"sessions.search": OpSpec<{ query: string }, FleetSearchResult>;
-	"thread.outline": OpSpec<{ threadId: string }, ThreadOutline>;
+	"thread.outline": OpSpec<{ threadId: string; known?: OutlineKnown }, ThreadOutlineReply>;
 	/**
 	 * `from` (an entry ID, the reader's place) centers the result's windows and the result echoes `anchored`; `tail`
 	 * puts them at the branch's end. Without either they hold the first matches. A Session the Host has not indexed
@@ -413,7 +440,7 @@ export type ViewTopics = {
 	};
 	team: { params: { threadId?: string }; value: TeamValue; ops: None };
 	"cos.timeline": { params: None; value: TimelineValue; ops: { locate: OpSpec<{ threadId: string; at: number }, { entry?: string; ref: string }> } };
-	arc: { params: { threadId: string }; value: ArcValue; ops: { build: OpSpec<{ threadId: string; rebuild?: boolean }, { started: true }> } };
+	arc: { params: { threadId: string }; value: ArcValue; ops: { build: OpSpec<{ threadId: string; rebuild?: boolean; requestId?: string }, import("./arc.ts").RequestOutcome | { started: true }>; dismiss: OpSpec<{ threadId: string; dropId: string; toPosition: number }, import("./arc.ts").DismissResult> } };
 };
 export type ViewName = keyof ViewTopics;
 /** A topic of one view; the default is the union over every view. */
@@ -439,6 +466,31 @@ export type OpRequest<K extends OpName = OpName> = { [P in K]: { op: P; args: Op
 /** Topic values a Pi Host publishes besides its views. */
 export type PiTopicValues = { threads: ThreadsState; thread: PiThreadView; node: { backend: "pi"; host: string } };
 export type PiTopicValue = PiTopicValues[keyof PiTopicValues] | ViewValue;
+
+/**
+ * Extension points for another line's backend, by interface augmentation (`declare module`). Main declares them empty,
+ * so every type below reads as the Pi Host's alone. `ExtraTopics`: topics by kind. `ExtraTopicValues`: their values
+ * by the same kind. `ExtraOps`: ops by name; an op the Pi Host also serves takes either backend's arguments.
+ */
+// biome-ignore lint/suspicious/noEmptyInterface: augmented by another line
+export interface ExtraTopics {}
+// biome-ignore lint/suspicious/noEmptyInterface: augmented by another line
+export interface ExtraTopicValues {}
+// biome-ignore lint/suspicious/noEmptyInterface: augmented by another line
+export interface ExtraOps {}
+
+/**
+ * `T` as a type alias of its fields. An interface carries no index signature, so it does not fit chord's JSON types;
+ * the same fields as a mapped type do. Use it where a protocol interface meets a JSON-typed API.
+ */
+export type Wire<T> = { [K in keyof T]: T[K] };
+
+/** What the browser may request of a host: the Pi Host's ops and any extra backend's, merged by name. */
+export type ClientOps = {
+	[K in OpName | keyof ExtraOps]: K extends OpName
+		? OpSpec<Ops[K]["args"] | (K extends keyof ExtraOps ? ExtraOps[K] extends OpSpec<infer A, unknown> ? A : never : never), Ops[K]["result"]>
+		: K extends keyof ExtraOps ? ExtraOps[K] : never;
+};
 
 /**
  * Topics only the durable node serves. `team` and `rarebit` keep their native node shapes until the reader carries
@@ -468,8 +520,6 @@ export type NodeOps = {
 	"node.health": OpSpec<Done, NodeHealth>;
 	/** The thread's effective system prompt and tools at an entry (default: now), as the audit renderer's snapshot. */
 	"audit.snapshot": OpSpec<{ threadId: string; entryId?: string }, PromptAuditSnapshot>;
-	/** Consistent copies under `backups/<storeId>/` through SQLite's backup API; every store when `storeId` is absent. */
-	"node.backup": OpSpec<{ storeId?: string }, { store: string; path: string }[]>;
 	/**
 	 * Replaces the text of one queued steer or follow-up in place, if it still shows `expected` (its `inbox` content).
 	 * Each answer proves one thing, and none sends anything. An answer comes from one of two sources: a receipt, kept
@@ -535,17 +585,14 @@ export type ReaderWatchFrame = {
 	omittedDocs?: string[];
 };
 
-/** What the browser may request of a host: the Pi Host's ops and the node backend's, merged by name. */
-export type ClientOps = {
-	[K in OpName | keyof NodeOps]: K extends OpName
-		? OpSpec<Ops[K]["args"] | (K extends keyof NodeOps ? NodeOps[K]["args"] : never), Ops[K]["result"]>
-		: K extends keyof NodeOps ? NodeOps[K] : never;
-};
+/** The durable node's topics and ops, through the extension points above. */
+export interface ExtraTopicValues extends NodeTopicValues {}
+export interface ExtraOps extends NodeOps {}
 /** The value the browser gets for a topic. */
 export type TopicValue<T extends Topic> = T extends { kind: "view"; view: infer N extends ViewName }
 	? ViewValue<N>
 	: T extends { kind: infer K extends keyof PiTopicValues } ? PiTopicValues[K]
-	: T extends { kind: infer K extends keyof NodeTopicValues } ? NodeTopicValues[K]
+	: T extends { kind: infer K extends keyof ExtraTopicValues } ? ExtraTopicValues[K]
 	: never;
 
 /** Ops the hub serves itself (src/hub/hub.ts), on its own `hub` channel. */
@@ -556,10 +603,9 @@ export type HubOps = {
 	 * The owner's intent for one Session by threadId: pinned or not. The hub applies it idempotently: a repeated
 	 * intent keeps membership, the place and the host. `host`, the pin's first host hint, goes in only when the pin is
 	 * created, and a new pin needs one; `pins.hint` moves it later. `title` is saved so the pin still reads when the
-	 * Session is gone; a repeated pin with a new title renames in place. `intent: "owner"` marks an owner click; the hub
-	 * creates a pin only with it, and refuses an unmarked create with "This page is older than the hub. Reload it."
+	 * Session is gone; a repeated pin with a new title renames in place.
 	 */
-	"pins.set": OpSpec<{ threadId: string; pinned: boolean; intent?: "owner"; host?: string; title?: string }, Done>;
+	"pins.set": OpSpec<{ threadId: string; pinned: boolean; host?: string; title?: string }, Done>;
 	/**
 	 * Moves an existing pin's host hint to the Host that now lists the Session. It never creates or removes a pin: only
 	 * `pins.set`, an owner action, changes which Sessions are pinned. A hint for an unpinned Session does nothing.
@@ -567,8 +613,15 @@ export type HubOps = {
 	"pins.hint": OpSpec<{ host: string; threadId: string }, Done>;
 };
 /** The hub's broadcast of every host link's state, after any change. */
-/** `config`: the hub.json this hub read at start, for the Host setup prompt. */
-export type HostsFrame = { t: "hosts"; hosts: HostState[]; config?: string };
+/**
+ * `build`: this hub's build version; a page whose own differs shows the reload banner. `config`: the hub.json this hub
+ * read at start, for the Host setup prompt.
+ */
+export type HostsFrame = { t: "hosts"; build: string; hosts: HostState[]; config?: string };
+/** A hub.json Host row of a kind this hub does not serve (`local` or `ssh`, a durable node). */
+export type SkippedHost = { id: string; label: string; kind: string };
+/** Where durable Hosts and threads live now; the window and `ampi doctor` say it in these words. */
+export const DURABLE_RELEASE = "The durable node, with its threads, Teams, terminals and accounts, ships in AmPi's durable release (Alpha release/durable). To keep using those threads, install release/durable with the same AMPI_HOME.";
 /** One pinned Session (src/hub/pins.ts): threadId is the key, `host` the Host that last listed it. */
 export type Pin = { host: string; threadId: string; title: string };
 /** The hub's pin list, sent on connect and to every browser after a change. */

@@ -1,22 +1,18 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
 import { runDaemon } from "../src/node/daemon.ts";
-import { readPiResources } from "../src/node/pi-config.ts";
+import { readPiResources } from "../src/shared/pi-config.ts";
 import { TestClient, tempHome } from "./helpers.ts";
 
-// The anchor is the installed Pi: its loaders and prompt builder for the same files and working directory. The test
-// runner names its program directory in AMPI_PI_DIST, since each file runs under a temporary HOME; a bare run uses HOME.
-const versionFile = join(homedir(), ".pi", "agent", "install", "current-version");
-const piDist = process.env.AMPI_PI_DIST ?? (existsSync(versionFile)
-	? join(homedir(), ".pi", "agent", "install", "releases", readFileSync(versionFile, "utf8").trim(), "node_modules", "@earendil-works", "pi-coding-agent", "dist")
-	: undefined);
-const skip = piDist && existsSync(join(piDist, "index.js")) ? false : "the installed Pi is absent (~/.pi/agent/install or AMPI_PI_DIST)";
+// The anchor is the pinned Pi in the checkout's node_modules: the Pi the node ships with. Its loaders and prompt builder
+// read the same files and working directory as the node.
+const piDist = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")));
 
 const SIM = { provider: "ampi-sim", modelId: "sim-1" };
 const PI_TOOLS = ["read", "bash", "edit", "write", "codemode"];
@@ -82,8 +78,8 @@ function fixture(base: string) {
 
 /** Pi's view of `cwd`: trust, resources, the resolved tools, and the structured prompt sections. */
 async function piView(cwd: string, agent: string) {
-	const pi = await import(join(piDist!, "index.js"));
-	const { buildSystemPromptSections } = await import(join(piDist!, "core", "system-prompt.js"));
+	const pi = await import(join(piDist, "index.js"));
+	const { buildSystemPromptSections } = await import(join(piDist, "core", "system-prompt.js"));
 	const global = JSON.parse(readFileSync(join(agent, "settings.json"), "utf8"));
 	const trusted = pi.hasTrustRequiringProjectResources(cwd) ? (new pi.ProjectTrustStore(agent).get(cwd) ?? global.defaultProjectTrust === "always") : true;
 	const settingsManager = pi.SettingsManager.create(cwd, agent, { projectTrusted: trusted });
@@ -112,7 +108,7 @@ async function piView(cwd: string, agent: string) {
 	};
 }
 
-test("prompt parity: resources, tools, and the assembled system prompt match Pi's for the same directory", { skip }, async () => {
+test("prompt parity: resources, tools, and the assembled system prompt match Pi's for the same directory", async () => {
 	const base = tempHome();
 	const { home, agent, repo, proj, worktree, settings, w } = fixture(base);
 	const saved = { HOME: process.env.HOME, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR };
@@ -147,7 +143,8 @@ test("prompt parity: resources, tools, and the assembled system prompt match Pi'
 			const prompt = getCurrentSystemPrompt(view.messages);
 			assert.ok(prompt.startsWith(`${pi.system}\n`), `${label}: SYSTEM.md replaces the base prompt`);
 			for (const key of ["addendum", "project_context", "skills"]) {
-				if (pi.sections[key]) assert.ok(prompt.includes(pi.sections[key]!), `${label}: Pi's <${key}> section appears verbatim`);
+				const node = prompt.match(new RegExp(`<${key}>[\\s\\S]*</${key}>`))?.[0] ?? `(no <${key}> section; full prompt:)\n${prompt}`;
+				if (pi.sections[key]) assert.ok(prompt.includes(pi.sections[key]!), `${label}: Pi's <${key}> section appears verbatim\nnode:\n${node}\n---\npi:\n${pi.sections[key]}`);
 				else assert.ok(!prompt.includes(`<${key}>`), `${label}: no <${key}> section, as in Pi`);
 			}
 			assert.ok(!prompt.includes("not for the model"), "a disable-model-invocation skill stays out of the prompt");

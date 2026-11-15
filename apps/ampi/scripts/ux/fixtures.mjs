@@ -69,6 +69,8 @@ function fixtureSocket(ws, recipe, audit, clock) {
       return server.send(raw);
     }
     if (f.t === 'unsub') return server.send(raw);
+    // The page says its build first; the hub checks it (P1).
+    if (f.t === 'hello') return server.send(raw);
     if (!['req', 'hub'].includes(f.t)) throw new Error('Unexpected client frame');
     audit.requests.push({ op: f.op, host: f.host ?? 'hub', disposition: 'browser-fixture-only' });
     const respond = value => ws.send(JSON.stringify({ t: 'res', id: f.id, ok: true, value }));
@@ -80,6 +82,7 @@ function fixtureSocket(ws, recipe, audit, clock) {
       case 'accounts.list': return respond(providers);
       case 'accounts.login': return respond({ id: 'synthetic-login' });
       case 'accounts.answer': case 'accounts.cancel': case 'accounts.logout': return respond({});
+      case 'thread.commands': return respond({ commands: [], models: [], model: 'synthetic/offline', thinkingLevels: ['off'] });
       case 'prompts.list': return respond({ prompts: [], skills: [] });
       case 'compact.records': return respond({ records: [] });
       case 'thread.history': return respond({ entries: [], more: false });

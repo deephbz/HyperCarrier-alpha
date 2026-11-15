@@ -16,7 +16,7 @@ import { type CommandArgs, listCommands, runCommand } from "./commands.ts";
 import { loadPrompts, loadSkills } from "./core-extension.ts";
 import { projectEntry, projectView, projectViewFields, type ReturnedState } from "./projection.ts";
 import { NodeError } from "./errors.ts";
-import { expandHome, type NodeRuntime } from "./runtime.ts";
+import { expandHome, type NodeRuntime, parseThreadKey } from "./runtime.ts";
 import { IMAGE_MAGIC, NODE_IMAGE_LIMITS } from "./images.ts";
 import { admitImages, rejectionLine } from "../shared/image-admission.ts";
 import { claimSubmitKey, submitDigest } from "./submit-keys.ts";
@@ -110,7 +110,6 @@ defineOp("audit.snapshot", async (args, runtime) => {
 	if (!snapshot) throw new NodeError("not_found", "No system prompt recorded yet for this thread.");
 	return snapshot;
 });
-defineOp("node.backup", async (args, runtime) => runtime.backup(typeof args.storeId === "string" ? args.storeId : undefined));
 defineOp("models.list", async (_args, runtime) => runtime.listModels());
 defineOp("accounts.list", async (_args, runtime) => runtime.accounts.providers());
 defineOp("accounts.login", async (args, runtime) => runtime.accounts.start(str(args, "providerId"), args.type === "oauth" ? "oauth" : "api_key"));
@@ -295,10 +294,12 @@ topics.set("thread", async (topic, runtime) => {
 	if (fields !== undefined && !(Array.isArray(fields) && fields.every((f) => (THREAD_FIELDS as readonly string[]).includes(f))))
 		throw new NodeError("bad_request", `thread topic fields are ${THREAD_FIELDS.join(", ")}`);
 	const { conversation } = await runtime.thread(topic.threadId);
-	const state = await conversation.viewState(BACKGROUND_CONTEXT);
+	// pi-durable 1.5.0: the view's `entries` are a window (newest 50, up to 100) over the whole history. The hub's copy
+	// serves the transcript; without a copy, this window and `thread.history` pages serve it.
+	const viewWatch = await conversation.watch(BACKGROUND_CONTEXT);
 	const listeners = new Set<(value: JsonValue) => void>();
 	let returned: ReturnedState = { items: [] };
-	let view = state.value;
+	let view = viewWatch.value;
 	let current: JsonValue = null;
 	const project = (): JsonValue => (fields ? projectViewFields(view, returned, fields) : projectView(view, returned)) as unknown as JsonValue;
 	const publish = () => {
@@ -311,10 +312,12 @@ topics.set("thread", async (topic, runtime) => {
 	});
 	returned = watch.value;
 	current = project();
-	const unsubscribe = state.subscribe((next) => {
-		view = next;
+	viewWatch.start(async (call) => {
+		if (call.kind !== "value") return;
+		view = call.value;
 		publish();
 	});
+	void viewWatch.closed.then((end) => runtime.observerEnded(runtime.store(parseThreadKey(topic.threadId).storeId), "the thread view", end));
 	return {
 		get value() {
 			return current;
@@ -324,9 +327,8 @@ topics.set("thread", async (topic, runtime) => {
 			return () => listeners.delete(listener);
 		},
 		dispose: () => {
-			unsubscribe();
+			void viewWatch.stop();
 			watch.stop();
-			state.dispose?.();
 		},
 	};
 });

@@ -348,7 +348,9 @@ test("context usage is unknown after a compaction until the next response, as a 
 });
 
 test("HC trigger single-flight: responses above W during a slow HC summary start no second HC compaction", async () => {
-	writePiSettings({ auto_compact: { budget_tokens: 12_000 }, compaction: { keepRecentTokens: 200 } });
+	// W puts the trigger (90%, 9,000 tokens) between turn 1's context (about 7,300 on pi-durable 1.5.0) and turn 2's
+	// (about 10,100), so turn 2 is the crossing.
+	writePiSettings({ auto_compact: { budget_tokens: 10_000 }, compaction: { keepRecentTokens: 200 } });
 	const home = tempHome();
 	const daemon = await runDaemon({ home, simTokensPerSecond: 50000, plugins: await hydrate() });
 	const client = await TestClient.connect(daemon.socket);
@@ -484,9 +486,11 @@ test("keepset: the plan keeps the chosen outputs verbatim; a rejected plan falls
 		assert.equal(record.attempts, 1);
 		assert.ok(record.taskId);
 		assert.equal(compacted.entries.find((e: any) => e.kind === "compaction").byTaskId, record.taskId, "the row joins its record by task");
-		// T7: the active context starts at the compaction row, so the web's "active context starts below" marker sits above it.
-		assert.equal(compacted.entries[0].kind, "compaction", JSON.stringify(compacted.entries.map((e: any) => e.kind)));
-		assert.equal(compacted.hiddenBefore, true);
+		// T7: the view is a window over the whole history (pi-durable 1.5.0). The compaction row is the newest entry, after the
+		// turns it summarizes, and this short history fits the window, so nothing is hidden before it.
+		assert.equal(compacted.entries.at(-1).kind, "compaction", JSON.stringify(compacted.entries.map((e: any) => e.kind)));
+		assert.equal(compacted.entries[0].kind, "user", JSON.stringify(compacted.entries.map((e: any) => e.kind)));
+		assert.equal(compacted.hiddenBefore, false);
 		// The sim plan keeps the two newest outputs of the replaced range; every other output is dropped and indexed.
 		assert.equal(record.keep.kept.length, 2, JSON.stringify(record.keep));
 		assert.equal(record.keep.cap, 2000, "min(20000, W/4)");

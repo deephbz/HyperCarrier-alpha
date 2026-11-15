@@ -13,29 +13,17 @@ const dir = mkdtempSync(join(tmpdir(), "hub-config-"));
 const at = (name: string, body: object) => { const p = join(dir, name); writeFileSync(p, JSON.stringify(body)); return p; };
 const links = (path: string) => loadHubConfig(path).hosts.map((h) => `${linkKey(h)} ${h.kind}`);
 
-test("hub config: this machine is always a Pi Host and a durable Host, and an old backend field changes nothing (failure: backend pi hid this machine's durable node)", () => {
+test("hub config: this machine is always a Pi Host and a durable Host", () => {
 	const self = process.env.AMPI_SELF ?? hostname();
 	assert.deepEqual(links(join(dir, "missing.json")), [`${self}#pi pi-local`, `${self}#durable local`], "no hub.json");
 	const remote = { hosts: [{ id: "linuxbox", label: "linuxbox", kind: "pi-ssh", target: "linuxbox.invalid" }] };
-	const both = ["box#pi pi-local", "box#durable local", "linuxbox#pi pi-ssh"];
-	assert.deepEqual(links(at("plain.json", { self: "box", ...remote })), both);
-	assert.deepEqual(links(at("legacy.json", { backend: "pi", self: "box", ...remote })), both, "backend pi");
-	assert.deepEqual(links(at("legacy-node.json", { backend: "node", self: "box", ...remote })), both, "backend node");
-	const saved = process.env.AMPI_BACKEND;
-	process.env.AMPI_BACKEND = "pi";
-	try {
-		assert.deepEqual(links(at("env.json", { self: "box" })), ["box#pi pi-local", "box#durable local"], "AMPI_BACKEND");
-	} finally {
-		if (saved === undefined) delete process.env.AMPI_BACKEND;
-		else process.env.AMPI_BACKEND = saved;
-	}
+	assert.deepEqual(links(at("plain.json", { self: "box", ...remote })), ["box#pi pi-local", "box#durable local", "linuxbox#pi pi-ssh"]);
 	// The implicit Host resolves its paths from the environment at start; it names none, so a test home bounds it.
 	assert.deepEqual(loadHubConfig(at("bare.json", { self: "box" })).hosts, [{ id: "box", label: "box", kind: "pi-local" }, { id: "box", label: "box", kind: "local" }]);
 });
 
 test("hub config: listed durable Hosts still load, and one Host ID keeps both sources (the owner's shape gives four links)", () => {
 	const owner = {
-		backend: "pi",
 		hosts: [
 			{ id: "linuxbox", label: "linuxbox", kind: "pi-ssh", target: "linuxbox.invalid" },
 			{ id: "mac", label: "mac", kind: "local", home: join(dir, "durable") },
@@ -46,16 +34,15 @@ test("hub config: listed durable Hosts still load, and one Host ID keeps both so
 	assert.deepEqual(links(at("listed-pi.json", { self: "mac", hosts: [{ id: "mac", label: "mac", kind: "pi-local" }] })), ["mac#durable local", "mac#pi pi-local"], "a listed pi-local Host is the only Pi one");
 });
 
-test("doctor notes: a backend field, AMPI_BACKEND, and durable threads without a listed durable Host each get one line", () => {
+test("doctor notes: durable threads without a listed durable Host get one line", () => {
 	const home = mkdtempSync(join(tmpdir(), "hub-config-home-"));
-	assert.deepEqual(configNotes({}, {}, home, [], "mac"), []);
-	assert.deepEqual(configNotes({ backend: "pi" }, { AMPI_BACKEND: "pi" }, home, [], "mac").map((n) => n.what), ['hub.json sets "backend"; the hub ignores it', "AMPI_BACKEND is set; the hub ignores it"]);
+	assert.deepEqual(configNotes(home, [], "mac"), []);
 	mkdirSync(join(home, "threads", "t-1"), { recursive: true });
-	const lost = configNotes({}, {}, home, [{ kind: "pi-local" }], "mac");
+	const lost = configNotes(home, [{ kind: "pi-local" }], "mac");
 	assert.equal(lost.length, 1);
 	assert.match(lost[0]!.what, /^1 durable thread in .*threads, and no durable Host is listed/);
 	assert.match(lost[0]!.fix, /\{ "id": "mac", "label": "mac", "kind": "local" \}/, "the durable Host takes this machine's Host ID");
-	assert.deepEqual(configNotes({}, {}, home, [{ kind: "pi-local" }, { kind: "local" }], "mac"), [], "a listed durable Host serves them");
+	assert.deepEqual(configNotes(home, [{ kind: "pi-local" }, { kind: "local" }], "mac"), [], "a listed durable Host serves them");
 });
 
 test("host setup prompt: the agent edits the hub.json this hub reads, adds a durable Host (a Pi Host optional), restarts the hub (it reads hub.json only at start), and checks the Host connects (failure: the prompt named the default path; the agent's shell lacks the hub's AMPI_HOME)", () => {

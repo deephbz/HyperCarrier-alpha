@@ -7,7 +7,7 @@ import { revealStore } from "../../nav.ts";
 import { toCss, toScreen } from "../../display.ts";
 import { Markdown } from "../../components/Markdown.tsx";
 import { clock, href, tokens } from "../../util.ts";
-import { freshPress } from "../../composer-keys.ts";
+import { composing, freshPress } from "../../composer-keys.ts";
 import { rarebitState, useRarebitState } from "./state.ts";
 import "./rarebit.css";
 
@@ -219,7 +219,7 @@ export function RarebitView({ host, threadId, entry }: { host: string; threadId:
 		</div>
 		<footer className="rb-footer">
 			<div className="rb-toolbar">{hasSide && <span className="rb-meta">Temporary side thread</span>}<button className="btn ghost small" onClick={() => { pinned.current = false; setTailSpace(0); if (!hasSide) set({ window: filtered.length }); requestAnimationFrame(() => scroller.current?.scrollTo({ top: 0 })); }}>↑ Top</button><button className="btn ghost small" title="Previous user message" aria-label="Previous user message" disabled={hasSide || steps.prev === undefined || steps.prev < 0} onClick={() => step(steps.prev)}>Prev</button><button className="btn ghost small" title="Next user message" aria-label="Next user message" disabled={hasSide || steps.next === undefined || steps.next < 0} onClick={() => step(steps.next)}>Next</button><button className="btn ghost small" onClick={() => { pinned.current = true; setTailSpace(0); set({ window: 60 }); requestAnimationFrame(() => scroller.current?.scrollTo({ top: scroller.current.scrollHeight })); }}>↓ Bottom</button></div>
-			<form className="rb-ask" onSubmit={(e) => { e.preventDefault(); void ask(); }}><textarea ref={input} className="quiet-scroll" data-scrollbar="none" aria-label={state.side ? "Follow up on the side" : "Ask on the side"} placeholder={state.side ? "Follow up…" : "Ask on the side (Rarebits only)…"} rows={2} maxLength={20_000} value={state.draft} onChange={(e) => set({ draft: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); if (freshPress(e.nativeEvent)) void ask(); } }} /><button className="btn" type="submit" disabled={!state.draft.trim() || Boolean(state.pending) || !count}>Ask</button></form>
+			<form className="rb-ask" onSubmit={(e) => { e.preventDefault(); void ask(); }}><textarea ref={input} className="quiet-scroll" data-scrollbar="none" aria-label={state.side ? "Follow up on the side" : "Ask on the side"} placeholder={state.side ? "Follow up…" : "Ask on the side (Rarebits only)…"} rows={2} maxLength={20_000} value={state.draft} onChange={(e) => set({ draft: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !composing(e.nativeEvent)) { e.preventDefault(); if (freshPress(e.nativeEvent)) void ask(); } }} /><button className="btn" type="submit" disabled={!state.draft.trim() || Boolean(state.pending) || !count}>Ask</button></form>
 		</footer>
 	</div>;
 }

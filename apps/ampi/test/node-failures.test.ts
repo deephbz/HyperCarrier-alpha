@@ -1,8 +1,8 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { defineExtension, defineTask, defineTool, type Storage, type TaskId } from "@earendil-works/pi-durable";
-import { Type } from "@earendil-works/pi-ai";
+import { defineDoc, defineExtension, defineTask, defineTool, type Storage, type TaskId } from "@earendil-works/pi-durable";
+import { Type } from "typebox";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { runDaemon } from "../src/node/daemon.ts";
 import { parseThreadKey, REOPEN_ATTEMPTS } from "../src/node/runtime.ts";
@@ -87,13 +87,14 @@ test("failures: input queued behind a failed model run stays pending until the n
 			const failed = (await client.until<any>(threads, (v) => v.threads[threadId]?.lastError !== undefined && v.threads[threadId].activity === "idle")).threads[threadId];
 			assert.equal(failed.queued, 1, `${label}: the input stays visibly pending after the failed run (afterFailedRun "keep")`);
 			if (next === "submit") await client.req("thread.submit", { threadId, content: "and this" });
-			else assert.equal((await client.req("thread.command", { threadId, name: "retry" })).evidence, "retried", "/retry places the kept input");
+			else assert.equal((await client.req("thread.command", { threadId, name: "retry" })).evidence, "continued", "/retry continues the failed run with the kept input");
 			await client.until<any>(threads, (v) => v.threads[threadId]?.queued === 0 && v.threads[threadId].activity === "idle" && /received your message/.test(v.threads[threadId].preview ?? ""));
 			const { store, conversationId } = await daemon.runtime.thread(threadId);
 			const view = await (await store.conversation(conversationId)).context(BACKGROUND_CONTEXT);
 			const roles = view.messages.map((m: any) => (m.role === "user" ? `user:${typeof m.content === "string" ? m.content : m.content.map((c: any) => c.text).join("")}` : m.role));
 			const kept = roles.indexOf("user:queued behind the failure");
 			assert.ok(kept > 0 && roles.slice(kept).includes("assistant"), `${label}: the kept input was placed and answered: ${roles.join(" | ")}`);
+			if (next === "retry") assert.deepEqual(roles.slice(kept), ["user:queued behind the failure", "assistant"], `one run answers the kept input once: ${roles.join(" | ")}`);
 		}
 		client.close();
 	} finally {
@@ -189,7 +190,8 @@ test("failures: a task whose definition is missing shows why, keeps queued input
 		const health = await client.req("node.health");
 		assert.equal(health.stores.flatMap((s: any) => s.tasks).find((t: any) => t.kind === "test.hold").reason, "missing_task");
 		assert.deepEqual(delays, [], "a blocked task is not a storage failure: no reopen");
-		assert.equal((await client.req("thread.command", { threadId, name: "retry" })).evidence, "nothing_parked", "/retry cannot run a missing definition");
+		// The tool call keeps the run open, so there is no ended run to continue.
+		await assert.rejects(client.req("thread.command", { threadId, name: "retry" }), /The run is still going; \/retry works after it ends/, "/retry cannot run a missing definition");
 
 		// Installing the definition runs the task; the queued input runs after it.
 		held = false;
@@ -199,5 +201,34 @@ test("failures: a task whose definition is missing shows why, keeps queued input
 		client.close();
 	} finally {
 		await second.stop();
+	}
+});
+
+test("failures: a plugin that throws while naming touched threads is reported, and thread rows keep updating", async () => {
+	const home = tempHome();
+	const reports: string[] = [];
+	const ProbeDoc = defineDoc<{ n: number }>({ kind: "test.touch-probe", version: 1, checkpointWhen: () => false, scope: "session", initial: () => ({ n: 0 }) });
+	let throws = 1;
+	const touches = (kind: string) => {
+		if (kind === ProbeDoc.definition.kind && throws-- > 0) throw new Error("touch probe failed");
+		return [];
+	};
+	const daemon = await runDaemon({ home, simTokensPerSecond: 2000, plugins: [{ extensions: [], touches }], report: (error) => reports.push(String((error as Error)?.message ?? error)) });
+	try {
+		const client = await TestClient.connect(daemon.socket);
+		const threads = client.sub({ kind: "threads" });
+		const { threadId } = await client.req("thread.create", { requestId: "touch", cwd: home, model: SIM, prompt: "first" });
+		await client.until<any>(threads, (v) => v.threads[threadId]?.activity === "idle" && v.threads[threadId].preview);
+		const { store } = await daemon.runtime.thread(threadId);
+		await store.harness.commit(async (tx) => {
+			(await tx.doc(ProbeDoc)).n = 1;
+		}, BACKGROUND_CONTEXT);
+		assert.ok(reports.some((r) => /test\.touch-probe change touches: touch probe failed/.test(r)), JSON.stringify(reports));
+		assert.ok(!reports.some((r) => /stopped updating/.test(r)), "the thread rows observer stays attached");
+		await client.req("thread.submit", { threadId, content: "Second\n/sim long 1" });
+		await client.until<any>(threads, (v) => v.threads[threadId]?.activity === "idle" && /Paragraph/.test(v.threads[threadId].preview ?? ""), 20_000);
+		client.close();
+	} finally {
+		await daemon.stop();
 	}
 });

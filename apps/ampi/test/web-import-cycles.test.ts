@@ -1,6 +1,6 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { test } from "node:test";
@@ -116,5 +116,44 @@ test("the graph model holds: verbatimModuleSyntax is off, a value cycle is found
 
 test("the web client has no runtime import cycle", () => {
 	const cycles = findCycles(web);
+	assert.ok(cycles.length === 0, cycleReport(cycles));
+});
+
+// An extension dialog uses Modal. Modal must load neither Dialogs.tsx nor extensions-ui.ts, or an extension that
+// imports it closes the cycle extensions-ui -> extension -> Modal -> extensions-ui.
+test("Modal loads neither Dialogs nor the extension registry", () => {
+	const seen = new Set<string>(), queue = [resolve(web, "components/Modal.tsx")];
+	while (queue.length) {
+		const file = queue.shift()!;
+		if (seen.has(file)) continue;
+		seen.add(file);
+		queue.push(...runtimeImports(file));
+	}
+	const loaded = [...seen].map((f) => relative(web, f));
+	assert.deepEqual(loaded.filter((f) => ["components/Dialogs.tsx", "extensions-ui.ts"].includes(f)), [], `Modal.tsx loads ${loaded.join(", ")}`);
+});
+
+// The slot registries live in a leaf module: it loads nothing at runtime, so a component that reads a slot closes no
+// cycle. extensions-ui.ts is the line's registration file; only the app entry loads it, before the first render.
+test("the slot registry is a leaf, and only the app entry loads extensions-ui", () => {
+	assert.deepEqual(runtimeImports(resolve(web, "slot-registry.ts")).map((f) => relative(web, f)), [], "slot-registry.ts has a runtime import");
+	const loaders = sources(web).filter((f) => runtimeImports(f).includes(resolve(web, "extensions-ui.ts"))).map((f) => relative(web, f));
+	assert.deepEqual(loaders, ["main.tsx"]);
+});
+
+test("a kind module that imports main components and registers in extensions-ui closes no cycle", (t) => {
+	const dir = mkdtempSync(join(tmpdir(), "web-import-cycles-kind-"));
+	t.after(() => rmSync(dir, { recursive: true, force: true }));
+	cpSync(web, dir, { recursive: true });
+	mkdirSync(join(dir, "fake-kind"));
+	writeFileSync(join(dir, "fake-kind/kind.tsx"), [
+		`import { HelpDialog } from "../components/Dialogs.tsx";`,
+		`import { Sidebar } from "../components/Sidebar.tsx";`,
+		`import { TeamPanel } from "../views/team/TeamPanel.tsx";`,
+		`import { useThreadSurface } from "../shell-slots.ts";`,
+		`export const fakeUi = { parts: [HelpDialog, Sidebar, TeamPanel, useThreadSurface] };`,
+	].join("\n") + "\n");
+	appendFileSync(join(dir, "extensions-ui.ts"), `\nimport { fakeUi } from "./fake-kind/kind.tsx";\nkindUis.fake = fakeUi as never;\n`);
+	const cycles = findCycles(dir);
 	assert.ok(cycles.length === 0, cycleReport(cycles));
 });

@@ -3,10 +3,11 @@
 // Resources come from pi-config.ts, so a thread and a Pi Session in one directory see the same files; the
 // addendum, project_context, and skills sections use Pi's text (test/node-prompt-parity.test.ts compares them).
 
+import { dirname } from "node:path";
 import { defineExtension, type Extension, section } from "@earendil-works/pi-durable";
-import { type PiConfigOptions, type PiResources, piResources, type PromptTemplate, type Skill } from "./pi-config.ts";
+import { type PiConfigOptions, type PiResources, piResources, type PromptTemplate, type Skill } from "../shared/pi-config.ts";
 
-export { frontmatter, type PromptTemplate, type Skill } from "./pi-config.ts";
+export { frontmatter, type PromptTemplate, type Skill } from "../shared/pi-config.ts";
 
 const PREAMBLE = `You are an expert coding agent running inside AmPi, a durable agent harness. You help the user by reading files, running commands, editing code, and writing new files. Your work is committed to durable storage as it happens, so a crash or restart resumes where you stopped.
 
@@ -25,10 +26,6 @@ export function loadPrompts(cwd: string, options: PiConfigOptions = {}): PromptT
 	return piResources(cwd, options).prompts;
 }
 
-function escapeXml(text: string): string {
-	return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
-}
-
 /** Pi's `<project_context>` body (system-prompt.js renderProjectContext). */
 function renderProjectContext(files: PiResources["contextFiles"]): string | undefined {
 	if (files.length === 0) return undefined;
@@ -38,28 +35,21 @@ function renderProjectContext(files: PiResources["contextFiles"]): string | unde
 	].join("\n\n");
 }
 
-/** Pi's `<skills>` body (skills.js formatSkillsForPrompt): skills that allow model invocation, with the reader hint. */
-function renderSkills(skills: Skill[], tools: string[]): string | undefined {
+/** Pi's `<skills>` body: the pinned Pi renders it, for the skills that allow model invocation and the reader hint. */
+async function renderSkills(skills: Skill[], tools: string[]): Promise<string | undefined> {
 	const reader = tools.includes("read") ? "read" : tools.includes("bash") ? "bash" : undefined;
-	const visible = skills.filter((skill) => !skill.disableModelInvocation);
-	if (!reader || visible.length === 0) return undefined;
-	return [
-		"The following skills provide specialized instructions for specific tasks.",
-		reader === "read"
-			? "Use the read tool to load a skill's file when the task matches its description."
-			: "Use bash to load a skill's file when the task matches its description.",
-		"When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
-		"",
-		"<available_skills>",
-		...visible.flatMap((skill) => [
-			"  <skill>",
-			`    <name>${escapeXml(skill.name)}</name>`,
-			`    <description>${escapeXml(skill.description)}</description>`,
-			`    <location>${escapeXml(skill.path)}</location>`,
-			"  </skill>",
-		]),
-		"</available_skills>",
-	].join("\n");
+	if (!reader || skills.length === 0) return undefined;
+	// Loaded on first use: Pi's index is heavy, and a node without skills never needs it.
+	const { formatSkillsForPrompt } = await import("@earendil-works/pi-coding-agent");
+	const piSkills = skills.map((skill) => ({
+		name: skill.name,
+		description: skill.description,
+		filePath: skill.path,
+		baseDir: dirname(skill.path),
+		sourceInfo: { path: skill.path, source: "local", scope: "temporary", origin: "top-level" } as const,
+		disableModelInvocation: skill.disableModelInvocation ?? false,
+	}));
+	return formatSkillsForPrompt(piSkills, reader).trim() || undefined;
 }
 
 /** The base extension for one node; `options.agentDir` selects the Pi agent directory it reads. */

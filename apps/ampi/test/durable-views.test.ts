@@ -1,11 +1,14 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { DurableViews } from "../src/durable/reader-side.ts";
+import { checkPiModel } from "../src/arc/preflight.ts";
+import { buildArc } from "../src/durable/arc-sidecar.ts";
+import { writePiSettings } from "./helpers.ts";
 // @ts-ignore: plain ESM test fixtures over a real pi-durable 1.4.0 store.
 import { ask, buildFixture, buildTeam, openFixtureStore } from "../../trace-analytics/test/fixtures/durable-store.mjs";
 // @ts-ignore: the real reader service behind a JSON round-trip, as on the wire.
@@ -36,6 +39,28 @@ async function synthetic(t: any) {
 const changed = (views: DurableViews, threadId: string) => new Promise<void>((resolve) => {
  const on = (e: { threadId?: string }) => { if (e.threadId === threadId) { views.off("changed", on); resolve(); } };
  views.on("changed", on);
+});
+
+test("durable view summaries follow the injected carrier registry across source changes", async t => {
+ const s = await synthetic(t);
+ const views = s.open({ views: [{
+  name: "fixture.preview",
+  value: (ctx, topic) => ({ items: [{ text: "threadId" in topic ? ctx.session(topic.threadId!)?.data.preview ?? "" : "" }] }) as never,
+  summarize: (_ctx, session) => ({ preview: `Fixture: ${session.data.preview}` }),
+ }] });
+ const id = s.threads.root;
+ await views.track(id);
+ const read = () => {
+  const value = views.value({ kind: "view", view: "fixture.preview", threadId: id } as never) as any;
+  const row = { ...views.summaryFields(id), ...views.summarize(id) };
+  assert.equal(row.preview, `Fixture: ${value.items[0].text}`);
+  return row.preview;
+ };
+ const before = read();
+ await ask(s.root, "Synthetic registry source changed.");
+ await views.sync(id);
+ assert.notEqual(read(), before, "non-Arc row fields follow the refreshed Session");
+ assert.deepEqual(views.summarize("missing"), {});
 });
 
 test("an old Summary row remains stored but does not enter the Rarebit panel or Arc evidence", async t => {
@@ -124,6 +149,72 @@ test("durable views: thread value, summary, Find, search, history, entry, Rarebi
  await grew; await views.sync(s.threads.root);
  assert.ok(views.threadValue(s.threads.root)!.entries.length > before);
  release();
+});
+
+test("durable Arc builds through the shared core and serves a receipt without Dismiss", async t => {
+ writePiSettings({ ampi_arc: { model: "synthetic/model", auto: false, retries: 0 } });
+ t.after(() => writePiSettings(undefined));
+ const s = await synthetic(t);
+ let calls = 0;
+ const views = s.open({ ask: async request => {
+  calls++;
+  const data = JSON.parse(request.prompt), item = data.rarebits.at(-1);
+  const claim = { text: "Review the synthetic work.", cites: [{ id: item.id, quote: item.text }] };
+  return { text: JSON.stringify({ goal: claim, now: claim, chapters: [{ firstId: data.rarebits[0].id,
+   label: "Synthetic work", closed: true, summary: { scope: claim, bullets: [] } }], points: [] }),
+   model: request.model, usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: .01 } };
+ } });
+ await views.track(s.threads.root);
+ await buildArc(views.context, s.threads.root, { trigger: "manual" });
+ const value = views.value({ kind: "view", view: "arc", threadId: s.threads.root } as never) as any;
+ assert.equal(value.status.state, "idle", JSON.stringify(value));
+ assert.equal(calls, 1);
+ assert.equal(value.receipt.goal.text, "Review the synthetic work.");
+ assert.equal(value.receipt.builds[0].usage.cost, .01);
+ assert.equal(value.receipt.asOfCount, views.context.session(s.threads.root)!.arcSource().items.length);
+ assert.equal(value.canDismiss, false);
+ assert.equal("view.arc.dismiss" in views.ops, false);
+});
+
+for (const missing of ["pi", "sign-in"] as const) test(`durable Arc preflight: missing ${missing} blocks automatic work until explicit Build rechecks`, async t => {
+ writePiSettings({ ampi_arc: { model: "synthetic/model", auto: true, retries: 0 } });
+ t.after(() => writePiSettings(undefined));
+ const s = await synthetic(t), bin = join(s.dir, "synthetic-pi");
+ if (missing === "sign-in") { writeFileSync(bin, `#!${process.execPath}\nconsole.log('{"status":"not_ready"}');process.exit(1);\n`); chmodSync(bin, 0o755); }
+ let checks = 0, calls = 0;
+ const views = s.open({
+  preflight: async model => { checks++; return checkPiModel(model, { agentDir: process.env.PI_CODING_AGENT_DIR!, env: { PI_BIN: bin } }); },
+  ask: async request => {
+   calls++; const data = JSON.parse(request.prompt), item = data.rarebits.at(-1);
+   const claim = { text: "Review the synthetic work.", cites: [{ id: item.id, quote: item.text }] };
+   return { text: JSON.stringify({ goal: claim, now: claim, chapters: [{ firstId: data.rarebits[0].id, label: "Synthetic work",
+    closed: true, summary: { scope: claim, bullets: [] } }], points: [] }), model: request.model };
+  },
+ });
+ await views.track(s.threads.root);
+ const value = () => views.value({ kind: "view", view: "arc", threadId: s.threads.root } as never) as any;
+ await buildArc(views.context, s.threads.root, { trigger: "manual" });
+ assert.equal(value().modelPrerequisite.code, missing === "pi" ? "missing-pi" : "no-sign-in");
+ assert.deepEqual(value().modelPrerequisite.place, { kind: "hub" });
+ assert.equal(value().services, undefined, "a durable hub prerequisite is not a Host service");
+ assert.equal(value().status.state, "idle"); assert.equal(value().status.nextAt, undefined);
+ await buildArc(views.context, s.threads.root, { trigger: "owner" });
+ assert.equal(checks, 1); assert.equal(calls, 0);
+ writeFileSync(bin, `#!${process.execPath}\nconsole.log('{"status":"ready"}');\n`); chmodSync(bin, 0o755);
+ await buildArc(views.context, s.threads.root, { trigger: "manual" });
+ assert.equal(checks, 2); assert.equal(calls, 1); assert.equal(value().modelPrerequisite, undefined);
+ assert.equal(value().receipt.goal.text, "Review the synthetic work.");
+});
+
+test("durable Arc keeps quota distinct from missing prerequisites", async t => {
+ writePiSettings({ ampi_arc: { model: "synthetic/model", auto: false, retries: 0 } });
+ t.after(() => writePiSettings(undefined));
+ const s = await synthetic(t), views = s.open({ ask: async () => { throw Object.assign(new Error("Synthetic quota"), { resetAt: Date.now() + 60000 }); } });
+ await views.track(s.threads.root);
+ await buildArc(views.context, s.threads.root, { trigger: "manual" });
+ const value = views.value({ kind: "view", view: "arc", threadId: s.threads.root } as never) as any;
+ assert.equal(value.status.error.code, "quota");
+ assert.equal(value.modelPrerequisite, undefined);
 });
 
 test("durable Arc source includes evidence beyond a Rarebit page", async t => {

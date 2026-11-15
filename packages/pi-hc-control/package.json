@@ -8,10 +8,10 @@
   "keywords": ["pi-package"],
   "files": ["src", "README.md"],
   "exports": {
-    ".": "./src/extension.mjs",
-    "./control": "./src/control.mjs",
-    "./endpoint": "./src/endpoint.mjs",
-    "./client": "./src/client.mjs"
+    ".": "./src/extension.ts",
+    "./control": "./src/control.ts",
+    "./endpoint": "./src/endpoint.ts",
+    "./client": "./src/client.ts"
   },
   "engines": { "node": ">=22.19" },
   "peerDependencies": {
@@ -21,6 +21,6 @@
     "test": "node --test --test-concurrency=1 test/*.test.mjs"
   },
   "pi": {
-    "extensions": ["./src/extension.mjs"]
+    "extensions": ["./src/extension.ts"]
   }
 }

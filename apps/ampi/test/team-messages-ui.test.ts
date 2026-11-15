@@ -17,7 +17,7 @@ test("Team messages UI: exact sender/recipient filters preserve fan-out, bounded
  const built=await build({configFile:false,root,logLevel:"silent",define:{"process.env.NODE_ENV":JSON.stringify("production")},plugins:[react(),{
   name:"team-messages-test",resolveId:id=>id===entry?`\0${entry}`:undefined,
   load:id=>id===`\0${entry}`?`
-   import React from 'react';import {createRoot} from 'react-dom/client';
+   import React from 'react'; import ${JSON.stringify(join(root, "src/extensions-ui.ts"))};import {createRoot} from 'react-dom/client';
    import {TeamPanel} from ${JSON.stringify(join(root,"src/views/team/TeamPanel.tsx"))};
    import ${JSON.stringify(join(root,"src/styles.css"))};
    createRoot(document.getElementById('root')).render(React.createElement(TeamPanel,{host:'devbox',threadId:'store.1'}));

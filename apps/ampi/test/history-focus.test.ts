@@ -9,6 +9,7 @@ import { engineSkip } from "./engines.ts";
 // requested region mounts. A Session's regions mount after its data arrives; no region focuses itself on mount.
 const THREAD = "pi:sess-big";
 const region = (page: any) => page.evaluate(() => document.activeElement?.closest<HTMLElement>("[data-region]")?.dataset.region ?? document.activeElement?.tagName);
+const waitingForTranscript = (page: any) => page.waitForFunction(() => history.state?.focus === "transcript" && document.activeElement?.closest<HTMLElement>("[data-region]")?.dataset.region === "transcript");
 const settled = async (page: any) => {
 	await page.locator('[data-region="transcript"] [data-entry]').first().waitFor({ state: "attached" });
 	await page.getByRole("textbox", { name: "Message the agent", exact: true }).waitFor();
@@ -25,6 +26,28 @@ const hold = (page: any, ms: number) => page.routeWebSocket("**/ws", (ws: any) =
 		else ws.send(raw);
 	});
 });
+/** Holds the Session snapshot until the test releases it, so the composer cannot mount on a slow runner. */
+const holdUntilReleased = (page: any) => {
+	const held: { ws: any; raw: string }[] = [];
+	let armed = false;
+	let waiters: (() => void)[] = [];
+	page.routeWebSocket("**/ws", (ws: any) => {
+		const server = ws.connectToServer();
+		ws.onMessage((raw: string) => server.send(raw));
+		server.onMessage((raw: string) => {
+			const f = JSON.parse(String(raw));
+			if (armed && f.t === "snap" && f.value?.conversationId === THREAD) {
+				held.push({ ws, raw });
+				for (const resolve of waiters.splice(0)) resolve();
+			} else ws.send(raw);
+		});
+	});
+	return {
+		arm: () => { armed = true; },
+		wait: () => held.length ? Promise.resolve() : new Promise<void>((resolve) => waiters.push(resolve)),
+		release: () => { for (const item of held.splice(0)) { try { item.ws.send(item.raw); } catch {} } },
+	};
+};
 const reopen = async (page: any) => {
 	await page.keyboard.press("ControlOrMeta+Digit0");
 	await page.waitForURL(/#\/v\/overview/);
@@ -61,18 +84,26 @@ for (const [engine, type, path] of ENGINES) test(`history focus ${engine}: arriv
 // The wait belongs to one arrival. While the composer is still missing, the transcript holds focus by the fallback;
 // the reader's wheel or a later route arrival ends the wait, so the composer's late mount moves nothing.
 for (const [engine, type, path] of ENGINES) test(`history focus ${engine}: a wheel or a later arrival ends the wait for a missing region`, { skip: engineSkip(engine) }, async (t) => {
-	const page = await open(t, engine, type, path(), { route: `#/h/devbox/t/${encodeURIComponent(THREAD)}` });
-	await hold(page, 1500);
+	let held!: ReturnType<typeof holdUntilReleased>;
+	const page = await open(t, engine, type, path(), { route: `#/h/devbox/t/${encodeURIComponent(THREAD)}`, beforeNavigate: (page) => { held = holdUntilReleased(page); } });
+	held.arm();
 	const transcript = page.locator('[data-region="transcript"]');
 	for (const end of ["wheel", "arrival"] as const) {
 		await reopen(page);
-		await page.waitForFunction(() => document.activeElement?.closest<HTMLElement>("[data-region]")?.dataset.region === "transcript", undefined, { timeout: 1000 });
+		await held.wait();
+		await waitingForTranscript(page);
 		assert.equal(await page.locator('[data-region="composer"]').count(), 0, `${end}: the composer is still missing`);
 		if (end === "wheel") {
-			const box = (await transcript.boundingBox())!;
-			await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-			await page.mouse.wheel(0, -200);
-		} else await page.evaluate((hash) => { location.hash = hash; }, `#/h/devbox/t/${encodeURIComponent(THREAD)}?p=arc`);
+			// The real mouse wheel does not reach the document in this headless loopback fixture, even over the transcript.
+			await page.evaluate(() => { (window as any).__wheelCount = 0; document.addEventListener("wheel", () => { (window as any).__wheelCount++; }, true); });
+			await transcript.dispatchEvent("wheel", { deltaY: 200, bubbles: true });
+			assert.ok(await page.evaluate(() => (window as any).__wheelCount) > 0, "wheel reached the App's document listener");
+		} else {
+			const entry = await page.evaluate(() => history.state?.id);
+			await page.evaluate((hash) => { location.hash = hash; }, `#/h/devbox/t/${encodeURIComponent(THREAD)}?p=arc`);
+			await page.waitForFunction((entry) => history.state?.id !== entry, entry);
+		}
+		held.release();
 		await settled(page);
 		assert.equal(await region(page), "transcript", `${end}: the composer's late mount must not take focus`);
 	}

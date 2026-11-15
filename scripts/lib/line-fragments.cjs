@@ -187,14 +187,22 @@ function loadTestLanes(lanesPath, { root } = {}) {
 }
 
 /**
+ * The line of the checkout at `repoRoot`: `durable` with both durable fragments, `main` with neither. One fragment
+ * alone throws, so a half-copied line never reads as either.
+ */
+function line(repoRoot) {
+	const lanes = path.join(repoRoot, "apps/ampi/test-lanes.json"), manifest = path.join(repoRoot, "release/public/export-manifest.json");
+	const present = [lanes, manifest].map((file) => fs.existsSync(fragmentPath(file)));
+	if (present[0] !== present[1]) throw new Error(`the ${LINE} line needs both apps/ampi/test-lanes.${LINE}.json and release/public/export-manifest.${LINE}.json, or neither`);
+	return present[0] ? LINE : "main";
+}
+
+/**
  * Where AmPi test registration writes in the checkout at `repoRoot`, and the fix hints that name it. With both durable
  * fragments present, `--register` writes the fragments, and `--shared` writes the shared files.
  */
 function ampiRegistration(repoRoot) {
-	const lanes = path.join(repoRoot, "apps/ampi/test-lanes.json"), manifest = path.join(repoRoot, "release/public/export-manifest.json");
-	const present = [lanes, manifest].map((file) => fs.existsSync(fragmentPath(file)));
-	if (present[0] !== present[1]) throw new Error(`the ${LINE} line needs both apps/ampi/test-lanes.${LINE}.json and release/public/export-manifest.${LINE}.json, or neither`);
-	const fragments = present[0];
+	const fragments = line(repoRoot) === LINE;
 	return {
 		fragments,
 		lanesFile: fragments ? `apps/ampi/test-lanes.${LINE}.json` : "apps/ampi/test-lanes.json",
@@ -204,4 +212,4 @@ function ampiRegistration(repoRoot) {
 	};
 }
 
-module.exports = { LINE, ampiRegistration, fragmentPath, loadExportManifest, loadTestLanes, mergeExportManifest, mergeTestLanes };
+module.exports = { LINE, ampiRegistration, fragmentPath, line, loadExportManifest, loadTestLanes, mergeExportManifest, mergeTestLanes };

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test, type TestContext } from "node:test";
@@ -9,7 +9,15 @@ import { chromium, webkit, type Browser, type BrowserContextOptions, type Browse
 import { build } from "vite";
 // @ts-ignore: shared browser discovery is plain ESM.
 import { findChrome } from "../scripts/perf/browser.mjs";
+import { stamp } from "../src/shared/build.ts";
+import { isSessionInScope, SESSION_SCOPE_MS } from "../src/shared/session-scope.ts";
+import { groupSessions, timelineRows } from "../web/src/views/cos/rows.ts";
+import type { TimelineValue } from "../src/shared/timeline.ts";
 import { engineSkip } from "./engines.ts";
+import { waitForDemoArc } from "../scripts/demo/cos.ts";
+import { maintainHost } from "../src/arc/service/client.ts";
+import { ownerAlive } from "../scripts/process-owner.cjs";
+import type { DemoDataMode } from "../scripts/demo/data/modes.ts";
 
 // The owner's resize incident (ui-resize-edges): the real App and stylesheet, built in memory from web/src, on the
 // synthetic demo hub (scripts/pi-demo.ts). Real mouse down/move/up drive both edges in Chromium and in WebKit, the
@@ -27,7 +35,9 @@ const LEAD = "#/h/devbox/t/pi%3Asess-lead?p=arc";
 export const EDGES = { sidebar: { min: 220, max: 420, grow: 1, key: "ampi.sidebar.width", css: "--side-w" }, panel: { min: 320, max: 720, grow: -1, key: "ampi.panel.width", css: "--panel-w" } } as const;
 type Side = keyof typeof EDGES;
 
-let hub: { origin: string; key: string; demo: string } | undefined;
+type DemoHub = { origin: string; key: string; demo: string; stop: () => Promise<void> };
+const hubs = new Map<DemoDataMode, Promise<DemoHub>>();
+let defaultHub: DemoHub | undefined;
 let files: Map<string, { body: string | Uint8Array; type: string }> | undefined;
 const browsers = new Map<string, Promise<Browser>>();
 
@@ -38,21 +48,67 @@ async function appBundle() {
 	return new Map(output.output.map((item) => [`/${item.fileName}`, { body: item.code ?? item.source!, type: type(item.fileName) }]));
 }
 
-/** Kills the demo hub's process group and deletes its run directory, also when a hook times out before `after`. */
-let stopHub = () => {};
-process.once("exit", () => stopHub());
+/** Ends the demo hub's process group before the test file finishes; exit still sends the kill synchronously. */
+/** The demo hub's build: the stamp of this checkout, taken when the hub starts, as the hub takes its own. */
+let hubBuild = "";
+// Forced process.exit cannot await teardown. This handler only attempts synchronous SIGTERM;
+// the after hook owns the awaited process-group drains and resident stops.
+process.once("exit", () => {
+	for (const pending of hubs.values()) void pending.then((hub) => hub.stop()).catch(() => {});
+});
 
-async function startHub() {
+export async function waitForDemoGuardian(guardian: string, timeoutMs = 15_000): Promise<void> {
+	assert.ok(guardian, "the owner-bound demo recorded its guardian generation");
+	const deadline = Date.now() + timeoutMs;
+	while (ownerAlive(guardian)) {
+		assert.ok(Date.now() < deadline, `demo guardian ${guardian} did not end within ${timeoutMs} ms after fixture stop`);
+		await new Promise(resolve => setTimeout(resolve, 50));
+	}
+}
+
+async function startHub(mode: DemoDataMode): Promise<DemoHub> {
+	hubBuild = stamp().id;
 	const run = mkdtempSync(join(tmpdir(), "ampi-resize-"));
 	const home = join(run, "home"), demo = join(run, "demo"), log = join(run, "hub.log");
 	mkdirSync(join(home, ".ampi"), { recursive: true });
-	const env = { ...process.env, PATH: refusingPath(join(run, "bin"), process.env.PATH), HOME: home, AMPI_HOME: join(home, ".ampi"), AMPI_HUB_CONFIG: join(home, ".ampi/hub.json"), PI_CODING_AGENT_DIR: join(demo, "agent"), DEMO_DIR: demo, DEMO_WEB: "external", PORT: "0" };
-	const child = spawn(process.execPath, ["scripts/pi-demo.ts"], { cwd: app, detached: true, env, stdio: ["ignore", openSync(log, "a"), openSync(log, "a")] });
+	const env = { ...process.env, PATH: refusingPath(join(run, "bin"), process.env.PATH), HOME: home, AMPI_HOME: join(home, ".ampi"), AMPI_HUB_CONFIG: join(home, ".ampi/hub.json"), PI_CODING_AGENT_DIR: join(demo, "agent"), DEMO_DIR: demo, DEMO_WEB: "external", PORT: "0", DEMO_LIFETIME: "owner", DEMO_OWNER_FD: "3",
+		// phoneTimelineFixture seeds the empty hub with Sessions dated at fixed past instants; the real-clock Session scope would drop them.
+		...(mode === "empty" ? { AMPI_DEMO_RECENT_MS: String(3650 * 86_400_000) } : {}) };
+	const args = ["scripts/pi-demo.ts", ...(mode === "demo" ? [] : ["--fixture", mode])];
+	const child = spawn(process.execPath, args, { cwd: app, detached: true, env, stdio: ["ignore", openSync(log, "a"), openSync(log, "a"), "pipe"] });
+	(child.stdio[3] as import("node:net").Socket).unref();
 	child.unref();
-	stopHub = () => {
-		stopHub = () => {};
-		try { process.kill(-child.pid!, "SIGKILL"); } catch {}
-		rmSync(run, { recursive: true, force: true });
+	let stopping: Promise<void> | undefined;
+	const stop = () => {
+		if (stopping) return stopping;
+		// The after hook must finish even after the escalation timer fires.
+		child.ref();
+		return stopping = (async () => {
+			if (child.exitCode === null && child.signalCode === null) {
+				await new Promise<void>((resolve) => {
+					const timer = setTimeout(() => { try { process.kill(-child.pid!, "SIGKILL"); } catch {} }, 7000);
+					child.once("close", () => { clearTimeout(timer); resolve(); });
+					try { process.kill(-child.pid!, "SIGTERM"); } catch { clearTimeout(timer); resolve(); }
+				});
+			}
+			// End every hub-owned manager before stopping the independent resident.
+			const deadline = Date.now() + 5000;
+			while (true) {
+				const pids = execFileSync("ps", ["-axo", "pid=,pgid=,stat="], { encoding: "utf8", timeout: 1000 }).trim().split("\n")
+					.map((line) => line.trim().split(/\s+/)).filter(([, group, state]) => Number(group) === child.pid && !state?.startsWith("Z")).map(([pid]) => pid);
+				if (!pids.length) break;
+				if (Date.now() >= deadline) assert.fail(`the demo hub process group ${child.pid} did not end within 5 s; pids: ${pids.join(", ")}`);
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			}
+			// The resident owns a separate process group. Keep its lock until stop completes.
+			const stopped = await maintainHost({ id: "devbox", label: "devbox", kind: "pi-local", agentConfig: { agentDir: join(demo, "agent") } }, { op: "stop", timeoutMs: 10_000 });
+			assert.equal(stopped.state, "stopped", `demo Arc teardown: ${JSON.stringify(stopped)}`);
+			// A killed hub cannot await its detached guardian. Keep the sandbox until
+			// that exact generation ends; never hide a timeout from the strict runner.
+			const guardian = readFileSync(join(demo, ".demo-guardian"), "utf8");
+			await waitForDemoGuardian(guardian);
+			rmSync(run, { recursive: true, force: true });
+		})();
 	};
 	const deadline = Date.now() + 50_000;
 	const wait = async <T>(phase: string, poll: () => Promise<T | undefined>): Promise<T> => {
@@ -66,20 +122,35 @@ async function startHub() {
 	const [, port, key] = await wait("URL", async () => readFileSync(log, "utf8").match(/demo hub: http:\/\/127\.0\.0\.1:(\d+)\/\?k=([0-9a-f]+)/) ?? undefined);
 	assert.ok(Number(port) < FORBIDDEN_PORTS[0]! || Number(port) > FORBIDDEN_PORTS[1]!, "the demo hub never takes an owner port");
 	const read = { port: Number(port), host: "devbox", auth: { bearer: key! }, timeoutMs: 3000 };
-	// The lead is live once the demo Host reads its fake Herdr; only then does a file append stream to the page.
-	await wait("live lead", async () => ((await threadsSnapshot(read)).find((t) => t.id === "pi:sess-lead")?.live ? true : undefined));
-	// A cold hub derives the lead's transcript first; a page opened before that shows "Loading…" for long.
-	await wait("lead transcript", () => topicSnapshot({ ...read, topic: { kind: "thread", threadId: "pi:sess-lead" }, timeoutMs: 10_000 }));
-	return { origin: `http://127.0.0.1:${port}`, key: key!, demo };
+	if (mode !== "empty") {
+		// The lead is live once the demo Host reads its fake Herdr; only then does a file append stream to the page.
+		await wait("live lead", async () => ((await threadsSnapshot(read)).find((t) => t.id === "pi:sess-lead")?.live ? true : undefined));
+		// A cold hub derives the lead's transcript first; a page opened before that shows "Loading…" for long.
+		await wait("lead transcript", () => topicSnapshot({ ...read, topic: { kind: "thread", threadId: "pi:sess-lead" }, timeoutMs: 10_000 }));
+	}
+	return { origin: `http://127.0.0.1:${port}`, key: key!, demo, stop };
 }
 
-before(async () => {
-	[files, hub] = await Promise.all([appBundle(), startHub()]);
-});
+function hubFor(mode: DemoDataMode): Promise<DemoHub> {
+	let pending = hubs.get(mode);
+	if (!pending) {
+		pending = startHub(mode).then((hub) => { if (mode === "demo") defaultHub = hub; return hub; });
+		hubs.set(mode, pending);
+	}
+	return pending;
+}
+
+before(async () => { files = await appBundle(); });
 after(async () => {
 	for (const browser of browsers.values()) await (await browser).close().catch(() => {});
-	stopHub();
+	await Promise.all([...hubs.values()].map(async (pending) => (await pending).stop()));
 });
+
+/** Only checks that inspect seeded Arc content need this; layout and transcript checks do not. */
+export async function seededArc(threadId = "pi:sess-lead", fixture: DemoDataMode = "demo") {
+	const hub = await hubFor(fixture);
+	await waitForDemoArc(Number(new URL(hub.origin).port), hub.key, threadId);
+}
 
 export const ENGINES: [string, BrowserType, () => string | undefined][] = [
 	["chromium", chromium, () => findChrome()],
@@ -100,36 +171,55 @@ function phoneWidth(page: Page) {
 	}
 }
 
-export async function open(t: TestContext, engine: string, type: BrowserType, path: string | undefined, { display, route = LEAD, context: options }: { display?: Record<string, number>; route?: string; context?: BrowserContextOptions } = {}): Promise<Page> {
+export async function open(t: TestContext, engine: string, type: BrowserType, path: string | undefined, { display, route = LEAD, context: options, suppressResize = false, waitForPhoneLayout = true, recordResize = false, fixture = "demo", beforeNavigate }: { display?: Record<string, number>; route?: string; context?: BrowserContextOptions; suppressResize?: boolean; waitForPhoneLayout?: boolean; recordResize?: boolean; fixture?: DemoDataMode; beforeNavigate?: (page: Page) => void | Promise<void> } = {}): Promise<Page> {
 	// A fulfilled document loses its loopback address space; Chromium's Local Network Access check then blocks the hub socket.
 	const args = engine === "chromium" ? ["--disable-features=LocalNetworkAccessChecks"] : [];
 	if (!browsers.has(engine)) browsers.set(engine, type.launch({ headless: true, args, ...(path ? { executablePath: path } : {}) }));
 	const browser = await browsers.get(engine)!;
+	const hub = await hubFor(fixture);
 	const context = await browser.newContext({ viewport: { width: 1600, height: 800 }, ...options });
 	t.after(() => context.close());
 	const page = await context.newPage();
+	await beforeNavigate?.(page);
 	page.setDefaultTimeout(20_000);
-	if (options?.isMobile) phoneWidth(page);
+	if (options?.isMobile && waitForPhoneLayout) phoneWidth(page);
 	const errors: string[] = [];
 	page.on("pageerror", (e) => errors.push(e.message));
 	t.after(() => assert.deepEqual(errors, [], "no page error"));
 	// The hub keeps auth and data; the page is this checkout's web/src, built in memory.
-	const own = (url: URL) => url.origin === hub!.origin && (url.pathname === "/" || files!.has(url.pathname));
+	const own = (url: URL) => url.origin === hub.origin && (url.pathname === "/" || files!.has(url.pathname));
 	await page.route(own, async (route) => {
 		const path = new URL(route.request().url()).pathname;
 		const file = files!.get(path === "/" ? "/index.html" : path)!;
 		const response = await route.fetch();
-		return route.fulfill({ response, status: 200, body: typeof file.body === "string" ? file.body : Buffer.from(file.body), contentType: file.type });
+		// The page carries the hub's build, so the hub serves this page's writes. The hub and this fixture run from one
+		// checkout and compute one stamp; a checkout without web/dist has no hub index.html to copy the meta from.
+		const body = file.type === "text/html" ? String(file.body).replace("</head>", `<meta name="ampi-build" content="${hubBuild}" />\n</head>`) : file.body;
+		return route.fulfill({ response, status: 200, body: typeof body === "string" ? body : Buffer.from(body), contentType: file.type });
 	});
-	await page.addInitScript((display) => {
+	await page.addInitScript(({ display, suppressResize, recordResize }) => {
+		if (recordResize) {
+			(window as Window & { __initialInnerWidth?: number }).__initialInnerWidth = innerWidth;
+			(window as Window & { __resizeEvents?: number }).__resizeEvents = 0;
+			window.addEventListener("resize", () => { (window as Window & { __resizeEvents?: number }).__resizeEvents!++; });
+		}
+		if (suppressResize) {
+			const add = window.addEventListener.bind(window);
+			window.addEventListener = ((type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions) => {
+				if (type !== "resize") return add(type, listener, options);
+				const swallow = (_event: Event) => {};
+				return add(type, swallow, options);
+			}) as typeof window.addEventListener;
+		}
 		if (sessionStorage.getItem("seeded")) return;
 		sessionStorage.setItem("seeded", "1");
 		localStorage.setItem("ampi.panel", "arc");
 		if (display) localStorage.setItem("ampi.display", JSON.stringify(display));
-	}, display);
-	await page.goto(`${hub!.origin}/?k=${hub!.key}${route}`);
+	}, { display, suppressResize, recordResize });
+	await page.goto(`${hub.origin}/?k=${hub.key}${route}`);
 	if (route.includes("?p=")) await page.locator(".panel-edge").waitFor();
-	await page.locator(".transcript [data-entry]").first().waitFor({ state: "attached" });
+	if (route.includes("#/h/")) await page.locator(".transcript [data-entry]").first().waitFor({ state: "attached" });
+	else await page.locator(".main .topbar").waitFor({ state: "attached" });
 	return page;
 }
 
@@ -186,12 +276,51 @@ export async function eventually(check: () => Promise<boolean>, what: string) {
 }
 export const near = (actual: number, expected: number, what: string, tolerance = 1) => assert.ok(Math.abs(actual - expected) <= tolerance, `${what}: ${actual.toFixed(2)} vs ${expected.toFixed(2)}`);
 
+/** A phone Timeline fixture with stable, recent Session timestamps and no live or Team records. */
+export async function phoneTimelineFixture(now = Date.now(), suffix = "") {
+	const hub = await hubFor("empty");
+	const ids = Array.from({ length: 12 }, (_, i) => `devbox/pi:sess-phone-layout${suffix}-${i + 1}`);
+	for (const [index, id] of ids.entries()) {
+		const name = id.slice("devbox/pi:".length);
+		const timestamp = new Date(now - 60 * 60_000 + index * 1000).toISOString();
+		const dir = join(hub.demo, "agent/sessions", `--work-phone-layout${suffix}-${index + 1}--`);
+		mkdirSync(dir, { recursive: true });
+		const file = join(dir, `${name}.jsonl`);
+		const session = { type: "session", version: 3, id: name, timestamp, cwd: `/work/phone-layout/${index + 1}` };
+		const message = { type: "message", id: `${name}-entry`, parentId: null, timestamp, message: { role: "user", timestamp: Date.parse(timestamp), content: [{ type: "text", text: `Phone layout fixture ${index + 1}` }] } };
+		const content = `${JSON.stringify(session)}\n${JSON.stringify(message)}\n`;
+		if (!existsSync(file) || readFileSync(file, "utf8") !== content) writeFileSync(file, content);
+	}
+	return ids;
+}
+
 /** The demo agent's Session directory: a test may add Session files, and the hub reads them as new Sessions. */
-export const demoSessions = () => join(hub!.demo, "agent/sessions");
+export const demoSessions = () => join(defaultHub!.demo, "agent/sessions");
+
+/** The default demo Timeline stream count, derived from the complete synthetic fixture, not a UI literal. */
+export async function timelineStreamCount() {
+	const hub = defaultHub;
+	assert.ok(hub, "the default demo hub must be running before reading its Timeline fixture");
+	const root = demoSessions();
+	const url = new URL(hub.origin);
+	const deadline = Date.now() + 15_000;
+	while (Date.now() < deadline) {
+		const snapshot = await topicSnapshot({ port: Number(url.port), host: "devbox", auth: { bearer: hub.key }, topic: { kind: "view", view: "cos.timeline" }, timeoutMs: 3_000 }) as TimelineValue;
+		const fixtureSessions = readdirSync(root, { recursive: true }).filter((path) => String(path).endsWith(".jsonl")).length;
+		if (snapshot.sessions.length + (snapshot.unreadable?.length ?? 0) === fixtureSessions) {
+			const now = Date.now(), from = now - SESSION_SCOPE_MS;
+			const sessions = snapshot.sessions.filter((session) => session.entries.length > 0 && isSessionInScope({ activityAt: session.end, live: session.live, open: false }, now)).map((session) => ({ ...session, host: "devbox" }));
+			return timelineRows(groupSessions(sessions), true, (session) => session.live || (session.end >= from && session.start <= now)).length;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+	const expected = readdirSync(root, { recursive: true }).filter((path) => String(path).endsWith(".jsonl")).length;
+	throw new Error(`Timeline fixture indexed fewer than its ${expected} Sessions`);
+}
 
 /** Streams one reply into the lead Session's file; the hub's feeds re-render App and the transcript. */
 function stream(text: string) {
-	const dir = join(hub!.demo, "agent/sessions");
+	const dir = join(defaultHub!.demo, "agent/sessions");
 	const file = readdirSync(dir, { recursive: true }).map((f) => join(dir, String(f))).find((f) => f.endsWith("/lead.jsonl"))!;
 	const last = JSON.parse(readFileSync(file, "utf8").trim().split("\n").at(-1)!).id;
 	appendFileSync(file, JSON.stringify({ type: "message", id: `resize-${Date.now()}`, parentId: last, timestamp: new Date().toISOString(), message: { role: "assistant", model: "claude-sonnet-5-5", provider: "anthropic", stopReason: "stop", usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.001 } }, timestamp: Date.now(), content: [{ type: "text", text }] } }) + "\n");

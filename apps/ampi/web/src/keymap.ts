@@ -1,12 +1,17 @@
 import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { overlayChord, type Overlay } from "./focus.ts";
 import { carrier } from "./nav.ts";
+import { keyBindings } from "./extensions.ts";
+
+/** Actions another line adds with its key bindings (extensions.ts): augment this interface with one key per action. */
+export interface ExtraKeyActions {}
 
 type KeyAction =
 	| "sidebar.toggle" | "panel.toggle" | "focus.composer"
 	| "session.palette" | "command.palette" | "help" | "find"
-	| "overview" | "new" | "archive" | "display" | "transcript.mode" | "zoom.in" | "zoom.out" | "zoom.reset"
-	| "history.back" | "history.forward";
+	| "overview" | "new" | "display" | "transcript.mode" | "zoom.in" | "zoom.out" | "zoom.reset"
+	| "history.back" | "history.forward"
+	| keyof ExtraKeyActions;
 
 export type KeyBinding = {
 	id: KeyAction;
@@ -32,7 +37,7 @@ export type KeyBinding = {
 /** Panels, later Find jumps, scroll and focus make no steps (D20). */
 const HISTORY_NOTE = "Steps are Sessions, pages, entry links and the first Find jump";
 
-/** Single source for global bindings, help rows, and command-palette actions. */
+/** Single source for global bindings, help rows, and command-palette actions; registered bindings come last. */
 export const KEYMAP: readonly KeyBinding[] = [
 	{ id: "sidebar.toggle", code: "KeyB", meta: true, label: "Toggle sidebar", region: "global", palette: true },
 	{ id: "panel.toggle", code: "KeyL", meta: true, label: "Toggle side panel", region: "global", palette: true, context: "in a Session" },
@@ -44,7 +49,6 @@ export const KEYMAP: readonly KeyBinding[] = [
 	{ id: "overview", code: "Digit0", meta: true, label: "Overview", region: "global", palette: true },
 	{ id: "new", code: "KeyN", meta: true, label: "New Session", region: "global", palette: true },
 	{ id: "transcript.mode", code: "KeyT", meta: true, label: "Toggle conversation-only transcript", region: "global", palette: true, note: "⌘T (Ctrl+T in a browser), L outside an input", appNote: "⌘T switches transcript mode in AmPi.app" },
-	{ id: "archive", code: "KeyA", meta: true, shift: true, label: "Archive or unarchive this thread", region: "global", palette: true, browserOwned: true, context: "in a durable thread", note: "⌘⇧A in AmPi.app; in a browser, use the command palette (Chrome owns ⌘⇧A)" },
 	{ id: "history.back", code: "BracketLeft", meta: true, label: "Back", region: "global", palette: true, browserOwned: true, note: HISTORY_NOTE, appNote: "does nothing at the first AmPi page" },
 	{ id: "history.forward", code: "BracketRight", meta: true, label: "Forward", region: "global", palette: true, browserOwned: true },
 	{ id: "zoom.in", code: "Equal", meta: true, shift: true, label: "Increase display size", region: "global", palette: true },
@@ -60,6 +64,7 @@ export const KEYMAP: readonly KeyBinding[] = [
 		{ id: "overview" as const, code: "KeyU", label: "Scroll half page up", region },
 		{ id: "overview" as const, code: "KeyG", label: "Scroll to top / bottom", region },
 	]),
+	...keyBindings,
 ];
 
 const handlers = new Map<KeyAction, (event: KeyboardEvent) => void>();

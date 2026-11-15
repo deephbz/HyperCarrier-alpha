@@ -13,7 +13,7 @@ import { readWorkingSet } from "./working-set-db.ts";
 import { counter, tracing } from "../trace.ts";
 import { trackDerive } from "./derive-queue.ts";
 import { derivedVersion, sameIndex, WINDOW_BYTES, WINDOW_ENTRIES, ENTRY_PAGE_BYTES, type Source, type Derived, type WorkerJob } from "./working-set-types.ts";
-import { INDEXING, NOT_FOUND, STALE_VERSION, type PiEntry, type ThreadOutline } from "../shared/protocol.ts";
+import { INDEXING, NOT_FOUND, STALE_VERSION, type OutlineKnown, type PiEntry, type ThreadOutline, type ThreadOutlineReply } from "../shared/protocol.ts";
 import { projectEntry, wireEntry } from "./projection.ts";
 import type { RarebitItem, RarebitValue } from "./views/rarebit.ts";
 
@@ -25,6 +25,24 @@ const opened = new Map<string, number>();
 const refusal = (code: string, message: string) => Object.assign(new Error(message), { code });
 /** No head of this build's derivation yet (load); the read can succeed after the derive commits. */
 const notIndexed = () => refusal(INDEXING, "This Session is not indexed yet");
+/**
+ * The outline a page needs, given what it holds. When `known` comes from the same derivation and the current outline
+ * (its newest 2000 prompts) still holds the page's last prompt at the same ordinal, the reply carries only the prompts
+ * after it, with `base` = the held version: an entry ID fixes its ancestry, so the prompts before it are the page's.
+ * A compaction moves no ordinal, so it is a delta without prompts. Anything else gets the full outline without `base`:
+ * a branch change or reindex that drops or moves that prompt, another derivation, or no or malformed `known`.
+ */
+export function outlineSince(outline: ThreadOutline, known: unknown): ThreadOutlineReply {
+ const k = known as Partial<OutlineKnown> | undefined;
+ if (typeof k?.version !== "string" || typeof k.lastId !== "string" || !Number.isInteger(k.lastOrdinal) || !sameIndex(k.version)) return outline;
+ const { users } = outline;
+ for (let i = users.length - 1; i >= 0; i--) {
+  const user = users[i]!;
+  if (user.ordinal < k.lastOrdinal!) break;
+  if (user.id === k.lastId && user.ordinal === k.lastOrdinal) return { ...outline, users: users.slice(i + 1), base: k.version };
+ }
+ return outline;
+}
 const jobDir = (job: WorkerJob | { op: "close"; cacheDir: string }) => "cacheDir" in job ? job.cacheDir : job.source.cacheDir;
 function ensureWorker() {
  if (worker) return;
@@ -203,8 +221,14 @@ export class WorkingSet {
   return { entries, more: rows.length > kept, version: data.version };
  }
  #outlines = new Map<string, ThreadOutline>();
- /** Navigation reads compact indexed rows once per version, never transcript bodies or paint windows. */
- outline(path: string): ThreadOutline {
+ /**
+  * Navigation reads compact indexed rows once per version, never transcript bodies or paint windows. A page that names
+  * what it holds (`known`) gets only the prompts after its last one when that still holds (outlineSince).
+  */
+ outline(path: string, known?: unknown): ThreadOutlineReply {
+  return outlineSince(this.#outline(path), known);
+ }
+ #outline(path: string): ThreadOutline {
   return this.snapshot(() => {
    const data = this.load(path);
    if (!data) throw notIndexed();
@@ -282,11 +306,11 @@ export class WorkingSet {
   const get = this.db.prepare("SELECT t FROM entries WHERE path=? AND id=?");
   return new Map(ids.map((id) => { const t = get.get(path, id)?.t; return [id, typeof t === "number" ? t : null]; }));
  }
- arcSource(path: string, session: string, version: string): import("./views/arc-build.ts").ArcSource {
+ arcSource(path: string, session: string, version: string): import("../arc/core/types.ts").ArcSource {
   return this.snapshot(() => {
    const data = this.load(path);
    if (!data || data.version !== version) throw Object.assign(new Error("Arc source changed; retry Build"), { code: "source" });
-   const items: RarebitItem[] = [], entries: import("./views/arc-build.ts").ArcEntry[] = [];
+   const items: RarebitItem[] = [], entries: import("../arc/core/types.ts").ArcEntry[] = [];
    const positive = (n: unknown) => typeof n === "number" && Number.isFinite(n) && n > 0 ? n : 0;
    for (const row of this.db.prepare("SELECT id, t, rarebit, feature FROM entries WHERE path=? ORDER BY position").iterate(path)) {
     if (row.rarebit) items.push(JSON.parse(String(row.rarebit)));

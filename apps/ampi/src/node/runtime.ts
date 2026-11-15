@@ -8,7 +8,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, hostname, userInfo } from "node:os";
 import { basename, join } from "node:path";
-import { type MutableReplicatedState, replicatedState } from "@earendil-works/chord";
+import { type MutableReplicatedState, replicatedState, type WatchEnd } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT, type Context } from "@earendil-works/chord/context";
 import { type Api, type AssistantMessage, type AssistantMessageEventStream, createAssistantMessageEventStream, type Model, type StreamOptions } from "@earendil-works/pi-ai";
 import type { Models, MutableModels } from "@earendil-works/pi-ai/models";
@@ -26,6 +26,7 @@ import {
 	LiveDoc,
 	ProviderDoc,
 	type Registry,
+	type RunFailure,
 	type Storage,
 	type SubmissionId,
 	type TaskId,
@@ -49,7 +50,7 @@ type NodeThreadsState = Omit<ThreadsState, "threads"> & { threads: Record<string
 import { ampiCore } from "./core-extension.ts";
 import { defaultModel, listModels, openModels, startModel, testSafeModels } from "./models.ts";
 import { assertTestIsolation } from "./test-mode.ts";
-import { type PiConfigOptions, piResources } from "./pi-config.ts";
+import { type PiConfigOptions, piResources } from "../shared/pi-config.ts";
 import { activityOf, contentText, queueOrigin, RETURNED_KIND, type ReturnedState } from "./projection.ts";
 import { nodeGuard, recordStop, stopLatch, toolBlockReason } from "./guard.ts";
 import { type Marked, markStops, returnedInput, type StopIntent, type StopOutcome, settleStops } from "./stops.ts";
@@ -59,10 +60,17 @@ import { NodeError } from "./errors.ts";
 import { MetaDoc, type MetaState } from "./meta-doc.ts";
 import { NODE_IMAGE_LIMITS } from "./images.ts";
 import { buildId } from "../shared/build.ts";
+import type { Spend } from "../shared/spend.ts";
 import { type CacheTtl, cacheGoblinModels, CacheTtlDoc } from "../plugins/cache-goblin.ts";
 import { photonImages, piCodingTools } from "./coding-tools.ts";
 import { backupReason, backupStore, rootConversations, writeStoreFile } from "./store-file.ts";
 import { ampiHome } from "../shared/home.ts";
+
+/**
+ * A durable thread's cost: its usage document prices model responses and tools, so it counts every class (ALL_COVERS in
+ * shared/spend.ts; a type import keeps the trace-analytics rule out of the node's runtime imports).
+ */
+const durableSpend = (usd: number): Spend => ({ usd, covers: ["responses", "failed", "compaction", "tools"] });
 
 export const VERSION = "0.1.0";
 
@@ -354,6 +362,17 @@ export class NodeRuntime {
 	report(error: unknown): void {
 		this.#report(error);
 	}
+	/**
+	 * Reports an observer of `store` that ended for good, because `what` no longer updates after it. A Session close
+	 * ends every observer `failed` with "session closed" and needs no report; the store's close path reports a failed
+	 * Session and reopens it.
+	 */
+	observerEnded(store: Store, what: string, end: WatchEnd): void {
+		if (end.kind !== "listener_error" && end.kind !== "failed") return;
+		if (end.kind === "failed" && (end.error as Error | undefined)?.message === "session closed") return;
+		const cause = end.error instanceof Error ? end.error.message : String(end.error);
+		this.#report(new Error(`${what} stopped updating for ${store.id} (${end.kind}: ${cause})`));
+	}
 	#closing = false;
 	readonly #stopWaitMs: number;
 	/** Confirms an Esc stop: a settled one leaves EscDoc; an unsettled one stays for the next open to mark again. */
@@ -410,7 +429,7 @@ export class NodeRuntime {
 		const optIn = new Set(this.plugins.flatMap((plugin) => (plugin.optIn ?? []).map((extension) => extension.name)));
 		// The core renders first, as Pi renders its own sections before extension sections.
 		const defaults = [codingTools, core, codemode, guard, ...pluginExtensions].filter((e) => !optIn.has(e.name));
-		// A task cut off 5 times without progress is parked until /retry (pi-durable's default, set here on purpose).
+		// A task cut off 5 times in a row ends (pi-durable's default, set here on purpose): a run with `pi.live.runFailure`.
 		this.settings = () => {
 			const merged: HarnessSettings = {};
 			for (const plugin of this.plugins)
@@ -478,14 +497,17 @@ export class NodeRuntime {
 		const { id, dir } = store;
 		let ready = false;
 		mkdirSync(dir, { recursive: true, mode: 0o700 });
-		// pi-durable migrates a store forward on open and has no way back: keep a copy first (store-file.ts).
+		// pi-durable migrates a store forward on open and has no way back: keep a copy first (store-file.ts). The copy is
+		// data protection only: recovery is a manual copy back while the node is stopped (README).
 		const reason = this.#backedUp.has(id) ? undefined : backupReason(dir);
 		if (reason) {
+			let path: string;
 			try {
-				await backupStore(this.home, id, reason);
+				path = await backupStore(this.home, id, reason);
 			} catch (error) {
 				throw new Error(`backup before migration failed: ${(error as Error).message}`);
 			}
+			console.error(`[ampi node] ${id}: pre-migration snapshot (${reason}) at ${path}`);
 			this.#backedUp.add(id);
 		}
 		const sqlite = await openStoreStorage(join(dir, "harness.sqlite"));
@@ -524,10 +546,10 @@ export class NodeRuntime {
 					this.#placed.delete(`${id}.*`);
 					if (place) this.#placed.set(store.threadKey(record.id), { ...place, createdAt, closed: false });
 				},
-				onReport: (error, info) => {
-					this.#report(error);
-					// A parked, faulted, or outdated task changes no conversation document: refresh its row here.
-					const task = "task" in info ? info.task : undefined;
+				onReport: (report) => {
+					this.#report(report.error);
+					// A faulted, interrupted, or outdated task may change no conversation document: refresh its row here.
+					const task = "task" in report ? report.task : undefined;
 					if (task && this.stores.get(id) === store) this.#schedule(store, String(task.conversationId));
 				},
 			},
@@ -543,7 +565,9 @@ export class NodeRuntime {
 					delete draft.threads[key];
 				}
 			});
-		store.unsubscribe = store.harness.subscribeCommits((publication) => {
+		// Stored commits only (pi-durable 1.5.0): deferred progress arrives with the next stored commit. Thread rows
+		// refresh from stored state, so this needs no partials; live progress reaches the browser through Conversation.watch().
+		const commits = store.harness.observeCommits({ advance: (publication) => {
 			const touched = new Set<string>();
 			for (const change of publication.changes) {
 				if (change.type === "entry") touched.add(String(change.value.conversationId));
@@ -553,18 +577,25 @@ export class NodeRuntime {
 					// Session documents: titles and archive state touch every thread; a plugin's document only the
 					// threads it names. Refreshing the whole tree on every Team event would cost N refreshes per event.
 					else if (change.record.kind === MetaDoc.definition.kind) touched.add("*");
-					else
-						for (const plugin of this.plugins)
-							for (const conversationId of plugin.touches?.(change.record.kind, change.value) ?? []) touched.add(conversationId);
+					else if (change.kind === "change")
+						for (const plugin of this.plugins) {
+							// A throw here would detach this observer, and every row of the store would stop updating.
+							try {
+								for (const conversationId of plugin.touches?.(change.record.kind, change.value) ?? []) touched.add(conversationId);
+							} catch (error) {
+								this.#report(new Error(`A plugin could not name the threads a ${change.record.kind} change touches: ${(error as Error).message}`));
+							}
+						}
 				} else if (change.type === "document.copy") touched.add(String(change.conversationId));
 			}
 			for (const conversationId of touched) this.#schedule(store, conversationId);
-		});
+		}, end: (end) => this.observerEnded(store, "thread rows", end) });
+		store.unsubscribe = () => commits.detach();
 		void store.harness.closed.then((end) => {
 			store.closed = true;
 			store.detach();
-			if (ready && !this.#closing && end.reason === "failed") {
-				const message = `storage unavailable: ${String((end as { error?: unknown }).error)}`;
+			if (ready && !this.#closing && end.kind === "failed") {
+				const message = `storage unavailable: ${String(end.error)}`;
 				this.#report(new Error(`Thread storage ${id} failed (${message}); reopening`));
 				this.stores.delete(id);
 				this.#recover(id, message);
@@ -755,7 +786,7 @@ export class NodeRuntime {
 			await this.#abortEffects(store);
 			if (!conv.closed)
 				try {
-					const attention = await this.#parkedReasons(store, conversationId, BACKGROUND_CONTEXT, true);
+					const attention = await this.#attentionReasons(store, conversationId, BACKGROUND_CONTEXT, true);
 					await store.harness.commit(async (tx) => {
 						(await tx.doc(MetaDoc)).convs[conversationId]!.closed = { at: Date.now(), by: "owner", ...(attention.length ? { attention } : {}) };
 					}, BACKGROUND_CONTEXT);
@@ -944,7 +975,7 @@ export class NodeRuntime {
 		const after = await store.harness.inspect(context);
 		const running = new Set(after.tasks.filter(({ record }) => record.state.status !== "terminal").map(({ record }) => String(record.id)));
 		const reported: ControlCompaction[] = [];
-		for (const compaction of compactions) reported.push(await this.#compactionOutcome(store, String(compaction.taskId), compaction.reason, running));
+		for (const compaction of compactions) reported.push(await this.#compactionOutcome(store, String(compaction.taskId), compaction.trigger, running));
 		for (const write of finished) {
 			const taskId = write.requestId!.slice("compaction:".length);
 			if (!targets.includes(taskId)) reported.push({ ...(await this.#compactionOutcome(store, taskId, "", running)), summary: "pending" });
@@ -955,7 +986,7 @@ export class NodeRuntime {
 			const item = inbox?.items.find((candidate) => candidate.id === record.id);
 			const deliverAs = item?.mode === "steer" ? "steer" : "followUp";
 			const now = await (await store.harness.submission(record.id, context))?.status(context);
-			if (now && (now.status === "placed" || now.status === "done")) {
+			if (now?.type === "input" && (now.status === "placed" || now.status === "done")) {
 				submissions.push({ submission: String(record.id), deliverAs, state: "delivered", at, entryId: String(now.entry) });
 				continue;
 			}
@@ -1044,6 +1075,7 @@ export class NodeRuntime {
 					activity: "idle",
 					queued: 0,
 					costUsd: 0,
+					spend: durableSpend(0),
 					lastError: shown,
 					attention: [{ source: "node", reason: shown }],
 				};
@@ -1252,19 +1284,6 @@ export class NodeRuntime {
 		for (const wake of [...this.#held]) wake();
 	}
 
-	/**
-	 * `node.backup`: consistent copies through SQLite's backup API, safe while the store is open. One store, or every
-	 * store under `threads/`, failed ones included.
-	 */
-	async backup(storeId?: string): Promise<{ store: string; path: string }[]> {
-		const dir = join(this.home, "threads");
-		const ids = storeId !== undefined ? [storeId] : readdirSync(dir).filter((name) => existsSync(join(dir, name, "harness.sqlite"))).sort();
-		if (storeId !== undefined && !existsSync(join(dir, storeId, "harness.sqlite"))) throw new NodeError("not_found", `No thread storage ${storeId}`);
-		const done: { store: string; path: string }[] = [];
-		for (const id of ids) done.push({ store: id, path: await backupStore(this.home, id, "manual") });
-		return done;
-	}
-
 	/** Whether this store failed and is not open now. */
 	unavailable(storeId: string): { error: string; attempts: number; gaveUp: boolean } | undefined {
 		return this.#failed.get(storeId);
@@ -1334,17 +1353,22 @@ export class NodeRuntime {
 		return undefined;
 	}
 
-	/** The reasons of this conversation's blocked tasks, as its summary shows them. */
-	async #parkedReasons(store: Store, conversationId: string, context: Context, closed: boolean): Promise<string[]> {
+	/** The reasons of this conversation's blocked tasks and of its failed run, as its summary shows them. */
+	async #attentionReasons(store: Store, conversationId: string, context: Context, closed: boolean): Promise<string[]> {
 		const inspection = await store.harness.inspect(context);
-		return this.#blockedReasons(
-			inspection.tasks.filter(({ record, state }) => state.kind === "blocked" && String(record.conversationId) === conversationId),
-			closed,
-		);
+		const live = await store.harness.snapshot(LiveDoc, Number(conversationId) as ConversationId, context);
+		const ended = live?.run === undefined && live?.runFailure ? runFailureReason(live.runFailure, closed) : undefined;
+		return [
+			...this.#blockedReasons(
+				inspection.tasks.filter(({ record, state }) => state.kind === "blocked" && String(record.conversationId) === conversationId),
+				closed,
+			),
+			...(ended?.attention ? [ended.text] : []),
+		];
 	}
 
 	#blockedReasons(blocked: Awaited<ReturnType<Store["harness"]["inspect"]>>["tasks"], closed: boolean): string[] {
-		return blocked.map(({ record, state }) => blockedReason(record.kind, (state as { reason: string }).reason, this.settings().restartLimit ?? 5, closed));
+		return blocked.map(({ record, state }) => blockedReason(record.kind, (state as { reason: string }).reason, closed));
 	}
 
 	async #internal(store: Store, conversationId: string): Promise<boolean> {
@@ -1386,6 +1410,7 @@ export class NodeRuntime {
 			activity: activityOf(live),
 			queued: inbox?.items.length ?? 0,
 			costUsd: 0,
+			spend: durableSpend(0),
 			images: NODE_IMAGE_LIMITS,
 		};
 		if (convMeta.archived || convMeta.closed) summary.archived = true;
@@ -1404,6 +1429,7 @@ export class NodeRuntime {
 		if (agent?.model) summary.model = `${agent.model.provider}/${agent.model.modelId}`;
 		for (const value of Object.values(usage?.models ?? {})) summary.costUsd += (value as { cost?: { total?: number } }).cost?.total ?? 0;
 		for (const value of Object.values(usage?.tools ?? {})) summary.costUsd += (value as { cost?: { total?: number } }).cost?.total ?? 0;
+		summary.spend = durableSpend(summary.costUsd);
 		for (const entry of recent) {
 			// biome-ignore lint: loosely typed pi-ai message
 			const message = entry.model?.[0] as any;
@@ -1419,15 +1445,20 @@ export class NodeRuntime {
 		const assistantMessage = lastAssistant?.model?.[0] as any;
 		if (assistantMessage?.stopReason === "error" && summary.activity === "idle")
 			summary.lastError = excerpt(String(assistantMessage.errorMessage ?? "error"), 300);
-		// A blocked task never runs again by itself: a parked run looks idle, so it must say why (idle never means done).
-		// Close removes the parked tasks, so a closed thread shows the reasons its Close stored, without an action hint.
+		// A blocked task never runs again by itself: its thread looks idle, so it must say why (idle never means done).
+		// Close removes the blocked tasks, so a closed thread shows the reasons its Close stored, without an action hint.
 		const inspection = await store.harness.inspect(context);
 		const blocked = inspection.tasks.filter(({ record, state }) => state.kind === "blocked" && String(record.conversationId) === conversationId);
 		// pi.live still holds the cut-off run, so with nothing else of the thread live, the row must not look active.
 		const running = inspection.tasks.some(({ record, state }) => state.kind !== "blocked" && String(record.conversationId) === conversationId);
 		if (blocked.length && !running) summary.activity = "idle";
-		const parked = blocked.length ? this.#blockedReasons(blocked, !!closed) : (convMeta.closed?.attention ?? []);
-		if (parked.length) summary.attention = parked.map((reason) => ({ source: "node", reason }));
+		// pi-durable 1.5.0: a run cut off at the restart limit, or interrupted, ends with `pi.live.runFailure` instead of
+		// a blocked task. pi.live keeps it until the next run starts, so an idle thread still says why its run ended.
+		const ended = live?.run === undefined && live?.runFailure ? runFailureReason(live.runFailure, !!closed) : undefined;
+		if (ended?.error && summary.lastError === undefined) summary.lastError = excerpt(ended.text, 300);
+		const reasons = [...this.#blockedReasons(blocked, !!closed), ...(ended?.attention ? [ended.text] : [])];
+		const kept = reasons.length ? reasons : (convMeta.closed?.attention ?? []);
+		if (kept.length) summary.attention = kept.map((reason) => ({ source: "node", reason }));
 		// As Pi's getContextUsage and the Pi backend's derive-worker count them: the latest measured response gives the
 		// context size and the prompt share read from cache. A later compaction or reset makes the size unknown.
 		let restarted = false;
@@ -1945,11 +1976,9 @@ function failedMessage(model: Model<Api>, stopReason: "aborted" | "error", reaso
  * so its reason has no action hint.
  */
 
-function blockedReason(kind: string, reason: string, limit: number, closed: boolean): string {
+function blockedReason(kind: string, reason: string, closed: boolean): string {
 	const what = ({ "pi.generation": "The model request", "pi.tool": "A tool call", "pi.compaction": "Compaction" } as Record<string, string>)[kind] ?? `Task ${kind}`;
 	switch (reason) {
-		case "restart_limit":
-			return `${what} was cut off ${limit} times without progress and is parked${closed ? "" : "; /retry runs it again"}`;
 		case "missing_task":
 			return `${what} needs an extension this node does not have${closed ? "" : "; install it, then /retry"}`;
 		case "task_too_old":
@@ -1958,6 +1987,42 @@ function blockedReason(kind: string, reason: string, limit: number, closed: bool
 			return `${what} could not be migrated to this node's version`;
 		default:
 			return `${what} is blocked: ${reason}`;
+	}
+}
+
+/**
+ * The owner's words for a run that ended without an answer (pi-durable `pi.live.runFailure`). `attention`: the owner
+ * must act (the Needs-you signal); `error`: the row's last error. The two never both hold, because the browser shows a
+ * row's last error before its attention and would repeat the sentence. A Stop, a reset, or a context with nothing to
+ * answer is the owner's own doing and needs neither. A model error keeps today's row line only. A closed thread runs nothing
+ * again, so its reason has no action hint.
+ */
+export function runFailureReason(failure: RunFailure, closed: boolean): { text: string; attention: boolean; error: boolean } {
+	const detail = failure.detail ? `: ${failure.detail}` : "";
+	const hint = closed ? "" : "; /retry continues it";
+	switch (failure.reason) {
+		case "restart_limit":
+			return { text: `The run was cut off too often and ended${detail}${hint}`, attention: true, error: false };
+		case "interrupted":
+			return { text: `The node stopped while the model was answering, with no retry left${hint}`, attention: true, error: false };
+		case "faulted":
+			return { text: `The run failed${detail}${hint}`, attention: true, error: false };
+		case "orphaned":
+			return { text: `The run could not continue on this node${detail}${closed ? "" : "; update the node, then /retry"}`, attention: true, error: false };
+		case "no_model":
+			return { text: `The model is not available${detail}${closed ? "" : "; choose a model, then /retry"}`, attention: true, error: false };
+		case "turn_limit":
+			return { text: `The run reached its turn limit${detail}${hint}`, attention: true, error: false };
+		case "model_error":
+			return { text: `The model request failed${detail}${hint}`, attention: false, error: true };
+		case "aborted":
+			return { text: "The run was stopped", attention: false, error: false };
+		case "reset":
+			return { text: "The run ended at a reset", attention: false, error: false };
+		case "nothing_to_answer":
+			return { text: "Nothing to continue", attention: false, error: false };
+		default:
+			return failure.reason satisfies never;
 	}
 }
 

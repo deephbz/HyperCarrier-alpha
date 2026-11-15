@@ -12,6 +12,7 @@ tested alone.
 │   pi-hc-control extension                │          │   cache: append-only copy per Session file    │
 │   └ unix socket per Session              │◄─────────┤   reader: trace-analytics bounded ranges     │
 │ ~/.pi/agent/sessions/**.jsonl            │  actions │   topics: threads, thread, team               │
+│ Arc service · Builder · durable receipts │          │ Arc read copy · durable command outbox       │
 │ remote agent (src/pi/remote-agent.cjs),  ├─────────►│   ops: thread.submit, thread.abort            │
 │   sent inline over `ssh <alias>`         │  bytes,  │ Hub ── WebSocket ── React GUI                 │
 │   herdr CLI (layout, status, keys)       │  layout  └──────────────────────────────────────────────┘
@@ -38,7 +39,9 @@ Rules that apply to every part:
 ## 1. Control extension (`packages/pi-hc-control`)
 
 A Pi extension loaded in every Pi Session. On `session_start` it opens a unix
-socket and writes a descriptor; on shutdown it removes both.
+socket and writes a descriptor; on shutdown it removes both. A reload
+(`session_shutdown` with reason `reload`) removes only the socket and
+rewrites the descriptor as `reloading` until the reloaded control replaces it.
 
 - Directory: `<PI_CODING_AGENT_DIR or ~/.pi/agent>/hc-control/`, mode 0700.
 - Socket `<sessionId>.sock` (mode 0600) and descriptor `<sessionId>.json`:
@@ -47,9 +50,21 @@ socket and writes a descriptor; on shutdown it removes both.
   to a short one under the temporary directory.
   `nonce` is random per process start, so a stale descriptor cannot pass for a
   live Session.
+  While Pi reloads, the descriptor also carries `state: "reloading"`,
+  `targetStamp` (the build the reload loads, or null), and `deadline` (epoch
+  ms, 10 s out).
 - Frames: one JSON object per line.
-  - `{ id, op: "status" }` →
-    `{ id, ok: true, value: { sessionId, sessionFile, nonce, idle, compacting, pending: { steer, followUp }, submissions? } }`
+  - `{ id, op: "status", expect? }` →
+    `{ id, ok: true, value: { sessionId, sessionFile, nonce, idle, compacting, pending: { steer, followUp }, submissions, stamp } }`.
+    `stamp` is the control's build (`src/stamp.ts`), null without git.
+    `expect` is the build the hub expects (the remote agent's probe sends
+    it). The control reloads itself when the build on disk equals `expect`
+    and differs from `stamp`, at a quiet point (pi-hc-control README). The
+    remote agent serves a control of any build on the descriptor `schema`
+    it speaks (`hc-control/1`); the hub logs build drift once per Session
+    and stamp, and the deploy parts row names it. A control on another
+    protocol, or one that answers an op with `unknown_op`, gets
+    `version_skew` and no keys (P1).
   - `{ id, op: "submit", text, deliverAs: "steer" | "followUp" }` →
     `{ id, ok: true, evidence: "admitted" | "started", entryId?, submission? }` or
     `{ id, ok: false, error: { code, message } }`.
@@ -72,8 +87,7 @@ socket and writes a descriptor; on shutdown it removes both.
   Pi's editor draft holds it), or `dropped` (left undelivered, draft does not
   hold it). Pi's interactive abort and dequeue move queued input into the
   editor draft; Pi never sends it. An abort reply lists the submissions that
-  were queued when it began, with their outcome. An older extension sends no
-  `submissions`; absence proves nothing.
+  were queued when it began, with their outcome.
 - Input from this path is the owner's input; Pi records it as a user message.
 
 ## 2. Remote agent v2 (`apps/ampi/src/pi/remote-agent.cjs`)
@@ -148,6 +162,11 @@ In (hub → agent):
 
 Routing: if a live control descriptor names `session` (matching file and a
 socket that answers `status` with the same nonce), use the control socket.
+While a descriptor for `session` says `reloading` and its pid lives, a send
+never becomes keys. Before the deadline, hold it for the reloaded control
+(FIFO, at most 8); it goes to the new socket or fails with
+`control_reloading` and the restart step. After the deadline, refuse it at
+once the same way, until a live descriptor replaces it or the pid dies.
 Otherwise use Herdr keys after rechecking the exact pane↔Session binding:
 steer = `herdr agent prompt <pane> <text>` while busy or idle; follow-up =
 `herdr pane send-text <pane> <text>` (literal text; `agent send-keys` takes
@@ -225,6 +244,24 @@ and `thread.abort` go to its socket. The thread id is `pi:<descriptor
 sessionId>`, so the copy replaces the entry under the same id once the
 file arrives. A descriptor whose pid is dead, or whose socket does not answer
 with its nonce and file, is not presence.
+
+## 4a. Arc service link
+
+One Arc service per Host user and Pi agent directory serves every client.
+The hub link starts or updates it from its streamed bundle. Only matching
+builds exchange snapshots and commands. The service reads original Session
+JSONL through the published reader and Rarebit selector. It uses the Host's
+model, settings and sign-in.
+
+`src/arc/link.ts` owns the `arc.hello`, `arc.receipt`, `arc.status`,
+`arc.request` and `arc.ack` frames. The hub keeps its read copy and durable
+command outbox in each Host cache's `arc-replica/` namespace. It replays the
+same request ID and payload after reconnect or restart. Dismiss goes to the
+service; the hub never edits warning state. First replica use deletes old
+v2 hub receipts once.
+
+The [Arc contract](arc.md) owns build matching, lifecycle, maintenance and
+provisional Q1–Q3 limits. Panel reads stay local and do not start model calls.
 
 ## 5. Herdr control (stage 2)
 

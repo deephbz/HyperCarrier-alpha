@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { hub, useTopic } from "../client.ts";
-import { Modal } from "./Dialogs.tsx";
+import { Modal } from "./Modal.tsx";
 
 // biome-ignore lint: provider and login frames are loosely typed JSON
 type Any = any;

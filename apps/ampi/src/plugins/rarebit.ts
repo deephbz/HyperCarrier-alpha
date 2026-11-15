@@ -269,7 +269,8 @@ export function rarebitPlugin(): NodePlugin {
 		let current = await read();
 		const listeners = new Set<(value: JsonValue) => void>();
 		let timer: ReturnType<typeof setTimeout> | undefined;
-		const stop = store.harness.subscribeCommits((publication) => {
+		// Stored commits only (pi-durable 1.5.0); the view reads stored entries and the Rarebit document, never progress.
+		const commits = store.harness.observeCommits({ advance: (publication) => {
 			const touched = publication.changes.some(
 				(c) => (c.type === "entry" && String(c.value.conversationId) === conversationId) || (c.type === "document" && String(c.conversationId) === conversationId),
 			);
@@ -281,7 +282,7 @@ export function rarebitPlugin(): NodePlugin {
 					for (const listener of listeners) listener(current);
 				} catch {}
 			}, 150);
-		});
+		}, end: (end) => runtime.observerEnded(store, "the Rarebit view", end) });
 		return {
 			get value() {
 				return current;
@@ -291,7 +292,7 @@ export function rarebitPlugin(): NodePlugin {
 				return () => listeners.delete(listener);
 			},
 			dispose() {
-				stop();
+				commits.detach();
 				if (timer) clearTimeout(timer);
 			},
 		} satisfies TopicSource;
