@@ -1,5 +1,6 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
+import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 // @ts-expect-error: a plain ESM script without types
 import { clockOffset, prepareTrace, scrubText } from "../scripts/perf/browser.mjs";
@@ -47,4 +48,14 @@ test("perf browser: with the driver's flag off, the web marks call no performanc
 		g.requestAnimationFrame = saved.raf;
 	}
 	assert.deepEqual(calls, []);
+});
+
+// Hosted CI installs no Playwright Chromium: findChrome resolves a cached headless shell or the system Chrome.
+// A launch without executablePath passes on a workstation with a cached shell and fails on the hosted Linux job.
+test("perf browser: every Chromium launch in the tests names its executable", () => {
+	const dir = new URL(".", import.meta.url);
+	const bare = readdirSync(dir).filter((f) => /\.tsx?$/.test(f)).flatMap((f) =>
+		[...readFileSync(new URL(f, dir), "utf8").matchAll(/chromium\.launch\(([^)]*)\)/g)]
+			.filter((m) => !m[1].includes("executablePath")).map(() => f));
+	assert.deepEqual(bare, []);
 });

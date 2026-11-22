@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
-import { AXIS_TIMES, AXIS_MATRIX, phone, phoneAxisTests, go, overflow, settled, open } from "./phone-axis-fixture.ts";
+import { AXIS_TIMES, AXIS_MATRIX, calibratedFontSkip, phone, phoneAxisTests, go, overflow, settled, open } from "./phone-axis-fixture.ts";
 import { engineSkip } from "./engines.ts";
 import { demoSessions, ENGINES, phoneTimelineFixture } from "./resize-edges-fixture.ts";
 import { shortTick } from "../web/src/views/cos/axis.ts";
@@ -209,7 +209,7 @@ for (const [engine, type, path] of ENGINES) {
 		}
 	});
 
-	for (const locale of [LOCALE, "de-DE"]) test(`phone layout ${engine}: the axis threshold covers every formatter family in ${locale}`, { skip: engineSkip(engine) }, async (t) => {
+	for (const locale of [LOCALE, "de-DE"]) test(`phone layout ${engine}: the axis threshold covers every formatter family in ${locale}`, { skip: calibratedFontSkip(engine) }, async (t) => {
 		const page = await open(t, engine, type, path(), { route: SESSION, context: { ...phone(320), locale }, beforeNavigate: (page) => page.clock.setFixedTime(new Date(AXIS_TIMES[1])) });
 		await go(page, "#/v/timeline", ".cos-axis time");
 		const labels: { family: string; text: string }[] = [];
@@ -264,7 +264,7 @@ for (const [engine, type, path] of ENGINES) {
 		}
 	});
 
-	for (const width of [320, 375]) for (const locale of [LOCALE, "de-DE"]) test(`phone layout ${engine}: KNOWN LIMIT P2 historical endpoint at ${width} px ${locale}`, { skip: engineSkip(engine) }, async (t) => {
+	for (const width of [320, 375]) for (const locale of [LOCALE, "de-DE"]) test(`phone layout ${engine}: KNOWN LIMIT P2 historical endpoint at ${width} px ${locale}`, { skip: calibratedFontSkip(engine) }, async (t) => {
 		const now = Date.parse(AXIS_TIMES[1]), to = now - 86_400_000;
 		const rows = await phoneTimelineFixture(now - 2 * 86_400_000, "-historical");
 		const page = await open(t, engine, type, path(), { route: "#/v/overview", fixture: "empty", context: { ...phone(width), locale }, beforeNavigate: (page) => page.clock.setFixedTime(new Date(now)) });
