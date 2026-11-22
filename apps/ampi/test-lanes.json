@@ -186,6 +186,7 @@
     "timeline-totals.test.ts",
     "transcript-sideways.test.ts",
     "timeline-window.test.ts",
+    "tool-elapsed.test.ts",
     "touch-axis.test.ts",
     "tool-state.test.ts",
     "trace.test.ts",

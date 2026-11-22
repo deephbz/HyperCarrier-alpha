@@ -37,7 +37,7 @@ const positive = (name, fallback) => {
 	if (!Number.isSafeInteger(value) || value < 1) fail(`Invalid ${name}: ${process.env[name]}`);
 	return value;
 };
-const concurrency = positive("AMPI_TEST_CONCURRENCY", 8);
+const concurrency = positive("AMPI_TEST_CONCURRENCY", Math.min(8, Math.max(1, os.availableParallelism())));
 const testTimeout = positive("AMPI_TEST_TIMEOUT_MS", 60_000);
 const fileTimeout = positive("AMPI_TEST_FILE_TIMEOUT_MS", 3 * testTimeout);
 let limit = Math.min(concurrency, positive("AMPI_TEST_START_CONCURRENCY", concurrency)), pooling = false;

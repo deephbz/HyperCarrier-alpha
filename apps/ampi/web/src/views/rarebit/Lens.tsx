@@ -6,6 +6,8 @@ import { tokens } from "../../util.ts";
 import { Diagnosis } from "./Diagnosis.tsx";
 import { useRarebitState } from "./state.ts";
 import { useRevealOpen } from "../../components/reveal-open.ts";
+import type { RunningToolCall } from "../../components/tool-elapsed.ts";
+import { ToolElapsed } from "../../components/ToolElapsed.tsx";
 import { Segmented, type Segment } from "../../components/Segmented.tsx";
 import "./rarebit.css";
 
@@ -47,13 +49,13 @@ export function RarebitJump({ host, threadId, entry }: { host: string; threadId:
 }
 
 /** `reveal`: a reveal request for an entry in this run (ThreadView); each new request opens the fold. */
-export function RarebitTools({ run, children, reveal }: { run: ToolRun; children: ReactNode; reveal?: number }) {
+export function RarebitTools({ run, children, runningTool, now, reveal }: { run: ToolRun; children: ReactNode; runningTool?: { call: RunningToolCall; parallelCount: number }; now?: number; reveal?: number }) {
 	const [held, setOpen] = useRevealOpen(reveal);
 	const open = held ?? false;
 	const last = run.entries.at(-1);
 	const latest = last?.kind === "assistant" ? last.blocks.findLast((block) => block.type === "tool")?.name ?? "thinking" : last?.kind === "tool-result" ? last.name : last?.kind === "custom" ? last.entryKind : last?.kind;
 	return <details className="rb-tools" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
-		<summary className="quiet-scroll">{run.entries.map((entry, i) => run.entries.findIndex((e) => e.id === entry.id) === i && <span key={entry.id} data-entry={entry.id} data-fragment={`${run.keys[i]}/fold`} />)}{run.label} · {runDuration(run.start, run.end)} · {runClock(run.start)}–{runClock(run.end)}{run.errors > 0 && <span className="rb-run-errors"> · {run.errors} {run.errors === 1 ? "error" : "errors"}</span>}{run.running && ` · running · ${latest}`}</summary>
+		<summary className="quiet-scroll">{run.entries.map((entry, i) => run.entries.findIndex((e) => e.id === entry.id) === i && <span key={entry.id} data-entry={entry.id} data-fragment={`${run.keys[i]}/fold`} />)}{run.label} · {runDuration(run.start, run.end)} · {runClock(run.start)}–{runClock(run.end)}{run.errors > 0 && <span className="rb-run-errors"> · {run.errors} {run.errors === 1 ? "error" : "errors"}</span>}{run.running && (runningTool ? <> · running · {runningTool.call.name}{runningTool.parallelCount > 1 ? ` (+${runningTool.parallelCount - 1})` : ""} <ToolElapsed startedAt={runningTool.call.startedAt} now={now} /></> : ` · running · ${latest}`)}</summary>
 		{open && <div>{children}</div>}
 	</details>;
 }

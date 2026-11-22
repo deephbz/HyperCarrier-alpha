@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { ToolArgsPreview } from "../../../src/shared/protocol.ts";
 import { toolCallState } from "../../../src/shared/tool-state.ts";
 import { useRevealOpen } from "./reveal-open.ts";
+import { ToolElapsed } from "./ToolElapsed.tsx";
 
 export type ToolResult = { text: string; isError: boolean; truncated?: boolean; /** The tool-result entry, for a link that targets it. */ entry?: string };
 export type LiveSlot = { status: "pending" | "running" | "done"; output?: string };
@@ -64,6 +65,8 @@ export function ToolCall({
 	outputSource,
 	callOpen = false,
 	active = false,
+	startedAt,
+	now,
 	reveal,
 }: {
 	name: string;
@@ -78,6 +81,10 @@ export function ToolCall({
 	/** Evidence for toolCallState: the call is still open in the transcript, and the Session runs a turn. */
 	callOpen?: boolean;
 	active?: boolean;
+	/** Start timestamp (ms) of the currently running call, for the live elapsed readout. */
+	startedAt?: number;
+	/** Optional fixed clock (ms) for deterministic rendering in tests. */
+	now?: number;
 	/** A reveal request for this call's result (ThreadView): each new request opens the body. */
 	reveal?: number;
 }) {
@@ -109,7 +116,10 @@ export function ToolCall({
 				{running && <span className="spinner" />}
 				<span className="name">{name}</span>
 				<span className="arg">{args ? args.summary : "Arguments available in source entry"}</span>
-				<span className={`state ${result?.isError ? "err" : result ? "ok" : ""}`}>{state}</span>
+				<span className={`state ${result?.isError ? "err" : result ? "ok" : ""}`}>
+					{state}
+					{running && typeof startedAt === "number" && Number.isFinite(startedAt) && <>{" "}<ToolElapsed startedAt={startedAt} now={now} /></>}
+				</span>
 			</div>
 			{expanded && (
 				<div className="tool-body quiet-scroll">
