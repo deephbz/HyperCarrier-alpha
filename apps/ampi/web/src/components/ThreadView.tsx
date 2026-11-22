@@ -17,6 +17,7 @@ import { ACTIVITY_LABEL, MOD, attentionOf, clock, go, href, money, tokens } from
 import { Markdown } from "./Markdown.tsx";
 import { CloseAgentDialog, RelaunchAgentDialog, ResumeAgentDialog } from "./PiDialogs.tsx";
 import { type LiveSlot, ToolArgs, ToolCall, type ToolResult } from "./ToolCall.tsx";
+import { longestRunningToolCall, runningToolCalls } from "./tool-elapsed.ts";
 import { RevealScope } from "./reveal-open.ts";
 import { markSeen } from "../seen.ts";
 import { newBelow, newBelowLabel } from "./new-below.ts";
@@ -183,6 +184,8 @@ const Entries = memo(function Entries({
 	const { entryAction: EntryAction, userImages: UserImages, compactionRow: CompactionRow } = useThreadSurface(host);
 	const compactions = CompactionRow ? entries.filter((e) => e.kind === "compaction").length : 0;
 	const open = useMemo(() => openCalls(entries), [entries]);
+	const runningTools = useMemo(() => runningToolCalls(entries, open, !!busy), [entries, open, busy]);
+	const longestRunning = useMemo(() => longestRunningToolCall(runningTools), [runningTools]);
 	const calls = useMemo(() => new Set(entries.flatMap((entry) => entry.kind === "assistant" ? entry.blocks.flatMap((b) => b.type === "tool" ? [b.callId] : []) : [])), [entries]);
 	/** `fragment` names this rendered part of the entry: the lens part key, or the entry ID for a whole entry. */
 	const renderEntry = (preview: PiEntry, fragment = preview.id) => {
@@ -226,6 +229,7 @@ const Entries = memo(function Entries({
 											live={slots.get(block.callId)}
 											callOpen={open.has(block.callId)}
 											active={busy}
+											startedAt={runningTools.get(block.callId)?.startedAt}
 											source={block.argsClipped && <EntryBody host={host} threadId={threadId} entry={entry.id} label="Arguments shortened" show={(full) => {
 												const args = (blockOf(full, (b) => b.type === "tool" && b.callId === block.callId) as { args?: ToolArgsPreview } | undefined)?.args;
 												return args && <ToolArgs args={args} />;
@@ -274,7 +278,7 @@ const Entries = memo(function Entries({
   return <Fragment key={entry.id}>{rendered}</Fragment>;
 	};
 	return <>{lens ? parts.map((part) => part.kind === "run"
-		? <RarebitTools key={part.id} run={part} reveal={reveal && part.entries.some((entry) => entry.id === reveal.entry || entry.id === reveal.holder) ? reveal.seq : undefined}>{part.entries.map((entry, i) => <Fragment key={part.keys[i]}>{renderEntry(entry, part.keys[i])}</Fragment>)}</RarebitTools>
+		? <RarebitTools key={part.id} run={part} runningTool={part.running ? longestRunning : undefined} reveal={reveal && part.entries.some((entry) => entry.id === reveal.entry || entry.id === reveal.holder) ? reveal.seq : undefined}>{part.entries.map((entry, i) => <Fragment key={part.keys[i]}>{renderEntry(entry, part.keys[i])}</Fragment>)}</RarebitTools>
 		: <Fragment key={part.key}>{renderEntry(part.entry, part.key)}</Fragment>) : entries.map((entry) => <Fragment key={entry.id}>{renderEntry(entry)}</Fragment>)}</>;
 });
 

@@ -1120,6 +1120,12 @@ details[open] > .disclosure::before,
 .tool-head .state.ok {
 	color: var(--text-3);
 }
+.tool-elapsed {
+	font-variant-numeric: tabular-nums;
+}
+.tool-elapsed.warn {
+	color: color-mix(in srgb, var(--err) var(--elapsed-pct, 0%), var(--warn));
+}
 .tool-body {
 	--inset: 13px;
 	border-left: 1px solid var(--border);
