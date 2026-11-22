@@ -397,18 +397,29 @@ for (const [engine, type, path] of ENGINES) {
 		await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 		const afterRealResize = await options.evaluate((el: HTMLElement) => ({ scrollTop: el.scrollTop, height: el.clientHeight, scrollHeight: el.scrollHeight }));
 		assert.ok(Math.abs(afterRealResize.scrollTop - beforeHoverScroll) <= 1, `real 320x844 to 320x864 resize over two frames preserves manual options scroll within WebKit's 1 px scrollTop quantization: ${JSON.stringify({ beforeHoverScroll, afterRealResize, whole: await menu.evaluate((el: HTMLElement) => el.classList.contains("slash-menu-whole-scroll")) })}`);
-		await page.getByRole("option", { name: /cmd-06/ }).hover();
-		assert.match(await page.locator('[role="option"][aria-selected="true"] code').textContent() ?? "", /cmd-06/, "hover changes selection after manual menu scroll");
+		const visibleCmd = await page.evaluate(() => {
+			const clip = document.querySelector<HTMLElement>(".slash-options")!.getBoundingClientRect();
+			const inside = [...document.querySelectorAll<HTMLElement>("[role=option]")]
+				.map((el) => ({ text: el.querySelector("code")?.textContent ?? "", rect: el.getBoundingClientRect() }))
+				.filter(({ text, rect }) => /^\/cmd-\d+$/.test(text) && rect.top >= clip.top + 1 && rect.bottom <= clip.bottom - 1);
+			return inside[Math.floor(inside.length / 2)]?.text ?? null;
+		});
+		assert.ok(visibleCmd, "a synthetic command sits fully inside the scrolled options viewport");
+		const visibleNumber = Number(visibleCmd.slice("/cmd-".length));
+		const nextCmd = `/cmd-${String(visibleNumber + 1).padStart(2, "0")}`;
+		await page.getByRole("option", { name: new RegExp(visibleCmd.slice(1)) }).hover();
+		assert.equal(await page.locator('[role="option"][aria-selected="true"] code').textContent() ?? "", visibleCmd, "hover changes selection after manual menu scroll");
 		assert.ok(Math.abs(await options.evaluate((el: HTMLElement) => el.scrollTop) - afterRealResize.scrollTop) <= 1, "app rerender from hover preserves manual menu scroll");
 		assert.ok(Math.abs(await options.evaluate((el: HTMLElement) => el.scrollTop) - afterRealResize.scrollTop) <= 1, "selection change on a visible row preserves manual menu scroll");
 		const beforeArrowScroll = await page.evaluate(() => ({ page: window.scrollY, transcript: document.querySelector<HTMLElement>('[data-region="transcript"]')?.scrollTop }));
 		await input.press("ArrowDown");
 		await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 		const selected = page.locator('[role="option"][aria-selected="true"]');
-		assert.match(await selected.locator("code").textContent() ?? "", /cmd-07/, "ArrowDown selects the command after the hovered row");
+		assert.equal(await selected.locator("code").textContent() ?? "", nextCmd, "ArrowDown selects the command after the hovered row");
 		const selectedClip = await optionClip(page, selected);
 		assert.ok(selectedClip.row.top >= selectedClip.clip.top - 0.5 && selectedClip.row.bottom <= selectedClip.clip.bottom + 0.5, `selected row fits every ancestor clip: ${JSON.stringify({ selectedClip, scroll: await options.evaluate((el: HTMLElement) => ({ top: el.scrollTop, height: el.scrollHeight, client: el.clientHeight })) })}`);
 		assert.deepEqual(await page.evaluate(() => ({ page: window.scrollY, transcript: document.querySelector<HTMLElement>('[data-region="transcript"]')?.scrollTop })), beforeArrowScroll, "selection reveal does not scroll the page or transcript");
+		await options.evaluate((el: HTMLElement) => { el.scrollTop = el.scrollHeight; });
 		const final = page.getByRole("option", { name: /cmd-39/ });
 		await final.hover();
 		assert.match(await page.locator('[role="option"][aria-selected="true"] code').textContent() ?? "", /cmd-39/, "hover selects the final command by identity");

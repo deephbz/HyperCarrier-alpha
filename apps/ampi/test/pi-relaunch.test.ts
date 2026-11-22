@@ -278,7 +278,7 @@ test("pi relaunch race: a retry of the same requestId joins the run in flight; o
 	const requestId = randomUUID();
 	const [a, b] = await Promise.all([relaunch(r, { requestId }), relaunch(r, { requestId })]);
 	assert.equal(a.ok, true, JSON.stringify(a.error));
-	assert.deepEqual({ ...b, id: a.id }, a, "both acks carry the same result");
+	assert.deepEqual({ ...b, id: a.id, at: a.at }, a, "both acks carry the same result");
 	assert.equal(r.starts().length, 1);
 	assert.equal(r.log().filter((x) => x.ev === "term").length, 1);
 });

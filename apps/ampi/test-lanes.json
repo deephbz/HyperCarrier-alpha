@@ -8,6 +8,7 @@
     "arc-recovery.test.ts",
     "arc-service-lock.test.ts",
     "arc-service-adapters.test.ts",
+    "arc-service-runtime-recovery.test.ts",
     "arc-service-runtime.test.ts",
     "arc-unsupported-state.test.ts",
     "arc-v2.test.ts",
