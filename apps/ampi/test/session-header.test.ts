@@ -171,7 +171,10 @@ for (const [engine, type, path] of ENGINES) {
 		const build = page.locator(".arc-status .arc-actions > button").first();
 		await build.scrollIntoViewIfNeeded();
 		assert.ok(await build.isVisible(), "640x400/200%: Build is reachable by scrolling the panel body");
-		assert.ok(await build.isEnabled(), "640x400/200%: Build is enabled");
+		// seededArc proves a readable Arc; the panel admits a Build only once the Arc service state also allows one, and a
+		// loaded runner can still report a refusing state (busy, updating) then. Wait for that admission; never read it once.
+		await page.waitForFunction(() => document.querySelector<HTMLButtonElement>(".arc-status .arc-actions > button")?.disabled === false, undefined, { timeout: 15_000 }).catch(() => undefined);
+		assert.ok(await build.isEnabled(), `640x400/200%: Build is enabled: ${await page.locator(".arc-status").textContent()}`);
 		await build.click();
 		await seededArc();
 		await page.setViewportSize({ width: 320, height: 480 });

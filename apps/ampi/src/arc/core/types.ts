@@ -4,10 +4,10 @@ import type { ArcReceipt, BuildRecord, WaitFacts, BuildStatus, RequestResult, Di
 export type ArcItem = { id: string; kind: "user" | "continuation" | "stop" | "error" | "compaction"; owner: boolean; t: string | null; text: string; truncated?: boolean };
 export type ArcEntry = { id: string; at: string; tokens: number; cost: number };
 export type ArcSource = { session: string; selector: string; fingerprint: string; items: ArcItem[]; entries: ArcEntry[] };
-export type SourceSnapshot = ArcSource & { sourceVersion: string };
+export type SourceSnapshot = ArcSource & { sourceVersion: string; prefixWitness?: string };
 export type SourceCheck = { kind: "same-prefix" } | { kind: "history-changed"; sourceVersion: string; reason: string } | { kind: "unavailable"; reason: string };
 export interface SourcePort {
- snapshot(sessionRef: string): Promise<SourceSnapshot>;
+ snapshot(sessionRef: string, condition?: { expectedPrefix?: string; deferRepair?: boolean }): Promise<SourceSnapshot>;
  // Only authoritative evidence may report history-changed. Appends preserve a prefix.
  check(snapshot: SourceSnapshot): Promise<SourceCheck>;
 }
@@ -45,7 +45,7 @@ export type BuildJob = {
  record: BuildRecord; snapshot?: SourceSnapshot; checkpoint?: ArcReceipt; complete?: boolean;
  calls: CallRecord[]; callHistory: CallRecord[]; reason?: string; elapsedMs?: number; nextAt?: string;
 };
-export type RequestOptions = { trigger?: "stop" | "owner"; nextAt?: string };
+export type RequestOptions = { trigger?: "stop" | "owner"; nextAt?: string; expectedPrefix?: string };
 export type BuilderCommand = Omit<Extract<AcceptedCommand, { kind: BuildKind }>, "buildId"> | Omit<Extract<AcceptedCommand, { kind: "dismiss" }>, "revision">;
 export type AcceptedCommand = { requestId: string; sessionRef: string; kind: BuildKind; requester: string; buildId: string; options?: RequestOptions } | { requestId: string; sessionRef: string; kind: "dismiss"; dropId: string; toPosition: number; revision: number };
 export type ReceiptRevision = { revision: number; sessionRef: string; receipt: ArcReceipt };

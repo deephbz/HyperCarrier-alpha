@@ -38,6 +38,36 @@ export function storeIncarnation(store: string, create = false): string | null {
   throw new Error(`Cannot read or initialize Arc store identity ${path}. Stop all AmPi processes on this Host, restore or remove this file, then restart AmPi.`, { cause: error });
  }
 }
+export type StopState = { generation: string; recovery?: { generation: string; state: "pending" }; uncertainty?: "unknown-prior-stop" };
+export function readStop(store: string): StopState | undefined {
+ const value = readJson(join(store, "stop.json")) as StopState | undefined;
+ if (value === undefined) return;
+ if (!value || typeof value !== "object" || typeof value.generation !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value.generation) ||
+     value.recovery !== undefined && (!value.recovery || value.recovery.state !== "pending" || value.recovery.generation !== value.generation) ||
+     value.uncertainty !== undefined && value.uncertainty !== "unknown-prior-stop") throw Object.assign(new Error("Invalid Arc stop obligation"), { code: "invalid-stop" });
+ return value;
+}
+export function fenceStop(lock: ServiceLock, forced = false): StopState {
+ let prior: StopState | undefined, corrupt = false;
+ try { prior = readStop(lock.store); }
+ catch (error) { if (!(error instanceof SyntaxError) && (error as { code?: string }).code !== "invalid-stop") throw error; corrupt = true; }
+ // A locked child's stderr is service.log: the trace outlives the one result that reports it.
+ if (corrupt) console.error(`${new Date().toISOString()} Arc stop: the record of an earlier stop is unreadable. Its signals are unknown; it may have interrupted a Build and charged a model call. AmPi cancels the queued Builds before Arc runs again.`);
+ const generation = randomUUID(), pending = forced || corrupt || Boolean(prior?.recovery);
+ // Uncertainty lives only while its cancellation is pending. The completing
+ // stop reports it once; service.log keeps the durable trace.
+ const uncertainty = corrupt ? "unknown-prior-stop" as const : prior?.recovery ? prior.uncertainty : undefined;
+ const next: StopState = { generation, ...(pending ? { recovery: { generation, state: "pending" as const } } : {}), ...(uncertainty ? { uncertainty } : {}) };
+ try { durableJson(lock, "stop.json", next); }
+ catch (error) { throw Object.assign(error as Error, { recoveryUncertainty: uncertainty }); }
+ return next;
+}
+export function completeRecovery(lock: ServiceLock, generation: string): void {
+ const stop = readStop(lock.store);
+ if (!stop?.recovery || stop.generation !== generation) throw new Error("The stop record changed during cancellation");
+ durableJson(lock, "stop.json", { generation });
+}
+
 export function durableJson(lock: ServiceLock, name: string, value: unknown): void {
  lock.assertHeld();
  if (!/^[a-z][a-z0-9-]*\.json$/.test(name)) throw new Error("Invalid Arc store filename");

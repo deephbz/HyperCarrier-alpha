@@ -8,10 +8,12 @@ import { fileURLToPath } from "node:url";
 import { agentModules } from "../src/pi/agent-modules.ts";
 import { controlStamp, type Stamp } from "../src/shared/build.ts";
 import { SCHEMA as CONTROL_PROTOCOL } from "@hypercarrier/pi-hc-control/endpoint";
-import { tempHome } from "./helpers.ts";
+import { cleanupTempHomes, deferTempHomeCleanupUntilFixturesStop, tempHome } from "./helpers.ts";
+import { cleanupIsolatedHome } from "./isolate.ts";
 import { after } from "node:test";
 import { maintainHost } from "../src/arc/service/client.ts";
 const arcStores = new Set<string>();
+deferTempHomeCleanupUntilFixturesStop();
 export async function stopFixture(f: { agentDir: string }): Promise<void> {
  const result = await maintainHost({ id: "synthetic", label: "Synthetic", kind: "pi-local", agentConfig: { agentDir: f.agentDir } }, { op: "stop", timeoutMs: 2000 });
  if (result.state !== "stopped") throw new Error(`Synthetic Arc service did not stop: ${JSON.stringify(result)}`);
@@ -19,6 +21,8 @@ export async function stopFixture(f: { agentDir: string }): Promise<void> {
 }
 after(async () => {
  for (const store of arcStores) await stopFixture({ agentDir: dirname(store) });
+ cleanupTempHomes();
+ cleanupIsolatedHome();
 });
 
 export const AGENT = fileURLToPath(new URL("../src/pi/remote-agent.cjs", import.meta.url));
@@ -90,6 +94,14 @@ else if (a === "agent" && b === "get") {
   const p = paneOf(c);
   if (!p) refuse("pane_not_found", "no pane " + c);
   reply({ pane: paneView(p) });
+} else if (a === "pane" && b === "process-info") {
+  // A pane's \`pi\` is a live process the test or \`agent start\` made; without one, the shell is the foreground.
+  const p = paneOf(opt("--pane"));
+  if (!p) refuse("pane_not_found", "no pane");
+  const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; } };
+  const pi = p.pi && alive(p.pi.pid) ? p.pi : null, shell = p.noShell && pi ? pi.pid : state.shellPid;
+  reply({ process_info: { pane_id: p.pane_id, shell_pid: shell, foreground_process_group_id: pi ? pi.pid : shell,
+    foreground_processes: pi ? [{ argv0: "pi", cwd: p.cwd, name: "node", pid: pi.pid }] : [{ argv0: "-zsh", cwd: p.cwd, name: "zsh", pid: shell }] } });
 } else if (a === "pane" && b === "list") {
   reply({ panes: state.agents.filter((p) => p.workspace_id === opt("--workspace")).map(paneView) });
 } else if (a === "pane" && b === "split") {
@@ -137,6 +149,12 @@ else if (a === "agent" && b === "get") {
   const at = (flag) => (rest.includes(flag) ? rest[rest.indexOf(flag) + 1] : undefined);
   // --session <path> resumes an existing file; --session-id <id> starts a Session that has no file until a message.
   const resume = at("--session");
+  // With \`piBin\`, a started agent is a live fake Pi: a detached process that outlives this CLI call.
+  if (state.piBin) {
+    const child = require("child_process").spawn(process.execPath, [state.piBin, ...rest], { detached: true, stdio: "ignore", env: { ...process.env, FAKE_PI: JSON.stringify(state.piOpts || {}) } });
+    child.unref();
+    p.pi = { pid: child.pid };
+  }
   Object.assign(p, { name: c, terminal_title_stripped: "pi", agent_status: "idle", focused: false, agent: "pi",
     agent_session: resume ? { kind: "path", agent: "pi", value: resume } : { kind: "none" }, ...(resume ? {} : { startSession: at("--session-id") }) });
   save();

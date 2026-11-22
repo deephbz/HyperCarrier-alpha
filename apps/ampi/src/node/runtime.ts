@@ -8,7 +8,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, hostname, userInfo } from "node:os";
 import { basename, join } from "node:path";
-import { type MutableReplicatedState, replicatedState, type WatchEnd } from "@earendil-works/chord";
+import type { WatchEnd } from "@earendil-works/chord/watch";
 import { BACKGROUND_CONTEXT, type Context } from "@earendil-works/chord/context";
 import { type Api, type AssistantMessage, type AssistantMessageEventStream, createAssistantMessageEventStream, type Model, type StreamOptions } from "@earendil-works/pi-ai";
 import type { Models, MutableModels } from "@earendil-works/pi-ai/models";
@@ -48,7 +48,9 @@ import type { ActionAck, Activity, CommandAck, ControlCompaction, ControlSubmiss
  */
 type NodeThreadsState = Omit<ThreadsState, "threads"> & { threads: Record<string, ThreadSummary> };
 import { ampiCore } from "./core-extension.ts";
-import { defaultModel, listModels, openModels, startModel, testSafeModels } from "./models.ts";
+import { defaultModel, listModels, modelsJsonErrors, openModels, refreshModels, startModel, testSafeModels } from "./models.ts";
+import { type MutableNodeState, nodeState } from "./node-state.ts";
+import type { ThreadReloaded } from "../shared/reload-protocol.ts";
 import { assertTestIsolation } from "./test-mode.ts";
 import { type PiConfigOptions, piResources } from "../shared/pi-config.ts";
 import { activityOf, contentText, queueOrigin, RETURNED_KIND, type ReturnedState } from "./projection.ts";
@@ -303,7 +305,7 @@ export class NodeRuntime {
 	readonly plugins: NodePlugin[];
 	readonly stores = new Map<string, Store>();
 	readonly accounts: Accounts;
-	readonly threads: MutableReplicatedState<NodeThreadsState>;
+	readonly threads: MutableNodeState<NodeThreadsState>;
 	readonly info: NodeInfo;
 	/** The harness settings now. pi-durable reads them at each use, on every commit too. */
 	readonly settings: () => HarnessSettings;
@@ -436,7 +438,7 @@ export class NodeRuntime {
 				Object.assign(merged, (typeof plugin.settings === "function" ? plugin.settings(this.models) : plugin.settings) ?? {});
 			return { toolExecution: "parallel", retry: { maxRetries: 3 }, restartLimit: 5, ...merged, extensions: defaults };
 		};
-		this.threads = replicatedState<NodeThreadsState>({ threads: {}, backend: "durable" });
+		this.threads = nodeState<NodeThreadsState>({ threads: {}, backend: "durable" });
 		this.info = {
 			nodeId: this.#nodeId(),
 			hostname: hostname(),
@@ -1194,9 +1196,13 @@ export class NodeRuntime {
 				return inner.completeSimple(model, context, options);
 			},
 		};
+		// A generation resolves its model here, before its request: a catalog edit applies to that same generation.
+		// The refresh is stamp-gated (a few `stat` calls).
+		const catalog = this.models;
 		return new Proxy(inner, {
 			get(target, key) {
 				if (Object.hasOwn(gated, key)) return gated[key as keyof typeof gated];
+				if (key === "getModel") refreshModels(catalog);
 				const value = Reflect.get(target, key, target);
 				return typeof value === "function" ? value.bind(target) : value;
 			},
@@ -1773,6 +1779,27 @@ export class NodeRuntime {
 		const item = inbox?.items.find((candidate) => String(candidate.id) === submissionId);
 		if (item && item.mode !== "write" && queueOrigin(item.entry as never, contentText(item.content as never)))
 			throw new NodeError("bad_request", `A queued Team input cannot be ${verb}: durable-team owns its delivery`);
+	}
+
+	/**
+	 * `thread.reload`: re-reads the inputs a thread runs with, in place, and reports. The model catalog is re-read with
+	 * no stamp compare. Settings and Pi resources are read at each use, keyed by their file stamps, so they are already
+	 * current. A plugin input poll and a summary refresh run now. Nothing is committed and no thread is interrupted:
+	 * the catalog is host-wide, so sibling threads see it at their next generation, and a running generation keeps
+	 * the model it resolved. Extension code is part of the node build: a change needs a node restart.
+	 */
+	async reloadThread(key: string): Promise<ThreadReloaded> {
+		const { store, conversationId } = await this.thread(key);
+		const outcome = refreshModels(this.models, { force: true });
+		const warnings = [...modelsJsonErrors(this.models)];
+		if (outcome === "kept") warnings.push("A models file did not parse. The previous model catalog stays.");
+		this.#pollInputs();
+		this.#schedule(store, conversationId, 0);
+		const agent = await store.harness.snapshot(AgentDoc, Number(conversationId) as ConversationId, BACKGROUND_CONTEXT);
+		const ref = agent?.model;
+		if (ref && !this.models.getModel(ref.provider, ref.modelId))
+			warnings.push(`The thread's model ${ref.provider}/${ref.modelId} is not in the catalog. Pick a model before the next turn.`);
+		return { threadId: key, reloaded: ["models", "settings", "resources"], providers: this.models.getProviders().length, warnings };
 	}
 
 	async listModels() {

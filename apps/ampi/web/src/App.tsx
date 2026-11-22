@@ -13,7 +13,7 @@ import { SessionUnresolved } from "./components/SessionUnresolved.tsx";
 import { appLayers } from "./slot-registry.ts";
 import { ThreadView } from "./components/ThreadView.tsx";
 import { hashRoute, href, MOD, type Route } from "./util.ts";
-import { FeedsContext, FocusIntentContext } from "./context.ts";
+import { FeedsContext, FocusIntentContext, FocusPlacementContext } from "./context.ts";
 import { requestNotificationPermission, useAttention } from "./attention.ts";
 import { perfMarkPainted } from "./perf.ts";
 import { focusRegion, handleRegionScrollKey, installKeymapDispatcher, openOverlay, useKeyAction } from "./keymap.ts";
@@ -24,6 +24,7 @@ import { arriveEntry, goBack, goForward, installNavLinks, navigate, noteFocus, R
 import { applyDisplay, type DisplaySettings, scaleOf } from "./display.ts";
 import { bindDrawerSwipe } from "./drawer-swipe.ts";
 import { installTouchAxis } from "./touch-axis.ts";
+import { PHONE_BREAKPOINT_PX } from "./phone-breakpoint.ts";
 
 function savedWidth(key: string, fallback: number, min: number, max: number) {
 	const value = Number(localStorage.getItem(key) ?? fallback);
@@ -39,7 +40,7 @@ const viewWidth = () => document.documentElement.clientWidth;
  * its media query at render and subscribes to that query's change event, then marks `.app` with `side-overlay`.
  * The mark is an observation for tests: nothing styles or branches on it.
  */
-const sideOverlayQuery = matchMedia("(max-width: 600px)");
+const sideOverlayQuery = matchMedia(`(max-width: ${PHONE_BREAKPOINT_PX}px)`);
 const sideOverlay = () => sideOverlayQuery.matches;
 
 type Drag = { app: HTMLElement; pointer: number; x: number; scale: number; start: number; width: number };
@@ -130,15 +131,22 @@ function HostFeed({ host, onData }: { host: HostState; onData: (id: string, data
 	return null;
 }
 
-function useRoute() {
-	return useSyncExternalStore(
-		(listener) => {
-			window.addEventListener("hashchange", listener);
-			window.addEventListener(ROUTE_EVENT, listener);
-			return () => { window.removeEventListener("hashchange", listener); window.removeEventListener(ROUTE_EVENT, listener); };
-		},
-		() => location.hash,
-	);
+function sessionKey(route: Route) {
+	return route.host && route.thread ? `${route.host}\n${route.thread}` : undefined;
+}
+
+function useRoute(focusGeneration: { current: number }, routeGeneration: { current: number }, session: { current: string | undefined }) {
+	const subscribe = useCallback((listener: () => void) => {
+		const changed = () => {
+			const next = sessionKey(hashRoute());
+			if (next !== session.current) { session.current = next; routeGeneration.current = focusGeneration.current; }
+			listener();
+		};
+		window.addEventListener("hashchange", changed);
+		window.addEventListener(ROUTE_EVENT, changed);
+		return () => { window.removeEventListener("hashchange", changed); window.removeEventListener(ROUTE_EVENT, changed); };
+	}, [focusGeneration, routeGeneration, session]);
+	return useSyncExternalStore(subscribe, () => location.hash);
 }
 
 /**
@@ -156,7 +164,10 @@ function linkRoute(route: Route, hosts: HostState[]): { route: Route; resolved: 
 export function App() {
 	const { hosts, connected, listed: hostsListed } = useHosts();
 	const skew = useVersionSkew();
-	const hash = useRoute();
+	const focusGeneration = useRef(0);
+	const routeGeneration = useRef(0);
+	const routeSession = useRef(sessionKey(hashRoute()));
+	const hash = useRoute(focusGeneration, routeGeneration, routeSession);
 	const { route, resolved } = linkRoute(hashRoute(), hosts);
 	const [feeds, setFeeds] = useState<Record<string, HostThreads>>({});
 	const [dialog, setDialog] = useState<"new" | "host" | "palette" | "commands" | "display" | "help" | undefined>();
@@ -182,21 +193,28 @@ export function App() {
 	// Whether a panel name renders in the current Session; set each render, read by the stable panel writer.
 	const availableRef = useRef<(name: string) => boolean>(() => false);
 	const focusSeq = useRef(0);
-	const pendingFocus = useRef<{ seq: number; chain: Target[]; ifLost?: true } | undefined>(undefined);
-	const [focusRequest, setFocusRequest] = useState<{ seq: number; chain: Target[]; ifLost?: true }>();
+	const pendingFocus = useRef<{ seq: number; chain: Target[]; ifLost?: true; generation: number } | undefined>(undefined);
+	const [focusRequest, setFocusRequest] = useState<{ seq: number; chain: Target[]; ifLost?: true; generation: number }>();
 	// A Session's regions mount after its data loads, so a request's first target may not exist yet. The adapter keeps it
 	// and focuses it when it mounts. The wait belongs to one arrival: the next route arrival, the next key request, any
 	// input (pointer, key, wheel) and any focus not placed here end it. No region focuses itself on mount: this adapter is
 	// the only writer of a requested focus.
-	const awaiting = useRef<Target | undefined>(undefined);
+	const awaiting = useRef<{ target: Target; generation: number } | undefined>(undefined);
 	const placing = useRef(false);
 	const place = useRef((target: Target) => {
 		placing.current = true;
 		try { return focusRegion(target); } finally { placing.current = false; }
 	}).current;
+	const captureFocusGeneration = useCallback(() => focusGeneration.current, []);
+	const placeElement = useCallback((target: HTMLElement, generation: number, options?: FocusOptions) => {
+		if (generation !== focusGeneration.current) return false;
+		placing.current = true;
+		try { target.focus(options); } finally { placing.current = false; }
+		return true;
+	}, []);
 	const applyView = useRef({ sidebar: (_show: boolean) => {}, panel: (_open: boolean) => {} });
 	// `set` is the View a writer just made and the last render does not hold yet (panel.set).
-	const focusIntent = useRef((intent: KeyIntent, entry?: Target, set?: Partial<View>): boolean => {
+	const focusIntent = useRef((intent: KeyIntent, entry?: Target, set?: Partial<View>, generation = focusGeneration.current): boolean => {
 		const region = (document.activeElement?.closest<HTMLElement>("[data-region]")?.dataset.region ?? null) as Region | null;
 		const next = transition({ ...viewRef.current, modal: openOverlay() !== undefined, ...set }, { region, recent: recentRegions.current, entry }, intent);
 		if (next.kind === "unavailable") return false;
@@ -206,7 +224,7 @@ export function App() {
 		if (next.ifLost && pendingFocus.current && !pendingFocus.current.ifLost) return true;
 		recentRegions.current = next.recent;
 		if (!next.ifLost) awaiting.current = undefined;
-		pendingFocus.current = { seq: ++focusSeq.current, chain: next.chain, ifLost: next.ifLost };
+		pendingFocus.current = { seq: ++focusSeq.current, chain: next.chain, ifLost: next.ifLost, generation };
 		setFocusRequest(pendingFocus.current);
 		return true;
 	}).current;
@@ -252,7 +270,7 @@ export function App() {
 		arrivedThread.current = thread;
 		if (arrival.kind === "traverse") focusIntent("history.move", arrival.focus);
 		else if (intent) focusIntent(intent);
-		else if (opened) focusIntent("session.switch");
+		else if (opened) focusIntent("session.switch", undefined, undefined, routeGeneration.current);
 	}, [hash]);
 	useKeyAction("new", () => setDialog("new"));
 	useEffect(() => installKeymapDispatcher(), []);
@@ -274,7 +292,7 @@ export function App() {
 	useEffect(() => { if (zoomToast) { const timer = setTimeout(() => setZoomToast(""), 1800); return () => clearTimeout(timer); } }, [zoomToast]);
 	useEffect(() => {
 		const record = (event: FocusEvent) => {
-			if (!placing.current) awaiting.current = undefined;
+			if (!placing.current) { awaiting.current = undefined; focusGeneration.current++; }
 			lastFocused.current = event.target as Element;
 			const region = (event.target as Element | null)?.closest?.<HTMLElement>("[data-region]")?.dataset.region;
 			if (region === "transcript" || region === "composer" || region === "panel") recentRegions.current = remember(recentRegions.current, region);
@@ -296,7 +314,9 @@ export function App() {
 		document.addEventListener("focusout", leave);
 		// Any other writer that removes or inerts the focused element (resize, squeeze, auto-collapse) is a layout change.
 		const lost = new MutationObserver(() => {
-			if (awaiting.current && place(awaiting.current)) { awaiting.current = undefined; return; }
+			const wait = awaiting.current;
+			if (wait && wait.generation === focusGeneration.current && place(wait.target)) { awaiting.current = undefined; return; }
+			if (wait && wait.generation !== focusGeneration.current) awaiting.current = undefined;
 			const was = lastFocused.current;
 			if (document.activeElement !== document.body || !was || (was.isConnected && !was.closest("[inert]"))) return;
 			lastFocused.current = null;
@@ -309,18 +329,19 @@ export function App() {
 		if (!focusRequest) return;
 		const frame = requestAnimationFrame(() => {
 			if (pendingFocus.current?.seq === focusRequest.seq) pendingFocus.current = undefined;
+			if (focusRequest.generation !== focusGeneration.current) return;
 			if (focusRequest.ifLost && document.activeElement && document.activeElement !== document.body) return;
 			const [first, ...rest] = focusRequest.chain;
 			if (place(first!)) return;
-			if (!focusRequest.ifLost) awaiting.current = first;
+			if (!focusRequest.ifLost) awaiting.current = { target: first!, generation: focusRequest.generation };
 			for (const target of rest) if (place(target)) return;
 		});
 		return () => cancelAnimationFrame(frame);
 	}, [focusRequest]);
 	useEffect(() => {
-		const pointer = () => { document.documentElement.dataset.input = "pointer"; awaiting.current = undefined; };
-		const keyboard = () => { document.documentElement.dataset.input = "keyboard"; awaiting.current = undefined; };
-		const wheel = () => { awaiting.current = undefined; };
+		const pointer = () => { document.documentElement.dataset.input = "pointer"; awaiting.current = undefined; focusGeneration.current++; };
+		const keyboard = () => { document.documentElement.dataset.input = "keyboard"; awaiting.current = undefined; focusGeneration.current++; };
+		const wheel = () => { awaiting.current = undefined; focusGeneration.current++; };
 		document.addEventListener("pointerdown", pointer, true);
 		document.addEventListener("keydown", keyboard, true);
 		document.addEventListener("wheel", wheel, { capture: true, passive: true });
@@ -456,6 +477,7 @@ export function App() {
 	return (
 		<FeedsContext.Provider value={feeds}>
 		<FocusIntentContext.Provider value={focusIntent}>
+		<FocusPlacementContext.Provider value={{ capture: captureFocusGeneration, place: placeElement }}>
 		<div ref={appRef} className={`app ${sideHidden ? "sidebar-hidden" : ""} ${showPanel ? "has-panel" : ""} ${overlayPanel ? "panel-overlay" : ""} ${oneSide ? "side-overlay" : ""}`} style={{ "--side-w": `${sidebarWidth}px`, "--side-visible": sideHidden ? "0px" : "var(--side-w)", "--panel-w": `${panelWidth}px` } as CSSProperties}>
 			{zoomToast && <div className="toast" role="status" aria-live="polite">{zoomToast}</div>}
 			{skew && <div className="skew-banner" role="alert" data-version-skew>{skewText.page} <button className="btn small" onClick={() => location.reload()}>Reload</button></div>}
@@ -498,6 +520,7 @@ export function App() {
 			{dialog === "help" && <HelpDialog onClose={() => setDialog(undefined)} />}
 			{appLayers.map((Layer, i) => <Layer key={i} feeds={feeds} hosts={hosts} />)}
 		</div>
+		</FocusPlacementContext.Provider>
 		</FocusIntentContext.Provider>
 		</FeedsContext.Provider>
 	);

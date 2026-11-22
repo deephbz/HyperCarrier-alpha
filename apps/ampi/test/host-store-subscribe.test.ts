@@ -5,6 +5,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium, type WebSocketRoute } from "playwright";
 import { loadBudget, PAGE_LOAD_MS } from "./page-load.ts";
+import { catchAllRoute } from "./catch-all-route.ts";
 import { build } from "vite";
 import react from "@vitejs/plugin-react";
 // @ts-ignore: browser discovery is shared ESM.
@@ -43,7 +44,7 @@ test("host store: hub frames reach every consumer, and unrelated rerenders keep 
 		page.setDefaultTimeout(2000);
 		loadBudget(page);
 		let socket: WebSocketRoute | undefined;
-		await page.route("**/*", (route) => route.fulfill({ contentType: "text/html", body: `<div id="root"></div><script>${script}</script>` }));
+		await catchAllRoute(page, "http://localhost", (route) => route.fulfill({ contentType: "text/html", body: `<div id="root"></div><script>${script}</script>` }));
 		await page.routeWebSocket("**/ws", (ws) => { socket = ws; });
 		await page.goto("http://localhost/");
 		const text = async () => [await page.locator("#a").textContent(), await page.locator("#b").textContent()];

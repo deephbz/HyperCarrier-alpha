@@ -31,7 +31,7 @@ export async function hubCommand(command: string, rest: string[]): Promise<void>
    if (args.op === "stop" && !args.json) console.error("Stopping Arc drains Builds for every client. A linked hub restarts it within seconds.");
    const results = await Promise.all(hosts.map(async host => {
     try {
-     const result = await maintainHost(host, { op: args.op });
+     const result = await maintainHost(host, { op: args.op, ...(args.forceUnverified ? { forceUnverified: true } : {}) });
      if (["error", "unreachable", "cannot-start", "fault", "busy", "invalid-settings", "no-sign-in"].includes(result.state)) process.exitCode = 1;
      return { ...result, host: host.id };
     } catch (error) { process.exitCode = 1; return serviceError(host.id, error); }

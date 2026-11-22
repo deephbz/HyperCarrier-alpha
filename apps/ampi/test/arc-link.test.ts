@@ -28,6 +28,21 @@ function replica(t: any) {
  const r = new ArcReplica(options); t.after(() => r.disconnect()); return { r, options, dir, sent };
 }
 
+test("Arc replica: repair and retry waits omit expired display deadlines without changing scheduling facts", t => {
+ const { r, options } = replica(t); let changes = 0; options.changed = () => { changes++; };
+ t.mock.timers.enable({ apis: ["Date"], now: 100000 }); r.receive(hello());
+ const nextAt = new Date(101000).toISOString();
+ const scheduled: Extract<ArcFrame, { t: "arc.status" }> = { ...status(1), statuses: [], scheduled: [{ sessionRef: "pi:s", nextAt, trigger: "owner" }] };
+ r.receive(scheduled); assert.equal(r.value("pi:s").status.nextAt, nextAt); const before = changes;
+ t.mock.timers.tick(1000); r.receive({ ...scheduled, seq: 2 });
+ assert.equal(changes, before + 1, "an otherwise unchanged heartbeat must publish deadline expiry");
+ assert.equal(r.value("pi:s").status.state, "queued"); assert.equal(r.value("pi:s").status.nextAt, undefined, "a repair wait cannot render a past starts time");
+ assert.equal(scheduled.scheduled[0]!.nextAt, nextAt, "the source scheduling deadline is unchanged");
+ const retry = { ...status(3, "failed"), statuses: [{ sessionRef: "pi:s", buildId: "failed", state: "failed" as const, nextAt }] };
+ r.receive(retry); assert.equal(r.value("pi:s").status.nextAt, undefined, "the failed-Build line cannot render a past next-try time");
+ assert.equal(retry.statuses[0]!.nextAt, nextAt);
+});
+
 test("Arc replica: equal status heartbeat is quiet; changed status still invalidates", t => {
  const { r, options } = replica(t);
  let changes = 0; options.changed = () => { changes++; };

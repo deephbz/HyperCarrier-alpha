@@ -16,8 +16,9 @@ const USAGE = `usage: ampi [command]
                             otherwise it ends with the browser session
   open [--open]             print the link to the running hub, with its access key
   doctor                    check this machine and every host, and say how to fix problems
-  arc status [--host ID] [--json] | stop (--host ID | --all)
+  arc status [--host ID] [--json] | stop (--host ID [--force-unverified] | --all)
                             Stopping Arc drains Builds for every client. A linked hub restarts it within seconds.
+                            --force-unverified: on macOS, also stop a silent Arc service that AmPi cannot prove holds the lock (no effect on Linux)
                             exit 0: success; 1: bad/unknown Host state; 2: usage
                             --json: smoke checks each Host state; unreachable can be report-only
   status                    show this machine's node

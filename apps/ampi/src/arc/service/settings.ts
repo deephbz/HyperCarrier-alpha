@@ -12,9 +12,12 @@ export function serviceSettings(agentDir: string) {
  const file = join(agentDir, "settings.json"), base = arcSettings(file);
  sessionDirectory(agentDir);
  const block = (strictArcSettings(file).ampi_arc ?? {}) as Record<string, unknown>;
- const { concurrency = 8 } = block;
+ const { concurrency = 8, sourceVerifyBytesPerMinute = 64_000_000, sourceVerifyIntervalMs = 1_800_000 } = block;
  if (!Number.isSafeInteger(concurrency) || Number(concurrency) < 1 || Number(concurrency) > 256) throw settingsError(file, "ampi_arc.concurrency", "must be an integer from 1 to 256");
- return { ...base, concurrency: Number(concurrency) };
+ for (const [key, value] of Object.entries({ sourceVerifyBytesPerMinute, sourceVerifyIntervalMs })) {
+  if (!Number.isSafeInteger(value) || Number(value) < 1) throw settingsError(file, `ampi_arc.${key}`, "must be a positive safe integer");
+ }
+ return { ...base, concurrency: Number(concurrency), sourceVerifyBytesPerMinute: Number(sourceVerifyBytesPerMinute), sourceVerifyIntervalMs: Number(sourceVerifyIntervalMs) };
 }
 // The five-minute no-hub grace replaced this key. Startup names it once instead of failing.
 export function ignoredIdleHours(agentDir: string): boolean {

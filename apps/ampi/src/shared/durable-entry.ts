@@ -1,6 +1,6 @@
 // Durable entry types for the wire contract.
 // Node projections produce these values; hub and web transcript consumers read them.
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { InjectedMessage } from "./protocol.ts";
 
 export type UiBlock =

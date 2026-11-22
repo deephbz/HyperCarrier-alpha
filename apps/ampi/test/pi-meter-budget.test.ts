@@ -1,6 +1,6 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -54,8 +54,9 @@ test("pi meter budget: the remote agent's limits give hc-auto-compact's W for ev
 	}
 });
 
-test("pi meter budget: a shipped module inlines its relative imports and refuses bare ones", async () => {
+test("pi meter budget: a shipped module inlines its relative imports and refuses bare ones", async (t) => {
 	const dir = mkdtempSync(join(tmpdir(), "agent-modules-"));
+	t.after(() => rmSync(dir, { recursive: true, force: true }));
 	writeFileSync(join(dir, "leaf.mjs"), "export const n = 7;\n");
 	writeFileSync(join(dir, "root.mjs"), 'import { n } from "./leaf.mjs";\nexport const twice = n * 2;\n');
 	writeFileSync(join(dir, "bare.mjs"), 'import { readFileSync } from "node:fs";\nexport { readFileSync };\n');

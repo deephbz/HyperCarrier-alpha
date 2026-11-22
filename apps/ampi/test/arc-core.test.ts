@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { createBuilder, fingerprint, type Admission, type BuilderOptions, type BuilderState, type ModelInput, type ModelResult, type SourceSnapshot, type Store } from "../src/arc/core/index.ts";
 import { constructArc, storeAnswer, validateAnswer } from "../src/arc/core/construct.ts";
 import { hostAdmission } from "../src/arc/service/admission.ts";
+import { automaticSchedule } from "../src/arc/service/schedule.ts";
 import type { ArcAnswer, BuildRecord } from "../src/shared/arc.ts";
 
 const MODEL = "fixture/model";
@@ -36,6 +37,51 @@ function fixture(overrides: Partial<BuilderOptions> = {}) {
 }
 function buildId(result: Awaited<ReturnType<ReturnType<typeof createBuilder>["request"]>>) { assert.ok("buildId" in result); return result.buildId; }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
+
+test("Arc automatic admission creates no job for a trigger already covered by manual Build", async () => {
+ const f = fixture(), builder = f.create(); let time = 0;
+ const scheduler = automaticSchedule({ builder, source: { snapshot: async () => ({ ...snapshot(), sourceVersion: "accounting-only-append", prefixWitness: "proof" }) }, state: {}, save: () => {}, now: () => time });
+ scheduler.observe(snapshot(), true);
+ await builder.request("host/session", "manual-cover", "manual", "owner"); await builder.run();
+ const receipt = structuredClone(builder.receipts()), jobs = Object.keys(f.store.data!.jobs).length, calls = f.calls.length;
+ assert.equal(builder.status()[0]!.state, "idle");
+ f.setSource({ ...snapshot(), sourceVersion: "accounting-only-append" });
+ time = 20000; await scheduler.tick(true); await builder.run();
+ assert.equal(Object.keys(f.store.data!.jobs).length, jobs); assert.equal(f.calls.length, calls);
+ assert.deepEqual(builder.receipts(), receipt); assert.deepEqual(scheduler.pending(), []);
+});
+
+test("Builder conditions guard coalescing and accepted IDs retain their exact prefix", async () => {
+ const f = fixture(); let proof = "prefix-a", reads = 0;
+ f.options.source.snapshot = async (_ref, condition) => {
+  reads++;
+  if (condition?.expectedPrefix && condition.expectedPrefix !== proof) throw Object.assign(new Error("Prefix changed"), { code: "source-prefix" });
+  return { ...snapshot(), prefixWitness: proof };
+ };
+ const builder = f.create();
+ const accepted = await builder.request("host/session", "auto-a", "incremental", "source", { expectedPrefix: proof });
+ const before = structuredClone(f.store.data); proof = "prefix-b";
+ assert.deepEqual(await builder.request("host/session", "auto-b", "incremental", "source", { expectedPrefix: "prefix-a" }), { outcome: "refused", code: "source", detail: "Prefix changed" });
+ assert.deepEqual(f.store.data, before, "a failed condition cannot coalesce or mutate a job");
+ const n = reads;
+ assert.deepEqual(await builder.request("host/session", "auto-a", "incremental", "source", { expectedPrefix: "prefix-a" }), accepted);
+ assert.equal(reads, n, "replay acknowledges accepted knowledge without another source read");
+ assert.deepEqual(await builder.request("host/session", "auto-a", "incremental", "source", { expectedPrefix: proof }), { outcome: "refused", code: "id-conflict" });
+});
+
+test("Builder automatic retries defer repair before job creation; manual work preempts", async () => {
+ const f = fixture(); const conditions: unknown[] = [];
+ f.options.source.snapshot = async (_ref, condition) => {
+  conditions.push(condition);
+  if ((condition as any)?.deferRepair) throw Object.assign(new Error("Repair pending"), { code: "source-repair-pending" });
+  return snapshot();
+ };
+ const builder = f.create();
+ assert.deepEqual(await builder.request("host/session", "retry", "incremental", "source"), { outcome: "refused", code: "source", transient: true, detail: "Repair pending" });
+ assert.equal(Object.keys(f.store.data!.jobs).length, 0); assert.deepEqual(builder.status(), []);
+ assert.equal((await builder.request("host/session", "manual", "manual", "owner")).outcome, "accepted");
+ assert.equal((conditions[0] as any).deferRepair, true); assert.notEqual((conditions[1] as any)?.deferRepair, true);
+});
 
 test("Builder cancellation fences clients, shares completion, persists terminal records and retains paid-call uncertainty", async () => {
  const started = deferred<void>(), released = deferred<void>();

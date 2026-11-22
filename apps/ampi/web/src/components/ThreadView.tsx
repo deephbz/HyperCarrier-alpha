@@ -12,10 +12,10 @@ import { findHost, hub, readVersioned, refusal, useHosts, useTopic } from "../cl
 import { hostKind } from "../host-kinds.ts";
 import { useThreadSurface } from "../shell-slots.ts";
 import { INDEXING, NOT_FOUND, STALE_VERSION } from "../../../src/shared/protocol.ts";
-import { entryId, entryState, flushEntry, noteEntry, revealStore } from "../nav.ts";
+import { entryId, entryState, flushEntry, navigate, noteEntry, revealStore } from "../nav.ts";
 import { ACTIVITY_LABEL, MOD, attentionOf, clock, go, href, money, tokens } from "../util.ts";
 import { Markdown } from "./Markdown.tsx";
-import { CloseAgentDialog, ResumeAgentDialog } from "./PiDialogs.tsx";
+import { CloseAgentDialog, RelaunchAgentDialog, ResumeAgentDialog } from "./PiDialogs.tsx";
 import { type LiveSlot, ToolArgs, ToolCall, type ToolResult } from "./ToolCall.tsx";
 import { RevealScope } from "./reveal-open.ts";
 import { markSeen } from "../seen.ts";
@@ -31,8 +31,8 @@ import { toCss } from "../display.ts";
 import { SessionTitle } from "./SessionTitle.tsx";
 import { PinStar } from "./Pinned.tsx";
 import { perfMarkPainted } from "../perf.ts";
-import { handleRegionScrollKey, isEditableTarget, isScrollKey, useKeyAction } from "../keymap.ts";
-import { useFocusIntent } from "../context.ts";
+import { dispatchKeyAction, handleRegionScrollKey, isEditableTarget, isScrollKey, useKeyAction } from "../keymap.ts";
+import { useFocusIntent, useFocusPlacement } from "../context.ts";
 import { touchAxis } from "../touch-axis.ts";
 
 // biome-ignore lint: live and inbox docs are loosely typed JSON
@@ -517,6 +517,7 @@ export function ThreadView({
 	// The newest entries paint first; the rest follow right after, so a switch shows the latest turn at once.
 	const [limit, setLimit] = useState(FIRST_PAINT);
 	const [closing, setClosing] = useState(false);
+	const [relaunching, setRelaunching] = useState(false);
 	const [resuming, setResuming] = useState(false);
 	// A place to restore, taken when this Session opens (Back, or switching back to it), unless a link names an entry.
 	const restore = useRef<Place | undefined>(undefined);
@@ -902,6 +903,14 @@ export function ThreadView({
 	const continued = useFrameContinues(JSON.stringify([host, threadId]), view?.sourceVersion, view?.entries);
 	const outline = useThreadOutline(host, threadId, reader ? view?.sourceVersion : undefined, missing?.entry, continued);
 	const promptPlace = usePromptPlace(scroller, outline.outline, reader);
+	const focusPlacement = useFocusPlacement();
+	// Rarebit is a reader view, so `r` jumps only where the Host kind serves reader views.
+	useKeyAction("rarebit.jump", reader ? (event) => {
+		if (event.target instanceof HTMLElement && isEditableTarget(event.target)) return;
+		event.preventDefault();
+		const focusGeneration = focusPlacement.capture();
+		navigate(href.thread(host, threadId, { entry: promptPlace.current?.id, panel: "rarebit" }), undefined, { focusGeneration });
+	} : undefined);
 	const closeFind = () => { readerMoved(); find.close(); focusIntent("find.close"); };
 	// A reveal from elsewhere (a link, a prompt step, the rail) shows the full transcript.
 	// eslint-disable-next-line react-hooks/exhaustive-deps
@@ -942,6 +951,7 @@ export function ThreadView({
 			}>
 				{stale && <span className="badge err">{error ?? "reconnecting…"}</span>}
 				{pi && summary && !summary.live && <span className="badge">not running</span>}
+				{pi && summary?.relaunching && <span className="badge">relaunching…</span>}
 				{Header && <Header host={host} threadId={threadId} summary={summary} hostState={hostState} close={() => setClosing(true)} />}
 				<PinStar host={host} threadId={threadId} title={summary?.title || title} />
 				{reader && <button className="btn ghost small" aria-label="Find in this Session" aria-expanded={find.open} title={`Find in this Session (${MOD}F)`} onClick={() => (find.open ? closeFind() : find.show())}>
@@ -965,6 +975,9 @@ export function ThreadView({
 									<button title={`Start another agent in a pane beside this one (${MOD}N)`} onClick={() => window.dispatchEvent(new Event("ampi:new"))}>
 										New agent beside
 									</button>
+									<button title="Stop Pi and start it again in this pane on the same Session; settings, extensions, model catalogs and the Pi build load fresh" disabled={paneActions.relaunching} onClick={() => setRelaunching(true)}>
+										Relaunch Pi…
+									</button>
 									<button title="Stop Pi and free its Herdr pane; Resume starts it again" onClick={() => setClosing(true)}>
 										Close pane…
 									</button>
@@ -976,6 +989,7 @@ export function ThreadView({
 			</FormRow>
 			{resuming && summary && <ResumeAgentDialog host={host} summary={summary} onClose={() => setResuming(false)} />}
 			{closing && summary && <CloseDialog host={host} summary={summary} onClose={() => setClosing(false)} />}
+			{relaunching && summary && <RelaunchAgentDialog host={host} summary={summary} onClose={() => setRelaunching(false)} />}
 			{reader && find.open && <div ref={findBar}><FindBar find={find} onClose={closeFind} /></div>}
 			{reader && (view?.agent as Any)?.readError && <p className="err-box" role="status">Last indexed copy · {(view!.agent as Any).readError}. New source bytes retry the read.</p>}
 			{historyCue && !historyError && (
@@ -1037,6 +1051,12 @@ export function ThreadView({
 						event.preventDefault();
 						event.stopPropagation();
 						toEnd();
+						return;
+					}
+					if (reader && event.key === "r" && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && !isEditableTarget(event.target)) {
+						event.preventDefault();
+						event.stopPropagation();
+						dispatchKeyAction("rarebit.jump", event.nativeEvent);
 						return;
 					}
 					// G goes to the newest end, past a frozen window's bottom.

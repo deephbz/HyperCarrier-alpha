@@ -18,6 +18,7 @@ import type { CompactionRowProps, EntryActionProps, TeamMode, ThreadHeaderProps,
 import { ArchiveThreadDialog } from "./archive-dialog.tsx";
 import { DURABLE_COMPOSER } from "./composer-surface.tsx";
 import { carriedDraft } from "./drafts.ts";
+import type { ThreadReloaded } from "../../../src/shared/reload-protocol.ts";
 import "./team-messages.css";
 
 /** A fork of a closed thread continues its unsent draft; the source keeps its copy, and a draft in the fork wins. */
@@ -86,8 +87,15 @@ function RecordedCompaction({ entry, host, threadId, fragment, compactions, more
  */
 function ArchiveHeader({ host, threadId, summary, hostState, close }: ThreadHeaderProps) {
 	const [archivedToast, setArchivedToast] = useState(false);
+	const [reloaded, setReloaded] = useState<ReloadOutcome>();
 	useEffect(() => { if (archivedToast) { const timer = setTimeout(() => setArchivedToast(false), 6000); return () => clearTimeout(timer); } }, [archivedToast]);
-	useEffect(() => setArchivedToast(false), [host, threadId]);
+	useEffect(() => { if (reloaded && !reloaded.error && !reloaded.report?.warnings.length) { const timer = setTimeout(() => setReloaded(undefined), 6000); return () => clearTimeout(timer); } }, [reloaded]);
+	useEffect(() => { setArchivedToast(false); setReloaded(undefined); }, [host, threadId]);
+	useEffect(() => {
+		const shown = (event: Event) => { const outcome = (event as CustomEvent<ReloadOutcome>).detail; if (outcome.threadId === threadId) setReloaded(outcome); };
+		window.addEventListener(RELOADED, shown);
+		return () => window.removeEventListener(RELOADED, shown);
+	}, [threadId]);
 	useKeyAction("archive", !hostState?.buildMismatch && summary && summary.team?.role !== "worker" ? (event) => {
 		event.preventDefault();
 		if (summary.archived) void hub.request(host, "thread.archive", { threadId, archived: false });
@@ -95,17 +103,38 @@ function ArchiveHeader({ host, threadId, summary, hostState, close }: ThreadHead
 		else close();
 	} : undefined);
 	return <>
+		{reloaded && <div className="toast" role="status">{reloadLines(reloaded).map((line, i) => <div key={i}>{line}{i === 0 && <> · <button className="link-button" onClick={() => setReloaded(undefined)}>Dismiss</button></>}</div>)}</div>}
 		{archivedToast && <div className="toast">Archived · <button className="link-button" onClick={() => { setArchivedToast(false); void hub.request(host, "thread.archive", { threadId, archived: false }); }}>Undo</button></div>}
 		{summary?.archived && <div className="badge" role="status">Archived · <button className="link-button" disabled={hostState?.buildMismatch} title={hostState?.buildMismatch ? "This node needs the new build" : undefined} onClick={() => void hub.request(host, "thread.archive", { threadId, archived: false })}>Unarchive</button></div>}
 	</>;
 }
 
-/** More menu items while the thread is live: a new thread beside it, and Archive. */
+/** A reload's outcome, from the More menu to the header that shows it. */
+const RELOADED = "ampi:reloaded";
+type ReloadOutcome = { threadId: string; report?: ThreadReloaded; error?: string };
+
+/** The toast lines for a reload: the outcome, then one line per warning. A warning stays until dismissed; a clean reload clears itself. */
+export function reloadLines(outcome: ReloadOutcome): string[] {
+	if (outcome.error) return [`Reload failed: ${outcome.error}`];
+	const report = outcome.report!;
+	const providers = `${report.providers} provider${report.providers === 1 ? "" : "s"}`;
+	return [`Reloaded models, settings and resources · ${providers} · no thread stopped`, ...report.warnings];
+}
+
+function reloadThread(host: string, threadId: string): void {
+	const emit = (outcome: ReloadOutcome) => window.dispatchEvent(new CustomEvent<ReloadOutcome>(RELOADED, { detail: outcome }));
+	void hub.request(host, "thread.reload", { threadId }).then((report) => emit({ threadId, report }), (e) => emit({ threadId, error: (e as Error).message }));
+}
+
+/** More menu items while the thread is live: a new thread beside it, Reload config and models, and Archive. */
 function ArchiveMenu({ host, threadId, summary, hostState, close }: ThreadHeaderProps) {
 	if (!summary) return null;
 	return <>
 		<button title={`Start a thread after this one, in its tab (${MOD}N)`} onClick={() => window.dispatchEvent(new Event("ampi:new"))}>
 			New thread beside
+		</button>
+		<button disabled={hostState?.buildMismatch} title={hostState?.buildMismatch ? "This node needs the new build" : "Re-read models.json, settings and Pi resources now. No thread stops. Extension code changes need a node restart."} onClick={() => reloadThread(host, threadId)}>
+			Reload config and models
 		</button>
 		{summary.team?.role === "worker" ? <button disabled title="The lead manages Workers">Archive thread</button> : <button disabled={hostState?.buildMismatch} title={hostState?.buildMismatch ? "This node needs the new build" : "Stop owned work and put this thread away"} onClick={() => summary.activity === "idle" && summary.team?.role !== "lead" ? void hub.request(host, "thread.archive", { threadId, archived: true }) : close()}>Archive thread</button>}
 	</>;

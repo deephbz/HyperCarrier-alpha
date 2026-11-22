@@ -6,19 +6,20 @@ import { chmodSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { serviceAddress, controlRequest } from "./connection.ts";
 export { serviceAddress, controlRequest } from "./connection.ts";
-import { createBuilder, type BuildKind, type BuilderState, type RequestOptions, type Store } from "../core/index.ts";
+import { createBuilder, type Builder, type BuildKind, type BuilderState, type RequestOptions, type Store } from "../core/index.ts";
 import { inheritedLock, type ServiceLock } from "./lock.ts";
-import { durableJson, readJson, STORE_SCHEMA } from "./store.ts";
+import { completeRecovery, durableJson, fenceStop, readJson, STORE_SCHEMA } from "./store.ts";
 import { compare, validStamp, type Stamp } from "./engine.ts";
 import { ignoredIdleHours, serviceSettings, sessionDirectory } from "./settings.ts";
 import { piSource, canonicalSessionRef } from "./source.ts";
+import { verificationPump } from "./source-verification.ts";
 import { piModel } from "./model.ts";
 import { automaticSchedule, type ScheduleState } from "./schedule.ts";
 import { serviceStatus } from "./status.ts";
 import { hostAdmission } from "./admission.ts";
 
 export type ControlCommand = { op: "hello" | "status" | "snapshot" | "request" | "dismiss" | "offer" | "stop"; stamp?: Stamp; refreshAuth?: boolean; knownRevisions?: Record<string, number>; sessionRef?: string; requestId?: string; kind?: BuildKind; requester?: string; options?: RequestOptions; dropId?: string; toPosition?: number };
-export async function startService(options: { agentDir: string; host: string; serviceVersion: string; releaseLine?: string | null; buildOrder: number; extensionPath: string; pollMs?: number; ready?(status: unknown): void; exit(): void }) {
+export async function startService(options: { agentDir: string; host: string; serviceVersion: string; releaseLine?: string | null; buildOrder: number; extensionPath: string; pollMs?: number; maintenance?: { generation: string | null; uncertainty?: "unknown-prior-stop"; fencePending?: boolean; fault?: string }; ready?(status: unknown): void; exit(): void }) {
  const lock: ServiceLock = inheritedLock(), incarnation = randomUUID();
  try {
   if (ignoredIdleHours(options.agentDir)) console.warn("Arc: ampi_arc.serviceIdleHours is ignored; the no-hub grace is five minutes.");
@@ -27,31 +28,41 @@ export async function startService(options: { agentDir: string; host: string; se
  const store: Store = { load: () => readJson(join(lock.store, "builder.json")) as BuilderState | undefined, save: value => durableJson(lock, "builder.json", value) };
  let sessionsDir = join(options.agentDir, "sessions");
  try { sessionsDir = sessionDirectory(options.agentDir); } catch { /* status reports invalid settings */ }
- const source = piSource({ sessionsDir, storeDir: lock.store });
+ const source = piSource({ sessionsDir, storeDir: lock.store,
+  verification: { load: () => readJson(join(lock.store, "source-verification.json")), save: state => durableJson(lock, "source-verification.json", state) },
+  verificationSettings: () => { const settings = serviceSettings(options.agentDir); return { bytesPerMinute: settings.sourceVerifyBytesPerMinute, intervalMs: settings.sourceVerifyIntervalMs }; },
+  log: message => console.warn(message),
+ });
  let signIn: import("../core/index.ts").ModelFailure | undefined;
  const model = piModel({ agentDir: options.agentDir, extensionPath: options.extensionPath, checked: result => { signIn = result; } });
- let draining = false, drainCause: "update" | "stop" = "stop", lastHello = Date.now(), fault: string | undefined;
- let checking: Promise<void> | undefined;
+ let draining = Boolean(options.maintenance), drainCause: "update" | "stop" = "stop", lastHello = Date.now(), fault: string | undefined = options.maintenance?.fault;
+ let checking: Promise<void> | undefined, cancellationPersisted = false;
  const authCancellation = new AbortController();
- const admitter = hostAdmission(options.host, () => serviceSettings(options.agentDir).concurrency, store.load());
- const builder = createBuilder({ source, model, store, engineVersion: options.serviceVersion, settings: () => serviceSettings(options.agentDir), admission: {
+ let initial: BuilderState | undefined;
+ try { initial = store.load(); } catch (error) { if (!options.maintenance) throw error; fault = (error as Error).message; }
+ const admitter = hostAdmission(options.host, () => serviceSettings(options.agentDir).concurrency, initial);
+ let builder: Builder | undefined;
+ const initializeBuilder = () => createBuilder({ source, model, store, engineVersion: options.serviceVersion, settings: () => serviceSettings(options.agentDir), admission: {
   acquire: kind => draining || fault ? Promise.resolve({ kind: "wait" as const, facts: { reason: "unavailable" as const, running: admitter.running(), limit: 0, scope: options.host } }) : admitter.acquire(kind),
   release: (permit, outcome) => admitter.release(permit, outcome),
  } });
- const scheduler = automaticSchedule({ builder, state: (readJson(join(lock.store, "schedule.json")) ?? {}) as ScheduleState,
+ try { if (!fault) builder = initializeBuilder(); } catch (error) { if (!options.maintenance) throw error; fault = (error as Error).message; }
+ const scheduler = options.maintenance ? undefined : automaticSchedule({ builder: builder!, source, state: (readJson(join(lock.store, "schedule.json")) ?? {}) as ScheduleState,
   save: state => durableJson(lock, "schedule.json", state) });
  const active = new Set<Promise<void>>();
  function wake() {
-  if (draining || fault) return;
+  if (draining || fault || !builder) return;
   const run = builder.run().catch(e => { fault = (e as Error).message; }).finally(() => active.delete(run));
   active.add(run);
  }
  function status() {
+  const recoveryAction = fault === "The stop record changed during cancellation" ? `Run ampi arc stop --host ${options.host} again.` : `Repair ${lock.store}: ${fault}; then run ampi arc stop --host ${options.host} again.`;
   let settings: ReturnType<typeof serviceSettings> | undefined, invalid: { message: string; settingsPath?: string; settingsKey?: string } | undefined;
   try { settings = serviceSettings(options.agentDir); } catch (e) { invalid = e as typeof invalid; }
   return serviceStatus(options.host, { incarnation, serviceVersion: options.serviceVersion, releaseLine: options.releaseLine ?? null, buildOrder: options.buildOrder, stamp, receiptSchema: 1, serviceLogPath: join(lock.store, "service.log"), storeSchema: STORE_SCHEMA, bundleSchema: STORE_SCHEMA, running: true, pid: process.pid,
-   state: draining ? drainCause === "update" ? "updating" : "stopping" : fault ? "fault" : invalid ? "invalid-settings" : signIn ? signIn.code === "sign-in" ? "no-sign-in" : signIn.code === "settings" ? "invalid-settings" : "cannot-start" : "running",
-   ...(fault || invalid || signIn ? { detail: fault ?? invalid?.message ?? signIn?.message } : {}),
+   state: options.maintenance && fault ? "fault" : draining ? drainCause === "update" ? "updating" : "stopping" : fault ? "fault" : invalid ? "invalid-settings" : signIn ? signIn.code === "sign-in" ? "no-sign-in" : signIn.code === "settings" ? "invalid-settings" : "cannot-start" : "running",
+   ...(fault || invalid || signIn ? { detail: options.maintenance && fault ? fault === "The stop record changed during cancellation" ? `${fault}. ${recoveryAction}` : `Arc recovery could not finish: ${fault}. ${recoveryAction}` : fault ?? invalid?.message ?? signIn?.message } : {}),
+   ...(options.maintenance ? { kind: "forced-recovery", recoveryGeneration: options.maintenance.generation, recoveryUncertainty: options.maintenance.uncertainty, cancellationPersisted, ...(fault ? { recoveryFault: fault, recoveryAction } : {}) } : {}),
    ...(invalid ? { settingsPath: invalid.settingsPath, settingsKey: invalid.settingsKey } : signIn ? { prerequisite: signIn.prerequisite, authPath: signIn.authPath, settingsPath: signIn.settingsPath, settingsKey: signIn.settingsKey } : {}),
    model: settings?.model, runningBuilds: admitter.running(), limit: settings?.concurrency });
  }
@@ -68,11 +79,12 @@ export async function startService(options: { agentDir: string; host: string; se
   try { lock.assertHeld(); return true; } catch { return false; }
  }
  function hasAuthority() { return holdsLock() && existsSync(serviceAddress(lock.store)); }
+ const verifier = verificationPump({ active: () => !draining && !fault && !scanCancellation.signal.aborted && hasAuthority(), step: () => source.verifyStep(scanCancellation.signal) });
  async function tick() {
   if (!hasAuthority()) { await stop(true); return; }
   // A missing hub also bounds update drains with unfinished model calls.
   if (Date.now() - lastHello >= 5 * 60_000) { await stop(true, "No AmPi hub was connected for 5 minutes, so Arc cancelled this Build."); return; }
-  if (draining) return;
+  if (draining || !builder || !scheduler) return;
   let settings;
   try { settings = serviceSettings(options.agentDir); } catch { /* Status reports invalid settings. */ }
   if (!settings) return;
@@ -80,23 +92,37 @@ export async function startService(options: { agentDir: string; host: string; se
    scanning = (async () => { try {
     const snapshots = await source.scan(scanCancellation.signal);
     if (draining) return;
-    for (const snapshot of snapshots) scheduler.observe(snapshot, settings.auto);
-    await scheduler.tick(settings.auto && !draining);
-    if (settings.auto && !draining) for (const status of builder.status()) {
-     if (status.state === "failed" && status.nextAt && Date.parse(status.nextAt) <= Date.now()) await builder.request(status.sessionRef, `retry:${status.buildId}:${status.nextAt}`, "incremental", "source");
-    }
+    for (const snapshot of snapshots) scheduler!.observe(snapshot, settings.auto);
+    await scheduler!.tick(settings.auto && !draining, true);
    } catch { if (fault) return; /* Source scans retry without advancing their durable trigger. */ }
    })().finally(() => { scanning = undefined; });
    await scanning;
   }
   wake();
+  void verifier.run().catch(error => console.warn(`Arc source verification paused: ${(error as Error).message}`));
  }
  const sockets = new Set<Socket>();
  let interval: ReturnType<typeof setInterval> | undefined;
  let stopping: Promise<void> | undefined, cancellation: Promise<void> | undefined;
  function stop(cancelActive = false, reason?: string): Promise<void> {
+  if (options.maintenance) cancelActive = true;
   if (!hasAuthority()) cancelActive = true;
-  if (cancelActive) { cancellation ??= builder.cancel(reason); void cancellation.catch(e => { fault = (e as Error).message; }); }
+  if (options.maintenance && fault && !stopping && hasAuthority()) {
+   cancellation = undefined; cancellationPersisted = false;
+   try {
+    if (options.maintenance.fencePending) {
+     const stop = fenceStop(lock, true);
+     options.maintenance.generation = stop.generation;
+     options.maintenance.uncertainty ??= stop.uncertainty;
+     options.maintenance.fencePending = false;
+    }
+    builder = initializeBuilder(); fault = undefined;
+   } catch (error) {
+    options.maintenance.uncertainty ??= (error as { recoveryUncertainty?: "unknown-prior-stop" }).recoveryUncertainty;
+    fault = (error as Error).message;
+   }
+  }
+  if (cancelActive) { cancellation ??= builder?.cancel(reason) ?? Promise.reject(new Error(fault ?? "Arc Builder is unavailable")); void cancellation.catch(e => { fault = (e as Error).message; }); }
   if (stopping) return stopping;
   draining = true;
   scanCancellation.abort();
@@ -107,12 +133,14 @@ export async function startService(options: { agentDir: string; host: string; se
    await scanning;
    await Promise.allSettled([...requests]);
    await Promise.allSettled([...active]);
+   await source.close();
    let shutdownError: unknown;
-   try { await cancellation; } catch (error) { shutdownError = error; }
+   try { await cancellation; cancellationPersisted = Boolean(options.maintenance); } catch (error) { shutdownError = error; }
    try { await checking; } catch (error) { shutdownError ??= error; }
    // Lost authority cannot retain a readable terminal record. A valid store
    // still requires successful persistence before its lifetime lock can go.
    if (shutdownError && hasAuthority()) throw shutdownError;
+   if (options.maintenance && !shutdownError && hasAuthority()) completeRecovery(lock, options.maintenance.generation!);
    await new Promise<void>(resolve => setImmediate(resolve));
    if (interval) clearInterval(interval);
    for (const socket of sockets) if (!socket.writableEnded) socket.destroy();
@@ -143,10 +171,11 @@ export async function startService(options: { agentDir: string; host: string; se
   if (!["offer", "stop"].includes(command.op) && (!validStamp(command.stamp) || compare(command.stamp, stamp) !== "same")) return mismatch();
   if (command.op === "snapshot") {
    let auto = false; try { auto = serviceSettings(options.agentDir).auto; } catch {}
-   const statuses = builder.status().map(value => { if (!auto && value.state === "failed") { const { nextAt, ...rest } = value; return rest; } return value; });
-   return { ...status(), receipts: builder.receipts(command.knownRevisions), statuses, scheduled: auto ? scheduler.pending() : [] };
+   const statuses = (builder?.status() ?? []).map(value => { if (!auto && value.state === "failed") { const { nextAt, ...rest } = value; return rest; } return value; });
+   return { ...status(), receipts: builder?.receipts(command.knownRevisions) ?? [], statuses, scheduled: auto ? scheduler?.pending() ?? [] : [] };
   }
   if (command.op === "offer") {
+   if (options.maintenance) return status();
    if (!validStamp(command.stamp)) return mismatch();
    if (compare(command.stamp, stamp) !== "newer") return mismatch();
    drainCause = "update"; void stop(); return status();
@@ -156,6 +185,7 @@ export async function startService(options: { agentDir: string; host: string; se
    drainCause = "stop"; void stop(true).catch(e => { fault = (e as Error).message; }); return status();
   }
   const session = canonicalSessionRef(command.sessionRef ?? "");
+  if (!builder) return { outcome: "refused", code: "service", transient: true, detail: status().detail };
   if (!fault && (command.op === "request" || command.op === "dismiss")) {
    const prior = builder.replay(command.op === "dismiss"
     ? { sessionRef: session, requestId: command.requestId ?? "", kind: "dismiss", dropId: command.dropId ?? "", toPosition: command.toPosition! }
@@ -188,6 +218,7 @@ export async function startService(options: { agentDir: string; host: string; se
  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(serviceAddress(lock.store), () => { chmodSync(serviceAddress(lock.store), 0o600); resolve(); }); });
  process.on("SIGTERM", signalStop); process.on("SIGINT", signalStop);
  interval = setInterval(() => { void tick().catch(e => { fault = (e as Error).message; }); }, options.pollMs ?? 2000);
- options.ready?.(status()); void tick();
+ if (options.maintenance && !fault) { drainCause = "stop"; void stop(true).catch(e => { fault = (e as Error).message; }); }
+ options.ready?.(status()); if (!options.maintenance) void tick();
  return { stop, status, builder };
 }

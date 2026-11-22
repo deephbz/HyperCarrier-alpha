@@ -2,130 +2,25 @@ import "./bound.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, symlinkSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, createReadStream } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { chmodSync, copyFileSync, symlinkSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, createReadStream, realpathSync } from "node:fs";
 import { once } from "node:events";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createConnection, createServer } from "node:net";
 // @ts-expect-error Build script runs as native ESM.
 import { buildArcService } from "../scripts/build-arc-service.mjs";
-import { launchLocked } from "../src/arc/service/lock.ts";
+import { launchLocked, LOCK_BUSY } from "../src/arc/service/lock.ts";
 import { serviceText, serviceStatus } from "../src/arc/service/status.ts";
 import { storeIncarnation } from "../src/arc/service/store.ts";
 import type { Socket } from "node:net";
 import { controlRequest as rawControlRequest, serviceAddress } from "../src/arc/service/runtime.ts";
 import type { ControlCommand } from "../src/arc/service/runtime.ts";
 import { pathToFileURL } from "node:url";
-const controlRequest = (store: string, command: ControlCommand, timeout?: number) => rawControlRequest(store, { stamp: JSON.parse(readFileSync(join(store, "control.json"), "utf8")).selected, ...command }, timeout);
 import { maintainHost, maintenanceLaunch, parseArcArgs } from "../src/arc/service/client.ts";
 import { piSource } from "../src/arc/service/source.ts";
 import { fingerprint, storeAnswer } from "../src/arc/core/construct.ts";
-
-async function fixture(t: any, virtualTime = false) {
- const dir = mkdtempSync(join(tmpdir(), "arc-runtime-")), agent = join(dir, "agent"), bundle = join(dir, "service.mjs");
- mkdirSync(agent); const built = await buildArcService(bundle, { buildOrder: 100, releaseLine: "stable" });
- assert.equal(built.sourceReader, true);
- const original = readFileSync(bundle, "utf8");
- const { version: version2 } = await buildArcService(join(dir, "next.mjs"), { buildOrder: 200, releaseLine: "stable" });
- const pi = join(dir, "pi"); writeFileSync(pi, `#!${process.execPath}\nconsole.log('{"status":"ready"}');\n`); chmodSync(pi, 0o755);
- const settings = (extra = {}) => writeFileSync(join(agent, "settings.json"), JSON.stringify({ ampi_arc: { model: "fixture/model", auto: false, ...extra } })); settings();
- const runner = join(dir, "runner.mjs"); writeFileSync(runner, `import {readFileSync} from 'node:fs'; const file=process.argv[2]; const m=await import(file); console.log(JSON.stringify(await m.manage(readFileSync(file,'utf8'),JSON.parse(process.argv[3]))));`);
- const clockPath = join(dir, "clock.sock"), preload = join(dir, "clock.mjs");
- if (virtualTime) writeFileSync(preload, `
-import { mock } from 'node:test';
-import { createServer } from 'node:net';
-import { isMainThread } from 'node:worker_threads';
-import { rmSync } from 'node:fs';
-if (isMainThread && process.argv[2] === '_locked' && JSON.parse(process.argv[3]).op === 'ensure') {
- rmSync(${JSON.stringify(clockPath)}, { force: true });
- mock.timers.enable({ apis: ['Date', 'setInterval'], now: Date.now() });
- let ticks = 0;
- const interval = globalThis.setInterval;
- globalThis.setInterval = (callback, ms, ...args) => interval(() => { ticks++; callback(...args); }, ms);
- const server = createServer(socket => {
-  socket.once('data', data => {
-   const before = Date.now(); mock.timers.tick(Number(data));
-   socket.end(JSON.stringify({ elapsed: Date.now() - before, ticks }));
-  });
- });
- await new Promise(resolve => server.listen(${JSON.stringify(clockPath)}, resolve));
-}
-`);
- async function advance(ms: number) {
-  return new Promise<{ elapsed: number; ticks: number }>((resolve, reject) => {
-   const socket = createConnection(clockPath); let body = "";
-   socket.setTimeout(5000, () => socket.destroy(new Error("fixture clock did not reply")));
-   socket.once("connect", () => socket.write(String(ms))); socket.on("data", data => body += data);
-   socket.once("error", reject); socket.once("end", () => { try { resolve(JSON.parse(body)); } catch (e) { reject(e); } });
-  });
- }
- const pids = new Set<number>(), managers = new Map<ReturnType<typeof spawn>, Promise<void>>();
- let tearingDown = false, closed: Promise<void> | undefined;
- async function manage(op: string, extra: any = {}, next = false, env = {}) {
-  if (tearingDown) throw new Error("Arc fixture is closed");
-  const result = await new Promise<any>((resolve, reject) => {
-   const child = spawn(process.execPath, [runner, next ? join(dir, "next.mjs") : bundle, JSON.stringify({ op, host: "synthetic", agentDir: agent, timeoutMs: 10000, ...extra })], { cwd: dir, env: { HOME: dir, PATH: process.env.PATH, PI_BIN: pi, ...(virtualTime ? { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` } : {}), ...env }, stdio: ["ignore", "pipe", "pipe"] });
-   const ended = new Promise<void>(resolve => child.once("close", () => resolve()));
-   managers.set(child, ended); void ended.then(() => managers.delete(child));
-   let out = "", err = ""; const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("manager hung: " + err)); }, 15000);
-   child.stdout.on("data", b => out += b); child.stderr.on("data", b => err += b); child.on("error", reject);
-   child.on("close", code => { clearTimeout(timer); if (tearingDown) reject(new Error("Arc fixture is closed")); else if (code) reject(new Error(err + out)); else { try { resolve(JSON.parse(out)); } catch { reject(new Error(out + err)); } } });
-  });
-  if (result.pid) pids.add(result.pid); return result;
- }
- function close() {
-  if (closed) return closed;
-  tearingDown = true;
-  return closed = (async () => {
-   const active = [...managers];
-   for (const [child] of active) child.kill("SIGKILL");
-   await Promise.allSettled(active.map(([, ended]) => ended));
-   for (const pid of pids) { try { process.kill(pid, "SIGKILL"); } catch {} }
-   await new Promise(r => setTimeout(r, 40)); rmSync(dir, { recursive: true, force: true });
-  })();
- }
- t.after(close);
- return { dir, agent, bundle, close, stamp: { id: built.version, order: 100, line: "stable" }, store: join(agent, "ampi-arc"), manage, advance, settings, version: built.version, version2, body: original, pids };
-}
-
-async function until(check: () => Promise<boolean> | boolean, message: string) {
- const end = Date.now() + 10000;
- while (!await check()) { if (Date.now() >= end) throw new Error(message); await new Promise(r => setTimeout(r, 30)); }
-}
-function managerClock(f: { dir: string }) {
- const address = join(f.dir, "manager-clock.sock"), preload = join(f.dir, "manager-clock.mjs");
- writeFileSync(preload, `import {mock} from 'node:test'; import {createServer} from 'node:net';
-if(process.argv.length===1 || process.argv[1]?.endsWith('/runner.mjs')){
- mock.timers.enable({apis:['Date','setTimeout'],now:Date.now()});
- const server=createServer(socket=>socket.once('data',data=>{mock.timers.tick(Number(data));socket.end('advanced');server.unref();}));
- await new Promise(resolve=>server.listen(${JSON.stringify(address)},resolve));
-}`);
- return { env: { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` }, async advance(ms: number) {
-  const socket = createConnection(address); socket.resume(); await once(socket, "connect"); socket.end(String(ms)); await once(socket, "close");
- } };
-}
-function blockingModel(f: Awaited<ReturnType<typeof fixture>>, loss = false) {
- const sessions = join(f.agent, "sessions"); mkdirSync(sessions);
- const rows: any[] = [{ type: "session", version: 3, id: "fixture-session", timestamp: "2026-01-01T00:00:00Z", cwd: "/synthetic/project" }];
- for (let n = 0; n < 6; n++) rows.push({ type: "message", id: "u" + n, parentId: n ? "u" + (n - 1) : null, timestamp: "2026-01-01T00:00:00Z", message: { role: "user", content: "Synthetic evidence " + n + "." } });
- writeFileSync(join(sessions, "session.jsonl"), rows.map(row => JSON.stringify(row)).join("\n") + "\n");
- const calls = join(f.dir, "calls"), release = join(f.dir, "release"), pid = join(f.dir, "model-pid");
- writeFileSync(join(f.dir, "pi"), `#!${process.execPath}
-const fs=require('node:fs');
-if(process.argv[2]==='auth'){console.log('{"status":"ready"}');process.exit(0);}
-let body='';process.stdin.on('data',b=>body+=b);process.stdin.on('end',()=>{
- fs.appendFileSync(${JSON.stringify(calls)},'call\\n');fs.writeFileSync(${JSON.stringify(pid)},String(process.pid));
- const timer=setInterval(()=>{
-  if(!fs.existsSync(${JSON.stringify(release)}))return;clearInterval(timer);
-  const data=JSON.parse(body.split('\\nAnswer rejected:')[0]),item=data.rarebits.at(-1),claim={text:'Review the work.',cites:[{id:item.id,quote:item.text}]};
-  const answer={goal:claim,now:claim,chapters:[{firstId:data.rarebits[0].id,label:'Reviewing the work',closed:true,summary:{scope:claim,bullets:[]}}],points:${loss ? JSON.stringify([{kind:'request',state:'open',by:'owner',waits:'owner',title:'Review the work',text:'Review it.',cites:[{id:'missing',quote:'Missing evidence'}]}]) : '[]'}};
-  console.log(JSON.stringify({type:'message_end',message:{role:'assistant',provider:'fixture',model:'model',stopReason:'stop',content:[{type:'text',text:JSON.stringify(answer)}],usage:{input:10,output:5,cost:{total:0.01}}}}));
- },20);
-});
-`);
- return { calls, release, pid };
-}
-const request = (id: string) => ({ op: "request" as const, sessionRef: "pi:fixture-session", requestId: id, kind: "manual" as const, requester: "synthetic" });
+import { blockingModel, controlRequest, fixture, managerClock, request, until } from "./arc-service-runtime-fixture.ts";
 
 test("Arc fixture: teardown settles managers and refuses later launches", async t => {
  const f = await fixture(t), started = join(f.dir, "manager-pid");
@@ -278,7 +173,7 @@ for (const recreate of [false, true]) test(`Arc maintenance: stop fences an admi
  t.after(() => server.close());
  await new Promise<void>(resolve => server.listen(gate, resolve));
  const connected = once(server, "connection");
- const needle = "\tlet staging, replacing = false, sawBusy = false;";
+ const needle = "\tlet staging,";
  assert.equal(f.body.split(needle).length, 2, "the built manage admission seam is unique");
  const pause = `if (operation.op === 'ensure' && process.env.ADMISSION_GATE === '1') {
   const {createConnection} = await import('node:net');
@@ -343,7 +238,7 @@ async function blockedScan(t: any, silentDrain = false) {
  const f = await fixture(t), sessions = join(f.agent, "sessions"), reads = join(f.dir, "reads"), release = join(f.dir, "read-release");
  mkdirSync(sessions);
  for (let i = 0; i < 4; i++) writeFileSync(join(sessions, `${i}.jsonl`), JSON.stringify({ type: "session", version: 3, id: `scan-${i}`, timestamp: "2026-01-01T00:00:00Z", cwd: "/synthetic" }) + "\n");
- const seam = "async function readFile(file, expected) {";
+ const seam = "async function readFile(file, expected, verify, expectedPrefix) {";
  assert.ok(f.body.includes(seam));
  const body = silentDrain ? f.body.replace('if (command.op === "status") {', 'if (command.op === "status") { if (draining) await new Promise(() => {});') : f.body;
  assert.ok(!silentDrain || body !== f.body);
@@ -356,6 +251,49 @@ async function blockedScan(t: any, silentDrain = false) {
  await until(() => existsSync(reads), "source did not admit its first read");
  return { ...f, resident, reads, release };
 }
+
+test("Arc verification loop serves real status, manual admission and stop before its quantum bound", async t => {
+ const f = await fixture(t); blockingModel(f); mkdirSync(f.store, { recursive: true });
+ const events = join(f.dir, "verification-order"), seam = "async function periodicStep(signal) {";
+ assert.ok(f.body.includes(seam));
+ const command = (value: object) => JSON.stringify({ stamp: f.stamp, ...value });
+ const injected = `
+  const fs = await import('node:fs');
+  const n = globalThis.arcQuantum = (globalThis.arcQuantum ?? 0) + 1;
+  fs.appendFileSync(${JSON.stringify(events)}, 'quantum:' + n + '\\n');
+  if (n === 1) {
+   const net = await import('node:net');
+   const send = (command) => new Promise((resolve, reject) => {
+    const socket = net.createConnection(${JSON.stringify(serviceAddress(f.store))}); let body = '';
+    socket.once('connect', () => socket.write(JSON.stringify(command) + '\\n'));
+    socket.on('data', bytes => body += bytes); socket.once('error', reject);
+    socket.once('end', () => resolve(JSON.parse(body)));
+   });
+   void send(${command({ op: "status", refreshAuth: false })}).then(result => {
+    if (result.state !== 'running') throw new Error('status did not reply running');
+    fs.appendFileSync(${JSON.stringify(events)}, 'status\\n');
+    return send(${command(request("during-verification"))});
+   }).then(result => {
+    if (result.outcome !== 'accepted') throw new Error('manual admission did not succeed');
+    fs.appendFileSync(${JSON.stringify(events)}, 'manual\\n');
+    return send(${command({ op: "stop" })});
+   }).then(result => {
+    if (result.state !== 'stopping') throw new Error('stop did not reply stopping');
+    fs.appendFileSync(${JSON.stringify(events)}, 'stop\\n');
+   }).catch(error => fs.appendFileSync(${JSON.stringify(events)}, 'error:' + error.message + '\\n'));
+  }
+  return true;
+ `;
+ writeFileSync(f.bundle, f.body.replace(seam, seam + injected));
+ await f.manage("ensure");
+ await until(() => existsSync(events) && /stop|error:/.test(readFileSync(events, "utf8")), "control requests did not finish during verification");
+ const order = readFileSync(events, "utf8").trim().split("\n");
+ assert.equal(order.some(line => line.startsWith("error:")), false, order.join(","));
+ assert.ok(order.includes("status")); assert.ok(order.includes("manual")); assert.ok(order.includes("stop"));
+ assert.equal(order.includes("quantum:64"), false, "real control replies must finish before the bounded verify loop ends");
+ assert.ok(order.indexOf("status") < order.indexOf("manual") && order.indexOf("manual") < order.indexOf("stop"));
+ assert.equal((await f.manage("stop")).state, "stopped");
+});
 
 test("Arc stop admits zero new scan reads and joins its in-flight read before unlock", async t => {
  const f = await blockedScan(t);
@@ -506,7 +444,7 @@ test("Arc maintenance: concurrent ensure and held-lock probes return plain coded
  const busy = await maintainHost(config, { op: "ensure", timeoutMs: 350 }, f.body);
  assert.ok(Date.now() - waitingAt >= 350);
  assert.equal(busy.state, "busy"); assert.equal(busy.detail, "Arc service holds its lock but does not answer");
- assert.equal(serviceText(busy), "synthetic: Arc service holds its lock but does not answer. Run ampi arc status --host synthetic before retrying.");
+ assert.equal(serviceText(busy), "synthetic: Arc service holds its lock but does not answer. Run ampi arc stop --host synthetic to stop it; a linked hub starts it again within seconds.");
  assert.doesNotMatch(JSON.stringify(busy), /data:text|base64|at manage/);
  const failed = await maintainHost(config, { op: "status" }, "export async function manage(){throw new Error('Synthetic maintenance failure')}");
  assert.equal(failed.state, "error"); assert.equal(failed.detail, "Synthetic maintenance failure");
@@ -581,7 +519,9 @@ test("Arc status: typed settings, auth caching, version facts and stopping cause
  f.pids.add(Number(readFileSync(model.pid, "utf8"))); assert.equal(readFileSync(auth, "utf8"), "check\ncheck\n");
  assert.equal((await controlRequest(f.store, { op: "stop" })).state, "stopping", "stop was labelled update");
  const stopped = await f.manage("stop"); assert.equal(stopped.state, "stopped");
- assert.equal(serviceText(stopped), "synthetic: Arc service is stopped. A linked hub restarts it within seconds.");
+ // The control stop above races resident exit: the explicit stop finds it still draining or already gone.
+ assert.ok(["orderly-stop", "not-running"].includes(stopped.kind), stopped.kind);
+ assert.match(serviceText(stopped), /^Arc service on synthetic (stopped\. A linked hub starts it again within seconds|is not running\. Nothing to stop\. No signal sent)\.$/);
 });
 
 test("Arc stop reaps current children and exits when the store disappears during cancellation", { timeout: 10000 }, async t => {
@@ -818,7 +758,9 @@ test("Arc maintenance: a failed launcher reports its cause and full log path", {
 test("Arc CLI: strict arguments and stdin transport work with a synthetic local Host", { timeout: 15000 }, async t => {
  assert.equal(parseArcArgs(["stop", "--host", "synthetic", "--json"]).host, "synthetic");
  assert.equal(parseArcArgs(["stop", "--all"]).all, true);
- for (const args of [["enable"], ["update"], ["stop"], ["status", "--all", "--host", "synthetic"], ["enable", "--generation", "NaN"], ["status", "--disable"], ["stop", "--generation", "1"], ["enable", "--host"], ["status", "--other"]]) assert.throws(() => parseArcArgs(args));
+ for (const args of [["enable"], ["update"], ["stop"], ["status", "--all", "--host", "synthetic"], ["enable", "--generation", "NaN"], ["status", "--disable"], ["stop", "--generation", "1"], ["enable", "--host"], ["status", "--other"], ["stop", "--all", "--force-unverified"], ["status", "--host", "synthetic", "--force-unverified"]]) assert.throws(() => parseArcArgs(args));
+ assert.equal(parseArcArgs(["stop", "--host", "synthetic", "--force-unverified"]).forceUnverified, true);
+ assert.equal(parseArcArgs(["stop", "--host", "synthetic"]).forceUnverified, false);
  const remote = maintenanceLaunch({ id: "synthetic", label: "Synthetic", kind: "pi-ssh", remoteNode: "/synthetic/Node's bin/node" });
  assert.equal(remote.command, "ssh"); assert.ok(remote.args.includes("BatchMode=yes")); assert.match(remote.args.at(-1)!, /input-type=module/);
  const f = await fixture(t);

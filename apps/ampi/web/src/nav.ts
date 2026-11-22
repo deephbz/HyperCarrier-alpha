@@ -110,14 +110,14 @@ export function noteFocus(target: Target) {
  * (the transcript, the Rarebit panel) reveals each request once. A request serves the reader only until their next
  * move in its Session (`end`).
  */
-type RevealRequest = { entry: string; thread?: string; seq: number };
+type RevealRequest = { entry: string; thread?: string; seq: number; focusGeneration?: number };
 let reveal: RevealRequest | undefined;
 let revealSeq = 0;
 const revealListeners = new Set<() => void>();
 /** Sets the request from a route: an entry route asks to reveal it, any other route ends the request. */
-function requestReveal(to: string) {
+function requestReveal(to: string, focusGeneration?: number) {
 	const r = parseRoute(to);
-	reveal = r.entry ? { entry: r.entry, thread: r.thread, seq: ++revealSeq } : undefined;
+	reveal = r.entry ? { entry: r.entry, thread: r.thread, seq: ++revealSeq, focusGeneration } : undefined;
 	for (const listener of revealListeners) listener();
 }
 export const revealStore = {
@@ -139,8 +139,8 @@ export const revealStore = {
  * The only route writer. Returns false when `to` is already the route. A route with `?e=` requests a reveal, also when
  * it is already the route; `reveal: false` keeps the current request (a panel change that keeps the linked entry).
  */
-export function navigate(to: string, hint?: "replace", { reveal: ask = true }: { reveal?: boolean } = {}): boolean {
-	if (ask) requestReveal(to);
+export function navigate(to: string, hint?: "replace", { reveal: ask = true, focusGeneration }: { reveal?: boolean; focusGeneration?: number } = {}): boolean {
+	if (ask) requestReveal(to, focusGeneration);
 	if (to === location.hash) return false;
 	flushEntry();
 	const was = entryState();

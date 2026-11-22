@@ -98,5 +98,21 @@
 				"text": "<rarebit>\nRarebit recall: your context may have been compacted. The user's exact earlier words and your own earlier prose answers are still in the durable record. Call rarebit_recall to reread them (filter with query) before relying on a summary for a precise requirement, name, number, or decision.\n</rarebit>"
 			}
 		]
+	},
+	{
+		"id": "pi-ai-1.6-tool-additional-properties",
+		"reason": "pi-ai 1.6.0 preserves additionalProperties: false on TypeBox tool schemas; the captured pi-request.json fixture is from Pi 1.4.0 before that change.",
+		"cite": "apps/ampi/test/fixtures/pi-request.json (pi 1.4.0) vs @earendil-works/pi-ai 1.6.0",
+		"edits": [
+			{ "tool": "team_create", "additionalProperties": false },
+			{ "tool": "team_sync", "additionalProperties": false },
+			{ "tool": "ensure_worker", "additionalProperties": false },
+			{ "tool": "task_graph_apply", "additionalProperties": false },
+			{ "tool": "task_read", "additionalProperties": false },
+			{ "tool": "task_update", "additionalProperties": false },
+			{ "tool": "worker_stop", "additionalProperties": false },
+			{ "tool": "team_shutdown", "additionalProperties": false },
+			{ "tool": "alert_send", "additionalProperties": false }
+		]
 	}
 ]

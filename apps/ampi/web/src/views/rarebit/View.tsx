@@ -8,6 +8,7 @@ import { toCss, toScreen } from "../../display.ts";
 import { Markdown } from "../../components/Markdown.tsx";
 import { clock, href, tokens } from "../../util.ts";
 import { composing, freshPress } from "../../composer-keys.ts";
+import { useFocusPlacement } from "../../context.ts";
 import { rarebitState, useRarebitState } from "./state.ts";
 import "./rarebit.css";
 
@@ -49,6 +50,7 @@ export function RarebitView({ host, threadId, entry }: { host: string; threadId:
 	const failure = result && "error" in result ? `${result.error.code}: ${result.error.message}` : error;
 	const value = result && "items" in result ? result : undefined;
 	const [state, set] = useRarebitState(host, threadId);
+	const focusPlacement = useFocusPlacement();
 	const scroller = useRef<HTMLDivElement>(null);
 	const input = useRef<HTMLTextAreaElement>(null);
 	const pinned = useRef(true);
@@ -102,11 +104,12 @@ export function RarebitView({ host, threadId, entry }: { host: string; threadId:
 		const needed = newest ? Math.max(0, short) : 0;
 		if (needed !== tailSpace) { setTailSpace(needed); return; }
 		el.scrollTop = top;
+		if (want?.entry === jump.id && want.focusGeneration !== undefined) focusPlacement.place(target, want.focusGeneration, { preventScroll: true });
 		// The placed message is the reader's place at once: a resize before this write's scroll event restores it.
 		keepPlace.record();
 		setJump(undefined);
 		updateSteps();
-	}, [jump, state.window, tailSpace]);
+	}, [jump, state.window, tailSpace, want?.seq, focusPlacement]);
 	/** The one writer of a placed message: the hook hands the place to the jump effect. */
 	const place = (id: string, offset: number) => setJump({ id, offset, hand: keepPlace.handOff(), space: tailSpace });
 	const step = (index: number | undefined) => {
@@ -202,7 +205,7 @@ export function RarebitView({ host, threadId, entry }: { host: string; threadId:
 				{value?.more && <button className="btn small" onClick={() => { page(value.items[0]?.id); set({ window: 60 }); }}>Earlier page</button>}
 				{(before || value?.before) && <button className="btn small" onClick={() => { page(); set({ window: 60 }); }}>Newest page</button>}
 				{start > 0 && <button className="btn ghost small rb-earlier" onClick={() => { pinned.current = false; set({ window: state.window + 60 }); scroller.current?.scrollTo({ top: 0 }); }}>Show 60 earlier · {start.toLocaleString()} remaining</button>}
-				{visible.map((item) => item.kind === "compaction" ? <div key={item.id} className="rb-compaction" data-rarebit={item.id}><a href={href.thread(host, threadId, { entry: item.id })}>── compacted {time(item.t)} · context restarts here ──</a>{item.t && <a className="rb-timeline" href={href.page("timeline", [], { host, thread: threadId, at: String(Date.parse(item.t)) })}>Timeline ↗</a>}</div> : <article key={item.id} className={`rb-message rb-${item.kind}${item.kind === "user" ? " you" : ""}${item.id === entry ? " rb-target" : ""}`} data-rarebit={item.id} data-kind={item.kind}>
+				{visible.map((item) => item.kind === "compaction" ? <div key={item.id} className="rb-compaction" data-rarebit={item.id}><a href={href.thread(host, threadId, { entry: item.id })}>── compacted {time(item.t)} · context restarts here ──</a>{item.t && <a className="rb-timeline" href={href.page("timeline", [], { host, thread: threadId, at: String(Date.parse(item.t)) })}>Timeline ↗</a>}</div> : <article key={item.id} className={`rb-message rb-${item.kind}${item.kind === "user" ? " you" : ""}${item.id === entry ? " rb-target" : ""}`} tabIndex={item.id === entry ? -1 : undefined} data-rarebit={item.id} data-kind={item.kind}>
 					<div className={item.kind === "user" ? "rb-message-heading you-label" : "rb-message-heading"}><span aria-label={MARK[item.kind]} title={MARK[item.kind]}>{GLYPH[item.kind]}</span><time dateTime={item.t ?? undefined} title={item.t ?? "Time unavailable"}>{messageTime(item.t)}</time><span className="rb-item-actions"><Copy text={item.text} icon /><a className="rb-icon" title="Transcript" aria-label="Transcript" href={href.thread(host, threadId, { entry: item.id, panel: "rarebit" })}><Icon name="transcript" /></a>{item.t && <a className="rb-icon" title="Timeline" aria-label="Timeline" href={href.page("timeline", [], { host, thread: threadId, at: String(Date.parse(item.t)) })}><Icon name="timeline" /></a>}</span></div>
 					<Markdown text={item.text} />{item.truncated && <p className="rb-meta">Preview shortened · open Transcript to read the source entry.</p>}
 				</article>)}

@@ -1,7 +1,7 @@
 // Wire readers for Host op requests and agent acks; the op table stays in host.ts (PiHost #hostOps). `defined`
 // lives here because the readers need it and this module must not import host.ts.
 
-import type { ActionAck, CommandAck, ControlSubmission, Every, HostOps, OpHandlers, OpRequest, SlashCommands, SubmittedPrompt } from "../shared/protocol.ts";
+import type { ActionAck, CommandAck, ControlSubmission, Every, HostOps, OpHandlers, OpRequest, RelaunchCheck, SlashCommands, SubmittedPrompt, ThreadRelaunched } from "../shared/protocol.ts";
 
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -12,6 +12,8 @@ export type AgentAck = {
 	watermark?: { size: number; mtimeMs: number };
 	/** Slash commands: the `commands` list, or one command's outcome. */
 	value?: SlashCommands; disposition?: CommandAck["disposition"]; notice?: string; effect?: CommandAck["effect"];
+	/** Relaunch: the stopped process, what became of the queue, dropped launch flags, a `check`, a ledger repeat. */
+	stopped?: { pid?: unknown; signal?: unknown }; returned?: unknown[]; delivered?: unknown[]; dropped?: unknown[]; check?: Record<string, unknown>; repeat?: boolean;
 };
 
 /** Replicated values are JSON: chord's diff cannot carry `undefined`, so drop such keys. */
@@ -55,6 +57,37 @@ export function ackResult(ack: AgentAck): ActionAck {
 		submission: typeof ack.submission === "string" ? ack.submission : undefined,
 		submissions: Array.isArray(ack.submissions) ? controlSubmissions(ack.submissions) : undefined,
 	});
+}
+
+/**
+ * The `holdMs` of a send frame: how long the agent may hold the send while Pi relaunches. It ends before the Host's
+ * own timeout, so a send the Host reported as failed is never delivered later and then duplicated by a resend.
+ */
+export const holdMsFor = (timeoutMs: number): number => Math.max(0, timeoutMs - 5_000);
+
+/** A relaunch's whole wait on the agent (remote-agent.cjs relaunchSteps), and the Host's margin over it for the frames. */
+export const RELAUNCH_BUDGET_MS = 120_000;
+export const RELAUNCH_MARGIN_MS = 15_000;
+const strings = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : []);
+/** A relaunch `check` ack as the reply clients see. */
+export function relaunchCheck(ack: AgentAck): ThreadRelaunched {
+	const c = ack.check ?? {};
+	const activity = ["working", "compacting", "blocked"].includes(String(c.activity)) ? (c.activity as RelaunchCheck["activity"]) : "idle";
+	return { evidence: "checked", check: { activity, queued: Number(c.queued) || 0, editorEmpty: c.editorEmpty === true, dropped: strings(c.dropped), control: c.control === true } };
+}
+/** A finished relaunch ack as the reply clients see. */
+export function relaunchResult(ack: AgentAck): ThreadRelaunched {
+	const stopped = ack.stopped ?? {};
+	return defined({
+		evidence: ack.evidence === "started" ? "started" : "unknown",
+		pane: String(ack.pane ?? ""),
+		stopped: { pid: Number(stopped.pid) || 0, signal: String(stopped.signal ?? "SIGTERM") },
+		returned: strings(ack.returned),
+		delivered: strings(ack.delivered),
+		dropped: Array.isArray(ack.dropped) && ack.dropped.length ? strings(ack.dropped) : undefined,
+		warning: typeof ack.warning === "string" ? ack.warning : undefined,
+		repeat: ack.repeat === true ? true : undefined,
+	} as const) as ThreadRelaunched;
 }
 
 /** A `thread.submit` request's images, text and delivery. Refuses an empty message, and slash text not marked as text. */

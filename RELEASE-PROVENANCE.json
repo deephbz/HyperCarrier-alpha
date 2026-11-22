@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "sourceRepository": "HyperCarrier",
-  "sourceCommit": "14eb902523761c1bc95d63875c59f3f0666f02f5",
-  "sourceTree": "32048065e701b5b1090b2a6db5ccd3672395ea64",
+  "sourceCommit": "1e950e868a22fb837054aa206f215711b6215487",
+  "sourceTree": "5e5e8ea0977e94037dde667a144778f5ba9fdc09",
   "sourceWorktreeDirty": false,
-  "exportContentSha256": "33572f419df52da55f76a43b81bd156072ded86d9a39699328f1a01d85374c1e",
-  "exportManifestSha256": "04b4dee9805b395f3e606ed6bde43bda2bed9159e58d9dc5ff41b901c7b0a4d1",
+  "exportContentSha256": "076309a231fb3454807ba63a6a7d453846ac2f5af47e317abaabc00d5cc0f69b",
+  "exportManifestSha256": "66d656d9f6cd846e23e648f4f69505f2fef4172594fc29def705788c0886a0c2",
   "dependencies": [],
   "submodules": [
     {
@@ -72,36 +72,36 @@
       "name": "packages/rarebit-durable",
       "path": "packages/rarebit-durable",
       "repository": "https://github.com/deephbz/rarebit-durable.git",
-      "commit": "60f658d74c4d8dcb5ec90309df76c84b07d2309c",
-      "tree": "0f432b32a82dac11ae05b48e8cf65b0786e20897",
+      "commit": "8a23741fcbad48b214a71f7e6b7b30db1149f907",
+      "tree": "f1f8d56b4f0c89148106447501cc48407f88290a",
       "identity": {
         "kind": "npm-package",
         "name": "@hypercarrier/rarebit-durable",
-        "version": "0.1.3"
+        "version": "0.1.4"
       }
     },
     {
       "name": "packages/auto-compact-durable",
       "path": "packages/auto-compact-durable",
       "repository": "https://github.com/deephbz/auto-compact-durable.git",
-      "commit": "166a621418244392c258b3db6bb7c93e9885b8a7",
-      "tree": "ed0c3148793d71e9bd5a22b0ffd005964e4623c6",
+      "commit": "d8b0d62aa2b2916c65f77cfebbce1c5eeea41ada",
+      "tree": "2eba05b1d4bcddb63825698108c0045739239444",
       "identity": {
         "kind": "npm-package",
         "name": "@hypercarrier/auto-compact-durable",
-        "version": "0.1.3"
+        "version": "0.1.4"
       }
     },
     {
       "name": "packages/pi-team-durable",
       "path": "packages/pi-team-durable",
       "repository": "https://github.com/deephbz/pi-team-durable.git",
-      "commit": "68c77cc795815ecbfc4b91ccfa4e339d455658d1",
-      "tree": "2aabf6d00e8ffa903269265b794538b34799e711",
+      "commit": "ca7346e3f16b9b5c9ee7e10ff915f077dd0a4116",
+      "tree": "3454cd5ca29f20804e3c9215267cbba9b45111ea",
       "identity": {
         "kind": "npm-package",
         "name": "@hypercarrier/pi-team-durable",
-        "version": "0.1.0-rc.4"
+        "version": "0.1.0-rc.5"
       }
     }
   ],

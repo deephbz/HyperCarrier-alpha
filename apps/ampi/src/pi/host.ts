@@ -18,11 +18,11 @@ import { workingBudget } from "@hypercarrier/auto-compact-durable/budget";
 import { negotiating, withStatus } from "../hub/hosts.ts";
 import type { ErrorClass, HostBase, HostState, LinkStatus } from "../shared/hosts.ts";
 import { StalePackageBuild } from "../shared/build.ts";
-import type { ClientFrame, ControlSubmission, Every, HostOps, PiQueuedItem, OpHandlers, OpName, OpResult, Ops, Placement, PiHostFrame, PiThreadView, PiTopicValue, ThreadCreated, ThreadResumed, ThreadsState, ThreadSummary, Topic } from "../shared/protocol.ts";
+import type { ClientFrame, ControlSubmission, Every, HostOps, PiQueuedItem, OpHandlers, OpName, OpResult, Ops, Placement, PiHostFrame, PiThreadView, PiTopicValue, ThreadCreated, ThreadRelaunched, ThreadResumed, ThreadsState, ThreadSummary, Topic } from "../shared/protocol.ts";
 import { INDEXING, NOT_FOUND, STALE_VERSION, type ImageLimits } from "../shared/protocol.ts";
 import { admitImages, rejectionLine } from "../shared/image-admission.ts";
 import { controlProtocolSkew, controlSkew, controlStamp, type Stamp, VERSION_SKEW } from "../shared/build.ts";
-import { ackResult, type AgentAck, commandFrame, commandResult, controlSubmissions, defined, isOpRequest, submitArgs, threadOf, UUID } from "./host-wire.ts";
+import { ackResult, type AgentAck, commandFrame, commandResult, controlSubmissions, defined, isOpRequest, holdMsFor, RELAUNCH_BUDGET_MS, RELAUNCH_MARGIN_MS, relaunchCheck, relaunchResult, submitArgs, threadOf, UUID } from "./host-wire.ts";
 import { IMAGE_LIMITS as CONTROL_IMAGE_LIMITS } from "@hypercarrier/pi-hc-control/control";
 import { SCHEMA as CONTROL_PROTOCOL } from "@hypercarrier/pi-hc-control/endpoint";
 /** The pi-hc-control protocol this AmPi speaks; /api/health reports it. */
@@ -98,7 +98,7 @@ type RemoteAgent = {
  * This hub's record of one queued submission. `unknown`: the live control no longer reports it (Pi restarted or
  * switched Session). `dismissed`: the owner cleared it from the composer.
  */
-type QueuedInput = { threadId: string; submission: string; deliverAs: string; state: ControlSubmission["state"] | "unknown"; at: number; text: string; truncated?: boolean; images?: number; dismissed?: boolean };
+type QueuedInput = { threadId: string; submission: string; deliverAs: string; state: PiQueuedItem["state"]; at: number; text: string; truncated?: boolean; images?: number; dismissed?: boolean };
 /** One Herdr pane as listed, with or without a Session file. */
 type RemotePane = { pane: string; workspace?: string; tab?: string; name?: string | null; status?: string | null };
 /**
@@ -305,6 +305,9 @@ export class PiHost extends EventEmitter {
 	#starting = new Map<string, Starting>();
 	/** thread.create in flight by requestId. */
 	#creates = new Map<string, Promise<ThreadCreated>>();
+	/** thread.relaunch in flight by requestId, and the threads it relaunches (ThreadSummary.relaunching). */
+	#relaunches = new Map<string, Promise<ThreadRelaunched>>();
+	#relaunching = new Set<string>();
 	#views = new Map<string, HostedView>(PI_VIEWS.map((v) => [v.name, v]));
 	#forcedViews = new Set<string>();
 	/** What views may see of this Host (views/types.ts). */
@@ -687,6 +690,7 @@ export class PiHost extends EventEmitter {
   copy.urgent = urgent;
   copy.refreshing = (async () => {
    try {
+    if (this.#stopped) return;
     const data = await this.#store.refresh(this.#source(copy), () => { copy.deriving = true; }, urgent);
     if (!data || copy.generation !== generation || this.#copies.get(copy.path) !== copy || this.#stopped) return;
     copy.readError = undefined;
@@ -1064,6 +1068,9 @@ export class PiHost extends EventEmitter {
 							code: String(error.code ?? "refused"),
 							...(typeof msg.pane === "string" ? { pane: msg.pane } : {}),
 							...(Array.isArray(error.matches) ? { matches: error.matches.map(String) } : {}),
+							// A refused relaunch after the stop still says what became of the queue.
+							...(Array.isArray(msg.returned) ? { returned: msg.returned.map(String) } : {}),
+							...(Array.isArray(msg.delivered) ? { delivered: msg.delivered.map(String) } : {}),
 						}),
 					);
 				}
@@ -1114,7 +1121,7 @@ export class PiHost extends EventEmitter {
 			this.#noteSubmissions(threadId, reported);
 			const listed = new Set(reported.map((r) => r.submission));
 			for (const q of this.#queued.values())
-				if (q.threadId === threadId && !listed.has(q.submission) && q.state !== "unknown") {
+				if (q.threadId === threadId && !listed.has(q.submission) && q.state !== "unknown" && q.state !== "stopped") {
 					if (q.dismissed) this.#queued.delete(q.submission);
 					else q.state = "unknown";
 				}
@@ -1303,6 +1310,7 @@ export class PiHost extends EventEmitter {
 			let summary = session ? session.summary : this.#summary(copy);
 			if (!summary) continue;
 			if (session) for (const view of this.#views.values()) if (view.summarize) summary = { ...summary, ...view.summarize(this.#viewContext, session) };
+			if (this.#relaunching.has(summary.id)) summary = { ...summary, relaunching: true };
 			threads[summary.id] = summary;
 		}
 		let layout = this.#layout;
@@ -1648,7 +1656,7 @@ export class PiHost extends EventEmitter {
 				if (images.length) {
 					// A Session with no file yet has only its pane, and keys cannot carry an image.
 					const { path, agent } = starting ? { path: "", agent: {} as RemoteAgent } : this.#target(String(args.threadId));
-					const ack = await this.#command({ t: "submit", session: path, text, deliverAs, images: this.#imagesFor(agent, images) }, 130_000);
+					const ack = await this.#command({ t: "submit", session: path, text, deliverAs, images: this.#imagesFor(agent, images), holdMs: holdMsFor(130_000) }, 130_000);
 					return this.#noteSubmission(String(args.threadId), deliverAs, text, ackResult(ack));
 				}
 				if (starting) {
@@ -1657,7 +1665,8 @@ export class PiHost extends EventEmitter {
 					return ackResult(ack);
 				}
 				const { path, agent } = this.#target(String(args.threadId));
-				const ack = await this.#command({ t: "submit", session: path, pane: agent.pane, text, deliverAs }, agent.control?.live ? 130_000 : 20_000);
+				const timeoutMs = agent.control?.live ? 130_000 : 20_000;
+				const ack = await this.#command({ t: "submit", session: path, pane: agent.pane, text, deliverAs, holdMs: holdMsFor(timeoutMs) }, timeoutMs);
 				return this.#noteSubmission(String(args.threadId), deliverAs, text, ackResult(ack));
 			},
 			"thread.commands": async (args) => {
@@ -1744,6 +1753,23 @@ export class PiHost extends EventEmitter {
 					this.#schedulePublish();
 				} else this.#markAll();
 				return ackResult(ack);
+			},
+			"thread.relaunch": async (args) => {
+				const threadId = String(args.threadId);
+				const requestId = String(args.requestId ?? "").toLowerCase();
+				if (!UUID.test(requestId)) throw Object.assign(new Error("requestId must be a UUID"), { code: "invalid" });
+				// A retry joins the run in flight here; after it, the agent's ledger answers the same requestId.
+				const running = this.#relaunches.get(requestId);
+				if (running) return running;
+				const { path, copy, agent } = this.#target(threadId);
+				if (!agent.pane) throw Object.assign(new Error("This Session is not in a Herdr pane, so AmPi cannot relaunch it"), { code: "not_in_pane" });
+				if (!copy) throw Object.assign(new Error("Pi has not written this Session's file yet; relaunch it after its first message"), { code: "no_session_file" });
+				const cmd = { t: "relaunch", requestId, session: path, pane: agent.pane, force: args.force === true, budgetMs: RELAUNCH_BUDGET_MS };
+				if (args.check === true) return relaunchCheck(await this.#command({ ...cmd, check: true }, 20_000));
+				const run = this.#relaunch(threadId, cmd);
+				this.#relaunches.set(requestId, run);
+				void run.catch(() => {}).finally(() => this.#relaunches.delete(requestId));
+				return run;
 			},
 			"sessions.search": async (args) => {
     return this.#store.snapshot(() => {
@@ -1936,7 +1962,35 @@ export class PiHost extends EventEmitter {
 		const { path, agent } = this.#target(threadId);
 		if (cmd.t === "commands") this.#refuseForeign(agent);
 		if (cmd.t === "commands" && !agent.control?.live) return Promise.reject(Object.assign(new Error("This Session has no live control socket, so AmPi cannot list slash commands; Enter types a command into the Pi pane"), { code: "no_control" }));
-		return this.#command({ ...cmd, session: path, pane: agent.pane }, timeoutMs);
+		return this.#command({ ...cmd, session: path, pane: agent.pane, holdMs: holdMsFor(timeoutMs) }, timeoutMs);
+	}
+
+	/**
+	 * One relaunch. The agent fits every wait into `budgetMs`; the margin covers the frame round trip, so a timeout here
+	 * means the agent is gone, not slow. The queue takes the outcome whether the start worked or not: a returned
+	 * submission is `stopped` (its text lives here only), a delivered one leaves the queue.
+	 */
+	async #relaunch(threadId: string, cmd: Record<string, unknown>): Promise<ThreadRelaunched> {
+		this.#relaunching.add(threadId);
+		this.#markAll();
+		const settle = (r: { returned?: unknown; delivered?: unknown }) => {
+			for (const id of Array.isArray(r.returned) ? r.returned : []) {
+				const q = this.#queued.get(String(id));
+				if (q?.threadId === threadId) q.state = "stopped";
+			}
+			for (const id of Array.isArray(r.delivered) ? r.delivered : []) if (this.#queued.get(String(id))?.threadId === threadId) this.#queued.delete(String(id));
+		};
+		try {
+			const ack = await this.#command(cmd, RELAUNCH_BUDGET_MS + RELAUNCH_MARGIN_MS);
+			settle(ack);
+			return relaunchResult(ack);
+		} catch (e) {
+			settle(e as { returned?: unknown; delivered?: unknown });
+			throw e;
+		} finally {
+			this.#relaunching.delete(threadId);
+			this.#markAll();
+		}
 	}
 
 	/** The Session file path and its running agent; a Session without a copy is a target only through its live control endpoint. */

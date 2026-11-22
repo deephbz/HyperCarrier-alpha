@@ -6,6 +6,7 @@ import { after, test, type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium, webkit, type Page } from "playwright";
 import { engineSkip } from "./engines.ts";
+import { catchAllRoute } from "./catch-all-route.ts";
 import { build } from "vite";
 import react from "@vitejs/plugin-react";
 // @ts-ignore: shared browser discovery is plain ESM.
@@ -69,7 +70,7 @@ async function open(t: TestContext, engine: "chromium" | "webkit" = "chromium") 
 	const page = await browser.newPage({ viewport: { width: 1000, height: 700 } });
 	t.after(() => page.context().close());
 	page.setDefaultTimeout(5000);
-	await page.route("**/*", (route) => route.fulfill({ contentType: "text/html", body: "<style>" + readFileSync(join(web, "src/styles.css"), "utf8") + "</style><div id=\"root\"></div><script>" + script + "</script>" }));
+	await catchAllRoute(page, "http://localhost", (route) => route.fulfill({ contentType: "text/html", body: "<style>" + readFileSync(join(web, "src/styles.css"), "utf8") + "</style><div id=\"root\"></div><script>" + script + "</script>" }));
 	let asked!: () => void;
 	const history = new Promise<void>((resolve) => { asked = resolve; });
 	let replied!: () => void;

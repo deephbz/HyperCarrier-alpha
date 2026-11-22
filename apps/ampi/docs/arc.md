@@ -80,7 +80,77 @@ Acceptance does not prove completion. A late "unknown" reply cannot replace an a
 
 The service watches Session files through the published selection. Owner messages and agent stops schedule automatic work when at least four Rarebits exist. Debounce is 20 seconds; automatic cadence is five minutes per Session. Manual Build skips both. A pending job retains its strongest intent across restart. Source cursors deduplicate automatic targets. Failed Builds retain retry times and backoff. Other Sessions can continue when one waits or fails.
 
-A resident checks its store, lifetime-lock identity and control socket at each existing service tick. Loss of any of these cancels current calls and ends the resident after child reaping. If terminal persistence fails while these authority paths remain valid, the resident retains its lock and stop reports busy. The existing tick still checks authority loss after that failure. A displaced resident never closes or removes a successor control socket. If the authority paths are gone, shutdown cannot retain a readable terminal record and still ends after child reaping. A fixture must stop and await the resident before it removes the store.
+Automatic admission rechecks the four-Rarebit gate against an exact source snapshot.
+An opaque prefix witness permits a pure append between that check and admission.
+A rewritten prefix or changed ancestry cannot mutate or join a Build. Two failed
+assurance attempts set a durable 20-second cooldown. New observations cannot
+extend or erase that deadline. Failure retries use the same verified admission.
+A pending source repair defers automatic admission without creating a job or
+advancing failure backoff. The service retains the trigger. Manual Build preempts
+repair and performs its exact checks outside the background byte budget.
+
+### Source verification
+
+Warm scans verify source identity, a 4 KiB head and a 64 KiB old tail. They decode
+and index only appended records when the branch stays compatible. These samples
+do not prove interior integrity. Exact Build input and publication checks hash
+the complete committed prefix without decoding unchanged records. An index
+rebuild cannot establish a history change by itself. Witness ancestry comes
+from native entry IDs, parent links and byte offsets.
+
+The service retains at most 16 compact projections and 16 MiB of serialized
+projection data. It logs reprojection within ten minutes of eviction. Cache
+misses, branch changes and invalid prefixes rebuild the projection.
+
+Background verification covers projected sources that changed since their last
+full proof. Its default cap is 64,000,000 native bytes per rolling minute. Its
+target is 30 minutes. Every verification, corrective replay and projection read
+uses this budget. A 144 MB prefix requires at least three quota minutes for one
+proof; corrective replay costs additional quota. The cap wins over the target.
+Charges and pending repairs survive restart. Partial repairs remain private
+until their index and completion fact commit. Repair work precedes routine
+proofs. A failed or invalidated source yields to readable peers without resetting
+its verification age. `service.log` reports overdue verification and repair.
+
+Each background quantum reads at most 64 KiB. The driver runs at most 64 quanta
+per tick and yields an event-loop turn between quanta. Status, stop and explicit
+Build work do not wait for a complete background replay. Automatic triggers can
+wait across quota windows while a repair remains pending. There is no new panel
+status for that repair.
+
+Published receipts remain historical until the next successful Build. A source
+redaction can remain visible in an older receipt during this interval. The service
+logs when detected source changes make a receipt older than its source.
+
+A resident checks its store, lifetime-lock identity and control socket at each existing service tick. Loss of any of these cancels current calls and ends the resident after child reaping. If terminal persistence fails while these authority paths remain valid, the resident retains its lock and answers with its stopping or storage-fault state. The existing tick still checks authority loss after that failure. A displaced resident never closes or removes a successor control socket. If the authority paths are gone, shutdown cannot retain a readable terminal record and still ends after child reaping. A fixture must stop and await the resident before it removes the store.
+
+### Explicit recovery
+
+Only `ampi arc stop --host <host>` can signal an unresponsive resident. Each stop result has one `kind`, one set of facts and one next step:
+
+| Result | What is true | Next step |
+| --- | --- | --- |
+| `orderly-stop` | The service answered and stopped. Queued Builds are cancelled. | None. A linked hub starts Arc again within seconds. |
+| `not-running` | No service held the lock. No signal was sent. | None. |
+| `recovery-refused` | AmPi could not bind the lock to one Arc service of this store. No signal was sent, or the loop halted after a change. | Follow the named step: run stop again, stop the hubs, end the named pid, or restart the machine. On macOS, add `--force-unverified` only when the result names it. |
+| `forced-recovery`, cancellation confirmed | AmPi signalled the silent owner, took the lock and saved the cancellation of queued Builds. | Check the model provider's usage page for a charged call. |
+| `forced-recovery`, cancellation unconfirmed | The owner ended, but AmPi could not take the lock or save the cancellation. | Run stop again, or repair the named store path first. |
+| `forced-recovery`, `evidence: "unverified"` | macOS matched the owner by open file, start second and command only. The owner chose to stop it. | As for confirmed or unconfirmed. |
+
+The mechanism follows. Hub startup, hello and Build never signal a resident. Recovery first tries the control socket, then probes the lifetime lock without waiting. A free lock needs no signal. Recovery never unlinks the lock file.
+
+On Linux, recovery requires a granted whole-file `FLOCK ADVISORY WRITE` record in both the candidate's fdinfo and `/proc/locks`. The record must name the exact device and inode. A dead launcher guardian can remain the record's PID; recovery selects the live descriptor holder instead. Multiple descriptors in one process count once. Multiple visible holders, incomplete target evidence, a foreign user or store, and a changed incarnation cause refusal. Unrelated EACCES or EPERM failures remain counted per-process visibility evidence with their inspection stage and errno. All other inventory failures cause refusal. A plain opener provides no ownership evidence.
+
+Recovery pins a pidfd before its final inspection. It anchors process reads to an open proc directory and checks pidfd liveness around them. It rechecks the socket, process generation, command, store and kernel evidence before TERM and before KILL. It never retargets a successor and never signals model children. An unavailable or denied pidfd causes refusal.
+
+macOS cannot prove flock ownership from lsof. A plain stop refuses and names one next action: `ampi arc stop --host <host> --force-unverified`. The flag needs one Host. It accepts only a same-user Arc service of this store and incarnation that is the only opener of the exact lock inode. A hub ensure opens the lock file briefly before its flock fails, so recovery polls a second opener three times over about 300 ms before it refuses. Its start second and full command bind the PID between rechecks, because macOS gives no process handle. The same TERM and KILL loop and rechecks then apply. A new process with the same PID, start second and command remains a residual risk. The result says that macOS could not prove ownership. On Linux the flag changes nothing.
+
+Arc never transfers or reacquires its lifetime lock. It holds the lock while it can serve or persist work, and releases it only on the terminal no-work path. Linux exposes no lock-acquisition epoch, so this invariant excludes an unlock/relock ABA; rechecks do not detect it. The same-UID scan proves only a unique verified visible holder. Private store access and exclusion of privileged interference are threat assumptions. Cross-UID inheritance or descriptor transfer can retain the lock elsewhere. Only a later successful flock acquisition proves that recovery owns the lock.
+
+After acquisition, the current runtime enters maintenance-stop before any scan, auth check, scheduler or admission work. A generation-keyed pending cancellation survives crashes and mixed selected-runtime versions. The Builder cancels queued Builds and saves their records before clearing that obligation. A malformed stop record becomes a new pending cancellation under the lock. Read-permission and I/O failures never authorize replacement of that record. Unknown prior signals stay in the pending stop record through cancellation failures and manager death. The stop that completes the cancellation reports them once and clears them. Later `status` and `stop` results do not repeat the warning. The stop that finds the unreadable record writes a timestamped line to `service.log`; that line keeps the trace if the reporting stop dies after completion. Storage failure, including the initial fence write, retains a responsive no-work fault owner and its lock. Repair storage, then retry stop. Checkpoints, call journals, unknown charges and surviving-child capacity remain intact.
+
+Forced recovery has a distinct result. Another resident can acquire the lock, dispatch a Build and exit before recovery acquires it. Recovery does not detect or exclude that interval; a hub ensure that retries the busy lock can win it. Cancellation is confirmed only from recovery's own acquisition and successful save. Every signal path retains the possible-charge warning. Confirmed cancellation directs the owner to the model provider's usage page. Failed acquisition or persistence reports incomplete recovery. The owner accepts this partial guarantee. No stop request blocks other starts during the interval.
+>>>>>>> 52528d7a9 (ampi arc: recover an unresponsive Arc owner by explicit stop)
 
 **Q1 — no-hub grace:** the service stops after five minutes without a compatible hub handshake. Work can finish during the grace. At expiry, the service cancels unfinished Builds, persists cancellation and reaps model children before exit. A compatible hub that returns during the grace renews it, including during an update drain. Expiry also cancels an update drain. A later hub connection starts a stopped service again. The panel keeps the cancelled Build's cause and says "Press Build to continue." An interrupted model call also retains the charge warning. v2.1 adds no OS supervisor.
 
@@ -98,12 +168,18 @@ The Session Host's Pi `settings.json` owns `ampi_arc`; the hub's credentials and
     "model": "anthropic/claude-haiku-5-5",
     "auto": true,
     "retries": 2,
-    "concurrency": 8
+    "concurrency": 8,
+    "sourceVerifyBytesPerMinute": 64000000,
+    "sourceVerifyIntervalMs": 1800000
   }
 }
 ```
 
 The model is an exact `provider/modelId`, with no fuzzy match. Invalid settings name the file and key. Missing sign-in names the model and auth path. The service checks sign-in before each paid call.
+
+`sourceVerifyBytesPerMinute` and `sourceVerifyIntervalMs` accept positive safe
+integers. They control background work only. Exact Build checks keep their
+existing correctness boundary.
 
 `retries` permits 0–5 extra attempts after an unusable answer; zero disables the Needs-you retry too. `concurrency` remains subject to Q3. Old `serviceIdleHours` values are ignored; the service logs this once per start. Depth stays tier b; zoom calls and adaptive depth are deferred.
 
@@ -155,7 +231,7 @@ The Session's Arc panel is the only prose surface. Overview receives only Needs-
 | stopped | devbox: Arc service is stopped. A linked hub restarts it within seconds. | The service idled out or was stopped. | None. |
 | stopping | devbox: Arc service is stopping for every client. A linked hub restarts it within seconds. | Stop cancels work for every linked client. | Wait for cancellation and restart. |
 | fault | devbox: Arc service stopped Builds after an internal error. Run ampi arc stop --host devbox to restart it; a linked hub starts it again within seconds. | The service fenced new Builds. | Restart it. |
-| busy | devbox: Arc service holds its lock but does not answer. Run ampi arc status --host devbox before retrying. | The lock owner did not answer. | Check status. |
+| busy | devbox: Arc service holds its lock but does not answer. Run ampi arc stop --host devbox to stop it; a linked hub starts it again within seconds. | The lock owner did not answer. | Run the explicit stop command. |
 | error | devbox: Arc maintenance failed: `<cause>`. Run ampi arc status --host devbox; the log is `<path>`. | Maintenance did not finish. | Check status and the named log. |
 | no sign-in | devbox: Arc service has no sign-in for anthropic/claude-haiku-5-5. Sign in using `<auth path>`. | The Host has no sign-in for the Arc model. | Sign in on the Host. |
 | invalid settings | devbox: Arc settings are invalid. Check ampi_arc.retries in `<settings path>`. | A settings key fails validation. | Fix the key. |
@@ -165,7 +241,9 @@ Host names and counts above are synthetic examples. A healthy matching service s
 
 The Build record names the trigger, requester and builder Host, followed by call count, cost and new-chapter counts. Possible repeat cost remains visible. For example: `22:52 · manual from desk · built on devbox · 3 calls · $0.01`. These Host names are synthetic.
 
-Failure text precedes Build details and states when the last good Arc remains. A partial Arc says "Covers N of M messages" through failure, queued retry and building. A retry time appears once. Only building shows an elapsed counter. It starts from Host-measured elapsed and interpolates on a browser-local monotonic clock while status is fresh. A stale sample freezes with its observed time. A browser disconnect means hub disconnection; it does not prove Host failure. Stale status hides the newer-message count.
+Failure text precedes Build details and states when the last good Arc remains. A partial Arc says "Covers N of M messages" through failure, queued retry and building. A retry time appears once. The hub omits past start and retry times from
+the display projection. A heartbeat publishes deadline expiry even when the
+Host's scheduling facts stay unchanged. Only building shows an elapsed counter. It starts from Host-measured elapsed and interpolates on a browser-local monotonic clock while status is fresh. A stale sample freezes with its observed time. A browser disconnect means hub disconnection; it does not prove Host failure. Stale status hides the newer-message count.
 
 Service facts, correlated request outcomes and receipt revisions reach this panel through the remote-agent link. A build mismatch reports the required update; it does not invent an empty Arc. A receipt can arrive before its cited transcript bytes. Keep it visible with a not-copied-yet citation state. Panel open never fetches remote evidence synchronously. `test/arc-link.test.ts` checks replication and receipt-ahead-of-copy behavior; browser tests check presentation.
 

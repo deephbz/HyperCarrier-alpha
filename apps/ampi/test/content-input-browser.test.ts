@@ -1,6 +1,7 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { IMAGE_LIMITS } from "@hypercarrier/pi-hc-control/control";
 import type { WebSocketRoute } from "playwright";
 import { ENGINES, open } from "./resize-edges-fixture.ts";
 import { engineSkip } from "./engines.ts";
@@ -19,7 +20,7 @@ async function enableImageControl(page: Awaited<ReturnType<typeof open>>) {
 			const frame = JSON.parse(raw);
 			if (frame.t === "snap" && frame.value?.threads) for (const thread of Object.values(frame.value.threads) as { control?: boolean; images?: unknown }[]) {
 				thread.control = true;
-				thread.images = { count: CONTENT_IMAGE_COUNT, totalBase64: CONTENT_IMAGE_TOTAL_BASE64, types: ["image/png", "image/jpeg", "image/gif", "image/webp"] };
+				thread.images = IMAGE_LIMITS;
 			}
 			ws.send(JSON.stringify(frame));
 		},

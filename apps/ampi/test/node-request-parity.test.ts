@@ -87,6 +87,7 @@ type Allowed = {
 		| { systemBlock: number; section: string; insertAfter: string; text: string }
 		| { stripDescriptionSuffix: string }
 		| { tool: string; description: string }
+		| { tool: string; additionalProperties: boolean }
 		| { tool: string; insertAfter: string; value: WireTool }
 	)[];
 };
@@ -159,6 +160,7 @@ function expectedRequest(pi: RequestShape, allowed: Allowed[]): RequestShape {
 			const suffix = new RegExp(edit.stripDescriptionSuffix);
 			for (const tool of out.body.tools) tool.description = tool.description.replace(suffix, "");
 		} else if ("insertAfter" in edit) out.body.tools.splice(toolAt(edit.insertAfter) + 1, 0, edit.value);
+		else if ("additionalProperties" in edit) (out.body.tools[toolAt(edit.tool)]!.input_schema as Record<string, unknown>).additionalProperties = edit.additionalProperties;
 		else out.body.tools[toolAt(edit.tool)]!.description = edit.description;
 	}
 	return out;

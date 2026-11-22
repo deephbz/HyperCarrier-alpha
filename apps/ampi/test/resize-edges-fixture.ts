@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test, type TestContext } from "node:test";
@@ -35,8 +35,8 @@ const LEAD = "#/h/devbox/t/pi%3Asess-lead?p=arc";
 export const EDGES = { sidebar: { min: 220, max: 420, grow: 1, key: "ampi.sidebar.width", css: "--side-w" }, panel: { min: 320, max: 720, grow: -1, key: "ampi.panel.width", css: "--panel-w" } } as const;
 type Side = keyof typeof EDGES;
 
-type DemoHub = { origin: string; key: string; demo: string; stop: () => Promise<void> };
-const hubs = new Map<DemoDataMode, Promise<DemoHub>>();
+type DemoHub = { origin: string; key: string; demo: string; stop: () => Promise<void>; waitForProseIndexHold: () => Promise<void>; installProseIndexHold: () => Promise<void>; releaseProseIndex: () => void };
+const hubs = new Map<string, Promise<DemoHub>>();
 let defaultHub: DemoHub | undefined;
 let files: Map<string, { body: string | Uint8Array; type: string }> | undefined;
 const browsers = new Map<string, Promise<Browser>>();
@@ -66,18 +66,70 @@ export async function waitForDemoGuardian(guardian: string, timeoutMs = 15_000):
 	}
 }
 
-async function startHub(mode: DemoDataMode): Promise<DemoHub> {
+type ProgressWaitOptions = { budgetMs?: number; maxMs?: number; intervalMs?: number; now?: () => number; sleep?: (ms: number) => Promise<void> };
+type PhaseWaitOptions = { budgetMs?: number; intervalMs?: number; now?: () => number; sleep?: (ms: number) => Promise<void>; timeoutError?: () => Error };
+export async function waitForPhase<T>(phase: string, poll: () => Promise<T | undefined>, { budgetMs = 50_000, intervalMs = 250, now = Date.now, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), timeoutError = () => new Error(`${phase} not ready in ${budgetMs} ms`) }: PhaseWaitOptions = {}): Promise<T> {
+	const deadline = now() + budgetMs;
+	while (now() < deadline) {
+		const value = await poll().catch(() => undefined);
+		if (value !== undefined) return value;
+		await sleep(intervalMs);
+	}
+	throw timeoutError();
+}
+export async function waitForProgress<T>(poll: () => Promise<T | undefined>, witness: (value: T | undefined) => string, ready: (value: T | undefined) => value is T, { budgetMs = 50_000, maxMs = 160_000, intervalMs = 250, now = Date.now, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }: ProgressWaitOptions = {}): Promise<T> {
+	const startedAt = now();
+	let progress = "";
+	let stalledAt = startedAt;
+	while (true) {
+		const value = await poll().catch(() => undefined);
+		const current = now();
+		const next = witness(value);
+		if (next !== progress) { progress = next; stalledAt = current; }
+		if (ready(value)) return value;
+		if (current - startedAt >= maxMs) throw new Error(`readiness exceeded ${maxMs} ms (${progress})`);
+		if (current - stalledAt >= budgetMs) throw new Error(`readiness made no progress for ${budgetMs} ms (${progress})`);
+		await sleep(intervalMs);
+	}
+}
+
+export async function startHub(mode: DemoDataMode, early = false, holdProseIndex = false, seedArcs = true, beforeHugeReadiness?: () => Promise<void>, stressSessions?: number, holdProseIndexAfterStart = false): Promise<DemoHub> {
 	hubBuild = stamp().id;
 	const run = mkdtempSync(join(tmpdir(), "ampi-resize-"));
 	const home = join(run, "home"), demo = join(run, "demo"), log = join(run, "hub.log");
 	mkdirSync(join(home, ".ampi"), { recursive: true });
-	const env = { ...process.env, PATH: refusingPath(join(run, "bin"), process.env.PATH), HOME: home, AMPI_HOME: join(home, ".ampi"), AMPI_HUB_CONFIG: join(home, ".ampi/hub.json"), PI_CODING_AGENT_DIR: join(demo, "agent"), DEMO_DIR: demo, DEMO_WEB: "external", PORT: "0", DEMO_LIFETIME: "owner", DEMO_OWNER_FD: "3",
+	const env = { ...process.env, PATH: refusingPath(join(run, "bin"), process.env.PATH), HOME: home, AMPI_HOME: join(home, ".ampi"), AMPI_HUB_CONFIG: join(home, ".ampi/hub.json"), PI_CODING_AGENT_DIR: join(demo, "agent"), DEMO_DIR: demo, DEMO_WEB: "external", DEMO_SEED_ARCS: seedArcs ? "1" : "0", ...(stressSessions === undefined ? {} : { DEMO_STRESS: String(stressSessions) }), PORT: "0", DEMO_LIFETIME: "owner", DEMO_OWNER_FD: "3",
 		// phoneTimelineFixture seeds the empty hub with Sessions dated at fixed past instants; the real-clock Session scope would drop them.
 		...(mode === "empty" ? { AMPI_DEMO_RECENT_MS: String(3650 * 86_400_000) } : {}) };
-	const args = ["scripts/pi-demo.ts", ...(mode === "demo" ? [] : ["--fixture", mode])];
+	const args = ["scripts/pi-demo.ts", ...(mode === "demo" ? [] : ["--fixture", mode]), ...(holdProseIndex ? ["--test-hold-prose-index"] : holdProseIndexAfterStart ? ["--test-hold-prose-index-after-start"] : [])];
 	const child = spawn(process.execPath, args, { cwd: app, detached: true, env, stdio: ["ignore", openSync(log, "a"), openSync(log, "a"), "pipe"] });
 	(child.stdio[3] as import("node:net").Socket).unref();
 	child.unref();
+	let proseIndexReleased = false;
+	const waitForLog = (marker: string) => {
+		const ready = () => readFileSync(log, "utf8").includes(marker);
+		if (ready()) return Promise.resolve();
+		return new Promise<void>((resolve, reject) => {
+			const watcher = watch(log, () => {
+				try { if (ready()) { clearTimeout(timer); watcher.close(); resolve(); } }
+				catch (error) { clearTimeout(timer); watcher.close(); reject(error); }
+			});
+			const timer = setTimeout(() => { watcher.close(); reject(new Error(`demo hub did not log ${marker}`)); }, 15_000);
+			watcher.on("error", (error) => { clearTimeout(timer); watcher.close(); reject(error); });
+			if (ready()) { clearTimeout(timer); watcher.close(); resolve(); }
+		});
+	};
+	const waitForProseIndexHold = () => waitForLog("demo test prose-index gate held");
+	const installProseIndexHold = async () => {
+		if (!holdProseIndexAfterStart || readFileSync(log, "utf8").includes("demo test prose-index gate installed")) return;
+		if (child.pid && child.exitCode === null && child.signalCode === null) process.kill(child.pid, "SIGUSR1");
+		await waitForLog("demo test prose-index gate installed");
+	};
+	const releaseProseIndex = () => {
+		if ((!holdProseIndex && !holdProseIndexAfterStart) || proseIndexReleased) return;
+		proseIndexReleased = true;
+		if (child.pid && child.exitCode === null && child.signalCode === null) process.kill(child.pid, "SIGUSR2");
+	};
 	let stopping: Promise<void> | undefined;
 	const stop = () => {
 		if (stopping) return stopping;
@@ -110,32 +162,41 @@ async function startHub(mode: DemoDataMode): Promise<DemoHub> {
 			rmSync(run, { recursive: true, force: true });
 		})();
 	};
-	const deadline = Date.now() + 50_000;
-	const wait = async <T>(phase: string, poll: () => Promise<T | undefined>): Promise<T> => {
-		while (Date.now() < deadline) {
-			const value = await poll().catch(() => undefined);
-			if (value !== undefined) return value;
-			await new Promise((r) => setTimeout(r, 250));
+	const wait = <T>(phase: string, poll: () => Promise<T | undefined>): Promise<T> => waitForPhase(phase, poll, {
+		timeoutError: () => new Error(`demo hub: ${phase} not ready in 50 s. Log tail: ${readFileSync(log, "utf8").slice(-600).replace(/k=[0-9a-f]+/g, "k=<redacted>")}`),
+	});
+	try {
+		const [, port, key] = await wait("URL", async () => readFileSync(log, "utf8").match(/demo hub: http:\/\/127\.0\.0\.1:(\d+)\/\?k=([0-9a-f]+)/) ?? undefined);
+		assert.ok(Number(port) < FORBIDDEN_PORTS[0]! || Number(port) > FORBIDDEN_PORTS[1]!, "the demo hub never takes an owner port");
+		const read = { port: Number(port), host: "devbox", auth: { bearer: key! }, timeoutMs: 3000 };
+		if (!early && mode !== "empty") {
+			// The lead is live once the demo Host reads its fake Herdr; only then does a file append stream to the page.
+			await wait("live lead", async () => ((await threadsSnapshot(read)).find((t) => t.id === "pi:sess-lead")?.live ? true : undefined));
+			if (mode === "huge") {
+				if (beforeHugeReadiness) await beforeHugeReadiness();
+				else await waitForProgress(
+					async () => await topicSnapshot({ ...read, topic: { kind: "threads" } }) as { threads: Record<string, unknown>; indexing?: boolean },
+					(state) => `${Object.keys(state?.threads ?? {}).length}:${state?.indexing ?? "unknown"}`,
+					(state): state is { threads: Record<string, unknown>; indexing?: boolean } => Object.keys(state?.threads ?? {}).length >= (stressSessions ?? 1000) && !state?.indexing,
+				).catch((error) => { throw new Error(`demo hub: huge Session feed ${error.message}. Log tail: ${readFileSync(log, "utf8").slice(-600).replace(/k=[0-9a-f]+/g, "k=<redacted>")}`); });
+			}
+			// A cold hub derives the lead's transcript first; a page opened before that shows "Loading…" for long.
+			await wait("lead transcript", () => topicSnapshot({ ...read, topic: { kind: "thread", threadId: "pi:sess-lead" }, timeoutMs: 10_000 }));
 		}
-		throw new Error(`demo hub: ${phase} not ready in 50 s. Log tail: ${readFileSync(log, "utf8").slice(-600).replace(/k=[0-9a-f]+/g, "k=<redacted>")}`);
-	};
-	const [, port, key] = await wait("URL", async () => readFileSync(log, "utf8").match(/demo hub: http:\/\/127\.0\.0\.1:(\d+)\/\?k=([0-9a-f]+)/) ?? undefined);
-	assert.ok(Number(port) < FORBIDDEN_PORTS[0]! || Number(port) > FORBIDDEN_PORTS[1]!, "the demo hub never takes an owner port");
-	const read = { port: Number(port), host: "devbox", auth: { bearer: key! }, timeoutMs: 3000 };
-	if (mode !== "empty") {
-		// The lead is live once the demo Host reads its fake Herdr; only then does a file append stream to the page.
-		await wait("live lead", async () => ((await threadsSnapshot(read)).find((t) => t.id === "pi:sess-lead")?.live ? true : undefined));
-		// A cold hub derives the lead's transcript first; a page opened before that shows "Loading…" for long.
-		await wait("lead transcript", () => topicSnapshot({ ...read, topic: { kind: "thread", threadId: "pi:sess-lead" }, timeoutMs: 10_000 }));
+		return { origin: `http://127.0.0.1:${port}`, key: key!, demo, stop, waitForProseIndexHold, installProseIndexHold, releaseProseIndex };
+	} catch (error) {
+		try { await stop(); }
+		catch (cleanupError) { throw new AggregateError([error, cleanupError], "demo hub readiness failed and teardown did not complete"); }
+		throw error;
 	}
-	return { origin: `http://127.0.0.1:${port}`, key: key!, demo, stop };
 }
 
-function hubFor(mode: DemoDataMode): Promise<DemoHub> {
-	let pending = hubs.get(mode);
+function hubFor(mode: DemoDataMode, early = false, key: string = mode, holdProseIndex = false, seedArcs = true, stressSessions?: number, holdProseIndexAfterStart = false): Promise<DemoHub> {
+	const cacheKey = `${key}:${seedArcs}:${stressSessions ?? "default"}:${holdProseIndexAfterStart}`;
+	let pending = hubs.get(cacheKey);
 	if (!pending) {
-		pending = startHub(mode).then((hub) => { if (mode === "demo") defaultHub = hub; return hub; });
-		hubs.set(mode, pending);
+		pending = startHub(mode, early, holdProseIndex, seedArcs, undefined, stressSessions, holdProseIndexAfterStart).then((hub) => { if (mode === "demo") defaultHub = hub; return hub; });
+		hubs.set(cacheKey, pending);
 	}
 	return pending;
 }
@@ -143,7 +204,7 @@ function hubFor(mode: DemoDataMode): Promise<DemoHub> {
 before(async () => { files = await appBundle(); });
 after(async () => {
 	for (const browser of browsers.values()) await (await browser).close().catch(() => {});
-	await Promise.all([...hubs.values()].map(async (pending) => (await pending).stop()));
+	await Promise.all([...hubs.values()].map((pending) => pending.then((hub) => hub.stop(), () => undefined)));
 });
 
 /** Only checks that inspect seeded Arc content need this; layout and transcript checks do not. */
@@ -171,12 +232,12 @@ function phoneWidth(page: Page) {
 	}
 }
 
-export async function open(t: TestContext, engine: string, type: BrowserType, path: string | undefined, { display, route = LEAD, context: options, suppressResize = false, waitForPhoneLayout = true, recordResize = false, fixture = "demo", beforeNavigate }: { display?: Record<string, number>; route?: string; context?: BrowserContextOptions; suppressResize?: boolean; waitForPhoneLayout?: boolean; recordResize?: boolean; fixture?: DemoDataMode; beforeNavigate?: (page: Page) => void | Promise<void> } = {}): Promise<Page> {
+export async function open(t: TestContext, engine: string, type: BrowserType, path: string | undefined, { display, route = LEAD, context: options, suppressResize = false, waitForPhoneLayout = true, recordResize = false, fixture = "demo", beforeNavigate, fixtureKey = fixture, holdProseIndex = false, holdProseIndexAfterStart = false, stressSessions, waitForEntry = true, earlyStart = false, recordSearch = false, seedArcs = true }: { display?: Record<string, number>; route?: string; context?: BrowserContextOptions; suppressResize?: boolean; waitForPhoneLayout?: boolean; recordResize?: boolean; fixture?: DemoDataMode; beforeNavigate?: (page: Page) => void | Promise<void>; fixtureKey?: string; holdProseIndex?: boolean; holdProseIndexAfterStart?: boolean; stressSessions?: number; waitForEntry?: boolean; earlyStart?: boolean; recordSearch?: boolean; seedArcs?: boolean } = {}): Promise<Page> {
 	// A fulfilled document loses its loopback address space; Chromium's Local Network Access check then blocks the hub socket.
 	const args = engine === "chromium" ? ["--disable-features=LocalNetworkAccessChecks"] : [];
 	if (!browsers.has(engine)) browsers.set(engine, type.launch({ headless: true, args, ...(path ? { executablePath: path } : {}) }));
 	const browser = await browsers.get(engine)!;
-	const hub = await hubFor(fixture);
+	const hub = await hubFor(fixture, earlyStart, fixtureKey, holdProseIndex, seedArcs, stressSessions, holdProseIndexAfterStart);
 	const context = await browser.newContext({ viewport: { width: 1600, height: 800 }, ...options });
 	t.after(() => context.close());
 	const page = await context.newPage();
@@ -197,7 +258,22 @@ export async function open(t: TestContext, engine: string, type: BrowserType, pa
 		const body = file.type === "text/html" ? String(file.body).replace("</head>", `<meta name="ampi-build" content="${hubBuild}" />\n</head>`) : file.body;
 		return route.fulfill({ response, status: 200, body: typeof body === "string" ? body : Buffer.from(body), contentType: file.type });
 	});
-	await page.addInitScript(({ display, suppressResize, recordResize }) => {
+	await page.addInitScript(({ display, suppressResize, recordResize, recordSearch }) => {
+		if (recordSearch) {
+			const send = WebSocket.prototype.send;
+			WebSocket.prototype.send = function (data) {
+				if (typeof data === "string") {
+					try {
+						const frame = JSON.parse(data);
+						if (frame.t === "req" && frame.op === "sessions.search") {
+							const target = window as Window & { __proseSearchRequests?: string[] };
+							(target.__proseSearchRequests ??= []).push(frame.args?.query ?? "");
+						}
+					} catch {}
+				}
+				return send.call(this, data);
+			};
+		}
 		if (recordResize) {
 			(window as Window & { __initialInnerWidth?: number }).__initialInnerWidth = innerWidth;
 			(window as Window & { __resizeEvents?: number }).__resizeEvents = 0;
@@ -215,11 +291,13 @@ export async function open(t: TestContext, engine: string, type: BrowserType, pa
 		sessionStorage.setItem("seeded", "1");
 		localStorage.setItem("ampi.panel", "arc");
 		if (display) localStorage.setItem("ampi.display", JSON.stringify(display));
-	}, { display, suppressResize, recordResize });
+	}, { display, suppressResize, recordResize, recordSearch });
 	await page.goto(`${hub.origin}/?k=${hub.key}${route}`);
 	if (route.includes("?p=")) await page.locator(".panel-edge").waitFor();
-	if (route.includes("#/h/")) await page.locator(".transcript [data-entry]").first().waitFor({ state: "attached" });
-	else await page.locator(".main .topbar").waitFor({ state: "attached" });
+	if (waitForEntry) {
+		if (route.includes("#/h/")) await page.locator(".transcript [data-entry]").first().waitFor({ state: "attached" });
+		else await page.locator(".main .topbar").waitFor({ state: "attached" });
+	} else await page.getByRole("button", { name: /Search Sessions or prose/ }).waitFor();
 	return page;
 }
 
@@ -296,6 +374,19 @@ export async function phoneTimelineFixture(now = Date.now(), suffix = "") {
 
 /** The demo agent's Session directory: a test may add Session files, and the hub reads them as new Sessions. */
 export const demoSessions = () => join(defaultHub!.demo, "agent/sessions");
+export const fixtureSessions = async (fixture: DemoDataMode, fixtureKey: string = fixture, seedArcs = true, stressSessions?: number, holdProseIndexAfterStart = false) => join((await hubFor(fixture, false, fixtureKey, false, seedArcs, stressSessions, holdProseIndexAfterStart)).demo, "agent/sessions");
+export async function installFixtureProseIndexHold(fixture: DemoDataMode, fixtureKey: string = fixture, seedArcs = true) {
+	const hub = await hubFor(fixture, false, fixtureKey, false, seedArcs, undefined, true);
+	await hub.installProseIndexHold();
+}
+export async function waitForFixtureProseIndexHeld(fixture: DemoDataMode, fixtureKey: string = fixture, holdProseIndexAfterStart = false, seedArcs = true) {
+	const hub = await hubFor(fixture, false, fixtureKey, !holdProseIndexAfterStart, seedArcs, undefined, holdProseIndexAfterStart);
+	await hub.waitForProseIndexHold();
+}
+export async function releaseFixtureProseIndex(fixture: DemoDataMode, fixtureKey: string = fixture, holdProseIndexAfterStart = false, seedArcs = true) {
+	const hub = await hubFor(fixture, false, fixtureKey, !holdProseIndexAfterStart, seedArcs, undefined, holdProseIndexAfterStart);
+	hub.releaseProseIndex();
+}
 
 /** The default demo Timeline stream count, derived from the complete synthetic fixture, not a UI literal. */
 export async function timelineStreamCount() {

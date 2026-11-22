@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { loadBudget, PAGE_LOAD_MS } from "./page-load.ts";
+import { catchAllRoute } from "./catch-all-route.ts";
 import { build } from "vite";
 import react from "@vitejs/plugin-react";
 // @ts-ignore: browser discovery is shared ESM.
@@ -34,7 +35,7 @@ test("pin menu: a scroll in another region keeps it open; a scroll that moves it
 		const page = await browser.newPage();
 		page.setDefaultTimeout(2000);
 		loadBudget(page);
-		await page.route("**/*", (route) => route.fulfill({ contentType: "text/html", body: `<style>${readFileSync(join(web, "src/styles.css"), "utf8")}</style><div id="root"></div><script>${script}</script>` }));
+		await catchAllRoute(page, "http://localhost", (route) => route.fulfill({ contentType: "text/html", body: `<style>${readFileSync(join(web, "src/styles.css"), "utf8")}</style><div id="root"></div><script>${script}</script>` }));
 		await page.routeWebSocket("**/ws", () => {});
 		await page.goto("http://localhost/");
 		const menu = page.locator(".row-menu");

@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createConnection, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { after } from "node:test";
 import { applyImmutable } from "@earendil-works/chord/delta";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
@@ -15,8 +16,20 @@ import { simProvider } from "../src/node/sim.ts";
 import { encodeFrame, lineReader } from "../src/shared/framing.ts";
 import type { NodeFrame, Topic } from "../src/shared/protocol.ts";
 
+const tempHomes = new Set<string>();
+let cleanupAfterFixtures = false;
+export function deferTempHomeCleanupUntilFixturesStop(): void { cleanupAfterFixtures = true; }
+export function cleanupTempHomes(): void {
+	for (const home of tempHomes) rmSync(home, { recursive: true, force: true });
+	tempHomes.clear();
+}
+// Test-level teardown runs before top-level teardown. Pi fixtures defer this hook so their resident services stop first.
+after(() => { if (!cleanupAfterFixtures) cleanupTempHomes(); });
+
 export function tempHome(): string {
-	return mkdtempSync(join(tmpdir(), "ampi-test-"));
+	const home = mkdtempSync(join(tmpdir(), "ampi-test-"));
+	tempHomes.add(home);
+	return home;
 }
 
 /** The home lock for one test hub, as `ampi hub` takes it; release it when the hub stops. */

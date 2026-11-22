@@ -1,12 +1,13 @@
 import "./bound.ts";
-// The durable node's wire contract (node-design.md, R1 wire contract). `NodeOps` in src/shared/protocol.ts declares
-// every op the node serves; the type assertions below run under `npm run typecheck`.
+// The durable node's wire contract (node-design.md, R1 wire contract). `NodeOps` in src/shared/protocol.ts and its
+// `ExtraOps` augmentations (src/shared/reload-protocol.ts) declare every op the node serves; the type assertions below
+// run under `npm run typecheck`.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { runDaemon } from "../src/node/daemon.ts";
 import { ops, readerOps } from "../src/node/server.ts";
 import { hydrate } from "../src/plugins.ts";
-import type { NodeOpName, NodeOps, NodeTopicValues } from "../src/shared/protocol.ts";
+import type { ExtraOps, NodeTopicValues } from "../src/shared/protocol.ts";
 import { TestClient, tempHome } from "./helpers.ts";
 import type { Escapes } from "./wire-contract.test.ts";
 
@@ -16,15 +17,16 @@ const SIM = { provider: "ampi-sim", modelId: "sim-1" };
 // `thread.history` keeps the node's native page until the reader carries Pi-shaped entries (node-design.md step 8).
 // The reader wire forwards pi-durable records and documents as stored; only the hub's DurableViews reads them.
 type Deferred = "thread.history" | `reader.${string}`;
-type Found = { [K in Exclude<NodeOpName, Deferred>]: Escapes<NodeOps[K]["result"], K> }[Exclude<NodeOpName, Deferred>] | Escapes<NodeTopicValues["login"], "topic login">;
+type NodeOpName = keyof ExtraOps;
+type Found = { [K in Exclude<NodeOpName, Deferred>]: Escapes<ExtraOps[K]["result"], K> }[Exclude<NodeOpName, Deferred>] | Escapes<NodeTopicValues["login"], "topic login">;
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 export const noEscape: Equal<Found, never> = true;
 
-/** Every node op name, checked against `NodeOps` both ways. */
+/** Every node op name, checked against `NodeOps` and its augmentations both ways. */
 const NODE_OPS = {
 	"node.info": true, "node.restart": true, "node.health": true, "audit.snapshot": true, "store.reopen": true, "models.list": true, "prompts.list": true,
 	"accounts.list": true, "accounts.login": true, "accounts.answer": true, "accounts.cancel": true, "accounts.logout": true,
-	"thread.create": true, "thread.submit": true, "thread.abort": true, "thread.withdraw": true, "thread.editQueued": true, "thread.close": true, "thread.compact": true,
+	"thread.create": true, "thread.submit": true, "thread.abort": true, "thread.withdraw": true, "thread.editQueued": true, "thread.close": true, "thread.reload": true, "thread.compact": true,
 	"thread.commands": true, "thread.command": true,
 	"thread.configure": true, "thread.rename": true, "thread.archive": true, "thread.fork": true, "thread.history": true,
 	"thread.images": true, "compact.records": true, "git.changes": true, "fs.dirs": true,

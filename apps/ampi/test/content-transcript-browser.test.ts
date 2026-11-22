@@ -5,8 +5,30 @@ import { ENGINES, open } from "./resize-edges-fixture.ts";
 import { engineSkip } from "./engines.ts";
 
 const WORST_ROUTE = "#/h/devbox/t/pi%3Asess-content-worst?e=content-worst-2";
+const WIDE_ROUTE = "#/h/devbox/t/pi%3Asess-content-worst?e=content-worst-4";
 
 for (const [engine, type, path] of ENGINES) {
+	test(`transcript content ${engine}: wide code, large diff and CJK/RTL/emoji render without page overflow`, { skip: engineSkip(engine) }, async (t) => {
+		const page = await open(t, engine, type, path(), { route: WIDE_ROUTE, fixture: "worst" });
+		const entry = page.locator('[data-entry="content-worst-4"]');
+		await entry.waitFor();
+		await entry.scrollIntoViewIfNeeded();
+		const content = await entry.innerText();
+		for (const sample of ["veryLongOptionName", "diff --git a/src/reader.ts", "王秀英", "نور الهدى", "👩🏽‍💻"]) {
+			assert.ok(content.includes(sample), `the rendered entry retains ${sample}`);
+		}
+		for (const width of [320, 1600]) {
+			await page.setViewportSize({ width, height: 900 });
+			const state = await page.evaluate(() => ({
+				pageWidth: document.documentElement.scrollWidth,
+				viewportWidth: innerWidth,
+				entryWidth: document.querySelector<HTMLElement>('[data-entry="content-worst-4"]')!.getBoundingClientRect().width,
+			}));
+			assert.ok(state.pageWidth <= state.viewportWidth, `content does not widen the page at ${width}px: ${JSON.stringify(state)}`);
+			assert.ok(state.entryWidth > 0, `content entry remains laid out at ${width}px`);
+		}
+	});
+
 	test(`transcript content ${engine}: 48k tool output stays in its block at 320 px and desktop width`, { skip: engineSkip(engine) }, async (t) => {
 		const page = await open(t, engine, type, path(), { route: WORST_ROUTE, fixture: "worst" });
 		const tool = page.locator('.tool[data-result-entry="content-worst-3"]');

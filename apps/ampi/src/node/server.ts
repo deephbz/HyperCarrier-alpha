@@ -6,16 +6,18 @@ import { readdirSync, statSync } from "node:fs";
 import { promisify } from "node:util";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import type { JsonValue, ReplicatedState } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { diffRevisions } from "@earendil-works/chord/delta";
 import type { EntryId, EntryRecord } from "@earendil-works/pi-durable";
-import { type ClientFrame, type NodeFrame, type NodeOpName, type NodeOps, type Placement, PROTOCOL, THREAD_FIELDS, type Topic } from "../shared/protocol.ts";
+import { type ClientFrame, type ExtraOps, type NodeFrame, type NodeOpName, type Placement, PROTOCOL, THREAD_FIELDS, type Topic } from "../shared/protocol.ts";
+import "../shared/reload-protocol.ts";
 import { auditSnapshot } from "../plugins/prompt-audit.ts";
 import { type CommandArgs, listCommands, runCommand } from "./commands.ts";
 import { loadPrompts, loadSkills } from "./core-extension.ts";
 import { projectEntry, projectView, projectViewFields, type ReturnedState } from "./projection.ts";
 import { NodeError } from "./errors.ts";
+import type { NodeState } from "./node-state.ts";
 import { expandHome, type NodeRuntime, parseThreadKey } from "./runtime.ts";
 import { IMAGE_MAGIC, NODE_IMAGE_LIMITS } from "./images.ts";
 import { admitImages, rejectionLine } from "../shared/image-admission.ts";
@@ -40,10 +42,10 @@ export const ops = new Map<string, OpHandler>();
 export const topics = new Map<string, TopicHandler>();
 
 /**
- * Registers one node op. Its result must be the op's declared `NodeOps` result; its arguments arrive unchecked from the
- * wire, so the handler validates them.
+ * Registers one node op. Its result must be the op's declared result (`NodeOps`, or an `ExtraOps` augmentation such as
+ * reload-protocol.ts); its arguments arrive unchecked from the wire, so the handler validates them.
  */
-function defineOp<K extends NodeOpName>(name: K, handler: (args: Record<string, unknown>, runtime: NodeRuntime) => Promise<NodeOps[K]["result"]>): void {
+function defineOp<K extends keyof ExtraOps>(name: K, handler: (args: Record<string, unknown>, runtime: NodeRuntime) => Promise<ExtraOps[K]["result"]>): void {
 	ops.set(name, handler);
 }
 
@@ -70,8 +72,12 @@ function str(args: Record<string, unknown>, key: string): string {
 	return value;
 }
 
-export function fromState<T>(state: ReplicatedState<T> & { dispose?: () => void }, map: (value: T) => JsonValue): TopicSource {
-	let current = map(state.value as T);
+/**
+ * A node state as a topic. `subscribe` hydrates (node-state.ts), so a change between this call and the subscription
+ * reaches the listener as the first call.
+ */
+export function fromState<T>(state: NodeState<T>, map: (value: T) => JsonValue): TopicSource {
+	let current = map(state.value);
 	return {
 		get value() {
 			return current;
@@ -82,7 +88,6 @@ export function fromState<T>(state: ReplicatedState<T> & { dispose?: () => void 
 				listener(current);
 			});
 		},
-		dispose: () => state.dispose?.(),
 	};
 }
 
@@ -137,6 +142,7 @@ defineOp("thread.create", async (args, runtime) =>
 	}),
 );
 defineOp("thread.close", async (args, runtime) => runtime.closeThread(str(args, "threadId")));
+defineOp("thread.reload", async (args, runtime) => runtime.reloadThread(str(args, "threadId")));
 defineOp("thread.submit", async (args, runtime) => {
 	const threadId = str(args, "threadId");
 	// A message unarchives an archived thread first. Legacy Close stays read-only for API callers.

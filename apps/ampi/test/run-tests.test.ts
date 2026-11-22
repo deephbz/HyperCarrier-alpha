@@ -16,7 +16,8 @@ const scripts = join(import.meta.dirname, "..", "scripts");
 // Use the real runner with a one-file disposable lane; no full suite or live cache is needed.
 for (const mode of ["queued", "inherited", "focused", "SIGTERM", "SIGINT", "SIGHUP", "timeout", "invalid", "negative", "empty", "infinite"]) {
 	test(`gate lock: test lane ${mode}`, async (t) => {
-		const home = mkdtempSync(join(tmpdir(), "ampi-gate-lock-"));
+		const home = mkdtempSync(join(tmpdir(), "ampi-gate-lock-")), tmp = join(home, "tmp");
+		mkdirSync(tmp);
 		// The repository layout: the runner loads its lanes through scripts/lib/line-fragments.cjs.
 		const app = join(home, "apps", "ampi"), perf = join(home, "perf"), lock = join(perf, "gate.lock");
 		mkdirSync(join(app, "scripts", "perf"), { recursive: true });
@@ -39,7 +40,7 @@ for (const mode of ["queued", "inherited", "focused", "SIGTERM", "SIGINT", "SIGH
 		const timeout = mode === "timeout";
 		const release = await acquireRunLock("synthetic holder", { lock });
 		const child = spawn(process.execPath, [join(app, "scripts", "run-tests.cjs"), "fast", ...(mode === "focused" ? ["ok.test.cjs"] : [])], {
-			env: { ...process.env, HOME: home, AMPI_PERF_HOME: perf, AMPI_GATE_SLOTS: "1", AMPI_PREFLIGHT_DONE: "1", AMPI_GATE_LOCK_HELD: mode === "inherited" ? "1" : "", AMPI_GATE_LOCK_TIMEOUT_MIN: timeout ? "0.01" : invalid ? ({ invalid: "oops", negative: "-1", empty: "", infinite: "Infinity" }[mode]) : "0", AMPI_TEST_FILE_TIMEOUT_MS: "10000" },
+			env: { ...process.env, HOME: home, TMPDIR: tmp, AMPI_PERF_HOME: perf, AMPI_GATE_SLOTS: "1", AMPI_PREFLIGHT_DONE: "1", AMPI_GATE_LOCK_HELD: mode === "inherited" ? "1" : "", AMPI_GATE_LOCK_TIMEOUT_MIN: timeout ? "0.01" : invalid ? ({ invalid: "oops", negative: "-1", empty: "", infinite: "Infinity" }[mode]) : "0", AMPI_TEST_FILE_TIMEOUT_MS: "10000" },
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 		const exit = once(child, "close");
@@ -65,6 +66,7 @@ for (const mode of ["queued", "inherited", "focused", "SIGTERM", "SIGINT", "SIGH
 			else release();
 		}
 		const [code] = await exit;
+		assert.deepEqual(readdirSync(tmp), [], `${mode}: runner left temporary entries`);
 		if (timeout || invalid) {
 			assert.notEqual(code, 0, output);
 			assert.doesNotMatch(output, /▸ pass/);

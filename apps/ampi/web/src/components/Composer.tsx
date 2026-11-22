@@ -12,6 +12,7 @@ import { Popover, hoverIntent } from "./Popover.tsx";
 import { tokens } from "../util.ts";
 import { hostLabelFor } from "./host-label.ts";
 import { slashCommandSlots } from "../slash-command-slots.ts";
+import { useFocusPlacement } from "../context.ts";
 import { newId } from "../ids.ts";
 import { type ComposerApi, type ComposerSurface, type LocalCommand, type QueueOutcome, useThreadSurface } from "../shell-slots.ts";
 
@@ -44,6 +45,7 @@ function OutcomeLine({ outcome, keyed, held = false, what, actions }: { outcome:
 const PI_OUTCOMES: Record<string, QueueOutcome> = {
 	returned: { badge: "not sent", tone: "attn", note: "returned to Pi's input box", recover: "Put this text into the composer. Pi's input box still holds it, so clear one copy before you send." },
 	dropped: { badge: "not sent", tone: "err", note: "dropped by Pi" },
+	stopped: { badge: "not sent", tone: "attn", note: "Pi stopped for the relaunch before it sent this", recover: "Put this text into the composer to send it again." },
 	unknown: { badge: "unknown", tone: "", note: "Pi stopped reporting this message" },
 };
 const PI_TEXTS: NonNullable<ComposerSurface["texts"]> = {
@@ -237,19 +239,21 @@ export function Composer({
 	const [choice, setChoice] = useState<Choice>();
 	const [piCommands, setPiCommands] = useState<PiCommands>();
 	const ref = useRef<HTMLTextAreaElement>(null);
+	const focusPlacement = useFocusPlacement();
 	const box = useRef<HTMLDivElement>(null);
 	useImperativeHandle(composerRef, () => ({
 		quote: (selection, quoteNote) => {
+			const generation = focusPlacement.capture();
 			quoteDraft(host, threadId, selection, quoteNote);
-			// After React commits the new value: focus the draft with the caret at its end.
+			// After React commits the new value: focus the draft with the caret at its end, unless focus moved meanwhile.
 			requestAnimationFrame(() => {
 				const el = ref.current;
 				if (!el) return;
-				el.focus();
+				if (!focusPlacement.place(el, generation)) return;
 				el.setSelectionRange(el.value.length, el.value.length);
 			});
 		},
-	}), [host, threadId]);
+	}), [host, threadId, focusPlacement]);
 	const fileInput = useRef<HTMLInputElement>(null);
 	useLayoutEffect(() => {
 		const update = () => {

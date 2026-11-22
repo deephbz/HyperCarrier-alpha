@@ -4,7 +4,7 @@
 
 import type { ProviderStatus, PromptView, LoginState } from "../shared/accounts.ts";
 import { randomUUID } from "node:crypto";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { AuthEvent, AuthPrompt, AuthType, Credential, MutableModels } from "@earendil-works/pi-ai";
 import { credentialsOf } from "./models.ts";
 import { NodeError } from "./errors.ts";

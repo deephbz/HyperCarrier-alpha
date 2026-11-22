@@ -1,6 +1,6 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -32,6 +32,7 @@ test("perf browser: the switch scenario on a real hub records first data, timed 
 	client.ws.close();
 
 	const runDir = mkdtempSync(join(tmpdir(), "ampi-perf-run-"));
+	t.after(() => rmSync(runDir, { recursive: true, force: true }));
 	const logs: string[] = [];
 	const start = epochUs();
 	const result = await runScenario({ url: `http://127.0.0.1:${port}/?k=${TOKEN}`, origin: `http://127.0.0.1:${port}`, runDir, scenario: "switch", sessions: 3, epochUs, signal: AbortSignal.timeout(60_000), log: (m: string) => logs.push(m) });

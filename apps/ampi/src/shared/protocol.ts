@@ -2,7 +2,7 @@
 // render-only clients. Frames are JSON objects, one per line on byte streams (unix socket, SSH stdio) and one per
 // message on WebSockets. The node is the only authority; clients send requests and apply view deltas.
 
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { Op } from "@earendil-works/chord/delta";
 import type { HostState } from "./hosts.ts";
 import type { CompactRecord } from "@hypercarrier/auto-compact-durable";
@@ -134,6 +134,8 @@ export interface ThreadSummary {
 	model?: string;
 	activity: Activity;
 	queued: number;
+	/** Pi backend: a relaunch from this hub runs now (thread.relaunch). */
+	relaunching?: boolean;
 	/** Last generation failure that ended a run; cleared by the next successful answer. */
 	lastError?: string;
 	/** Rarebit Summary status projection (C4), node Sessions only; undefined means unknown. Legacy needs_attention is tolerated, but is not a Needs-you signal. */
@@ -265,7 +267,8 @@ export type QueueOrigin = { kind: "team"; delivery: "task" | "alert" | "stop" | 
 /** Each field of `T`, optional ones included: a projection typed with it fails to compile when it leaves a field out. */
 export type Every<T> = { [K in keyof Required<T>]: T[K] | undefined };
 /** One undelivered submission as the composer shows it. `images`: how many images it carried; Pi returns text only, so a returned message loses them. */
-export interface PiQueuedItem { id: string; mode: string; content: string; state: ControlSubmission["state"] | "unknown"; truncated?: boolean; images?: number; origin?: QueueOrigin }
+/** `stopped`: a relaunch stopped Pi before it sent the message (thread.relaunch); its text is here only. */
+export interface PiQueuedItem { id: string; mode: string; content: string; state: ControlSubmission["state"] | "unknown" | "stopped"; truncated?: boolean; images?: number; origin?: QueueOrigin }
 /** A Pi Session's thread topic. `live.run` is present while the Session runs a turn. */
 export type PiThreadView = {
 	/** Content key for bounded Pi pages and body reads. */
@@ -309,6 +312,15 @@ export type ControlSubmission = { submission: string; deliverAs: "steer" | "foll
  * An action's reply: how it was delivered, its evidence, the Session entry it made when the Host names one, the
  * queued submission it made, and, for abort, what became of each queued submission.
  */
+/** What a relaunch would lose: the turn (`activity`), queued messages, editor text, and launch flags it does not repeat. */
+export type RelaunchCheck = { activity: "idle" | "working" | "compacting" | "blocked"; queued: number; editorEmpty: boolean; dropped: string[]; control: boolean };
+/**
+ * A relaunch's reply. `started`: the new Pi's control answered (or Pi has none). `unknown`: Herdr started Pi, but AmPi
+ * has no proof it runs. `returned`: queued submissions Pi never sent; `delivered`: ones the Session file shows.
+ */
+export type ThreadRelaunched =
+	| { evidence: "checked"; check: RelaunchCheck }
+	| { evidence: "started" | "unknown"; pane: string; stopped: { pid: number; signal: string }; returned: string[]; delivered: string[]; dropped?: string[]; warning?: string; repeat?: boolean };
 /**
  * A compaction Esc acted on. `outcome`: its task's final status (`aborted`, `completed`, `failed`), or `unknown` when
  * Esc's bounded wait ended first. `summary`, for a completed one: `placed`, `pending` (placed at the turn boundary),
@@ -406,6 +418,12 @@ export type HostOps = {
 	"thread.create": OpSpec<{ requestId: string; cwd: string; place: Placement; name?: string; prompt?: string }, ThreadCreatedReply>;
 	"thread.resume": OpSpec<{ requestId: string; threadId: string; place: Placement; cwd?: string; name?: string }, ThreadResumed>;
 	"thread.close": OpSpec<{ threadId: string; lastPane?: boolean }, ActionAck>;
+	/**
+	 * Stops Pi in its pane and starts it on the same Session file there (pi-backend.md section 5). `check` stops
+	 * nothing and reports what a relaunch would lose. Without `force`, a busy Pi, a queue, or editor text refuses.
+	 * A retry with the same `requestId` joins the run or reads its answer.
+	 */
+	"thread.relaunch": OpSpec<{ threadId: string; requestId: string; force?: boolean; check?: boolean }, ThreadRelaunched>;
 	"sessions.search": OpSpec<{ query: string }, FleetSearchResult>;
 	"thread.outline": OpSpec<{ threadId: string; known?: OutlineKnown }, ThreadOutlineReply>;
 	/**

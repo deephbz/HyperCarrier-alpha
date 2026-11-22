@@ -43,16 +43,21 @@ function composeProviders(models: MutableModels, agentDir: string, home: string 
 	return ids;
 }
 
-/** Re-reads the saved catalogs and models.json when a file changed since the last read: a sync needs no node restart. */
-export function refreshModels(models: MutableModels): void {
+/**
+ * Re-reads the saved catalogs and models.json when a file changed since the last read: a sync needs no node restart.
+ * `force` re-reads with no stamp compare, for an edit that kept the size and mtime. `kept`: a file did not parse, so the
+ * previous catalog stays. `none`: these models did not come from openModels.
+ */
+export function refreshModels(models: MutableModels, options: { force?: boolean } = {}): "unchanged" | "refreshed" | "kept" | "none" {
 	const source = sources.get(models);
-	if (!source) return;
+	if (!source) return "none";
 	const stamp = fileStamp(modelsJsonPaths(source.agentDir, source.home));
-	if (stamp === source.stamp) return;
+	if (stamp === source.stamp && !options.force) return "unchanged";
 	const ids = composeProviders(models, source.agentDir, source.home, source.ids, true);
-	if (!ids) return;
+	if (!ids) return "kept";
 	source.ids = ids;
 	source.stamp = stamp;
+	return "refreshed";
 }
 
 /** models.json errors from openModels: each names the provider whose layer was skipped. */

@@ -3,7 +3,7 @@
 
 import { randomBytes } from "node:crypto";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { ConversationId, EntryId, EntryRecord } from "@earendil-works/pi-durable";
 import {
 	type Completion,

@@ -1,7 +1,7 @@
 // Node carrier ports for PTB authority. The node alone owns stop reconciliation.
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { AgentDoc, LiveDoc, type ConversationId } from '@earendil-works/pi-durable';
-import type { JsonValue } from '@earendil-works/chord';
+import type { JsonValue } from '@earendil-works/chord/json';
 import { homedir } from 'node:os';
 import { createTeamRuntime, abortExpectedRun, pendingStops, confirmStop, closing, observe, openObservations, TeamDoc, HeadDoc, openAuthority, readTeamSummary, type State, type ModelRole } from '@hypercarrier/pi-team-durable/authority';
 import type { ModelRolePort } from '../node/model-roles.ts';

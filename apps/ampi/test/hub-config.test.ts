@@ -1,15 +1,16 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { after, test } from "node:test";
 import { configNotes } from "../src/doctor.ts";
 import { loadHubConfig } from "../src/hub/hub.ts";
 import { linkKey } from "../src/hub/hosts.ts";
 import { hostSetupPrompt } from "../src/shared/host-setup.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "hub-config-"));
+after(() => rmSync(dir, { recursive: true, force: true }));
 const at = (name: string, body: object) => { const p = join(dir, name); writeFileSync(p, JSON.stringify(body)); return p; };
 const links = (path: string) => loadHubConfig(path).hosts.map((h) => `${linkKey(h)} ${h.kind}`);
 
@@ -34,8 +35,9 @@ test("hub config: listed durable Hosts still load, and one Host ID keeps both so
 	assert.deepEqual(links(at("listed-pi.json", { self: "mac", hosts: [{ id: "mac", label: "mac", kind: "pi-local" }] })), ["mac#durable local", "mac#pi pi-local"], "a listed pi-local Host is the only Pi one");
 });
 
-test("doctor notes: durable threads without a listed durable Host get one line", () => {
+test("doctor notes: durable threads without a listed durable Host get one line", (t) => {
 	const home = mkdtempSync(join(tmpdir(), "hub-config-home-"));
+	t.after(() => rmSync(home, { recursive: true, force: true }));
 	assert.deepEqual(configNotes(home, [], "mac"), []);
 	mkdirSync(join(home, "threads", "t-1"), { recursive: true });
 	const lost = configNotes(home, [{ kind: "pi-local" }], "mac");

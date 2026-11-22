@@ -2,8 +2,8 @@
 // these dialogs only say where, and report what Herdr confirmed. New agent is one dialog for every Host kind: the
 // chosen Host's kind draws the form (HostKindUi.NewForm), and Pi's form is the default.
 
-import { useState } from "react";
-import type { ThreadSummary } from "../../../src/shared/protocol.ts";
+import { useEffect, useRef, useState } from "react";
+import type { RelaunchCheck, ThreadRelaunched, ThreadSummary } from "../../../src/shared/protocol.ts";
 import { findHost, hub, type HostState } from "../client.ts";
 import { hostKind } from "../host-kinds.ts";
 import { kindUi, type NewFormProps } from "../shell-slots.ts";
@@ -218,6 +218,148 @@ export function CloseAgentDialog({ host, summary, onClose }: { host: string; sum
 				<button className="btn danger" disabled={busy} onClick={() => void close(lastPane)}>
 					{busy ? "Closing…" : lastPane ? "Close it anyway" : "Close pane"}
 				</button>
+			</div>
+		</Modal>
+	);
+}
+
+/**
+ * What the owner can do after a relaunch refusal or failure: what is true now, then the next step. A next step must
+ * work in the state the failure leaves: after Pi stopped, the pane shows a shell, which AmPi's Close pane no longer
+ * recognizes, so the step is Herdr's close and then Resume.
+ */
+function relaunchErrorText(code: string | undefined, message: string): string {
+	const said = sentence(message);
+	const shellNext = "When the pane shows a shell, close the pane in Herdr, then Resume.";
+	switch (code) {
+		case "stop_timeout": return `${said} Its queued messages may be lost. ${shellNext} If Pi still runs, quit it in its pane.`;
+		case "stop_pending": return `Pi got the stop signal from an earlier relaunch and has not exited yet. Nothing was sent. ${shellNext}`;
+		case "start_refused": return `${said} The pane is at its shell. Close the pane in Herdr, then Resume.`;
+		case "outcome_unknown": return `An earlier attempt may have started Pi in the pane. Check the pane. If it shows a shell, close the pane in Herdr, then Resume.`;
+		case "binding_changed": case "pane_moved": return "The pane no longer shows this Session. Nothing was stopped. Open the Session from the list to find its pane.";
+		case "no_shell": return "Pi is the only process in this pane, so it cannot start again here. Nothing was stopped. Close the pane, then Resume.";
+		case "not_pi": return "AmPi cannot find the Pi process in this pane. Nothing was stopped. Check the pane in Herdr: if it shows a shell, close it there, then Resume.";
+		case "already_running": return `${said} Open the Session from the list to find the Pi that has it.`;
+		case "herdr_outdated": return "The Herdr on this Host has no `pane process-info`. Nothing was stopped. Update Herdr on this Host, then try again.";
+		case "control_reloading": return "pi-hc-control in this Pi is reloading. Nothing was stopped. Try again in a few seconds.";
+		case "relaunching": return "Pi is already relaunching in this pane. Wait until it is back.";
+		case "timeout": return "The Host did not answer in time, so the outcome is unknown. Try again: AmPi continues the same relaunch.";
+		case "start_deferred": return "Pi stopped, but too little time was left to start it. Try again: AmPi starts it in the same pane.";
+		case "host_slow": return `${said} Nothing was stopped. Try again.`;
+		default: return said;
+	}
+}
+/** A message as a sentence: a capital first letter and a full stop. */
+const sentence = (message: string) => {
+	const text = message.trim();
+	const capital = text.charAt(0).toUpperCase() + text.slice(1);
+	return /[.!?]$/.test(capital) ? capital : `${capital}.`;
+};
+const RETRYABLE = new Set(["timeout", "host_unavailable", "start_deferred", "host_slow", "control_reloading"]);
+const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
+
+/**
+ * Relaunch stops Pi in its pane and starts it on the same Session there, so configs, extensions, model catalogs and
+ * the Pi build load fresh. The dialog asks first only when the relaunch loses something: a turn, queued messages,
+ * editor text, launch flags, or an unknown queue (no control); a Team Worker gets a note. One `requestId` per dialog,
+ * so Try again continues the same relaunch.
+ */
+export function RelaunchAgentDialog({ host, summary, onClose }: { host: string; summary: ThreadSummary; onClose: () => void }) {
+	const [requestId] = useState(() => newId());
+	const [phase, setPhase] = useState<"checking" | "confirm" | "running" | "done" | "error">("checking");
+	const [check, setCheck] = useState<RelaunchCheck>();
+	const [result, setResult] = useState<Extract<ThreadRelaunched, { pane: string }>>();
+	const [error, setError] = useState<{ code?: string; text: string }>();
+	const place = [summary.location?.workspaceLabel, summary.location?.tabLabel].filter(Boolean).join(" › ");
+	const worker = summary.team?.role === "worker" ? summary.team.worker || summary.title : undefined;
+	const busy = check && check.activity !== "idle";
+	const force = !!check && (busy || check.queued > 0 || !check.editorEmpty);
+	const fail = (e: unknown) => {
+		const err = e as Error & { code?: string };
+		setError({ code: err.code, text: relaunchErrorText(err.code, err.message) });
+		setPhase("error");
+	};
+	const run = async (withForce: boolean) => {
+		setPhase("running");
+		setError(undefined);
+		try {
+			const r = await hub.request(host, "thread.relaunch", { threadId: summary.id, requestId, ...(withForce ? { force: true } : {}) });
+			if ("pane" in r) setResult(r);
+			setPhase("done");
+		} catch (e) {
+			// The Session changed since the check: ask again with what is true now.
+			const code = (e as { code?: string }).code;
+			if (code === "busy" || code === "editor_not_empty") void preflight(true);
+			else fail(e);
+		}
+	};
+	const preflight = async (ask = false) => {
+		setPhase("checking");
+		try {
+			const r = await hub.request(host, "thread.relaunch", { threadId: summary.id, requestId: newId(), check: true });
+			if (!("check" in r)) throw Object.assign(new Error("The Host did not report the Session's state"), { code: "malformed" });
+			setCheck(r.check);
+			const lossless = r.check.activity === "idle" && r.check.queued === 0 && r.check.editorEmpty && r.check.control && !r.check.dropped.length;
+			if (lossless && !worker && !ask) void run(false);
+			else setPhase("confirm");
+		} catch (e) {
+			fail(e);
+		}
+	};
+	const started = useRef(false);
+	useEffect(() => {
+		if (started.current) return;
+		started.current = true;
+		void preflight();
+	}, []);
+	const returned = result?.returned.length ?? 0;
+	return (
+		<Modal onClose={onClose}>
+			<h2>Relaunch Pi for {summary.title}</h2>
+			{phase === "done" && result ? (
+				<div role="status">
+					{result.evidence === "started"
+						? <p>Pi relaunched{place ? ` in ${place}` : ""}. The transcript continues.</p>
+						: <p>Herdr started Pi again{place ? ` in ${place}` : ""}, but AmPi has no proof that it runs. Check the pane.</p>}
+					{returned > 0 && <p className="hint">{plural(returned, "queued message")} came back to the composer as not sent.</p>}
+					{result.warning && <p className="hint">{result.warning}</p>}
+				</div>
+			) : (
+				<>
+					<p>Pi exits and starts again in its pane{place ? ` in ${place}` : ""}, on the same Session. Settings, extensions, model catalogs and the Pi build load fresh.</p>
+					{phase === "confirm" && check && (
+						<ul className="hint">
+							{busy && <li>Pi is {check.activity === "compacting" ? "compacting" : check.activity === "blocked" ? "waiting for an answer in its pane" : "running a turn"}. Relaunch stops it first; the partial answer is lost.</li>}
+							{check.queued > 0 && <li>{plural(check.queued, "queued message")} come back to AmPi's composer as not sent, with their text.</li>}
+							{!check.editorEmpty && <li>The Pi pane's input box has text, or AmPi cannot read it. Relaunch discards it.</li>}
+							{!check.control && <li>This Pi has no control socket, so AmPi cannot see its queue.</li>}
+							{check.dropped.length > 0 && <li>Pi started with flags a relaunch does not repeat: <code>{check.dropped.join(" ")}</code>. The new Pi gets only the Session.</li>}
+							{worker && <li>This Pi is Team Worker {worker}. Its lead sees the exit. The same Session starts again in this pane.</li>}
+							{summary.team?.role === "lead" && <li>This is a Pi Team Bright lead. Its Workers keep running in their own panes.</li>}
+						</ul>
+					)}
+					{phase === "error" && error && <div className="err-box" role="alert">{error.text}</div>}
+				</>
+			)}
+			<div className="actions">
+				<button className="btn" onClick={onClose}>
+					{phase === "done" ? "Done" : phase === "error" && !RETRYABLE.has(error?.code ?? "") ? "Close" : "Cancel"}
+				</button>
+				{phase === "confirm" && (
+					<button className={force ? "btn danger" : "btn primary"} onClick={() => void run(force)}>
+						{busy || (check?.queued ?? 0) > 0 ? "Stop and relaunch" : check && !check.editorEmpty ? "Relaunch anyway" : "Relaunch"}
+					</button>
+				)}
+				{(phase === "checking" || phase === "running") && (
+					<button className="btn primary" disabled>
+						{phase === "checking" ? "Checking…" : "Relaunching…"}
+					</button>
+				)}
+				{phase === "error" && RETRYABLE.has(error?.code ?? "") && (
+					<button className="btn primary" onClick={() => void run(force)}>
+						Try again
+					</button>
+				)}
 			</div>
 		</Modal>
 	);

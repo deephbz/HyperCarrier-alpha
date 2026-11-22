@@ -1,5 +1,5 @@
 // The Session's Arc receipt view. Read and disclosure never start a Build (docs/arc.md).
-import { Component, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { Component, useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { hoverIntent } from "../../components/Popover.tsx";
 import type { ThreadSummary } from "../../../../src/shared/protocol.ts";
 import { hub, useTopic } from "../../client.ts";
@@ -44,6 +44,8 @@ export function ArcPanelView({ host, threadId, value, error, disconnected, summa
 	value?: ArcValue; error?: string; disconnected?: boolean; summary?: ThreadSummary; build: ArcBuild;
 }) {
 	const receipt = value?.receipt;
+	const unavailableId = useId();
+	const unavailableText = "Arc isn't available on this Host. Update its AmPi hub to use Arc.";
 	const [arrival, setArrival] = useState({ stamp: receipt?.builtAt, updated: false });
 	if (arrival.stamp !== receipt?.builtAt) setArrival({ stamp: receipt?.builtAt, updated: Boolean(arrival.stamp) });
 	const [unit, setUnit] = useState<1 | 2>(1);
@@ -57,7 +59,8 @@ export function ArcPanelView({ host, threadId, value, error, disconnected, summa
 	const evidence = { host, threadId, readMessage };
 	const current = receipt?.chapters.at(-1);
 	const busy = build.pending || value?.status.state === "building" || value?.status.state === "waiting";
-	const cannotBuild = disconnected || value?.services?.some(service => service.host === host && ["stopped", "fault", "busy", "error", "cannot-start", "unreachable", "updating", "stopping"].includes(service.state));
+	const unsupported = Boolean(error && /^(?:unsupported\b|(?:view|arc|view\.arc) is not available(?: for Pi Sessions yet)?[.!]?$)/i.test(error));
+	const cannotBuild = unsupported || disconnected || value?.services?.some(service => service.host === host && ["stopped", "fault", "busy", "error", "cannot-start", "unreachable", "updating", "stopping"].includes(service.state));
 	const stale = disconnected || Boolean(value?.statusStale);
 	const unavailable = value?.services?.some((service) => service.host === host && service.state === "unreachable");
 	const request = value?.request?.requestId === build.outcome?.requestId && value?.request?.outcome === "accepted" ? value.request : build.outcome ?? value?.request;
@@ -92,9 +95,10 @@ export function ArcPanelView({ host, threadId, value, error, disconnected, summa
 	return <ReceiptPlace stamp={receipt?.builtAt}>
 		<header className="arc-status">
 			<span className="arc-meta arc-status-meta" title={`${statusLabel}${statusDetailTitle ? ` · ${statusDetailTitle}` : ""}`}><span className="arc-status-label">{statusLabel}</span>{statusDetailTitle && <span className="arc-status-detail">{statusCoverage ? <span className="arc-status-count">{statusCoverage}</span> : <><span className="arc-status-through">{statusThrough}</span>{statusNewer && <><span aria-hidden="true"> · </span><span className="arc-status-count">{statusNewer}</span></>}</>}</span>}</span>
-			<div className="arc-actions"><button className="btn small" disabled={busy || cannotBuild} onClick={() => build.start()}>{build.pending ? "Build requested" : value?.status.state === "waiting" ? "Waiting" : busy ? "Building…" : "Build"}</button>
-			<details className="arc-menu"><summary aria-label="Arc Build options">⋯</summary><button className="btn small" disabled={busy || cannotBuild} onClick={(e) => { e.currentTarget.closest("details")!.open = false; build.start(true); }}>Rebuild</button></details></div>
+			<div className="arc-actions"><button className="btn small" disabled={busy || cannotBuild} title={unsupported ? unavailableText : undefined} aria-describedby={unsupported ? unavailableId : undefined} onClick={() => build.start()}>{build.pending ? "Build requested" : value?.status.state === "waiting" ? "Waiting" : busy ? "Building…" : "Build"}</button>
+			{!unsupported && <details className="arc-menu"><summary aria-label="Arc Build options">⋯</summary><button className="btn small" disabled={busy || cannotBuild} onClick={(e) => { e.currentTarget.closest("details")!.open = false; build.start(true); }}>Rebuild</button></details>}</div>
 		</header>
+		{unsupported ? <p id={unavailableId} className="arc-meta" role="status">{unavailableText}</p> : <>
 		{disconnected && <p className="arc-meta" role="status">Disconnected from the hub. Status as of {value?.status.observedAt ? time(value.status.observedAt) : "last update"}.</p>}
 		<ServiceLines services={value?.services} />
 		<ModelPrerequisiteLine fact={value?.modelPrerequisite} />
@@ -134,6 +138,7 @@ export function ArcPanelView({ host, threadId, value, error, disconnected, summa
 				<div className="arc-board" style={{ "--arc-columns": STATES[kind].length } as CSSProperties}>{STATES[kind].map((state) => { const items = selected.filter((p) => p.state === state); return <section className="arc-column" key={state} aria-label={state}><h3>{state} ({items.length})</h3>{items.length ? items.map((p) => <PointItem key={p.id} point={p} kept={receipt.kept?.includes(p.id)} chapter={scope === "all"} {...evidence} />) : <p className="arc-meta">None</p>}</section>; })}</div>
 			</section>
 			{receipt.builds.length > 0 && <details className="arc-builds"><summary>Build record · {receipt.model}</summary>{[...receipt.builds].reverse().map((b, i) => <p key={i}>{time(b.endedAt)} · {b.trigger}{b.requester && ` from ${b.requester}`}{value?.builderHost && ` · built on ${value.builderHost}`} · {b.state} · {b.calls} calls{b.newChapters && ` · new chapters ${b.newChapters.join(", ")}`} · {b.usage.cost === null ? "cost unavailable" : money(b.usage.cost)}{b.possibleRepeatCost && " · may have been charged; this Build may repeat the cost"}{b.error && ` · ${b.error.message}`}{b.repairs.length > 0 && ` · repairs: ${b.repairs.join("; ")}`}</p>)}</details>}
+		</>}
 		</>}
 	</ReceiptPlace>;
 }

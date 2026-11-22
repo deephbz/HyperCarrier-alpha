@@ -7,7 +7,7 @@ import { keyBindings } from "./extensions.ts";
 export interface ExtraKeyActions {}
 
 type KeyAction =
-	| "sidebar.toggle" | "panel.toggle" | "focus.composer"
+	| "sidebar.toggle" | "panel.toggle" | "focus.composer" | "rarebit.jump"
 	| "session.palette" | "command.palette" | "help" | "find"
 	| "overview" | "new" | "display" | "transcript.mode" | "zoom.in" | "zoom.out" | "zoom.reset"
 	| "history.back" | "history.forward"
@@ -57,6 +57,7 @@ export const KEYMAP: readonly KeyBinding[] = [
 	{ id: "display", code: "", label: "Display settings", region: "global", palette: true },
 	{ id: "help", code: "Slash", shift: true, label: "Help", region: "global", skipEditable: true },
 	{ id: "focus.composer", code: "KeyI", label: "Focus composer (insert)", region: "transcript" },
+	{ id: "rarebit.jump", code: "KeyR", label: "Show this prompt in Rarebit", region: "transcript", palette: true },
 	...(["transcript", "panel"] as const).flatMap((region) => [
 		{ id: "overview" as const, code: "KeyJ", label: "Scroll down", region },
 		{ id: "overview" as const, code: "KeyK", label: "Scroll up", region },

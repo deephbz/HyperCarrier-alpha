@@ -8,6 +8,7 @@ import { build } from "vite";
 // @ts-ignore: shared browser discovery is plain ESM.
 import { findChrome } from "../scripts/perf/browser.mjs";
 import { engineSkip } from "./engines.ts";
+import { catchAllRoute } from "./catch-all-route.ts";
 
 // A hub served over http from a LAN address gives the page an insecure context, where the browser has no
 // secure-context APIs such as its UUID minter. The real App, built in memory from web/src with its own vite config,
@@ -44,9 +45,9 @@ for (const engine of ["chromium", "webkit"] as const) {
 		page.setDefaultTimeout(20_000);
 		const errors: string[] = [];
 		page.on("pageerror", (e) => errors.push(e.message));
-		await page.route("**/*", (route) => {
+		await catchAllRoute(page, ORIGIN, (route) => {
 			const url = new URL(route.request().url());
-			const file = url.origin === ORIGIN ? served.get(url.pathname === "/" ? "/index.html" : url.pathname) : undefined;
+			const file = served.get(url.pathname === "/" ? "/index.html" : url.pathname);
 			return file ? route.fulfill({ status: 200, body: typeof file.body === "string" ? file.body : Buffer.from(file.body), contentType: file.type }) : route.abort();
 		});
 		const submits: { op: string; requestId?: string; content?: string }[] = [];

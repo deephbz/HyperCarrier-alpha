@@ -1,5 +1,6 @@
 import { useId, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
+import { useFocusPlacement } from "../context.ts";
 import { scaleOf } from "../display.ts";
 import { registerOverlay } from "../keymap.ts";
 import type { Overlay } from "../focus.ts";
@@ -9,6 +10,8 @@ let modalOpener: HTMLElement | null = null;
 
 export function Modal({ children, onClose, label = "AmPi dialog", overlay = "dialog" }: { children: React.ReactNode; onClose: () => void; label?: string; overlay?: Overlay }) {
 	const ref = useRef<HTMLDivElement>(null);
+	const focusPlacement = useFocusPlacement();
+	const place = (target: HTMLElement, options?: FocusOptions) => focusPlacement.place(target, focusPlacement.capture(), options);
 	const active = document.activeElement as HTMLElement | null;
 	const opener = useRef(active?.closest('[aria-modal="true"]') ? modalOpener : active);
 	const close = useRef(onClose);
@@ -22,14 +25,14 @@ export function Modal({ children, onClose, label = "AmPi dialog", overlay = "dia
 		const title = modal.querySelector("h2");
 		if (title) { title.id = titleId; modal.setAttribute("aria-labelledby", titleId); }
 		const controls = () => [...modal.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], input:not(:disabled):not([type="hidden"]), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])')].filter((el) => el.getClientRects().length > 0);
-		if (!modal.contains(document.activeElement)) (controls()[0] ?? modal).focus({ preventScroll: true });
+		if (!modal.contains(document.activeElement)) place(controls()[0] ?? modal, { preventScroll: true });
 		const key = (e: KeyboardEvent) => {
 			if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close.current(); }
 			if (e.key !== "Tab") return;
 			const items = controls();
 			const target = e.shiftKey ? items.at(-1) : items[0];
 			if (!modal.contains(document.activeElement) || document.activeElement === modal || document.activeElement === (e.shiftKey ? items[0] : items.at(-1)) || !items.length) {
-				e.preventDefault(); (target ?? modal).focus();
+				e.preventDefault(); place(target ?? modal);
 			}
 		};
 		document.addEventListener("keydown", key, true);
@@ -49,7 +52,7 @@ export function Modal({ children, onClose, label = "AmPi dialog", overlay = "dia
 			document.removeEventListener("keydown", key, true);
 			observer.disconnect();
 			resize.disconnect();
-			if (opener.current?.isConnected) opener.current.focus({ preventScroll: true });
+			if (opener.current?.isConnected) place(opener.current, { preventScroll: true });
 		};
 	}, [titleId]);
 	// Like a Popover, it renders in a body portal, outside every region's display zoom and every scroller.
