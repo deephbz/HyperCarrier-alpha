@@ -1,8 +1,27 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 import type { Page } from "playwright";
 import { engineSkip } from "./engines.ts";
 import { ENGINES, open as openFixture } from "./resize-edges-fixture.ts";
+
+let linuxSystemUiFont: string | null | undefined;
+
+/** Calibrated axis-metric limits were measured with SF Pro (macOS) and Noto Sans (Linux). */
+export function calibratedFontSkip(engine: string): string | false {
+	const skip = engineSkip(engine);
+	if (skip) return skip;
+	if (process.platform !== "linux") return false;
+	if (linuxSystemUiFont === undefined) {
+		try {
+			linuxSystemUiFont = execFileSync("fc-match", ["-f", "%{family}", "system-ui"], { encoding: "utf8" }).trim();
+		} catch {
+			linuxSystemUiFont = null;
+		}
+	}
+	if (linuxSystemUiFont === "Noto Sans") return false;
+	return `calibrated for Noto Sans (system-ui resolves to ${linuxSystemUiFont || "unknown"})`;
+}
 
 const LOCALE = "en-US";
 const createdContexts = new Map<string, number>();
@@ -43,7 +62,7 @@ export function phoneAxisTests(pinnedTimes: readonly string[], widths: readonly 
 	for (const [engine, type, path] of ENGINES) for (const width of widths) {
 		// Fast contexts visit six cases. Split exhaustive ranges at 28 cases to stay below WebKit's history-write rate limit.
 		const rangeGroups = width === 390 ? [[false]] : shareRanges ? [[false, true]] : [[false], [true]];
-		for (const ranges of rangeGroups) for (const overall of width === 390 ? [1] : [1, 1.25, 1.5, 2]) for (const locale of [LOCALE, "de-DE"]) test(`phone layout ${engine} ${width} px: the Timeline axis shows whole labels ${locale} zoom ${overall}${shareRanges ? "" : ranges[0] ? " historical" : " live"}`, { skip: engineSkip(engine) }, async (t) => {
+		for (const ranges of rangeGroups) for (const overall of width === 390 ? [1] : [1, 1.25, 1.5, 2]) for (const locale of [LOCALE, "de-DE"]) test(`phone layout ${engine} ${width} px: the Timeline axis shows whole labels ${locale} zoom ${overall}${shareRanges ? "" : ranges[0] ? " historical" : " live"}`, { skip: calibratedFontSkip(engine) }, async (t) => {
 			const times = pinnedTimes;
 			const page = await open(t, engine, type, path(), { route: SESSION, display: { overall }, context: { ...phone(width), locale }, beforeNavigate: (page) => page.clock.setFixedTime(new Date(times[0])) });
 			for (const historical of ranges) for (const now of times) await t.test(`${historical ? "historical" : "live"} at ${now}${historical && overall === 2 ? " (KNOWN LIMIT: magnified historical endpoint)" : ""}`, async (t) => {

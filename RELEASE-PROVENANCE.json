@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
   "sourceRepository": "HyperCarrier",
-  "sourceCommit": "4135a27b9d41bdcff13b06bf8b6e920ab937f40b",
-  "sourceTree": "d67891bb131eb2835b65086ca5e36da55f848cfc",
+  "sourceCommit": "1b929dce5f15f5a0b74178d3af81105e977f90b9",
+  "sourceTree": "60fa9a549349cedab502366ec8fc26485aff9fc0",
   "sourceWorktreeDirty": false,
-  "exportContentSha256": "a8e4d29f810f93987e5194a645ae4c51dd21b494e9e64f77b9592c69967c3646",
+  "exportContentSha256": "4428c5438fc00a8992054ac25b1cde8afd3754d6439dfb3239a34364aeec715b",
   "exportManifestSha256": "c8740e3026a4f6a8672423eec80fac47a9a10ab6d9159e4c92b955edb9e905ff",
   "dependencies": [],
   "submodules": [
@@ -60,8 +60,8 @@
       "name": "apps/trace-analytics",
       "path": "apps/trace-analytics",
       "repository": "https://github.com/deephbz/trace-analytics.git",
-      "commit": "b5cbc2d2a3a437ab11b02c743541153d0b621759",
-      "tree": "bdf2f43ace423e791b682bd2e6692ef93dfbddf3",
+      "commit": "c74caa96fd916b7f24f1adef59772ef046f3a9a9",
+      "tree": "7078bdc49756bc9a276cbb68523fc114ff5d06ea",
       "identity": {
         "kind": "npm-package",
         "name": "trace-analytics",

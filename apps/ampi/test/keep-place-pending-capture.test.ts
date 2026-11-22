@@ -8,6 +8,8 @@ import { build } from "vite";
 import react from "@vitejs/plugin-react";
 import { engineSkip } from "./engines.ts";
 import { ENGINES, type Engine } from "./thread-scroll-fixture.ts";
+// @ts-ignore: shared browser discovery is plain ESM.
+import { findChrome } from "../scripts/perf/browser.mjs";
 
 declare global {
 	interface Window { probe: { capture: () => unknown; pending: () => number | undefined; render: () => void; events: () => number; extensions: () => number } }
@@ -54,7 +56,7 @@ async function component(): Promise<string> {
 
 async function open(t: TestContext, engine: Engine): Promise<Page> {
 	const script = await (bundle ??= component());
-	const browser = await (engine === "webkit" ? (safari ??= webkit.launch({ headless: true })) : (chrome ??= chromium.launch({ headless: true })));
+	const browser = await (engine === "webkit" ? (safari ??= webkit.launch({ headless: true })) : (chrome ??= chromium.launch({ headless: true, executablePath: findChrome() })));
 	const page = await browser.newPage({ viewport: { width: 700, height: 500 } });
 	t.after(() => page.context().close());
 	await page.route("**/*", (route) => {
