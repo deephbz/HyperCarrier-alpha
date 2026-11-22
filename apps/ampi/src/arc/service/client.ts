@@ -63,12 +63,13 @@ export async function maintainHost(config: PiHostConfig, operation: Omit<ManageO
 }
 export function parseArcArgs(args: string[]) {
  const op = args[0];
- if (op !== "stop" && op !== "status") throw new Error("usage: ampi arc status [--host ID] [--json] | stop (--host ID | --all)");
- let host: string | undefined, json = false, all = false, config: string | undefined;
+ if (op !== "stop" && op !== "status") throw new Error("usage: ampi arc status [--host ID] [--json] | stop (--host ID [--force-unverified] | --all)");
+ let host: string | undefined, json = false, all = false, config: string | undefined, forceUnverified = false;
  for (let n = 1; n < args.length; n++) {
   const arg = args[n];
   if (arg === "--json") json = true;
   else if (arg === "--all") all = true;
+  else if (arg === "--force-unverified") forceUnverified = true;
   else if (arg === "--host" || arg === "--config") {
    const value = args[++n]; if (!value || value.startsWith("--")) throw new Error(`${arg} requires a value`);
    if (arg === "--host") host = value; else config = value;
@@ -76,5 +77,7 @@ export function parseArcArgs(args: string[]) {
  }
  if (host && all) throw new Error("--host and --all are mutually exclusive");
  if (op === "stop" && !host && !all) throw new Error("Arc stop requires --host ID or --all");
- return { op: op as "stop" | "status", host, all, json, config };
+ // An unverified signal names one Host; it never fans out.
+ if (forceUnverified && (op !== "stop" || !host)) throw new Error("--force-unverified requires arc stop --host ID");
+ return { op: op as "stop" | "status", host, all, json, config, forceUnverified };
 }

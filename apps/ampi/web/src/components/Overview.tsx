@@ -5,6 +5,7 @@ import { useKeepPlace } from "../keep-place.ts";
 import { useNow } from "../client.ts";
 import { linkLine, linkView } from "./host-fold.ts";
 import { hostLabel } from "./host-label.ts";
+import { countLabel } from "../count-label.ts";
 import { overviewSteps } from "../slot-registry.ts";
 import type { OverviewStepProps } from "../shell-slots.ts";
 import { ActivityIcon, ThreadBadges } from "./ThreadStatus.tsx";
@@ -106,7 +107,7 @@ export function Overview({ data, onNew, onHostSetup, onHelp }: OverviewStepProps
 			<div className="topbar">
 				<b>Overview</b>
 				<span className="crumbs">
-					{loading ? "Reading Sessions…" : rows.length === 0 && ended ? ended : <>{rows.length.toLocaleString()} Session{rows.length === 1 ? "" : "s"} · {data.length} Host{data.length === 1 ? "" : "s"} · {spend.label} in Sessions active today</>}
+					{loading ? "Reading Sessions…" : rows.length === 0 && ended ? ended : <>{countLabel(rows.length, "Session")} · {countLabel(data.length, "Host")} · {spend.label} in Sessions active today</>}
 				</span>
 				{updating && <span className="hint" role="status">Updating…</span>}
 				<span className="spacer" />
@@ -119,7 +120,7 @@ export function Overview({ data, onNew, onHostSetup, onHelp }: OverviewStepProps
 					{overviewSteps.map((Step, i) => <Step key={i} data={data} onNew={onNew} onHostSetup={onHostSetup} onHelp={onHelp} />)}
 					<section className="attention-summary" aria-label="Activity since your last visit">
 						<h1>{since ? "Since you last checked Overview" : "Recent activity"}</h1>
-						<p>{loading ? "Reading Sessions…" : <>{changed.toLocaleString()} Session{changed === 1 ? "" : "s"} updated {since ? `since ${new Date(since).toLocaleString()}` : "in the last 24 hours"}. {needs.length > 0 ? `${needs.length.toLocaleString()} ${needs.length === 1 ? "has" : "have"} a signal that ${needs.length === 1 ? "it needs" : "they need"} you.` : "No Session has a positive signal that it needs you."}</>}</p>
+						<p>{loading ? "Reading Sessions…" : <>{countLabel(changed, "Session")} updated {since ? `since ${new Date(since).toLocaleString()}` : "in the last 24 hours"}. {needs.length > 0 ? `${needs.length.toLocaleString()} ${needs.length === 1 ? "has" : "have"} a signal that ${needs.length === 1 ? "it needs" : "they need"} you.` : "No Session has a positive signal that it needs you."}</>}</p>
 						{data.some((d) => d.stale || d.host.status !== "connected") && <p className="hint">Counts are from local copies. Away Hosts may have newer activity; check their connection before relying on these counts.</p>}
 						<a href={href.page("timeline")}>See changes in Timeline <span aria-hidden="true">↗</span></a>
 					</section>
@@ -130,7 +131,7 @@ export function Overview({ data, onNew, onHostSetup, onHelp }: OverviewStepProps
 								<b>{hostLabel(host, hosts)}</b>
 								<span className="hint">
 									{host.status === "connected"
-										? reading(d) ? "Reading Sessions…" : d.error ? d.error : `${host.node?.hostname ? `${host.node.hostname} · ` : ""}${perHost.get(host.link)?.busy ?? 0} running · ${(perHost.get(host.link)?.total ?? 0).toLocaleString()} Sessions in scope`
+										? reading(d) ? "Reading Sessions…" : d.error ? d.error : `${host.node?.hostname ? `${host.node.hostname} · ` : ""}${perHost.get(host.link)?.busy ?? 0} running · ${countLabel(perHost.get(host.link)?.total ?? 0, "Session")} in scope`
 										: linkLine(linkView(host, now))}
 								</span>
 							</div>

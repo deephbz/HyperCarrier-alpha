@@ -15,6 +15,8 @@ for (const [engine, type, path] of ENGINES) test(`session route ${engine}: a pas
 	const before = await page.evaluate(() => location.hash);
 	const row = page.locator(`.side .row[data-thread="${THREAD}"] a.title`).first();
 	await row.waitFor();
+	// Header-first rows have a provisional title. Read the search query only after the Host finishes deriving it.
+	await page.locator(`.side .row[data-thread="${THREAD}"]`).first().locator(".row-meta").filter({ hasText: /^updating$/ }).waitFor({ state: "hidden" });
 	const title = await row.innerText();
 	const start = await page.evaluate(() => history.length);
 	// The reader's place is the top visible row and its offset. scrollTop is not: the first paint shows a short window,

@@ -43,7 +43,7 @@ export function RarebitControls({ host, threadId, panel, setPanel, beforeLensCha
 }
 
 export function RarebitJump({ host, threadId, entry }: { host: string; threadId: string; entry: string }) {
-	return <a className="rb-jump" tabIndex={-1} href={href.thread(host, threadId, { entry, panel: "rarebit" })} title="Show this message in the Rarebit panel" aria-label="Rarebit"><span className="rb-jump-label">Rarebit </span>↗</a>;
+	return <a className="rb-jump" tabIndex={-1} href={href.thread(host, threadId, { entry, panel: "rarebit" })} title="Show this message in the Rarebit panel" aria-label="Show in Rarebit"><span className="rb-jump-label">Rarebit </span>↗</a>;
 }
 
 /** `reveal`: a reveal request for an entry in this run (ThreadView); each new request opens the fold. */

@@ -81,7 +81,7 @@ export function createBuilder(options: BuilderOptions): Builder {
   if (!old) return;
   if (old.sessionRef === command.sessionRef) {
    if (old.kind === "dismiss" && command.kind === "dismiss" && old.dropId === command.dropId && old.toPosition === command.toPosition) return { outcome: "dismissed", revision: old.revision };
-   if (old.kind !== "dismiss" && command.kind !== "dismiss" && old.kind === command.kind && old.requester === command.requester && old.options?.trigger === command.options?.trigger && old.options?.nextAt === command.options?.nextAt) return { outcome: "accepted", buildId: old.buildId };
+   if (old.kind !== "dismiss" && command.kind !== "dismiss" && old.kind === command.kind && old.requester === command.requester && old.options?.trigger === command.options?.trigger && old.options?.nextAt === command.options?.nextAt && old.options?.expectedPrefix === command.options?.expectedPrefix) return { outcome: "accepted", buildId: old.buildId };
   }
   return { outcome: "refused", code: "id-conflict" };
  }
@@ -94,7 +94,11 @@ export function createBuilder(options: BuilderOptions): Builder {
   if (!sessionRef || !requestId || !requester || !Object.hasOwn(rank, kind) || requestOptions.trigger !== undefined && !["stop", "owner"].includes(requestOptions.trigger) || requestOptions.nextAt !== undefined && !Number.isFinite(Date.parse(requestOptions.nextAt))) return { outcome: "refused", code: "invalid" };
   if (cancellation.signal.aborted) return { outcome: "refused", code: "service", transient: true, detail: "Arc service is stopping" };
   let target;
-  try { target = copy(await source.snapshot(sessionRef)); } catch (e) { return { outcome: "refused", code: "source", detail: (e as Error).message }; }
+  try { target = copy(await source.snapshot(sessionRef, { expectedPrefix: requestOptions.expectedPrefix, deferRepair: requestOptions.expectedPrefix !== undefined || kind === "incremental" && requester === "source" })); }
+  catch (e) {
+   const failure = e as Error & { code?: string };
+   return { outcome: "refused", code: "source", ...(failure.code === "source-repair-pending" ? { transient: true as const } : {}), detail: failure.message };
+  }
   if (fault) throw fault;
   if (cancellation.signal.aborted) return { outcome: "refused", code: "service", transient: true, detail: "Arc service is stopping" };
   const accepted = priorRequest(sessionRef, requestId, kind, requester, requestOptions); if (accepted) return accepted;

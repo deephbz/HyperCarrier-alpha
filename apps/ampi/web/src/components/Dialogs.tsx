@@ -16,7 +16,7 @@ import { paletteSessions } from "./palette-sessions.ts";
 import type { HostThreads } from "./Sidebar.tsx";
 import { hostLabel, servesHostOps } from "./host-label.ts";
 import { helpActions } from "../slot-registry.ts";
-import { proseRows, type HostProse, type ProseRow } from "./palette-prose.ts";
+import { prosePendingLabel, proseRows, type HostProse, type ProseRow } from "./palette-prose.ts";
 
 /** "Remote host (?)": the copyable prompt an agent follows to add a remote Host. The window adds no Host itself. */
 export function HostSetupDialog({ onClose }: { onClose: () => void }) {
@@ -123,7 +123,8 @@ export function Palette({ data, onClose, query = "", onQuery }: { data: HostThre
 					</button>
 				))}
 				{scope === "prose" && prose.notes.map((note) => <div key={note} className="hint" role="status">{note}</div>)}
-				{scope === "prose" && prose.rows.length === 0 && <div className="empty">{!q.trim() ? "Type words to search prose." : prose.busy ? "Searching…" : "No prose matches."}</div>}
+				{scope === "prose" && prose.rows.length > 0 && (prose.pending ?? 0) > 0 && <div className="hint" role="status">{prosePendingLabel(prose.pending!)}; results may grow.</div>}
+				{scope === "prose" && prose.rows.length === 0 && <div className="empty">{!q.trim() ? "Type words to search prose." : prose.busy ? "Searching…" : (prose.pending ?? 0) > 0 ? `No prose matches yet. ${prosePendingLabel(prose.pending!)}.` : "No prose matches."}</div>}
 			</div>
 			<div className="palette-foot hint" title={scope === "prose" ? prose.scope : undefined}>
 				↑↓ move · ↵ open · Tab {scope === "sessions" ? "Prose" : "Sessions"} · Esc close{scope === "prose" ? " · your prompts, agent replies and summaries; no tools or thinking" : ""}
@@ -133,21 +134,34 @@ export function Palette({ data, onClose, query = "", onQuery }: { data: HostThre
 }
 
 /** Searches the retained prose of each Host that serves Host operations as the query settles; a newer query discards older answers. */
-function useProseSearch(query: string, hosts: HostState[]): { rows: ProseRow[]; notes: string[]; scope?: string; busy: boolean } {
-	const [state, setState] = useState<{ rows: ProseRow[]; notes: string[]; scope?: string; busy: boolean }>({ rows: [], notes: [], busy: false });
+function useProseSearch(query: string, hosts: HostState[]): { rows: ProseRow[]; notes: string[]; scope?: string; busy: boolean; pending?: number } {
+	const [state, setState] = useState<{ rows: ProseRow[]; notes: string[]; scope?: string; busy: boolean; pending?: number }>({ rows: [], notes: [], busy: false });
 	const generation = useRef(0);
 	const needle = query.trim();
 	useEffect(() => {
 		const token = ++generation.current;
 		if (!needle) { setState({ rows: [], notes: [], busy: false }); return; }
-		setState((s) => ({ ...s, busy: true }));
-		const timer = setTimeout(() => {
+		setState({ rows: [], notes: [], busy: true });
+		let timer: ReturnType<typeof setTimeout>;
+		let active = true;
+		let delay = 500;
+		const search = () => {
+			if (!active) return;
 			void Promise.all(hosts.map(async (host): Promise<HostProse> => {
 				try { return { host, value: await hub.request(host.link, "sessions.search", { query: needle }) }; }
 				catch (e) { return { host, error: String(e) }; }
-			})).then((results) => { if (generation.current === token) setState({ ...proseRows(results), busy: false }); });
-		}, 200);
-		return () => clearTimeout(timer);
+			})).then((results) => {
+				if (!active || generation.current !== token) return;
+				const value = proseRows(results);
+				setState({ ...value, busy: false });
+				if ((value.pending ?? 0) > 0) {
+					timer = setTimeout(search, delay);
+					delay = Math.min(delay * 2, 5000);
+				}
+			});
+		};
+		timer = setTimeout(search, 200);
+		return () => { active = false; clearTimeout(timer); };
 	}, [needle, hosts]);
 	return state;
 }

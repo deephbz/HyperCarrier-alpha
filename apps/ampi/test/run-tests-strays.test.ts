@@ -1,7 +1,7 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -83,4 +83,32 @@ test("test runner: a file that kills its detached child without awaiting its exi
 	assert.equal(run.status, 0, output);
 	assert.match(output, /▸ pass .*killed\.test\.ts/);
 	assert.doesNotMatch(output, /STRAY/);
+});
+
+test("test runner: reports each file's new ampi-test directories without failing it", (t) => {
+	const dir = mkdtempSync(join(tmpdir(), "ampi-run-tests-"));
+	const leakedPath = join(dir, "leaked-path");
+	t.after(() => {
+		if (existsSync(leakedPath)) rmSync(readFileSync(leakedPath, "utf8"), { recursive: true, force: true });
+		rmSync(dir, { recursive: true, force: true });
+	});
+	const leaky = join(dir, "leaky.test.ts"), clean = join(dir, "clean.test.ts");
+	writeFileSync(leaky, [
+		`import { mkdtempSync, writeFileSync } from "node:fs";`,
+		`import { tmpdir } from "node:os";`,
+		`import { join } from "node:path";`,
+		`import { test } from "node:test";`,
+		`const dir = mkdtempSync(join(tmpdir(), "ampi-test-report-"));`,
+		`writeFileSync(${JSON.stringify(leakedPath)}, dir);`,
+		`test("leaves one directory", () => {});`,
+	].join("\n"));
+	writeFileSync(clean, 'import { test } from "node:test"; test("leaves nothing", () => {});\n');
+	const run = spawnSync(process.execPath, [runner, leaky, clean], {
+		encoding: "utf8",
+		env: { ...process.env, AMPI_PREFLIGHT_DONE: "1", AMPI_TEST_CONCURRENCY: "1", AMPI_TEST_FILE_TIMEOUT_MS: "60000" },
+	});
+	const output = run.stdout + run.stderr;
+	assert.equal(run.status, 0, output);
+	assert.match(output, /LEFTOVER .*leaky\.test\.ts 1 dirs/);
+	assert.match(output, /LEFTOVER .*clean\.test\.ts 0 dirs/);
 });

@@ -1,6 +1,6 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -66,6 +66,7 @@ test("hub.json with a local row, an ssh row and a Pi row: the hub starts and ser
 	} finally {
 		await hub.close();
 		home.release();
+		rmSync(dir, { recursive: true, force: true });
 	}
 });
 

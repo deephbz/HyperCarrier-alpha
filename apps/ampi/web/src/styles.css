@@ -1282,6 +1282,11 @@ details[open] > .disclosure::before,
 	.composer-actions .btn.danger { --action-color: var(--err); }
 	.composer-actions .action-label { background: var(--action-bg); color: var(--action-color); display: flex; align-items: center; justify-content: center; min-height: 28px; border: 1px solid var(--border); border-radius: 4px; font-size: 11px; }
 }
+@media (max-width: 374px) {
+	/* The fixed composer slots leave too little width for the action group; move it intact to a second row. */
+	.composer-bar { grid-template-columns: var(--hit) 62px minmax(90px, 1fr); }
+	.composer-actions { grid-column: 1 / -1; justify-self: end; }
+}
 .composer-feedback { padding: 4px 12px; font-size: 12px; overflow-wrap: anywhere; white-space: pre-line; color: var(--text-2); max-height: 96px; overflow-y: auto; }
 .composer-feedback.error { color: var(--err); }
 .image-admission-feedback { font-size: 11px; line-height: 1.15; }
@@ -1725,11 +1730,15 @@ details[open] > .disclosure::before,
 	padding: 4px;
 	max-height: min(40vh, 320px);
 	overflow: hidden;
+	/* The menu owns its scroll: it keeps the owner's scroll and reveals the selection itself (Composer onPlaced).
+	   Browser scroll anchoring would move it again when a placement rewrites the row floor; WebKit 26 anchors. */
+	overflow-anchor: none;
 }
 .slash-options {
 	flex: 1 1 auto;
 	min-height: var(--slash-option-floor, 2.6em);
 	overflow-y: auto;
+	overflow-anchor: none;
 }
 .slash-menu-whole-scroll {
 	overflow-y: auto;

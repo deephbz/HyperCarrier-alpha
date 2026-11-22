@@ -10,6 +10,7 @@ import { build } from "vite";
 import react from "@vitejs/plugin-react";
 // @ts-ignore: browser discovery is shared ESM.
 import { findChrome } from "../scripts/perf/browser.mjs";
+import { catchAllRoute } from "./catch-all-route.ts";
 
 // Real Host sections and keyboard handler; no Host connection or owner data.
 test("sidebar fold: only team/count fold, titles navigate, keys and Worker contrast hold on both backends", async () => {
@@ -36,7 +37,7 @@ test("sidebar fold: only team/count fold, titles navigate, keys and Worker contr
    const page = await browser.newPage();
    page.setDefaultTimeout(2000);
    loadBudget(page);
-   await page.route("**/*", route => route.fulfill({contentType:"text/html",body:`<style>${readFileSync(join(web,"src/styles.css"),"utf8")}</style><div id="root"></div><script>${script}</script>`}));
+   await catchAllRoute(page,"http://localhost", route => route.fulfill({contentType:"text/html",body:`<style>${readFileSync(join(web,"src/styles.css"),"utf8")}</style><div id="root"></div><script>${script}</script>`}));
    await page.routeWebSocket("**/ws", () => {});
    await page.goto(`http://localhost/?kind=${kind}`);
    await page.locator('[data-sidebar-toggle="unplaced"]').click({timeout:PAGE_LOAD_MS});

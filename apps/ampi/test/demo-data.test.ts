@@ -1,6 +1,6 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -57,8 +57,20 @@ test("live hub ignores the demo-only fixture option", () => {
 	const hub = readFileSync(join(app, "src/hub/hub.ts"), "utf8");
 	const entry = readFileSync(join(app, "bin/ampi.mjs"), "utf8");
 	const demo = readFileSync(join(app, "scripts/pi-demo.ts"), "utf8");
-	assert.match(demo, /demoDataMode\(process\.argv\.slice\(2\)\)/);
 	assert.match(demo, /demoFixtures\(dataMode/);
-	assert.doesNotMatch(hub, /--fixture|demo\/data/);
-	assert.doesNotMatch(entry, /--fixture|demo\/data/);
+	for (const source of [hub, entry]) {
+		assert.doesNotMatch(source, /--fixture|demo\/data|test-hold-prose-index|testProseIndexGate/);
+	}
+});
+
+const testOnlyHold = /\b(?:prose-index-hold|holdProseIndex|testProseIndexGate)\b/;
+function assertNoTestOnlyHold(sourcePath: string, source: string) {
+	assert.ok(!testOnlyHold.test(source), `${sourcePath} references the test-only prose-index hold`);
+}
+
+test("Pi index sources reject the test-only prose hold seam", () => {
+	assert.throws(() => assertNoTestOnlyHold("synthetic bad source", "holdProseIndex(cacheDir)"), /synthetic bad source/);
+	const pi = join(app, "src/pi");
+	const files = ["host.ts", ...readdirSync(pi).filter((name) => /^working-set.*\.ts$/.test(name)), ...["derive-queue.ts", "derive-worker.ts"].filter((name) => existsSync(join(pi, name)))];
+	for (const file of files) assertNoTestOnlyHold(`src/pi/${file}`, readFileSync(join(pi, file), "utf8"));
 });

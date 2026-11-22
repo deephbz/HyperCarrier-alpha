@@ -1,7 +1,7 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { proseRows } from "../web/src/components/palette-prose.ts";
+import { prosePendingLabel, proseRows } from "../web/src/components/palette-prose.ts";
 
 const hit = (threadId: string, entry: string, title = threadId) => ({ entry, ref: `${threadId}:${entry}`, threadId, snippet: `about ${entry}`, title, version: "v1" });
 const result = (hits: ReturnType<typeof hit>[], more = false) => ({ hits, more, scope: "prose", asOf: null });
@@ -41,4 +41,16 @@ test("prose notes name partial coverage and an away Host, so a miss is not read 
 test("prose notes count the Sessions an upgrade still re-derives, so a miss there is not read as absence", () => {
 	const { notes } = proseRows([{ host: { link: "a", label: "Alpha" }, value: { ...result([]), coverage: { indexed: 3, notIndexed: 0, stale: 0, invalidLines: 0, updating: 47 } } }]);
 	assert.deepEqual(notes, ["Alpha: searching 3 of 50 Sessions — updating after upgrade"]);
+});
+
+test("pending prose count uses the singular Session label at one", () => {
+	assert.equal(prosePendingLabel(1), "Still reading 1 Session");
+});
+
+test("pending prose count sums cold and updating Sessions across Hosts", () => {
+	const { pending } = proseRows([
+		{ host: { link: "a", label: "Alpha" }, value: { ...result([]), coverage: { indexed: 3, notIndexed: 7, stale: 0, invalidLines: 0 } } },
+		{ host: { link: "b", label: "Beta" }, value: { ...result([]), coverage: { indexed: 5, notIndexed: 2, stale: 0, invalidLines: 0, updating: 4 } } },
+	]);
+	assert.equal(pending, 13);
 });

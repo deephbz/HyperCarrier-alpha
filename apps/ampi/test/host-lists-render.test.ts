@@ -2,7 +2,7 @@ import "./bound.ts";
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { createElement } from "react";
+import { createElement, isValidElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createServer, type ViteDevServer } from "vite";
 
@@ -26,15 +26,56 @@ before(async () => {
 after(async () => { await vite?.close(); });
 
 const REASON = "Host cache unavailable: database is locked. Restart the hub; if it repeats, check the hub log and the cache at /synthetic/cache.";
-const failed = { host: { id: "devbox", label: "devbox", kind: "pi-local", status: "disconnected", attempts: 0, error: REASON, cacheFailed: true }, threads: [], stale: true, indexing: true, listing: true, error: REASON };
+const failed = { host: { id: "devbox", link: "devbox#pi", label: "devbox", kind: "pi-local", status: "disconnected", attempts: 0, error: REASON, cacheFailed: true }, threads: [], stale: true, indexing: true, listing: true, error: REASON };
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/\s+/g, " ");
+function overviewText(data: object[]) {
+	const keyWarnings: unknown[][] = [];
+	const originalError = console.error;
+	console.error = (...args: unknown[]) => { keyWarnings.push(args); };
+	let html: string;
+	try {
+		html = renderToStaticMarkup(createElement(overview as never, { data, onNew() {}, onHostSetup() {}, onHelp() {} }));
+	} finally {
+		console.error = originalError;
+	}
+	assert.deepEqual(keyWarnings, [], "Overview Host rows must use unique React keys");
+	return text(html!);
+}
+
+test("host lists render: Overview keeps distinct row identities for two sources of one Host", () => {
+	const host = { id: "devbox", label: "devbox", status: "connected", attempts: 0 };
+	const data = [
+		{ host: { ...host, kind: "pi-local", link: "devbox#pi" }, threads: [], stale: false },
+		{ host: { ...host, kind: "node", link: "devbox#node" }, threads: [], stale: false },
+	];
+	const identities = (rows: typeof data) => {
+		const keys: (string | null)[] = [];
+		function InspectOverview() {
+			const tree = overview({ data: rows, onNew() {}, onHostSetup() {}, onHelp() {} }) as ReactNode;
+			function visit(node: ReactNode) {
+				if (Array.isArray(node)) { node.forEach(visit); return; }
+				if (!isValidElement<{ className?: string; children?: ReactNode }>(node)) return;
+				if (node.props.className === "ov-host") keys.push(node.key);
+				visit(node.props.children);
+			}
+			visit(tree);
+			return tree;
+		}
+		renderToStaticMarkup(createElement(InspectOverview));
+		assert.equal(keys.length, 2, "both sources reach Overview");
+		assert.equal(new Set(keys).size, 2, "each source needs its own React row identity");
+		return keys;
+	};
+	const keys = identities(data);
+	assert.deepEqual(identities([...data].reverse()), [...keys].reverse(), "row identity follows its source across reordering");
+});
 
 test("host lists render: a failed init says unavailable and the full reason, never No Sessions yet", () => {
 	const side = text(renderToStaticMarkup(createElement(section as never, { data: failed, hosts: [failed.host], route: {}, filter: "" })));
 	assert.match(side, /unavailable/);
 	assert.doesNotMatch(side, /copies readable/);
 	assert.ok(side.includes(REASON), side);
-	const page = text(renderToStaticMarkup(createElement(overview as never, { data: [failed], onNew() {}, onHostSetup() {}, onHelp() {} })));
+	const page = overviewText([failed]);
 	assert.ok(page.includes(`devbox: ${REASON}`), page);
 	assert.doesNotMatch(page, /No Sessions yet|Reading Sessions/);
 });

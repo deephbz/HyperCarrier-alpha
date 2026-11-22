@@ -11,6 +11,7 @@ import react from "@vitejs/plugin-react";
 import { ArcReplica } from "../src/hub/arc-replica.ts";
 import { serviceStatus } from "../src/arc/service/status.ts";
 import { arcPanelFixture } from "./arc-panel-fixture.ts";
+import { catchAllRoute } from "./catch-all-route.ts";
 // @ts-ignore: shared browser discovery is plain ESM.
 import { findChrome } from "../scripts/perf/browser.mjs";
 
@@ -44,7 +45,7 @@ test("Arc replica suppresses equal heartbeats but sends real service changes to 
  const service = serviceStatus("devbox", { state: "running", running: true, stamp });
  replica.receive({ t: "arc.hello", generation: "one", stamp, expected: stamp, service });
  replica.receive({ t: "arc.status", generation: "one", seq: 1, service, statuses: [], scheduled: [] });
- await page.route("**/*", route => route.fulfill(new URL(route.request().url()).pathname === "/component.js"
+ await catchAllRoute(page, origin, route => route.fulfill(new URL(route.request().url()).pathname === "/component.js"
   ? { contentType: "text/javascript", body: script }
   : { contentType: "text/html", body: `<meta charset="utf-8"><style>${css}</style><div id="root"></div><script src="/component.js"></script>` }));
  await page.routeWebSocket("**/ws", client => client.onMessage(data => {
@@ -69,7 +70,7 @@ test("Arc panel renders chapters without timestamps and keeps disclosure usable"
  value.sourceCount = value.receipt!.asOfCount;
  Object.assign(value.receipt!.chapters[1]!, { firstAt: at, lastAt: at });
  page.on("pageerror", error => errors.push(error.message));
- await page.route("**/*", route => route.fulfill(new URL(route.request().url()).pathname === "/component.js"
+ await catchAllRoute(page, origin, route => route.fulfill(new URL(route.request().url()).pathname === "/component.js"
   ? { contentType: "text/javascript", body: script }
   : { contentType: "text/html", body: `<meta charset="utf-8"><style>${css}</style><div id="root"></div><script src="/component.js"></script>` }));
  await page.routeWebSocket("**/ws", client => client.onMessage(data => {
@@ -102,7 +103,7 @@ test("Arc render fault stays inside the panel and Retry view does not Build", as
  // A non-renderable claim forces a descendant render exception without a production fault switch.
  value.receipt!.goal.text = { forced: "render fault" } as unknown as string;
  const peers: { client: WebSocketRoute; sid: string }[] = [], operations: string[] = [];
- await page.route("**/*", route => route.fulfill(new URL(route.request().url()).pathname === "/component.js"
+ await catchAllRoute(page, origin, route => route.fulfill(new URL(route.request().url()).pathname === "/component.js"
   ? { contentType: "text/javascript", body: script }
   : { contentType: "text/html", body: `<meta charset="utf-8"><style>${css}</style><div id="root"></div><script src="/component.js"></script>` }));
  await page.routeWebSocket("**/ws", client => client.onMessage(data => {
@@ -137,7 +138,7 @@ test("Arc Goal uses the Now body style on desktop and touch", async (t) => {
 			t.after(() => page.context().close());
 			const value = arcPanelFixture();
 			value.receipt!.kept = ["goal"];
-			await page.route("**/*", (route) => route.fulfill(new URL(route.request().url()).pathname === "/component.js"
+			await catchAllRoute(page, origin, (route) => route.fulfill(new URL(route.request().url()).pathname === "/component.js"
 				? { contentType: "text/javascript", body: script }
 				: { contentType: "text/html", body: `<meta charset="utf-8"><style>${css}</style><div id="root"></div><script src="/component.js"></script>` }));
 			await page.routeWebSocket("**/ws", (client) => client.onMessage((data) => {
@@ -176,7 +177,7 @@ test("Arc service facts, request outcomes, loss disclosure and stale elapsed on 
 		let refuseDismiss = false;
 		const requests: { op: string; args: Record<string, unknown> }[] = [], errors: string[] = [];
 		page.on("pageerror", (e) => errors.push(e.message));
-		await page.route("**/*", (route) => {
+		await catchAllRoute(page, origin, (route) => {
 			const url = new URL(route.request().url());
 			assert.equal(url.origin, origin);
 			return route.fulfill(url.pathname === "/component.js" ? { contentType: "text/javascript", body: script } : { contentType: "text/html", body: `<meta charset="utf-8"><style>${css}</style><div id="root"></div><script src="/component.js"></script>` });
@@ -370,9 +371,8 @@ test("Arc panel: source disclosure, timeline sync, scoped boards, receipt arriva
 	page.on("pageerror", (error) => errors.push(error.message));
 	let socket: WebSocketRoute, sid: number;
 	let value = arcPanelFixture();
-	await page.route("**/*", (route) => {
+	await catchAllRoute(page, origin, (route) => {
 		const url = new URL(route.request().url());
-		if (url.origin !== origin) { errors.push(`External request ${url.origin}`); return route.abort(); }
 		if (url.pathname === "/component.js") return route.fulfill({ contentType: "text/javascript", body: script });
 		return route.fulfill({ contentType: "text/html", body: `<meta charset="utf-8"><style>${css}\n#root,.panel{width:100%;height:100vh;min-width:0}.panel-body{overflow-anchor:none}</style><div id="root"></div><script src="/component.js"></script>` });
 	});

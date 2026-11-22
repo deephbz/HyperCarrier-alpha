@@ -1,15 +1,16 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { after, test } from "node:test";
 import { configNotes } from "../src/doctor.ts";
 import { loadHubConfig } from "../src/hub/hub.ts";
 import { linkKey } from "../src/hub/hosts.ts";
 import { hostSetupPrompt } from "../src/shared/host-setup.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "hub-config-"));
+after(() => rmSync(dir, { recursive: true, force: true }));
 const at = (name: string, body: object) => { const p = join(dir, name); writeFileSync(p, JSON.stringify(body)); return p; };
 const links = (path: string) => loadHubConfig(path).hosts.map((h) => `${linkKey(h)} ${h.kind}`);
 
@@ -37,8 +38,9 @@ test("hub config: a local or ssh row is a durable Host; the hub skips it, keeps 
 	assert.deepEqual(links(at("listed-pi.json", { hosts: [{ id: "mac", label: "mac", kind: "pi-local" }] })), ["mac#pi pi-local"], "a listed pi-local Host is the only one");
 });
 
-test("doctor notes: skipped durable Hosts and durable threads in the home each get one line", () => {
+test("doctor notes: skipped durable Hosts and durable threads in the home each get one line", (t) => {
 	const home = mkdtempSync(join(tmpdir(), "hub-config-home-"));
+	t.after(() => rmSync(home, { recursive: true, force: true }));
 	assert.deepEqual(configNotes(home, []), []);
 	const skipped = configNotes(home, [{ id: "mac", label: "mac", kind: "local" }]);
 	assert.equal(skipped.length, 1);

@@ -11,6 +11,7 @@ import { build } from "vite";
 // @ts-ignore: shared browser discovery is plain ESM.
 import { findChrome } from "../scripts/perf/browser.mjs";
 import { engineSkip } from "./engines.ts";
+import { catchAllRoute } from "./catch-all-route.ts";
 
 // Quiet scrollbars (styles.css, quiet-scroll.ts) with the real stylesheet, in Chromium with visible classic scrollbars
 // and in WebKit, at display size 1 and 1.3. A .quiet-scroll region whose content fits shows no bar and no gutter; the sidebar list keeps a transparent track (invariant row a). An
@@ -133,9 +134,8 @@ async function open(t: TestContext, engine: Engine, zoom: number): Promise<Page>
 	page.setDefaultTimeout(3000);
 	loadBudget(page);
 	const css = readFileSync(join(web, "src/styles.css"), "utf8");
-	await page.route("**/*", (route) => {
+	await catchAllRoute(page, ORIGIN, (route) => {
 		const url = new URL(route.request().url());
-		if (url.origin !== ORIGIN) return route.abort();
 		if (url.pathname === "/reveal.js") return route.fulfill({ contentType: "text/javascript; charset=utf-8", body: code });
 		if (url.pathname === "/") return route.fulfill({ contentType: "text/html; charset=utf-8", body: `<meta charset="utf-8"><style>${css}</style>${FIXTURE}<script src="/reveal.js"></script>` });
 		return route.abort();
@@ -212,8 +212,10 @@ for (const engine of Object.keys(ENGINES) as Engine[]) for (const zoom of [1, 1.
 		await page.mouse.move(1430, 990);
 		await settle(page);
 		assert.equal(await painted(page, "tall"), false, "the bar stays after the pointer leaves");
-		await page.focus("#inner");
+		await page.evaluate(() => { document.getElementById("inner")!.focus({ preventScroll: true }); });
 		await page.evaluate(() => { document.getElementById("tall")!.scrollTop = 120; });
+		const focusScrollTop = await page.locator("#tall").evaluate((el) => el.scrollTop);
+		assert.equal(Math.round(focusScrollTop), 120, `the focus setup changed the region's scroll position: ${focusScrollTop}`);
 		await page.waitForTimeout(1300);
 		assert.equal(await painted(page, "tall"), true, "keyboard focus inside does not show the bar");
 		assert.deepEqual(await geometry(page, "tall"), rest, "the focus reveal moved the region");

@@ -1,5 +1,6 @@
 import './bound.ts';
 import { engineSkip } from './engines.ts';
+import { catchAllRoute } from './catch-all-route.ts';
 import { ENGINES, open as openThread, settled, frames, anchor, view, entries } from './thread-scroll-fixture.ts';
 import assert from 'node:assert/strict';
 import {after,test,type TestContext} from 'node:test';
@@ -27,7 +28,7 @@ for(const engine of ['chromium','webkit'] as const){
  const open=async(t:TestContext,policy:string)=>{
   browser??=await (engine==='chromium'?chromium.launch({headless:true,executablePath:findChrome()}):webkit.launch({headless:true}));if(!browsers.includes(browser))browsers.push(browser);
   const page=await browser.newPage();t.after(()=>page.close());
-  await page.route('**/*',(route)=>route.fulfill({contentType:'text/html',body:`<div id="root"></div><script>window.policy=${JSON.stringify(policy)};window.errors=[];addEventListener('error',e=>window.errors.push(e.message));</script><script>${code}</script>`}));
+  await catchAllRoute(page,'http://localhost',(route)=>route.fulfill({contentType:'text/html',body:`<div id="root"></div><script>window.policy=${JSON.stringify(policy)};window.errors=[];addEventListener('error',e=>window.errors.push(e.message));</script><script>${code}</script>`}));
   await page.goto('http://localhost/');await page.locator('[data-row=r14]').waitFor();
   await page.evaluate(()=>{const el=document.querySelector('#scroll')!;el.scrollTop=250;el.dispatchEvent(new Event('scroll'));});
   const settle=()=>page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));await settle();

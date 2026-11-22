@@ -1,6 +1,6 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
-import { appendFileSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -80,6 +80,7 @@ test("pi host: Session roles count as read after the first teams frame, and at o
 	const dir = mkdtempSync(join(tmpdir(), "ampi-roles-")), gate = join(dir, "open"), ptb = join(dir, "ptb.mjs");
 	writeFileSync(ptb, `import { existsSync } from "node:fs";\nexport async function readObservationSnapshot() { while (!existsSync(${JSON.stringify(gate)})) await new Promise((r) => setTimeout(r, 20)); return { schema: "none" }; }\n`);
 	const { f, browser } = await setup(t, { agent: { teams: true, ptbObservation: ptb } });
+	t.after(() => rmSync(dir, { recursive: true, force: true }));
 	await browser.until<any>(browser.sub("devbox", { kind: "threads" }), (v) => v.threads["pi:sess-a"]);
 	const roles = browser.sub("devbox", { kind: "view", view: "roles", threadId: "pi:sess-a" });
 	assert.deepEqual(await browser.until<any>(roles, (v) => v.count === 3), { known: false, frame: false, count: 3 }, "no frame yet: roles unknown");

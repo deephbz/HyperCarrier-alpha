@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { createServer } from "node:net";
+import { createConnection, createServer } from "node:net";
+import { errorMonitor, once } from "node:events";
 import { join } from "node:path";
 import { test } from "node:test";
 import { Hub } from "../src/hub/hub.ts";
@@ -136,8 +137,29 @@ async function bareControl(f: { agentDir: string }, sessionId: string, sessionFi
 	});
 	await new Promise<void>((resolve) => server.listen(join(dir, `${sessionId}.sock`), resolve));
 	replaceFile(join(dir, `${sessionId}.json`), JSON.stringify({ schema: "hc-control/1", sessionId, sessionFile, pid, nonce: `n-${sessionId}`, startedAt: iso(9), version: "test" }));
-	return { requests, close: () => server.close() };
+	return { requests, server, close: () => server.close() };
 }
+
+test("pi control fixture: an unread reply can reset its socket without ending the endpoint", { skip: process.platform !== "linux" }, async t => {
+ const f = fixture(), endpoint = await bareControl(f, "reset-session", join(f.agentDir, "not-written.jsonl"), process.pid);
+ t.after(() => endpoint.close());
+ const accepted = once(endpoint.server, "connection"), peer = createConnection(join(f.agentDir, "hc-control", "reset-session.sock"));
+ t.after(() => peer.destroy());
+ const [socket] = await accepted, resets: string[] = [];
+ socket.on(errorMonitor, (error: NodeJS.ErrnoException) => resets.push(error.code ?? "unknown"));
+ const closed = new Promise<void>(resolve => socket.once("close", () => resolve()));
+ // bareControl writes first. Close the paused peer before it can read that reply.
+ socket.once("data", () => peer.destroy());
+ peer.write(JSON.stringify({ id: "reset", op: "status" }) + "\n");
+ await closed;
+ assert.deepEqual(resets, ["ECONNRESET"], "observe the reset without consuming its error event");
+ const next = createConnection(join(f.agentDir, "hc-control", "reset-session.sock"));
+ t.after(() => next.destroy());
+ const reply = once(next, "data");
+ next.write(JSON.stringify({ id: "healthy", op: "status" }) + "\n");
+ assert.equal(JSON.parse(String((await reply)[0])).id, "healthy"); next.destroy();
+ assert.deepEqual(endpoint.requests.map(request => request.id), ["reset", "healthy"]);
+});
 
 test("pi host: a live control descriptor makes a Session present before its file; the file merges into it", async (t) => {
 	const { f, browser } = await setup(t);

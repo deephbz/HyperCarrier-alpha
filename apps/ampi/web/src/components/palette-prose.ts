@@ -1,16 +1,24 @@
 import type { SearchResult } from "../../../src/shared/search.ts";
+import { countLabel } from "../count-label.ts";
 
 /** One Host's answer to `sessions.search`: its hits, or why it was not searched. */
 export type HostProse = { host: { link: string; label: string; status?: string }; value?: SearchResult; error?: string };
 export type ProseRow = { host: string; hostLabel: string; threadId: string; entry: string; title: string; snippet: string };
 
+export function prosePendingLabel(count: number): string { return `Still reading ${countLabel(count, "Session")}`; }
+
 /** Flattens per-Host prose results into palette rows in Host order; a failed, away, partly indexed or truncated Host becomes a note. `scope` is the hub's own statement of what prose search covers. */
-export function proseRows(results: HostProse[]): { rows: ProseRow[]; notes: string[]; scope?: string } {
+export function proseRows(results: HostProse[]): { rows: ProseRow[]; notes: string[]; scope?: string; pending?: number } {
 	const rows: ProseRow[] = [];
 	const notes: string[] = [];
+	let pending = 0, hasCoverage = false;
 	for (const { host, value, error } of results) {
 		if (error) notes.push(`${host.label} not searched: ${error}`);
 		if (!value) continue;
+		if (value.coverage) {
+			hasCoverage = true;
+			pending += value.coverage.notIndexed + (value.coverage.updating ?? 0);
+		}
 		if (host.status && host.status !== "connected") notes.push(`${host.label}: Host away; searched its last copy`);
 		const updating = value.coverage?.updating;
 		if (updating) notes.push(`${host.label}: searching ${value.coverage!.indexed} of ${value.coverage!.indexed + updating} Sessions — updating after upgrade`);
@@ -23,5 +31,5 @@ export function proseRows(results: HostProse[]): { rows: ProseRow[]; notes: stri
 		if (value.more) notes.push(`${host.label}: limit reached; narrow the query`);
 		for (const hit of value.hits) rows.push({ host: host.link, hostLabel: host.label, threadId: hit.threadId, entry: hit.entry, title: hit.title || "Untitled Session", snippet: hit.snippet });
 	}
-	return { rows, notes, scope: results.find((result) => result.value)?.value?.scope };
+	return { rows, notes, scope: results.find((result) => result.value)?.value?.scope, ...(hasCoverage ? { pending } : {}) };
 }

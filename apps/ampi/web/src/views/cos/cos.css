@@ -103,7 +103,7 @@
 	.cos-list-head, .cos-list-row { grid-template-columns: minmax(0, 1fr) 48px 54px 64px; gap: 8px; }
 	.cos-list-row .cos-links { gap: 4px; }
 }
-/* A phone (styles.css's 600 px drawer rule). The axis shows three short labels when the time area can hold them.
+/* A phone (the shared drawer breakpoint). The axis shows three short labels when the time area can hold them.
    A narrower time area shows the endpoint alone. The page never scrolls sideways (docs/ux/swipe-drawers.md). The Timeline lanes take their full height and the
    page is the one vertical scroller, so a tall header or a large display size cannot squeeze them to nothing. The
    axis sticks to the top; nothing else in the page may stick above it. Timeline.tsx reads the lanes' offset from

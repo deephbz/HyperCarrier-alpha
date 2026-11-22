@@ -10,9 +10,11 @@ import { serviceRelay } from "./relay.ts";
 import type { ArcFrame } from "../link.ts";
 import { compare, type Stamp } from "./engine.ts";
 import { launchLocked, inheritedLock, LOCK_BUSY } from "./lock.ts";
-import { controlStore, durableJson, readJson, storeIncarnation, STORE_SCHEMA } from "./store.ts";
-import { replacementText, serviceStatus, serviceError } from "./status.ts";
+import { controlStore, fenceStop, readStop, storeIncarnation, STORE_SCHEMA } from "./store.ts";
+import { replacementText, serviceStatus, serviceError, type RecoveryResult } from "./status.ts";
 import { controlRequest, startService as runtime } from "./runtime.ts";
+import { inspectMacRecovery, macUnverifiedPorts, probeRecoveryLock, recoverOwner } from "./recovery.ts";
+import type { RecoveryVisibility } from "./recovery-linux.ts";
 
 declare const __ARC_VERSION__: string;
 declare const __ARC_RELEASE_LINE__: "stable" | "durable" | null;
@@ -22,15 +24,13 @@ export const buildOrder = typeof __ARC_BUILD_ORDER__ === "undefined" ? 0 : __ARC
 declare const __ARC_OUTPUT_LIMIT_SOURCE__: string;
 export const serviceVersion = typeof __ARC_VERSION__ === "undefined" ? "development" : __ARC_VERSION__;
 export const stamp: Stamp = { id: serviceVersion, order: buildOrder, line: releaseLine };
-export type ManageOperation = { op: "ensure" | "stop" | "status"; host: string; agentDir?: string; timeoutMs?: number };
-type LockedOperation = ManageOperation & { stopGeneration?: string | null; storeIncarnation?: string | null };
+/** `forceUnverified` lets a macOS stop signal an owner that open-file evidence only matches; Linux always needs kernel proof. */
+export type ManageOperation = { op: "ensure" | "stop" | "status"; host: string; agentDir?: string; timeoutMs?: number; forceUnverified?: boolean };
+type LockedOperation = ManageOperation & { stopGeneration?: string | null; storeIncarnation?: string | null; forcedRecovery?: boolean };
 function stopGeneration(store: string): string | null {
  const path = join(store, "stop.json");
  try {
-  const value = readJson(path) as { generation?: unknown } | undefined;
-  if (value === undefined) return null;
-  if (typeof value?.generation !== "string" || !/^[0-9a-f-]{36}$/.test(value.generation)) throw new Error("Invalid stop generation");
-  return value.generation;
+  return readStop(store)?.generation ?? null;
  } catch (error) { throw new Error(`Cannot read Arc stop fence ${path}. Run ampi arc stop on this Host to replace this file, then retry.`, { cause: error }); }
 }
 export function relay(body: string, options: { host: string; agentDir: string; known: Record<string, number>; emit(frame: ArcFrame): void; pollMs?: number }) {
@@ -79,7 +79,16 @@ async function lockedMain(operation: LockedOperation, body: string) {
  let selected = control.read().selected;
  // A stop fences every ensure admitted before it, including launchers that
  // have not acquired the lifetime lock and callers retrying LOCK_BUSY.
- if (operation.op === "stop") durableJson(lock, "stop.json", { generation: randomUUID() });
+ let stop, fenceFault: Error & { recoveryUncertainty?: "unknown-prior-stop" } | undefined;
+ try { stop = operation.op === "stop" ? fenceStop(lock, operation.forcedRecovery) : readStop(lock.store); }
+ catch (error) { if (operation.op !== "stop") throw error; fenceFault = error as typeof fenceFault; }
+ const pending = stop?.recovery;
+ if (pending || fenceFault) {
+  // The selected bundle may predate recovery. Current entry owns this no-work path.
+  await runtime({ agentDir, host: operation.host, serviceVersion, releaseLine, buildOrder,
+   extensionPath: join(lock.store, "versions", serviceVersion, "ask-limit.mjs"), maintenance: { generation: pending?.generation ?? null, uncertainty: stop?.uncertainty ?? fenceFault?.recoveryUncertainty, ...(fenceFault ? { fencePending: true, fault: fenceFault.message } : {}) }, ready: reply, exit: exitResident });
+  return;
+ }
  if (operation.op === "status" || operation.op === "stop" || operation.stopGeneration !== stopGeneration(lock.store)) {
   reply(serviceStatus(operation.host, { releaseLine: selected?.id === serviceVersion ? releaseLine : null,
    buildOrder: selected?.order ?? null, serviceVersion: selected?.id ?? null, stamp: selected,
@@ -156,21 +165,46 @@ function launch(staging: string, store: string, operation: LockedOperation): Pro
 export async function manage(body: string, operation: ManageOperation): Promise<any> {
  if (!operation.host || !["ensure", "stop", "status"].includes(operation.op)) throw new Error("Invalid Arc maintenance command");
  const agentDir = operation.agentDir ?? agentDirectory(), store = join(agentDir, "ampi-arc");
- const deadline = Date.now() + (operation.timeoutMs ?? 330_000), serviceLogPath = join(store, "service.log");
+ const budget = operation.timeoutMs ?? (operation.op === "stop" ? 20000 : 330_000);
+ const deadline = Date.now() + budget, serviceLogPath = join(store, "service.log");
+ const recoveryAt = Date.now() + Math.min(5000, budget / 4);
  let command: LockedOperation;
  try {
   if (operation.op === "ensure") mkdirSync(store, { recursive: true, mode: 0o700 });
   command = { ...operation, agentDir, ...(operation.op === "ensure" ? { storeIncarnation: storeIncarnation(store, true), stopGeneration: stopGeneration(store) } : {}) };
  } catch (error) { throw Object.assign(error as Error, { serviceLogPath }); }
- let staging: string | undefined, replacing = false, sawBusy = false;
+ let staging: string | undefined, replacing = false, sawBusy = false, recovered = false, stopRequested = false, sawLive = false;
+ let recoveryUncertainty: "unknown-prior-stop" | undefined, recoveryVisibility: RecoveryVisibility | undefined;
+ let recovery: (Extract<Awaited<ReturnType<typeof recoverOwner>>, { kind: "terminated" }> & { unverified?: true }) | undefined, recoveryAttempted = false;
+ const macRefuses = process.platform === "darwin" && !operation.forceUnverified;
+ const canSignal = process.platform === "linux" || process.platform === "darwin" && operation.forceUnverified === true;
+ function finish(result: any, acquired = false) {
+  recoveryUncertainty ??= result.recoveryUncertainty;
+  if (recoveryUncertainty) result = { ...result, recoveryUncertainty };
+  if (recoveryVisibility) result = { ...result, recoveryVisibility };
+  if (!recovery) return result;
+  const confirmed = acquired && result.state === "stopped" && result.running === false;
+  const facts: RecoveryResult = { pid: recovery.pid, signals: recovery.signals, oldHolderEnded: true, interveningDispatch: "unknown", ...(recovery.visibility ? { visibility: recovery.visibility } : {}), ...(recovery.unverified ? { evidence: "unverified" as const } : {}),
+   ...(confirmed ? { cancellation: "confirmed" as const } : { cancellation: "unconfirmed" as const,
+    reason: result.state === "fault" ? result.recoveryFault ?? result.detail ?? "queued-Build cancellation could not be persisted" : "lock acquisition was not confirmed",
+    action: result.state === "fault" ? (result.recoveryAction ?? `Repair ${store}: ${result.detail}; then run ampi arc stop --host ${operation.host} again`).replace(/\.$/, "") : `Run ampi arc stop --host ${operation.host} again` }) };
+  return { ...result, kind: "forced-recovery", recovery: facts };
+ }
  const failedReplacement = (cause: string) => serviceStatus(operation.host, { state: "error", code: "replacement-failed", serviceLogPath, detail: replacementText(operation.host, cause, serviceLogPath) });
  const busy = () => replacing ? failedReplacement("timed out waiting for the service to drain and release its lock") : serviceStatus(operation.host, { state: "busy", kind: "busy", serviceLogPath, detail: "Arc service holds its lock but does not answer" });
  async function timedOut() {
   if (replacing) return busy();
   // A final bounded probe distinguishes a responsive drain from a silent owner.
   // Earlier replies cannot prove that the resident still answers.
-  try { return await controlRequest(store, { op: "status", refreshAuth: false }, 1000); }
-  catch { return busy(); }
+  try { return finish(await controlRequest(store, { op: "status", refreshAuth: false }, 1000)); }
+  catch {
+   if (operation.op === "stop" && macRefuses) {
+    const inspection = await inspectMacRecovery(store, operation.host);
+    if (inspection.kind === "responsive") return inspection.live;
+    if (inspection.kind === "refused") return serviceStatus(operation.host, { state: "busy", kind: "recovery-refused", serviceLogPath, detail: inspection.detail });
+   }
+   return finish(busy());
+  }
  }
  try {
   while (true) {
@@ -178,8 +212,13 @@ export async function manage(body: string, operation: ManageOperation): Promise<
    let live: any;
    try { live = await controlRequest(store, { op: "status", refreshAuth: operation.op === "status" }, Math.max(1, Math.min(operation.op === "status" ? 20_000 : 1000, deadline - Date.now()))); } catch {}
    if (live) {
+    recoveryUncertainty ??= live.recoveryUncertainty;
+    sawLive = true;
     if (operation.op === "status") return live;
-    if (operation.op === "ensure") {
+    if (operation.op === "ensure" && live.kind === "forced-recovery") {
+     recovered = true;
+     if (live.state === "fault") return live;
+    } else if (operation.op === "ensure") {
      const order = compare(stamp, live.stamp);
      if (order === "same") return live;
      if (order === "older") return { ...live, state: "error", outcome: "refused", code: "build-mismatch", detail: `This AmPi is older than ${operation.host}. Update it.` };
@@ -190,9 +229,14 @@ export async function manage(body: string, operation: ManageOperation): Promise<
      // whether this launcher can install; a lost offer reply is not failure.
      try { await controlRequest(store, { op: "offer", stamp }, Math.max(1, Math.min(1000, deadline - Date.now()))); } catch {}
     } else {
+     if (stopRequested && live.kind === "forced-recovery" && live.state === "fault") return finish(live);
+     stopRequested = true;
      // Stop can remove the socket after status. Only lifetime-lock acquisition
      // below proves completion; a lost control acknowledgement proves neither outcome.
-     try { await controlRequest(store, { op: "stop" }, Math.max(1, Math.min(1000, deadline - Date.now()))); } catch {}
+     try {
+      const stopping = await controlRequest(store, { op: "stop" }, Math.max(1, Math.min(1000, deadline - Date.now())));
+      if (stopping.kind === "forced-recovery" && stopping.state === "fault") return finish(stopping);
+     } catch {}
     }
    }
    if (Date.now() >= deadline) return timedOut();
@@ -202,8 +246,29 @@ export async function manage(body: string, operation: ManageOperation): Promise<
     writeFileSync(staging, body, { mode: 0o600, flag: "wx" });
    }
    const result = await launch(staging, store, { ...command, timeoutMs: Math.max(1, deadline - Date.now()) });
-   if (!result.lockBusy) return replacing && result.state === "error" ? failedReplacement(result.detail ?? "the replacement service could not start") : result;
+   recoveryUncertainty ??= result.recoveryUncertainty;
+   if (result.kind === "forced-recovery") {
+    recovered = true; stopRequested = true; command.forcedRecovery = false;
+    if (result.state === "fault") return finish(result);
+    continue;
+   }
+   if (!result.lockBusy) return finish(replacing && result.state === "error" ? failedReplacement(result.detail ?? "the replacement service could not start") : recovered ? { ...result, kind: "forced-recovery" } : operation.op === "stop" && result.state === "stopped" ? { ...result, kind: sawLive ? "orderly-stop" : "not-running" } : result, true);
    sawBusy = true;
+   if (operation.op === "stop" && !live && macRefuses && Date.now() >= recoveryAt) {
+    const inspection = await inspectMacRecovery(store, operation.host);
+    if (inspection.kind === "refused" && await probeRecoveryLock(store) !== "free") return serviceStatus(operation.host, { state: "busy", kind: "recovery-refused", serviceLogPath, detail: inspection.detail });
+   }
+   if (operation.op === "stop" && !live && canSignal && !recoveryAttempted && Date.now() >= recoveryAt) {
+    recoveryAttempted = true;
+    const left = Math.max(0, deadline - Date.now()), unverified = process.platform === "darwin";
+    const attempt = await recoverOwner(store, operation.host, Math.min(10000, left / 2), Math.min(2000, left / 4), ...(unverified ? [macUnverifiedPorts(store)] : []));
+    recoveryVisibility = attempt.visibility;
+    if (attempt.kind === "refused") return serviceStatus(operation.host, { state: "busy", kind: "recovery-refused", serviceLogPath, detail: attempt.detail, ...(attempt.visibility ? { recoveryVisibility: attempt.visibility } : {}) });
+    if (attempt.kind === "terminated") {
+     recovery = unverified ? { ...attempt, unverified: true } : attempt;
+     command.forcedRecovery = true;
+    }
+   }
    if (Date.now() >= deadline) return timedOut();
    await new Promise(resolve => setTimeout(resolve, 100));
   }
@@ -212,6 +277,7 @@ export async function manage(body: string, operation: ManageOperation): Promise<
   if (replacing && error instanceof LaunchDeadline && error.phase === "lock") return timedOut();
   if (replacing) return failedReplacement((error as Error).message);
   if (sawBusy && Date.now() >= deadline) return timedOut();
+  if (recovery) return finish(serviceError(operation.host, error));
   throw Object.assign(error as Error, { serviceLogPath: join(store, "service.log") });
  }
  finally { if (staging) rmSync(staging, { force: true }); }

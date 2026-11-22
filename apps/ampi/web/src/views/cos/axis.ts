@@ -1,4 +1,5 @@
-// Short Timeline axis labels for a phone (cos.css shows them at 600 px or less). Each label stays exact: the range picks
+// Short Timeline axis labels for a phone. cos.css shows them at PHONE_BREAKPOINT_PX or less.
+// Each label stays exact: the range picks the coarsest unit that still tells its ticks apart.
 // the coarsest unit that still tells its ticks apart, and a label never drops characters to fit.
 const DAY = 86_400_000;
 

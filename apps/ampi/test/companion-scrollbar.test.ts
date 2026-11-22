@@ -6,6 +6,7 @@ import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { loadBudget, PAGE_LOAD_MS } from "./page-load.ts";
+import { catchAllRoute } from "./catch-all-route.ts";
 import { build } from "vite";
 import react from "@vitejs/plugin-react";
 // @ts-ignore: shared browser discovery is plain ESM.
@@ -56,7 +57,7 @@ for(const kind of ['pi-local']) test('companion '+kind+': whole-branch jump, idl
  const script=await(bundle??=componentScript());
  const browser=await(chrome??=chromium.launch({headless:true,executablePath:findChrome()}));
  const page=await browser.newPage({viewport:{width:1000,height:700}});t.after(()=>page.context().close());page.setDefaultTimeout(3000);loadBudget(page);
- await page.route('**/*',route=>route.fulfill({contentType:'text/html',body:'<style>'+readFileSync(join(web,'src/styles.css'),'utf8')+'</style><div id="root"></div><script>'+script+'</script>'}));
+ await catchAllRoute(page,'http://localhost',route=>route.fulfill({contentType:'text/html',body:'<style>'+readFileSync(join(web,'src/styles.css'),'utf8')+'</style><div id="root"></div><script>'+script+'</script>'}));
  let publish!:(n:number)=>void, late!:()=>void;
  let requests=0, count=400; const held:unknown[]=[];
  await page.routeWebSocket('**/ws',client=>{

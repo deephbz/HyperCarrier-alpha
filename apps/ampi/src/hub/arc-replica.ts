@@ -25,6 +25,7 @@ export class ArcReplica {
  private removedV2 = false;
  private statuses = new Map<string, BuildStatus>();
  private scheduled = new Map<string, ArcScheduled>();
+ private expiredDeadlines: string[] = [];
  private generation?: string;
  private seq = 0;
  private compatible = false;
@@ -111,12 +112,15 @@ export class ArcReplica {
    if (prior) rmSync(this.receiptPath(prior), { force: true }); this.options.changed();
   } else if (frame.t === "arc.status") {
    if (frame.generation !== this.generation || frame.seq <= this.seq) return;
-   const prior = [this.lastStamp, this.service, this.fresh, this.statuses, this.scheduled];
+   const prior = [this.lastStamp, this.service, this.fresh, this.statuses, this.scheduled, this.expiredDeadlines];
    this.seq = frame.seq; this.lastStamp = frame.service.running === true ? frame.service.stamp ?? null : null;
    if (this.compatible) this.service = frame.service;
    this.fresh = this.compatible && frame.service.running === true && !["error", "busy"].includes(frame.service.state);
    if (this.fresh) { this.statuses = new Map(frame.statuses.map(s => [s.sessionRef, s])); this.scheduled = new Map(frame.scheduled.map(s => [s.sessionRef, s])); }
-   if (!isDeepStrictEqual(prior, [this.lastStamp, this.service, this.fresh, this.statuses, this.scheduled])) this.options.changed();
+   this.expiredDeadlines = [...this.statuses.values(), ...this.scheduled.values()]
+    .filter(value => value.nextAt && !(Date.parse(value.nextAt) > Date.now()))
+    .map(value => `${value.sessionRef}:${value.nextAt}`).sort();
+   if (!isDeepStrictEqual(prior, [this.lastStamp, this.service, this.fresh, this.statuses, this.scheduled, this.expiredDeadlines])) this.options.changed();
    if (this.compatible) this.resend();
   } else {
    const stored = this.disk.commands[key(frame.requestId)];
@@ -173,6 +177,7 @@ export class ArcReplica {
   const { wait, ...rest } = raw ?? { state: scheduled ? "queued" as const : "idle" as const, wait: undefined };
   const status: ArcValue["status"] = { ...rest, ...(raw?.record?.error ? { error: raw.record.error } : {}), ...(wait ? { wait: { reason: wait.reason, running: wait.running, limit: wait.limit, scope: wait.scope, ...(wait.byHost ? { byHost: Object.entries(wait.byHost).map(([host, running]) => ({ host, running })) } : {}) } } : {}) };
   if (scheduled && (!raw || raw.state === "idle")) { status.state = "queued"; status.nextAt = scheduled.nextAt; }
+  if (status.nextAt && !(Date.parse(status.nextAt) > Date.now())) delete status.nextAt;
   const id = this.disk.latest[key(sessionRef)], command = id ? this.disk.commands[key(id)] : undefined;
   const request = command ? { ...(command.result ?? { outcome: "unknown", ...(this.serviceWait.has(id) ? { waitFor: "service" } : {}) }), requestId: id } as ArcRequest : undefined;
   return { ...(receipt ? { receipt: { ...receipt, session: `${this.options.host}/${sessionRef}` } } : {}), status, ...(request ? { request } : {}), services: [this.serviceValue()], builderHost: this.options.host, canDismiss: this.canSubmit(), ...(!receipt && this.removedV2 ? { v2Removed: true } : {}), statusStale: !this.fresh };

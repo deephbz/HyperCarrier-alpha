@@ -11,9 +11,17 @@ import react from "@vitejs/plugin-react";
 // @ts-ignore: shared browser discovery is plain ESM.
 import { findChrome } from "../scripts/perf/browser.mjs";
 import { engineSkip } from "./engines.ts";
+import { catchAllRoute } from "./catch-all-route.ts";
 import { track } from "@earendil-works/chord/delta";
 import type { SlashCommands } from "../src/shared/protocol.ts";
 import { IMAGE_LIMITS } from "@hypercarrier/pi-hc-control/control";
+
+declare global {
+ interface Window {
+  __pendingFrames?: FrameRequestCallback[];
+  __quoteOriginalRaf?: typeof requestAnimationFrame;
+ }
+}
 
 // Real ThreadView, Composer, selection API and stylesheet; the hub sends synthetic snapshots.
 
@@ -55,10 +63,14 @@ async function componentScript(): Promise<string> {
 				import React from 'react';
 				import { createRoot } from 'react-dom/client';
 				import { ThreadView } from ${JSON.stringify(join(web, "src/components/ThreadView.tsx"))};
+				import { FocusPlacementContext } from ${JSON.stringify(join(web, "src/context.ts"))};
+				let focusGeneration = 0;
+				document.addEventListener('focusin', () => focusGeneration++, true);
+				const focusPlacement = { capture: () => focusGeneration, place: (target, generation, options) => { if (generation !== focusGeneration) return false; target.focus(options); return true; } };
 				const summary = { control: true, id: ${JSON.stringify(THREAD)}, title: 'Quote test', createdAt: 0, updatedAt: 0, kind: 'thread', activity: 'idle', queued: 0, costUsd: 0 };
 				const root = createRoot(document.getElementById('root'));
-                const render = (state = {}) => root.render(React.createElement('div', { className: 'main-slot', style: { height: '600px' } },
-                    React.createElement(ThreadView, { host: state.host || 'devbox', threadId: state.threadId || ${JSON.stringify(THREAD)}, summary: {...summary, ...state}, panel: undefined, setPanel() {} })));
+                const render = (state = {}) => root.render(React.createElement(FocusPlacementContext.Provider, { value: focusPlacement }, React.createElement('div', { className: 'main-slot', style: { height: '600px' } },
+                    React.createElement(ThreadView, { host: state.host || 'devbox', threadId: state.threadId || ${JSON.stringify(THREAD)}, summary: {...summary, ...state}, panel: undefined, setPanel() {} }))));
                 window.addEventListener('test-state', event => render(event.detail));
                 window.addEventListener('test-unmount', () => root.render(null));
                 render();
@@ -103,10 +115,8 @@ async function open(t: TestContext, kind: string, engine: "chromium" | "webkit" 
 	page.setDefaultTimeout(3000);
 	loadBudget(page);
 	const css = readFileSync(join(web, "src/styles.css"), "utf8");
-	await page.route("**/*", (route) => {
+	await catchAllRoute(page, ORIGIN, (route) => {
 		const url = new URL(route.request().url());
-		if (url.protocol === "blob:" || url.protocol === "data:") return route.continue();
-		if (url.origin !== ORIGIN) return route.abort();
 		if (url.pathname === "/component.js") return route.fulfill({ contentType: "text/javascript; charset=utf-8", body: script });
 		if (url.pathname === "/") return route.fulfill({ contentType: "text/html; charset=utf-8", body: `<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style><div id="root"></div><script src="/component.js"></script>` });
 		return route.abort();
@@ -176,6 +186,41 @@ test("Quote: select, annotate, append, cancel, and reject cross-entry selection"
  assert.equal(await page.getByRole('button',{name:'Quote q'}).count(),0);
  await draft.focus();await page.keyboard.press('q');
  assert.ok((await draft.inputValue()).endsWith('q'));
+});
+
+test("a deferred quote focus does not replace focus placed after the quote action", async (t) => {
+ const {page} = await open(t,"pi-local");
+ const select = () => page.evaluate(() => {
+  const body=document.querySelector('[data-entry="e0"] .md p')!;
+  const range=document.createRange();range.selectNodeContents(body);
+  const selection=getSelection()!;selection.removeAllRanges();selection.addRange(range);
+ });
+ await select();
+ await page.getByRole('button',{name:'Quote q'}).click();
+ const pending: FrameRequestCallback[]=[];
+ await page.evaluate(() => {
+  window.__quoteOriginalRaf = window.requestAnimationFrame.bind(window);
+  const pending: FrameRequestCallback[] = [];
+  window.__pendingFrames = pending;
+  window.requestAnimationFrame = (callback) => { pending.push(callback); return pending.length; };
+ });
+ try {
+  await page.getByRole('textbox',{name:'Quote note (optional)'}).press('Enter');
+  const draft=page.locator('[data-region="composer"] textarea');
+  await page.waitForFunction(()=>document.querySelector<HTMLTextAreaElement>('[data-region="composer"] textarea')?.value.startsWith('> '));
+  await page.locator('[data-region="transcript"]').focus();
+  await page.evaluate(() => {
+   const pending = window.__pendingFrames!;
+   window.requestAnimationFrame = window.__quoteOriginalRaf!;
+   for (const callback of pending) callback(performance.now());
+  });
+  assert.equal(await page.evaluate(()=>document.activeElement?.closest('[data-region]')?.getAttribute('data-region')),'transcript');
+  assert.ok(await draft.inputValue());
+ } finally {
+  await page.evaluate(() => {
+   if (window.__quoteOriginalRaf) window.requestAnimationFrame = window.__quoteOriginalRaf;
+  });
+ }
 });
 
 test("Quote follows a visible selection while scrolling and hides out of view", async t => {
@@ -490,6 +535,14 @@ for (const engine of ['chromium','webkit'] as const) for (const attached of [fal
  if(attached){
   await page.locator('.composer input[type="file"]').setInputFiles({name:'synthetic.png',mimeType:'image/png',buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4AWJiYPj/HwAAAP//SnIwEgAAAAZJREFUAwADDAIB6Pxv8AAAAABJRU5ErkJggg==','base64')});
   await page.locator('.attachment').waitFor();
+  await page.locator('.attachment img').evaluate((image: HTMLImageElement) => image.decode());
+  const dataImageWidth = await page.evaluate(async () => {
+   const image = new Image();
+   image.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4AWJiYPj/HwAAAP//SnIwEgAAAAZJREFUAwADDAIB6Pxv8AAAAABJRU5ErkJggg==';
+   await image.decode();
+   return image.naturalWidth;
+  });
+  assert.equal(dataImageWidth, 1, 'data: image loads pass through the fixture route');
  }
  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
  if(process.env.AMPI_COMPOSER_SHOTS) await page.screenshot({path:join(process.env.AMPI_COMPOSER_SHOTS,`${engine}-${attached?'image':'empty'}.png`)});

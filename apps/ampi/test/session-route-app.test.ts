@@ -8,6 +8,7 @@ import { build } from "vite";
 // @ts-ignore: shared browser discovery is plain ESM.
 import { findChrome } from "../scripts/perf/browser.mjs";
 import { engineSkip } from "./engines.ts";
+import { catchAllRoute } from "./catch-all-route.ts";
 
 // One Session has one route, `#/h/<Host ID>/t/<thread>`. The real App, built in memory from web/src, runs against a hub
 // that is a script on the page's WebSocket. The hub lists its Hosts only after the App's first render, like a hub that
@@ -57,9 +58,9 @@ async function open(t: TestContext, engine: "chromium" | "webkit", opts: { stora
 		assert.deepEqual(errors, [], "no page error");
 		assert.deepEqual(frames.filter((f) => f.host === PI.id), [], "no frame names the bare Host ID");
 	});
-	await page.route("**/*", (route) => {
+	await catchAllRoute(page, ORIGIN, (route) => {
 		const url = new URL(route.request().url());
-		const file = url.origin === ORIGIN ? served.get(url.pathname === "/" ? "/index.html" : url.pathname) : undefined;
+		const file = served.get(url.pathname === "/" ? "/index.html" : url.pathname);
 		return file ? route.fulfill({ status: 200, body: typeof file.body === "string" ? file.body : Buffer.from(file.body), contentType: file.type }) : route.abort();
 	});
 	const sends: ((frame: unknown) => void)[] = [];

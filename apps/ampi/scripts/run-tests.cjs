@@ -104,7 +104,7 @@ try { times = JSON.parse(fs.readFileSync(timesPath, "utf8")); } catch {}
 const expected = (file) => times[name(file)] ?? (manifest.costs?.[name(file)] ?? Infinity) * 1000;
 const queue = [...files].sort((a, b) => expected(b) - expected(a));
 
-const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), "ampi-test-runner-"));
+let isolatedHome;
 const env = { ...process.env, AMPI_TEST_RUNNER_ID: require("./process-owner.cjs").processIdentity(process.pid) };
 // Playwright's browser cache holds browser binaries only; a WebKit test needs it under the per-file HOME.
 env.PLAYWRIGHT_BROWSERS_PATH ??= path.join(os.homedir(), process.platform === "darwin" ? "Library/Caches/ms-playwright" : ".cache/ms-playwright");
@@ -177,8 +177,8 @@ async function strays(child) {
 }
 const endAll = (found) => { for (const proc of found) try { process.kill(proc.pid, "SIGKILL"); } catch {} return found; };
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => {
-	for (const child of running) { killGroup(child, "SIGKILL"); endAll(straysNow(child)); }
-	fs.rmSync(isolatedHome, { recursive: true, force: true });
+	for (const child of running) { killGroup(child, "SIGKILL"); endAll(straysNow(child)); fs.rmSync(child.tempDir, { recursive: true, force: true }); }
+	if (isolatedHome) fs.rmSync(isolatedHome, { recursive: true, force: true });
 	process.exit(130);
 });
 
@@ -191,6 +191,7 @@ const started = Date.now();
 function runFile(file) {
 	return new Promise((done) => {
 		const fileStarted = Date.now();
+		const fileTmp = fs.mkdtempSync(path.join("/tmp", `ampi-t-${process.pid}-`));
 		// Each file gets its own HOME and Pi agent directory: a test never reads the owner's home or another file's.
 		const home = fs.mkdtempSync(path.join(isolatedHome, "home-"));
 		const agentDir = path.join(home, ".pi", "agent");
@@ -198,8 +199,9 @@ function runFile(file) {
 		// detached: the file and every process it spawns share one process group, which a timeout ends together.
 		// Isolation none: this process already is the file's process. Under Node 22 the default isolation also puts
 		// --test-timeout on the whole file, so a file whose tests together outlast one test bound failed in CI.
-		const child = spawn(process.execPath, ["--test", "--experimental-test-isolation=none", `--test-timeout=${testTimeout}`, "--test-reporter=spec", file], { cwd: root, env: { ...env, HOME: home, PI_CODING_AGENT_DIR: agentDir, [MARKER]: home }, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+		const child = spawn(process.execPath, ["--test", "--experimental-test-isolation=none", `--test-timeout=${testTimeout}`, "--test-reporter=spec", file], { cwd: root, env: { ...env, HOME: home, PI_CODING_AGENT_DIR: agentDir, TMPDIR: fileTmp, [MARKER]: home }, detached: true, stdio: ["ignore", "pipe", "pipe"] });
 		child.home = home;
+		child.tempDir = fileTmp;
 		running.add(child);
 		let output = "", timeout;
 		child.stdout.on("data", (chunk) => { output += chunk; });
@@ -215,6 +217,7 @@ function runFile(file) {
 			// The file stays in `running` until its scan ends, so a signal during the scan still ends its strays.
 			const left = endAll(await strays(child));
 			running.delete(child);
+			const tempDirsLeft = fs.existsSync(fileTmp) ? fs.readdirSync(fileTmp).length : 0;
 			const ms = Date.now() - fileStarted;
 			const slow = output.match(new RegExp(`test timed out after ${testTimeout}ms`, "g"))?.length ?? 0;
 			testTimeouts += slow;
@@ -232,6 +235,8 @@ function runFile(file) {
 			for (const proc of left)
 				console.log(`STRAY ${name(file)}: pid ${proc.pid} ppid ${proc.ppid ?? "unknown"} pgid ${proc.pgid} startedAt ${proc.startedAt ?? "unknown"} observedAt ${new Date().toISOString()} had not ended when the file did, outside its process group; the runner ended it. Usual causes: a test started a detached process and did not stop it, or did not await its exit. Command: ${proc.command}`);
 			console.log(`▸ ${timeout ? "timeout" : code === 0 && !left.length ? "pass" : "fail"} ${name(file)} ${(ms / 1000).toFixed(1)} s`);
+			console.log(`LEFTOVER ${name(file)} ${tempDirsLeft} dirs`);
+			fs.rmSync(fileTmp, { recursive: true, force: true });
 			done();
 		});
 	});
@@ -249,6 +254,7 @@ function pump() {
 		await require("./gate-lock.cjs").acquireGateLock(`tests ${lane}`);
 		env.AMPI_GATE_LOCK_HELD = "1";
 	}
+	isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), "ampi-test-runner-"));
 	pooling = true;
 	pump();
 })();

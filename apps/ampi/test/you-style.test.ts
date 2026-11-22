@@ -6,6 +6,7 @@ import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { build } from "vite";
+import { catchAllRoute } from "./catch-all-route.ts";
 import react from "@vitejs/plugin-react";
 // @ts-ignore: shared browser discovery is plain ESM.
 import { findChrome } from "../scripts/perf/browser.mjs";
@@ -70,9 +71,8 @@ test("You style: a user message has the same colors in the transcript and the Ra
 	t.after(() => page.context().close());
 	page.setDefaultTimeout(5000);
 	const css = readFileSync(join(web, "src/styles.css"), "utf8");
-	await page.route("**/*", (route) => {
+	await catchAllRoute(page, ORIGIN, (route) => {
 		const url = new URL(route.request().url());
-		if (url.origin !== ORIGIN) return route.abort();
 		if (url.pathname === "/component.js") return route.fulfill({ contentType: "text/javascript; charset=utf-8", body: script });
 		if (url.pathname === "/") return route.fulfill({ contentType: "text/html; charset=utf-8", body: `<meta charset="utf-8"><style>${css}\n${bundled}</style><div id="root"></div><script>window.THREAD = ${JSON.stringify(THREAD)}</script><script src="/component.js"></script>` });
 		return route.abort();

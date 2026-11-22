@@ -12,6 +12,7 @@ import { ENGINES, entries, frames, view, type Engine } from "./thread-scroll-fix
 // @ts-ignore: shared browser discovery is plain ESM.
 import { findChrome } from "../scripts/perf/browser.mjs";
 import { engineSkip } from "./engines.ts";
+import { catchAllRoute } from "./catch-all-route.ts";
 
 // The transcript's one strip (CompanionScrollbar): no native bar beside it, no estimated position cue, and dashes that
 // keep their nodes, inert, while a new outline loads. The real ThreadView and stylesheet run in Chromium
@@ -90,9 +91,8 @@ async function open(t: TestContext, engine: Engine, opts: { zoom?: number; regio
 	loadBudget(page);
 	const css = readFileSync(join(web, "src/styles.css"), "utf8");
 	const globals = opts.strip ? `window.MODE='strip';window.PROPS=${JSON.stringify(opts.strip)};` : `window.PANEL=${Boolean(opts.panel)};`;
-	await page.route("**/*", (route) => {
+	await catchAllRoute(page, ORIGIN, (route) => {
 		const url = new URL(route.request().url());
-		if (url.origin !== ORIGIN) return route.abort();
 		if (url.pathname === "/component.js") return route.fulfill({ contentType: "text/javascript; charset=utf-8", body: script });
 		return route.fulfill({ contentType: "text/html; charset=utf-8", body: `<meta charset="utf-8"><style>${css}${region === 1 ? "" : `[data-region=transcript]{zoom:${region}}`}</style><div id="root"></div><script>document.documentElement.style.zoom=${JSON.stringify(String(zoom))};${globals}</script><script src="/component.js"></script>` });
 	});

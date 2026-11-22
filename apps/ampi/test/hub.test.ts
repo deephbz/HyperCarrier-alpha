@@ -1,7 +1,7 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { helperModel, ModelNotFound, resolveHelperModel, type CarrierModel } from "../src/hub/helper-models.ts";
@@ -37,8 +37,9 @@ test("hub: foreign origins and missing or wrong keys are refused; the page learn
 	}
 });
 
-test("hub helper models: the per-call model, else hub.json models.<purpose>, else none; no default; a bad entry names the file; an unknown key is named once; loading keeps models (failure: a built-in default chose the model)", () => {
+test("hub helper models: the per-call model, else hub.json models.<purpose>, else none; no default; a bad entry names the file; an unknown key is named once; loading keeps models (failure: a built-in default chose the model)", (t) => {
 	const dir = mkdtempSync(join(tmpdir(), "ampi-models-")), file = join(dir, "hub.json"), none = join(dir, "missing.json");
+	t.after(() => rmSync(dir, { recursive: true, force: true }));
 	const write = (body: unknown) => writeFileSync(file, typeof body === "string" ? body : JSON.stringify(body));
 	const warn = console.warn, warned: string[] = [];
 	console.warn = (m: string) => { warned.push(m); };
@@ -102,12 +103,13 @@ test("hub helper model resolution: only an exact provider/id row resolves; a mis
 
 });
 
-test("hub Pi model registry: the --list-models table parses, an unreadable list fails with registry_unreadable, and neither a failed read nor an empty table is cached (failure: one bad read hid every model until restart)", async () => {
+test("hub Pi model registry: the --list-models table parses, an unreadable list fails with registry_unreadable, and neither a failed read nor an empty table is cached (failure: one bad read hid every model until restart)", async (t) => {
 	assert.deepEqual(parsePiModels("provider   model                    context\nanthropic  claude-haiku-5-5   1M\nmagpie     claude/claude-haiku-5-5  128K\n"), [{ provider: "anthropic", id: "claude-haiku-5-5" }, { provider: "magpie", id: "claude/claude-haiku-5-5" }]);
 	assert.deepEqual(parsePiModels("No models available. Use /login to log into a provider.\n"), []);
 	assert.deepEqual(parsePiModels("Update available: 1.3.1\nprovider model context\nanthropic claude-haiku-5-5 1M\n"), [{ provider: "anthropic", id: "claude-haiku-5-5" }], "a banner line before the header");
 	assert.throws(() => parsePiModels("Usage: pi [options]"), (e: Error & { code?: string }) => e.code === "registry_unreadable" && /^Pi's model list format changed/.test(e.message));
 	const dir = mkdtempSync(join(tmpdir(), "ampi-registry-")), bin = join(dir, "pi"), mode = join(dir, "mode");
+	t.after(() => rmSync(dir, { recursive: true, force: true }));
 	writeFileSync(bin, `#!${process.execPath}\nconst m = require("node:fs").readFileSync(${JSON.stringify(mode)}, "utf8");\nrequire("node:fs").appendFileSync(${JSON.stringify(join(dir, "reads"))}, "r");\nif (m === "slow") setTimeout(() => {}, 10000); else console.log(m === "bad" ? "garbage" : m === "empty" ? "No models available." : "provider model context\\nanthropic claude-haiku-5-5 1M");\n`);
 	chmodSync(bin, 0o755);
 	const saved = process.env.PI_BIN;
@@ -176,5 +178,6 @@ test("hub.json: a Host remove re-reads the file and changes only hosts, so an ow
 	} finally {
 		await hub.close();
 		home.release();
+		rmSync(dir, { recursive: true, force: true });
 	}
 });

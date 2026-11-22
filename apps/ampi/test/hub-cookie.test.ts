@@ -2,7 +2,7 @@ import "./bound.ts";
 import assert from "node:assert/strict";
 import { connect } from "node:net";
 import { test } from "node:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hub, loadHubConfig } from "../src/hub/hub.ts";
@@ -32,8 +32,9 @@ test("hub cookie: a login cookie lasts the client session unless the hub opts in
 	});
 });
 
-test("hub cookie: hub.json opts in with persistentCookie, and only true opts in", () => {
+test("hub cookie: hub.json opts in with persistentCookie, and only true opts in", (t) => {
 	const dir = mkdtempSync(join(tmpdir(), "hub-cookie-"));
+	t.after(() => rmSync(dir, { recursive: true, force: true }));
 	const at = (name: string, body: object) => { const p = join(dir, name); writeFileSync(p, JSON.stringify(body)); return p; };
 	assert.equal(loadHubConfig(at("on.json", { persistentCookie: true })).persistentCookie, true);
 	assert.equal(loadHubConfig(at("pi.json", { backend: "pi", self: "box", persistentCookie: true })).persistentCookie, true);

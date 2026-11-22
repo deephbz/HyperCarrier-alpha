@@ -17,12 +17,12 @@ const settled = async (page: any) => {
 	await page.waitForTimeout(400);
 };
 /** Holds the Session's data `ms` so its transcript and composer mount after the route arrival. */
-const hold = (page: any, ms: number) => page.routeWebSocket("**/ws", (ws: any) => {
+const hold = (page: any, ms: number, thread = THREAD) => page.routeWebSocket("**/ws", (ws: any) => {
 	const server = ws.connectToServer();
 	ws.onMessage((raw: string) => server.send(raw));
 	server.onMessage((raw: string) => {
 		const f = JSON.parse(String(raw));
-		if (f.t === "snap" && f.value?.conversationId === THREAD) setTimeout(() => ws.send(raw), ms);
+		if (f.t === "snap" && f.value?.conversationId === thread) setTimeout(() => ws.send(raw), ms);
 		else ws.send(raw);
 	});
 });
@@ -57,6 +57,47 @@ const reopen = async (page: any) => {
 	await page.waitForURL((url: URL) => url.hash.endsWith(`/t/${encodeURIComponent(THREAD)}`));
 };
 
+for (const [engine, type, path] of ENGINES) test(`history focus ${engine}: palette selection keeps Composer focus through a late Session mount`, { skip: engineSkip(engine) }, async (t) => {
+	const coldThread = THREAD;
+	const page = await open(t, engine, type, path(), { route: "#/h/devbox/t/pi%3Asess-long-title" });
+	const row = page.locator(`.side .row[data-thread="${coldThread}"] a.title`).first();
+	await row.waitFor();
+	const title = await row.innerText();
+	await hold(page, 700, coldThread);
+	await page.keyboard.press("ControlOrMeta+k");
+	await page.locator(".modal input").first().fill(title);
+	await page.locator(".palette-item.on").first().waitFor();
+	await page.keyboard.press("Enter");
+	await page.waitForURL((url: URL) => url.hash.includes(encodeURIComponent(coldThread)));
+	await page.waitForFunction(() => document.activeElement?.matches('[data-region="composer"] textarea'));
+});
+
+for (const [engine, type, path] of ENGINES) test(`history focus ${engine}: a phone drawer tap opens a Session in the transcript`, { skip: engineSkip(engine) }, async (t) => {
+	const page = await open(t, engine, type, path(), { route: `#/h/devbox/t/${encodeURIComponent("pi:sess-lead")}`, context: { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true } });
+	await page.getByRole("button", { name: "Show sidebar" }).click();
+	const row = page.locator('.side-scroll .row[data-thread] a.title').filter({ hasNot: page.locator('[href*="sess-lead"]') }).first();
+	await row.waitFor();
+	const target = await row.locator("xpath=..").getAttribute("data-thread");
+	await row.click();
+	await page.waitForURL((url: URL) => url.hash.includes(encodeURIComponent(target ?? "")));
+	await page.waitForFunction(() => document.activeElement?.closest<HTMLElement>("[data-region]")?.dataset.region === "transcript");
+	assert.equal(await page.getByRole("button", { name: "Show sidebar" }).count(), 1, "the drawer closes");
+});
+
+for (const [engine, type, path] of ENGINES) test(`history focus ${engine}: Alt+Down opens a cold Session in the Composer`, { skip: engineSkip(engine) }, async (t) => {
+	const source = "pi:sess-lead";
+	const page = await open(t, engine, type, path(), { route: `#/h/devbox/t/${encodeURIComponent(source)}` });
+	const target = await page.locator(".side-scroll .row[data-thread]").evaluateAll((rows) => {
+		const at = rows.findIndex((row) => row.classList.contains("active"));
+		return (rows[at + 1] as HTMLElement | undefined)?.dataset.thread;
+	});
+	assert.ok(target, "Alt+Down has a next Session");
+	await hold(page, 700, target);
+	await page.keyboard.press("Alt+ArrowDown");
+	await page.waitForURL((url: URL) => url.hash.includes(encodeURIComponent(target)));
+	await page.waitForFunction(() => document.activeElement?.matches('[data-region="composer"] textarea'));
+});
+
 for (const [engine, type, path] of ENGINES) test(`history focus ${engine}: arrivals focus the requested region while the Session mounts late`, { skip: engineSkip(engine) }, async (t) => {
 	const page = await open(t, engine, type, path(), { route: `#/h/devbox/t/${encodeURIComponent(THREAD)}` });
 	await hold(page, 600);
@@ -88,7 +129,7 @@ for (const [engine, type, path] of ENGINES) test(`history focus ${engine}: a whe
 	const page = await open(t, engine, type, path(), { route: `#/h/devbox/t/${encodeURIComponent(THREAD)}`, beforeNavigate: (page) => { held = holdUntilReleased(page); } });
 	held.arm();
 	const transcript = page.locator('[data-region="transcript"]');
-	for (const end of ["wheel", "arrival"] as const) {
+	for (const end of ["wheel", "arrival", "rerender"] as const) {
 		await reopen(page);
 		await held.wait();
 		await waitingForTranscript(page);
@@ -98,10 +139,14 @@ for (const [engine, type, path] of ENGINES) test(`history focus ${engine}: a whe
 			await page.evaluate(() => { (window as any).__wheelCount = 0; document.addEventListener("wheel", () => { (window as any).__wheelCount++; }, true); });
 			await transcript.dispatchEvent("wheel", { deltaY: 200, bubbles: true });
 			assert.ok(await page.evaluate(() => (window as any).__wheelCount) > 0, "wheel reached the App's document listener");
-		} else {
+		} else if (end === "arrival") {
 			const entry = await page.evaluate(() => history.state?.id);
 			await page.evaluate((hash) => { location.hash = hash; }, `#/h/devbox/t/${encodeURIComponent(THREAD)}?p=arc`);
 			await page.waitForFunction((entry) => history.state?.id !== entry, entry);
+		} else {
+			await transcript.click({ position: { x: 20, y: 120 } });
+			assert.equal(await region(page), "transcript", "the owner takes transcript focus during the late open");
+			await page.setViewportSize({ width: 1500, height: 800 });
 		}
 		held.release();
 		await settled(page);

@@ -64,7 +64,7 @@ test("Arc service acceptance S1: concurrent starts and repeated commands cannot 
 		assert.equal(busy.state, "busy");
 		assert.equal(busy.kind, "busy");
 		assert.equal(busy.detail, "Arc service holds its lock but does not answer");
-		assert.equal(serviceText(busy), "synthetic: Arc service holds its lock but does not answer. Run ampi arc status --host synthetic before retrying.");
+		assert.equal(serviceText(busy), "synthetic: Arc service holds its lock but does not answer. Run ampi arc stop --host synthetic to stop it; a linked hub starts it again within seconds.");
 		assert.doesNotMatch(JSON.stringify(busy), /base64|data:text|at manage/);
 	} finally { process.kill(owner, "SIGCONT"); }
 	f.model.block();
@@ -87,7 +87,7 @@ test("Arc service acceptance S2: temporary stop releases ownership and ensure re
 	const first = await f.manage("ensure");
 	assert.equal(first.running, true);
 	const stopped = await f.manage("stop");
-	assert.equal(serviceText(stopped), "synthetic: Arc service is stopped. A linked hub restarts it within seconds.");
+	assert.equal(serviceText(stopped), "Arc service on synthetic stopped. A linked hub starts it again within seconds.");
 	await until(async () => { try { await f.query({ op: "status", refreshAuth: false }); return false; } catch { return true; } }, "temporary stop releases the socket");
 	const next = await f.manage("ensure");
 	assert.equal(next.running, true); assert.notEqual(next.pid, first.pid);
@@ -177,7 +177,7 @@ test("Arc service acceptance S5 clock boundary: cadence blocks one millisecond e
 			const last = data.rarebits.at(-1), claim = { text: "Review the synthetic work.", cites: [{ id: last.id, quote: last.text }] };
 			return { kind: "answer", answer: { model: "synthetic/model", text: JSON.stringify({ goal: claim, now: claim, points: [], chapters: [{ firstId: data.rarebits[0].id, label: "Synthetic work", closed: true, summary: { scope: claim, bullets: [] } }] }) } };
 		} } });
-	const scheduler = automaticSchedule({ builder, state: {}, save: () => {}, now: () => now });
+	const scheduler = automaticSchedule({ builder, source: { snapshot: async () => ({ ...structuredClone(source), prefixWitness: source.sourceVersion }) }, state: {}, save: () => {}, now: () => now });
 	scheduler.observe(source, true);
 	now += 19_999; await scheduler.tick(true); await builder.run(); assert.equal(calls, 0);
 	now++; await scheduler.tick(true); await builder.run(); assert.equal(calls, 1);

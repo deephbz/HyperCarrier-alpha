@@ -11,7 +11,8 @@ if (!process.env.AMPI_PI_DIST && existsSync(version))
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= join(homedir(), process.platform === "darwin" ? "Library/Caches/ms-playwright" : ".cache/ms-playwright");
 const home = mkdtempSync(join(tmpdir(), "ampi-test-home-"));
 const agentDir = join(home, ".pi", "agent");
-process.once("exit", () => rmSync(home, { recursive: true, force: true }));
+export function cleanupIsolatedHome(): void { rmSync(home, { recursive: true, force: true }); }
+process.once("exit", cleanupIsolatedHome);
 process.env.HOME = home;
 // Prove that user paths now resolve inside the fresh HOME before any test code runs. Bun caches os.homedir() at
 // start, so a HOME set here does not reach it; on 2026-10-29 a Bun run of another suite wrote the operator's ~/.pi.

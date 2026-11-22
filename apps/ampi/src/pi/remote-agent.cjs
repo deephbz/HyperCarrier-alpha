@@ -18,6 +18,10 @@
 //      {t:'spawn', id, requestId, sessionId | resume, cwd, beside?, direction?, label?, name?, prompt?}
 //                                            new Pi agent in Herdr (contract section 5), once per requestId
 //      {t:'close', id, session, pane, lastPane?}   close a Session's pane
+//      {t:'relaunch', id, requestId, session, pane, force?, check?, budgetMs?}
+//                                            stop Pi in its pane and start it on the same Session file there
+//                                            (contract section 5); `check` reports what a relaunch would lose
+//   A `submit`, `commands` or `command` frame may carry `holdMs`: how long a send may wait for a relaunched Pi.
 //
 // Writes route to the Session's hc-control socket when its descriptor is live (same file, same nonce);
 // otherwise to Herdr keys after rechecking the exact pane<->Session binding (`herdr agent get`).
@@ -39,7 +43,10 @@
 //   keys.interrupt  key tokens that interrupt a turn. Default ['esc'].
 //   agentStartMs    `herdr agent start --timeout` (default 30000); the process gets a few seconds more.
 //   shellReadyMs    how long a pane this agent just made may stay `agent_pane_busy` while its shell starts (default 15000)
+//   relaunchStopMs  how long a relaunch waits for Pi to exit after SIGTERM (default 10000)
+//   relaunchControlMs  how long a relaunch waits for the new Pi's control socket (default 10000)
 const fs = require('fs');
+const crypto = require('crypto');
 const cp = require('child_process');
 const net = require('net');
 const path = require('path');
@@ -88,6 +95,8 @@ const controlStatusMs = cfg.controlStatusMs ?? 500;
 const controlSubmitMs = cfg.controlSubmitMs ?? 130_000;
 const agentStartMs = cfg.agentStartMs ?? 30_000;
 const shellReadyMs = cfg.shellReadyMs ?? 15_000;
+const relaunchStopMs = cfg.relaunchStopMs ?? 10_000;
+const relaunchControlMs = cfg.relaunchControlMs ?? 10_000;
 const keys = {
   typeArgv: ['pane', 'send-text', '{pane}', '{text}'],
   followUp: ['alt+enter'],
@@ -415,8 +424,18 @@ async function liveControls() {
 const RELOAD_HOLD_MAX = 8;
 const RELOAD_HOLD_MS = 10000;
 const reloadHolds = new Map(); // sessionFile -> { count, tail }
-async function liveControlFor(session) {
+async function liveControlFor(session, holdMs) {
   const file = path.resolve(session);
+  // A relaunch holds every send for its Session until the new Pi's control answers (holdForRelaunch). A relaunch lock
+  // without a hold here belongs to another agent, or to one that died mid-relaunch: refuse, never type keys.
+  const relaunch = relaunchHolds.get(file);
+  if (relaunch) return holdForRelaunch(file, relaunch, holdMs);
+  if (relaunchLocked(file)) return { refused: RELAUNCHING };
+  const fenced = stopFence(file);
+  if (fenced) return { refused: fenced };
+  return findControl(file);
+}
+async function findControl(file) {
   // Later sends queue behind held ones, even once the new endpoint answers.
   if (reloadHolds.has(file)) return holdForReload(file, null);
   let reloading = null;
@@ -635,7 +654,7 @@ async function spawnedBinding(msg) {
 const fill = (argv, vars) => argv.map((x) => x.replace(/\{(pane|text)\}/g, (_, k) => vars[k]));
 
 async function viaControl(msg, req, r) {
-  r ??= await liveControlFor(msg.session);
+  r ??= await liveControlFor(msg.session, msg.holdMs);
   if (!r) return false;
   if (r.refused) { fail(msg, 'control', r.refused.code, r.refused.message); return true; }
   try { return await sendViaControl(msg, req, r); } finally { r.release?.(); }
@@ -661,7 +680,7 @@ async function sendViaControl(msg, req, r) {
 // would record the command as a user message (packages/pi-hc-control README, Slash commands). This is the one
 // place that chooses, at the moment of sending, so no caller acts on an older answer about the control.
 async function viaCommandControl(msg, req, typed) {
-  const r = msg.session ? await liveControlFor(msg.session) : null;
+  const r = msg.session ? await liveControlFor(msg.session, msg.holdMs) : null;
   if (!r && typed) return commandKeys(msg, typed);
   if (!r) return fail(msg, 'control', 'no_control', 'This Session has no live control socket, so AmPi cannot run slash commands; use the Pi pane');
   if (r.refused) return fail(msg, 'control', r.refused.code, r.refused.message);
@@ -735,7 +754,7 @@ async function submit(msg) {
   const deliverAs = msg.deliverAs === 'followUp' ? 'followUp' : 'steer';
   // Keys cannot carry an image: never send the text without its images.
   if (images) {
-    const r = msg.session ? await liveControlFor(msg.session) : null;
+    const r = msg.session ? await liveControlFor(msg.session, msg.holdMs) : null;
     if (!r) return fail(msg, 'control', 'no_control', 'This Session has no live control socket, so AmPi cannot send images; paste them in the Pi pane');
     return void await viaControl(msg, { op: 'submit', text: msg.text, deliverAs, images: images.map(({ data, mimeType }) => ({ data, mimeType })) }, r);
   }
@@ -774,6 +793,9 @@ async function viaKeys(msg, text, deliverAs, ack, command = false) {
 }
 
 async function abort(msg) {
+  // A stop during a relaunch would reach the new Pi after it starts; there is no turn to stop until then.
+  const file = typeof msg.session === 'string' && msg.session ? path.resolve(msg.session) : null;
+  if (file && (relaunchHolds.has(file) || relaunchLocked(file))) return fail(msg, 'control', RELAUNCHING.code, 'Pi is relaunching in its pane; there is no turn to stop until it is back');
   if (await viaControl(msg, { op: 'abort' })) return;
   const b = await boundPane(msg);
   if (b.error) return fail(msg, 'keys', ...b.error);
@@ -881,17 +903,7 @@ async function spawnAgent(msg) {
   if (renamed.error) warning = `pane not named: ${renamed.error.code}: ${renamed.error.message}`.slice(0, 300);
   // The Session id is bound before Herdr runs anything: Pi creates the Session with exactly this id.
   const piArgs = resume ? ['--session', resume] : ['--session-id', sessionId];
-  // A new pane's shell runs its startup files and prompt hooks in the foreground first (starship init and prompt take
-  // ~0.5 s idle, longer under load). Until its prompt is up, Herdr answers agent_pane_busy and runs nothing. For this
-  // pane, which no one else has used yet, that refusal is transient: ask again until the shell is ready.
-  let start;
-  for (const until = Date.now() + shellReadyMs; ;) {
-    start = await herdrCall(['agent', 'start', name, '--kind', 'pi', '--pane', pane, '--timeout', String(agentStartMs), '--', ...piArgs], agentStartMs + 5000);
-    if (start.error?.code !== 'agent_pane_busy' || Date.now() >= until) break;
-    await new Promise((resolve) => setTimeout(resolve, 200));
-  }
-  if (start.error?.code === 'agent_pane_busy')
-    start.error = { ...start.error, message: `${start.error.message} after ${Math.round(shellReadyMs / 1000)} s; its shell never reached an idle prompt` };
+  const start = await startInPane(name, pane, piArgs, shellReadyMs);
   rediscover();
   const base = { pane, name, ...(warning ? { warning } : {}) };
   if (start.error && START_REFUSALS.includes(start.error.code)) {
@@ -917,6 +929,24 @@ async function spawnAgent(msg) {
   ackOf(msg, 'herdr', { ok: true, evidence: state, ...base, ...(submitted ? { submitted } : {}), ...(start.error ? { fact: `${start.error.code}: ${start.error.message}`.slice(0, 300) } : {}) });
 }
 
+/**
+ * `herdr agent start` in `pane`. A shell runs its startup files and prompt hooks in the foreground first (starship init
+ * and prompt take ~0.5 s idle, longer under load); a shell whose Pi just exited takes a moment to get its prompt back.
+ * Until the prompt is up, Herdr answers agent_pane_busy and runs nothing. For a pane this agent just made, or one whose
+ * Pi it just stopped under the Session's relaunch lock, that refusal is transient: ask again for up to `readyMs`.
+ */
+async function startInPane(name, pane, piArgs, readyMs) {
+  let start;
+  for (const until = Date.now() + readyMs; ;) {
+    start = await herdrCall(['agent', 'start', name, '--kind', 'pi', '--pane', pane, '--timeout', String(agentStartMs), '--', ...piArgs], agentStartMs + 5000);
+    if (start.error?.code !== 'agent_pane_busy' || Date.now() >= until) break;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  if (start.error?.code === 'agent_pane_busy')
+    start.error = { ...start.error, message: `${start.error.message} after ${Math.round(readyMs / 1000)} s; its shell never reached an idle prompt` };
+  return start;
+}
+
 async function closePane(msg) {
   if (!(typeof msg.session === 'string' && msg.session) && !msg.expectSession || typeof msg.pane !== 'string' || !msg.pane) return fail(msg, 'herdr', 'bad_request', 'session (or expectSession) and pane required');
   // Any pane closes, as in Herdr itself: a Team tracks its own members' exits.
@@ -940,6 +970,357 @@ async function closePane(msg) {
   rediscover();
   if (closed.error) return fail(msg, 'herdr', closed.error.code, closed.error.message);
   ackOf(msg, 'herdr', { ok: true, evidence: 'closed' });
+}
+
+// ---- Relaunch (contract section 5): stop Pi in its pane, then start it on the same Session file in that pane ----
+// One writer per Session file. A lock file per Session, created with `wx`, holds the run's progress and its writer
+// (this agent's pid, process start time and boot nonce). A second request for the Session, under any requestId, is
+// refused `relaunching` while that writer lives. After the writer died, one request takes the lock over (a marker
+// directory named for the dead writer) and continues from the recorded step; it never signals a recorded pid again
+// and never starts Pi twice. A run that got as far as the stop leaves an answer per requestId, which answers repeats.
+// A refusal before the stop leaves none: the owner may retry the same request with `force`.
+const relaunchDir = path.join(controlDir, 'relaunches');
+const agentNonce = crypto.randomUUID();
+const relaunchRuns = new Map(); // requestId -> Promise<result>: a retry joins the running relaunch
+const relaunchActive = new Set(); // Session files this agent relaunches now
+const relaunchHolds = new Map(); // sessionFile -> the hold for sends while Pi restarts
+const RELAUNCHING = { code: 'relaunching', message: 'Pi is relaunching in its pane; send again when it is back' };
+const lockFile = (file) => path.join(relaunchDir, `${crypto.createHash('sha256').update(file).digest('hex').slice(0, 32)}.lock`);
+const answerFile = (requestId) => path.join(relaunchDir, `${requestId}.json`);
+const relaunchLocked = (file) => fs.existsSync(lockFile(file));
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// A file being written reads as `{}`: a held lock with no known writer.
+function readJson(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { return e.code === 'ENOENT' ? null : {}; }
+}
+function writeJson(file, value) {
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify({ ...value, at: Date.now() }), { mode: 0o600 });
+  fs.renameSync(tmp, file);
+}
+/** One `ps` column of a process (`lstart`, `args`); null when it is gone. */
+function psField(pid, field) {
+  return new Promise((resolve) => cp.execFile('ps', ['-ww', '-o', `${field}=`, '-p', String(pid)], { timeout: 3000 }, (err, stdout) => resolve(err ? null : String(stdout).trim() || null)));
+}
+let selfStart;
+const writerId = async () => ({ pid: process.pid, nonce: agentNonce, start: selfStart ??= await psField(process.pid, 'lstart') });
+/** The recorded process still runs: its pid lives and started at the recorded time (a pid can be reused). */
+async function sameProcess(pid, start) {
+  if (!Number.isInteger(pid) || !pidAlive(pid)) return false;
+  return !start || await psField(pid, 'lstart') === start;
+}
+const liveDescriptorFor = (file) => readDescriptors().some((d) => d.sessionFile === file && Number.isInteger(d.pid) && pidAlive(d.pid));
+
+/** The Session's relaunch lock, or the reason it is not this request's. Resumes a lock whose writer died. */
+async function claimRelaunch(msg, file) {
+  fs.mkdirSync(relaunchDir, { recursive: true, mode: 0o700 });
+  const lock = lockFile(file), me = await writerId();
+  for (let tries = 0; tries < 3; tries++) {
+    const answer = readJson(answerFile(msg.requestId));
+    if (answer?.result) return { answer };
+    const record = { requestId: msg.requestId, session: file, pane: msg.pane, writer: me, state: 'checking' };
+    try {
+      const fd = fs.openSync(lock, 'wx', 0o600);
+      try { fs.writeSync(fd, JSON.stringify({ ...record, at: Date.now() })); } finally { fs.closeSync(fd); }
+      return { record };
+    } catch (e) { if (e.code !== 'EEXIST') throw e; }
+    const held = readJson(lock);
+    if (!held) continue; // released meanwhile
+    const w = held.writer;
+    if (!w?.nonce) return { refused: RELAUNCHING };
+    if (w.nonce !== agentNonce) {
+      if (await sameProcess(w.pid, w.start)) return { refused: RELAUNCHING };
+      // The writer died. One request per dead writer takes over: the marker's mkdir is atomic.
+      try { fs.mkdirSync(`${lock}.taken.${w.nonce}`, { mode: 0o700 }); } catch { return { refused: RELAUNCHING }; }
+      const again = readJson(lock);
+      if (!again) continue;
+      if (again.writer?.nonce !== w.nonce) return { refused: RELAUNCHING };
+    }
+    // This agent's own lock with no run here (relaunchActive excludes one) is a stopped run: resume it.
+    const taken = { ...held, writer: me, ...(held.requestId !== msg.requestId ? { also: msg.requestId } : {}) };
+    writeJson(lock, taken);
+    return { record: taken };
+  }
+  return { refused: RELAUNCHING };
+}
+// A Pi that got SIGTERM from a relaunch and did not exit in time (stop_timeout) is shutting down: its queue may be
+// lost, so no send reaches it while its process lives. In memory: an agent restart drops the fence.
+const stopFences = new Map(); // sessionFile -> { pid }
+function stopFence(file) {
+  const fence = stopFences.get(file);
+  if (!fence) return null;
+  if (pidAlive(fence.pid)) return { code: RELAUNCHING.code, message: 'Pi got the stop signal for a relaunch and has not exited; nothing was sent. Send again after Pi is back' };
+  stopFences.delete(file);
+  return null;
+}
+// A held send waits at most what its sender waits for the answer, less a margin (the frame's `holdMs`), so a send the
+// Host reported as failed never reaches Pi later. A sender that names no wait gets HOLD_DEFAULT_MS, below the Host's
+// shortest send timeout (20 s).
+const HOLD_DEFAULT_MS = 15_000;
+
+/** Ends the run: the answer for each requestId it served (when `answer`), then the lock and its takeover markers. */
+function releaseRelaunch(file, rec, result, answer) {
+  if (answer) for (const id of new Set([rec.requestId, rec.also].filter(Boolean))) writeJson(answerFile(id), { state: rec.state, result });
+  const lock = lockFile(file), base = path.basename(lock);
+  fs.rmSync(lock, { force: true });
+  try { for (const f of fs.readdirSync(relaunchDir)) if (f.startsWith(`${base}.taken.`)) fs.rmSync(path.join(relaunchDir, f), { recursive: true, force: true }); } catch {}
+}
+
+// While Pi restarts, every send for its Session waits here, in FIFO turns, at most RELOAD_HOLD_MAX at a time, for a
+// live control other than the old one (another nonce and pid). Keys never: the pane shows a shell then. The hold
+// ends with the run. After a refusal before the stop (`kept`), the old control serves the waiting sends again.
+// From the claim until the stop is recorded, the hold is `pending`: it knows no old control yet, so it only waits.
+// Waiting sends keep a reference to the hold, so a later step updates the same object.
+function holdSends(file, hold) {
+  let h = relaunchHolds.get(file);
+  if (!h || h.ended) relaunchHolds.set(file, h = { count: 0, tail: Promise.resolve() });
+  Object.assign(h, { pending: false, ...hold, ended: null });
+}
+function endHold(file, outcome) {
+  const hold = relaunchHolds.get(file);
+  if (!hold || hold.ended) return;
+  hold.ended = outcome;
+  if (hold.count === 0) relaunchHolds.delete(file);
+}
+async function holdForRelaunch(file, hold, holdMs) {
+  const until = Math.min(hold.until, Date.now() + Math.max(0, Number.isFinite(holdMs) ? holdMs : HOLD_DEFAULT_MS));
+  if (hold.count >= RELOAD_HOLD_MAX) return { refused: { code: RELAUNCHING.code, message: `Pi is relaunching and AmPi already holds ${RELOAD_HOLD_MAX} sends for this Session. Send again when it is back` } };
+  hold.count++;
+  let release;
+  const done = new Promise((resolve) => { release = resolve; });
+  const turn = hold.tail;
+  hold.tail = turn.then(() => done);
+  const finish = () => { if (--hold.count === 0 && hold.ended && relaunchHolds.get(file) === hold) relaunchHolds.delete(file); release(); };
+  await turn;
+  while (!hold.ended && Date.now() < until) {
+    if (!hold.pending) for (const n of readDescriptors()) {
+      if (n.sessionFile !== file || n.state === 'reloading' || n.nonce === hold.oldNonce || n.pid === hold.oldPid) continue;
+      const r = await probe(n);
+      if (r) return { ...r, release: finish };
+    }
+    await sleep(100);
+  }
+  if (hold.ended) {
+    const fenced = stopFence(file);
+    if (fenced) { finish(); return { refused: fenced }; }
+    const r = await findControl(file);
+    if (r && !r.refused) return { ...r, release: () => { r.release?.(); finish(); } };
+    if (r?.refused || hold.ended !== 'kept') {
+      finish();
+      const message = hold.ended === 'started' || hold.ended === 'unknown' ? 'Pi started again without a control socket; send again to type into its pane'
+        : 'Pi stopped for a relaunch and did not start again; Resume starts it, then send again';
+      return { refused: r?.refused ?? { code: RELAUNCHING.code, message } };
+    }
+    finish();
+    return null;
+  }
+  finish();
+  return { refused: { code: RELAUNCHING.code, message: 'Pi is still relaunching; nothing was sent. Send again after Pi is back' } };
+}
+
+/** Launch flags a relaunch does not repeat: everything after `pi` but the Session selection. */
+function droppedFlags(args) {
+  const tokens = String(args || '').split(/\s+/).filter(Boolean);
+  const at = tokens.findIndex((t) => path.basename(t) === 'pi');
+  const out = [];
+  for (let i = at + 1; at >= 0 && i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t === '--session' || t === '--session-id') { i++; continue; }
+    if (t === '--continue' || t === '-c' || t === '--resume' || t === '-r') continue;
+    out.push(t.slice(0, 80));
+  }
+  return out.slice(0, 12);
+}
+
+/**
+ * What the pane runs now: the bound Pi process, its control, and what a stop would lose. Sends nothing.
+ * Pi is the pane's foreground process (argv0 `pi`, the foreground process group); its shell must outlive it, or the
+ * pane would close with Pi. A live control for the file must belong to that process: any other is a second writer.
+ */
+async function inspectPane(msg, file) {
+  const b = await boundPane(msg);
+  if (b.error) return { error: b.error[0] === 'binding_changed' ? ['binding_changed', 'the pane no longer shows this Session'] : b.error };
+  const info = await herdrCall(['pane', 'process-info', '--pane', msg.pane], 5000);
+  if (info.error) return { error: info.error.code === 'herdr_failed' && /unrecognized|unexpected|subcommand|invalid/i.test(info.error.message) ? ['herdr_outdated', 'this Herdr has no `pane process-info`; update Herdr on this Host'] : [info.error.code, info.error.message] };
+  const p = info.value.process_info ?? info.value;
+  const fg = Array.isArray(p.foreground_processes) ? p.foreground_processes : [];
+  const isPi = (x) => Number.isInteger(x?.pid) && typeof x.argv0 === 'string' && path.basename(x.argv0) === 'pi';
+  const pi = fg.find((x) => isPi(x) && x.pid === p.foreground_process_group_id) ?? fg.find(isPi);
+  if (!pi) return { error: ['not_pi', 'AmPi cannot find the Pi process in this pane'] };
+  if (!Number.isInteger(p.shell_pid) || p.shell_pid === pi.pid) return { error: ['no_shell', 'Pi is the only process in this pane, so it cannot start again there'] };
+  const start = await psField(pi.pid, 'lstart');
+  if (!start) return { error: ['not_pi', 'the Pi process in this pane exited'] };
+  let control = null;
+  for (const d of readDescriptors()) {
+    if (d.sessionFile !== file || !Number.isInteger(d.pid) || !pidAlive(d.pid)) continue;
+    if (d.pid !== pi.pid) return { error: ['pid_mismatch', `another process (pid ${d.pid}) holds this Session's control socket`] };
+    if (d.state === 'reloading') return { error: ['control_reloading', 'pi-hc-control in this Pi is reloading; try again in a few seconds'] };
+    const r = await probe(d);
+    if (r?.value) control = r;
+  }
+  const v = control?.value;
+  const status = b.agent.agent_status;
+  const activity = v ? (v.compacting ? 'compacting' : v.idle ? 'idle' : 'working') : status === 'working' || status === 'blocked' ? status : 'idle';
+  const queued = v ? (v.pending?.steer ?? 0) + (v.pending?.followUp ?? 0) : 0;
+  const screen = await herdrRun(['agent', 'read', msg.pane, '--source', 'visible'], 5000);
+  return {
+    agent: b.agent, pid: pi.pid, start, control, activity, queued,
+    editorEmpty: !screen.err && editorEmpty(screen.stdout), dropped: droppedFlags(await psField(pi.pid, 'args')),
+  };
+}
+
+/**
+ * Which queued submissions reached the Session file before Pi stopped: a user message with the same text after `size`.
+ * Each message settles one submission, so two queued copies of one text need two messages.
+ */
+function settleQueued(file, rec) {
+  const texts = new Map(); // text -> messages left to match
+  try {
+    const fd = fs.openSync(file, 'r');
+    try {
+      const len = Math.max(0, fs.fstatSync(fd).size - (rec.size || 0)), buf = Buffer.alloc(len);
+      readAt(fd, buf, len, rec.size || 0);
+      for (const line of buf.toString('utf8').split('\n')) {
+        let e;
+        try { e = JSON.parse(line); } catch { continue; }
+        const m = e?.type === 'message' && e.message?.role === 'user' ? e.message : null;
+        if (!m) continue;
+        const parts = typeof m.content === 'string' ? [m.content] : Array.isArray(m.content) ? m.content.filter((c) => c?.type === 'text').map((c) => c.text) : [];
+        for (const text of new Set([parts.join(''), ...parts])) texts.set(text, (texts.get(text) ?? 0) + 1);
+      }
+    } finally { fs.closeSync(fd); }
+  } catch {}
+  const returned = [], delivered = [];
+  // An expanded submission (a skill or template) reaches the file as other text: its outcome stays unknown.
+  for (const q of rec.queued || []) {
+    if (q.expanded) continue;
+    const left = texts.get(q.text) ?? 0;
+    if (left > 0) { texts.set(q.text, left - 1); delivered.push(q.submission); } else returned.push(q.submission);
+  }
+  return { returned, delivered };
+}
+
+async function waitFor(pred, ms) {
+  for (const until = Date.now() + ms; ;) {
+    if (await pred()) return true;
+    if (Date.now() >= until) return false;
+    await sleep(100);
+  }
+}
+/** The new Pi's control: live on the file, with another nonce than the stopped one. */
+async function newControl(file, oldNonce, ms) {
+  let found = null;
+  await waitFor(async () => {
+    for (const d of readDescriptors()) if (d.sessionFile === file && d.state !== 'reloading' && d.nonce !== oldNonce && (found = await probe(d))?.value) return true;
+    found = null;
+    return false;
+  }, ms);
+  return found;
+}
+
+async function relaunch(msg) {
+  if (typeof msg.requestId !== 'string' || !ID_RE.test(msg.requestId)) return fail(msg, 'herdr', 'bad_request', 'requestId must be a UUID');
+  if (typeof msg.session !== 'string' || !path.isAbsolute(msg.session) || typeof msg.pane !== 'string' || !msg.pane) return fail(msg, 'herdr', 'bad_request', 'session and pane required');
+  if (!herdr) return fail(msg, 'herdr', 'no_route', 'herdr not found on this host');
+  if (!await checkSession()) return fail(msg, 'herdr', 'herdr_unavailable', `Herdr session ${herdrSession} not running`);
+  const file = path.resolve(msg.session);
+  if (msg.check) {
+    if (relaunchActive.has(file) || relaunchLocked(file)) return fail(msg, 'herdr', RELAUNCHING.code, 'Pi is already relaunching in this pane');
+    if (stopFence(file)) return fail(msg, 'herdr', 'stop_pending', 'Pi got the stop signal and has not exited yet');
+    const i = await inspectPane(msg, file);
+    if (i.error) return fail(msg, 'herdr', ...i.error);
+    return ackOf(msg, 'herdr', { ok: true, evidence: 'checked', check: { activity: i.activity, queued: i.queued, editorEmpty: i.editorEmpty, dropped: i.dropped, control: !!i.control } });
+  }
+  let run = relaunchRuns.get(msg.requestId);
+  if (!run) {
+    run = runRelaunch(msg, file).catch((e) => ({ ok: false, error: { code: 'internal', message: String(e?.message || e).slice(0, 300) } }));
+    relaunchRuns.set(msg.requestId, run);
+    void run.finally(() => relaunchRuns.delete(msg.requestId));
+  }
+  ackOf(msg, 'herdr', await run);
+}
+
+async function runRelaunch(msg, file) {
+  if (relaunchActive.has(file)) return { ok: false, error: RELAUNCHING };
+  relaunchActive.add(file);
+  try { return await relaunchSteps(msg, file); } finally { relaunchActive.delete(file); endHold(file, 'kept'); }
+}
+
+async function relaunchSteps(msg, file) {
+  // The Host's timeout for this command is `budgetMs` plus a margin: every wait below fits in what is left.
+  const until = Date.now() + Math.max(30_000, Number(msg.budgetMs) || 120_000);
+  const left = () => until - Date.now();
+  const c = await claimRelaunch(msg, file);
+  if (c.answer) return { ...c.answer.result, repeat: true };
+  if (c.refused) return { ok: false, error: c.refused };
+  let rec = c.record;
+  holdSends(file, { pending: true, until });
+  const lock = lockFile(file);
+  const save = (patch) => { rec = { ...rec, ...patch }; writeJson(lock, rec); };
+  const where = () => ({ pane: rec.pane, ...(rec.name ? { name: rec.name } : {}) });
+  // Nothing was stopped: no answer, so the owner may retry the same request (with force).
+  const abandon = (code, message) => { releaseRelaunch(file, rec, null, false); endHold(file, 'kept'); return { ok: false, error: { code, message }, ...where() }; };
+  const finish = (state, result) => { rec.state = state; releaseRelaunch(file, rec, result, true); endHold(file, state); rediscover(); return result; };
+  if (rec.state === 'checking') {
+    // A Pi that an earlier relaunch signalled is still exiting: never signal it again.
+    if (stopFence(file)) return abandon('stop_pending', 'Pi got the stop signal and has not exited yet');
+    const i = await inspectPane(msg, file);
+    if (i.error) return abandon(...i.error);
+    if (!msg.force && (i.activity !== 'idle' || i.queued)) return abandon('busy', i.queued && i.activity === 'idle' ? `Pi holds ${i.queued} queued message${i.queued === 1 ? '' : 's'}` : `Pi is ${i.activity === 'compacting' ? 'compacting' : 'running a turn'}`);
+    if (!msg.force && !i.editorEmpty) return abandon('editor_not_empty', "The Pi pane's input box has text, or AmPi cannot read it");
+    if (left() < relaunchStopMs + agentStartMs + 10_000) return abandon('host_slow', 'too little time was left to relaunch Pi safely');
+    const oldNonce = i.control?.descriptor.nonce ?? null;
+    holdSends(file, { oldNonce, oldPid: i.pid, until });
+    // The queue and the file size right before the stop: what reached the file afterwards was delivered.
+    // The size first: a message written between the two reads lands after `size`, so it counts as delivered.
+    let size = 0;
+    try { size = fs.statSync(file).size; } catch {}
+    const now = i.control ? await probe(i.control.descriptor) : null;
+    const queued = (now?.value?.submissions ?? []).filter((s) => s?.state === 'queued' && typeof s.submission === 'string')
+      .map((s) => ({ submission: s.submission, text: String(s.text ?? ''), ...(s.expanded || s.truncated ? { expanded: true } : {}) }));
+    save({ state: 'stopping', name: i.agent.name || herdrName(i.agent.label || path.basename(file, '.jsonl')), pid: i.pid, start: i.start, oldNonce, size, queued, dropped: i.dropped });
+    try { process.kill(i.pid, 'SIGTERM'); } catch (e) { if (e.code !== 'ESRCH') return abandon('stop_failed', `AmPi could not signal Pi: ${e.code || e.message}`); }
+  } else holdSends(file, { oldNonce: rec.oldNonce ?? null, oldPid: rec.pid, until });
+  if (rec.state === 'stopping') {
+    // Never signal again: wait for the recorded process (same pid and start time) to exit and its control to close.
+    const gone = await waitFor(async () => !await sameProcess(rec.pid, rec.start) && !liveDescriptorFor(file), Math.max(0, Math.min(relaunchStopMs, left())));
+    if (!gone) {
+      // The signal was sent, so this is an outcome: answer it (a retry never signals again), fence the exiting Pi,
+      // and refuse the held sends. Its queue may be lost.
+      stopFences.set(file, { pid: rec.pid });
+      return finish('stop_timeout', { ok: false, error: { code: 'stop_timeout', message: `Pi got the stop signal but did not exit in ${Math.round(relaunchStopMs / 1000)} s; AmPi started nothing` }, ...where(), stopped: { pid: rec.pid, signal: 'SIGTERM' } });
+    }
+    save({ state: 'stopped', ...settleQueued(file, rec) });
+  }
+  const stopped = { pid: rec.pid, signal: 'SIGTERM' };
+  const outcome = () => ({ stopped, returned: rec.returned ?? [], delivered: rec.delivered ?? [], ...(rec.dropped?.length ? { dropped: rec.dropped } : {}) });
+  if (rec.state === 'stopped') {
+    // Two-writer guard, right before the start: no live control names the file, and no Pi runs in the pane.
+    if (liveDescriptorFor(file)) return finish('refused', { ok: false, error: { code: 'already_running', message: 'another Pi opened this Session while it was stopped; AmPi started nothing' }, ...where(), ...outcome() });
+    const info = await herdrCall(['pane', 'process-info', '--pane', rec.pane], 5000);
+    const fg = info.value?.process_info?.foreground_processes;
+    if (Array.isArray(fg) && fg.some((x) => typeof x?.argv0 === 'string' && path.basename(x.argv0) === 'pi'))
+      return finish('refused', { ok: false, error: { code: 'already_running', message: 'a Pi runs in the pane again; AmPi started nothing' }, ...where(), ...outcome() });
+    if (left() < agentStartMs + 5000) {
+      // The lock stays at `stopped`: a retry of this request starts Pi.
+      endHold(file, 'stopped');
+      return { ok: false, error: { code: 'start_deferred', message: 'Pi stopped, but too little time was left to start it; a retry of this request starts it' }, ...where(), ...outcome() };
+    }
+    save({ state: 'starting' });
+    const start = await startInPane(rec.name, rec.pane, ['--session', file], Math.max(0, Math.min(shellReadyMs, left() - agentStartMs - 5000)));
+    if (start.error && START_REFUSALS.includes(start.error.code)) {
+      const cause = start.error.code === 'agent_pane_busy' ? 'the pane did not return to a shell prompt' : `${start.error.code}: ${start.error.message}`;
+      return finish('refused', { ok: false, error: { code: 'start_refused', message: `Pi stopped, but Herdr did not start it again: ${cause}`.slice(0, 300) }, ...where(), ...outcome() });
+    }
+    const ctl = rec.oldNonce ? await newControl(file, rec.oldNonce, Math.max(0, Math.min(relaunchControlMs, left() - 1000))) : null;
+    const evidence = start.error || (rec.oldNonce && !ctl) ? 'unknown' : 'started';
+    const fact = start.error ? `${start.error.code}: ${start.error.message}` : rec.oldNonce && !ctl ? 'Herdr started Pi, but its control socket did not answer' : '';
+    return finish(evidence, { ok: true, evidence, ...where(), ...outcome(), ...(ctl ? { nonce: ctl.descriptor.nonce } : {}), ...(fact ? { warning: fact.slice(0, 300) } : {}) });
+  }
+  // `starting`: an earlier run asked Herdr to start Pi; its outcome is unknown. Never start a second Pi.
+  const ctl = await newControl(file, rec.oldNonce ?? null, Math.max(0, Math.min(2000, left())));
+  if (ctl) return finish('started', { ok: true, evidence: 'started', ...where(), ...outcome(), nonce: ctl.descriptor.nonce });
+  return finish('unknown', { ok: false, error: { code: 'outcome_unknown', message: 'an earlier attempt may have started Pi in the pane; check the pane, and Resume if it shows a shell' }, ...where(), ...outcome() });
 }
 
 // The self-contained bundle owns service discovery; this agent only relays frames.
@@ -971,6 +1352,7 @@ async function command(msg) {
   if (msg.t === 'screen') return screen(msg);
   if (msg.t === 'spawn') return spawnAgent(msg);
   if (msg.t === 'close') return closePane(msg);
+  if (msg.t === 'relaunch') return relaunch(msg);
   if (msg.id !== undefined) fail(msg, null, 'unknown_command', `unknown command ${String(msg.t).slice(0, 40)}`);
 }
 let inBuf = '';

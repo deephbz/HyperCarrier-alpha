@@ -68,7 +68,7 @@ export const noEscape: Equal<Found, never> = true;
  * read or a write; a page of another build may request only the reads (skew.ts READ_OPS).
  */
 const OP_NAMES = {
-	"thread.submit": "write", "thread.abort": "write", "thread.withdraw": "write", "thread.commands": "read", "thread.command": "write", "thread.create": "write", "thread.resume": "write", "thread.close": "write",
+	"thread.submit": "write", "thread.abort": "write", "thread.withdraw": "write", "thread.commands": "read", "thread.command": "write", "thread.create": "write", "thread.resume": "write", "thread.close": "write", "thread.relaunch": "write",
 	"sessions.search": "read", "thread.outline": "read", "thread.find": "read", "thread.history": "read", "thread.entry": "read", "prompts.list": "read", "models.list": "read",
 	"view.rarebit.ask": "write", "view.cos.timeline.locate": "read", "view.arc.build": "write", "view.arc.dismiss": "write",
 } satisfies Record<OpName, "read" | "write">;
@@ -105,7 +105,7 @@ test("wire contract: the Host's op table keeps its order: host ops, then view op
 	t.after(() => rmSync(dir, { recursive: true, force: true }));
 	const host = new PiHost({ id: "devbox", label: "devbox", kind: "pi-local", cacheDir: dir });
 	assert.deepEqual(host.opNames(), [
-		"thread.submit", "thread.commands", "thread.command", "thread.abort", "thread.withdraw", "thread.create", "thread.resume", "thread.close",
+		"thread.submit", "thread.commands", "thread.command", "thread.abort", "thread.withdraw", "thread.create", "thread.resume", "thread.close", "thread.relaunch",
 		"sessions.search", "thread.outline", "thread.find", "thread.history", "thread.entry", "prompts.list", "models.list",
 		"view.rarebit.ask", "view.cos.timeline.locate", "view.arc.build", "view.arc.dismiss",
 	]);

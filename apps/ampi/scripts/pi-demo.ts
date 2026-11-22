@@ -38,7 +38,11 @@ if (!web.ok && process.env.DEMO_WEB !== "external") {
 const manualLifetime = process.env.DEMO_LIFETIME === "manual";
 const ownerIdentity = processIdentity(process.ppid);
 const runnerIdentity = process.env.AMPI_TEST_RUNNER_ID;
-const dataMode = demoDataMode(process.argv.slice(2));
+const testHoldFlag = "--test-hold-prose-index";
+const testHoldAfterStartFlag = "--test-hold-prose-index-after-start";
+const holdProseIndexForTest = process.argv.includes(testHoldFlag);
+const holdProseIndexAfterStart = process.argv.includes(testHoldAfterStartFlag);
+const dataMode = demoDataMode(process.argv.slice(2).filter((arg) => arg !== testHoldFlag && arg !== testHoldAfterStartFlag));
 const dir = process.env.DEMO_DIR ?? (manualLifetime ? join(tmpdir(), "ampi-pi-demo") : mkdtempSync(join(tmpdir(), "ampi-pi-demo-")));
 if (!manualLifetime) {
  const group = Number(execFileSync("ps", ["-p", String(process.pid), "-o", "pgid="], { encoding: "utf8", env: { ...process.env, LC_ALL: "C" } }).trim());
@@ -180,8 +184,25 @@ const hub = new Hub(
 	{ token },
 );
 let closing: Promise<void> | undefined;
+let disposeProseIndexHold = () => {};
+let removeProseIndexSignal = () => {};
+async function installProseIndexHold() {
+ const { holdProseIndex: installHold } = await import("../test/prose-index-hold.ts");
+ const host = hub.link("devbox");
+ if (!host) throw new Error("Demo Pi Host devbox is missing");
+ const hold = installHold(host.cacheDir);
+ disposeProseIndexHold = hold.dispose;
+ const release = () => hold.release();
+ process.once("SIGUSR2", release);
+ removeProseIndexSignal = () => process.off("SIGUSR2", release);
+ void hold.held.then(() => console.log("demo test prose-index gate held"), () => {});
+ console.log("demo test prose-index gate installed");
+}
 function close() {
  return closing ??= (async () => {
+  removeProseIndexSignal();
+  process.off("SIGUSR1", installAfterStart);
+  disposeProseIndexHold();
   await hub.close();
   if (process.env.DEMO_CLOSE_FAILURE === "1") throw new Error("Synthetic demo close failure");
   // This disposable Host owns its service. Stop after link shutdown so it cannot restart.
@@ -225,10 +246,17 @@ if (!manualLifetime) {
  }
  if (!alive()) { await close(); process.exit(0); }
 }
+function installAfterStart() {
+ void installProseIndexHold().catch((error) => { console.error("demo test prose-index gate install failed", error); process.exitCode = 1; });
+}
 try {
+ if (holdProseIndexForTest) await installProseIndexHold();
+ if (holdProseIndexAfterStart) process.once("SIGUSR1", installAfterStart);
  const port = await hub.listen(Number(process.env.PORT ?? 7880));
  console.log(`demo hub: http://127.0.0.1:${port}/?k=${token}  (data: ${dir}; fixture: ${dataMode})`);
  // Arc consumers wait for their own receipt. A model or resident failure must not stop the demo hub.
- void seedDemoArcs(port, token, fixtureSet.sessions.map(s => `pi:${s.id}`))
-  .catch(error => { if (!closing) console.error(error); });
+ if (process.env.DEMO_SEED_ARCS !== "0") {
+  void seedDemoArcs(port, token, fixtureSet.sessions.map(s => `pi:${s.id}`))
+   .catch(error => { if (!closing) console.error(error); });
+ }
 } catch (error) { await close(); throw error; }

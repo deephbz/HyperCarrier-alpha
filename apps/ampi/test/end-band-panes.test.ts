@@ -6,6 +6,7 @@ import { after, test, type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium, type Page } from "playwright";
 import { loadBudget } from "./page-load.ts";
+import { catchAllRoute } from "./catch-all-route.ts";
 import { build } from "vite";
 import react from "@vitejs/plugin-react";
 // @ts-ignore: shared browser discovery is plain ESM.
@@ -75,9 +76,8 @@ async function open(t: TestContext, pane: "overview" | "rarebit", served: (n: nu
 	page.setDefaultTimeout(3000);
 	loadBudget(page);
 	const css = readFileSync(join(web, "src/styles.css"), "utf8");
-	await page.route("**/*", (route) => {
+	await catchAllRoute(page, ORIGIN, (route) => {
 		const url = new URL(route.request().url());
-		if (url.origin !== ORIGIN) return route.abort();
 		if (url.pathname === "/component.js") return route.fulfill({ contentType: "text/javascript; charset=utf-8", body: script });
 		if (url.pathname === "/") return route.fulfill({ contentType: "text/html; charset=utf-8", body: `<meta charset="utf-8"><style>${css}\n${bundled}</style><div id="root"></div><script>window.PANE = ${JSON.stringify(pane)}</script><script src="/component.js"></script>` });
 		return route.abort();

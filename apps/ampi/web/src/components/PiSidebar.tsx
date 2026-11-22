@@ -3,7 +3,7 @@
 // identity is its Host plus its Session ID, so a Session without a pane still shows, under "Not in a pane". Another
 // Host kind keeps this section and fills its sidebar slot (HostKindUi.sidebar in shell-slots.ts).
 
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ThreadSummary } from "../../../src/shared/protocol.ts";
 import { type HostState, useNow } from "../client.ts";
 import { hostKind } from "../host-kinds.ts";
@@ -14,6 +14,7 @@ import { hostMeta, linkView, readHostFold, saveHostFold } from "./host-fold.ts";
 import { hostLabel } from "./host-label.ts";
 import { arrangeByLayout } from "./sidebar-layout.ts";
 import { projectTeamRows } from "./team-nesting.ts";
+import { centerInList } from "../util.ts";
 
 /** The cache-health note for stale reads: the hub repaired them, so this reports a defect and its log, not an action. */
 function staleReadsNote({ reopened, behind, refused }: NonNullable<HostThreads["host"]["staleReads"]>): string {
@@ -41,6 +42,8 @@ const allRows = (threads: ThreadSummary[]) => threads;
 
 export function PiHostSection({ data, hosts, route }: { data: HostThreads; hosts: HostState[]; route: { host?: string; thread?: string } }) {
 	const { host } = data;
+	const section = useRef<HTMLDivElement>(null);
+	const reveal = useRef({ route: "", pending: false });
 	const kind = hostKind(host);
 	const ui = kindUi(host).sidebar ?? {};
 	const label = hostLabel(host, hosts);
@@ -52,13 +55,15 @@ export function PiHostSection({ data, hosts, route }: { data: HostThreads; hosts
 	const [fold, setFold] = useState(() => readHostFold(host.id));
 	// The owner's expanded Teams. Every other leader is collapsed, including a Team that starts after the page loads.
 	const leadersKey = `ampi.sidebar.expandedLeaders.${host.id}`;
-	const [expandedLeaders, setExpandedLeaders] = useState<Set<string>>(() => {
+	const [savedLeaders, setSavedLeaders] = useState<Set<string>>(() => {
 		try {
 			const saved = localStorage.getItem(leadersKey);
 			if (saved !== null) return new Set(JSON.parse(saved) as string[]);
 		} catch { /* Use the collapsed default if storage is unavailable or invalid. */ }
 		return new Set();
 	});
+	const [revealedLeaders, setRevealedLeaders] = useState(new Set<string>());
+	const expandedLeaders = new Set([...savedLeaders, ...revealedLeaders]);
 	const saveLeaders = (next: Set<string>) => {
 		try { localStorage.setItem(leadersKey, JSON.stringify([...next])); } catch { /* The Teams stay expanded for this page only. */ }
 		return next;
@@ -71,16 +76,54 @@ export function PiHostSection({ data, hosts, route }: { data: HostThreads; hosts
 	const view = linkView(host, now);
 	const status = host.cacheFailed ? "unavailable" : `${view.state} · copies readable`;
 	const toggle = (key: string) => setCollapsed((c) => ({ ...c, [key]: !c[key] }));
-	const toggleLeader = (id: string) => setExpandedLeaders((previous) => {
-		const next = new Set(previous);
-		if (next.has(id)) next.delete(id); else next.add(id);
-		return saveLeaders(next);
-	});
+	const toggleLeader = (id: string) => {
+		const next = new Set(savedLeaders);
+		if (expandedLeaders.has(id)) next.delete(id); else next.add(id);
+		setSavedLeaders(saveLeaders(next));
+		setRevealedLeaders((previous) => { const next = new Set(previous); next.delete(id); return next; });
+	};
 	const teamIds = [...new Set(data.threads.filter((t) => t.team?.role === "lead").map((t) => t.team!.teamId))];
+	// Navigation reveals one row. Feed updates may finish a pending arrival, but never start another reveal.
+	useLayoutEffect(() => {
+		const key = JSON.stringify([route.host, route.thread]);
+		if (reveal.current.route !== key) reveal.current = { route: key, pending: route.host === host.link && Boolean(route.thread) };
+		if (!reveal.current.pending) return;
+		const target = threads.find((thread) => thread.id === route.thread);
+		if (!target) return;
+		const group = groups.find((group) => group.rows.some((thread) => thread.id === target.id));
+		const groupKey = group?.key ?? "unplaced";
+		let unfolding = false;
+		if (fold.collapsed) { setFold({ collapsed: false }); unfolding = true; }
+		if (collapsed[groupKey]) { setCollapsed((old) => ({ ...old, [groupKey]: false })); unfolding = true; }
+		if (target.team?.role === "worker" && !expandedLeaders.has(target.team.teamId)) {
+			setRevealedLeaders(new Set([...revealedLeaders, target.team.teamId]));
+			unfolding = true;
+		}
+		if (unfolding) return;
+		const row = [...section.current!.querySelectorAll<HTMLElement>(".row[data-thread]")].find((row) => row.dataset.thread === target.id);
+		const list = section.current!.closest<HTMLElement>(".side-scroll");
+		if (!row || !list) return;
+		reveal.current.pending = false;
+		const item = row.getBoundingClientRect(), viewport = list.getBoundingClientRect();
+		if (item.bottom <= viewport.top || item.top >= viewport.bottom) centerInList(list, row);
+		else if (item.top < viewport.top) list.scrollTop += Math.floor(item.top - viewport.top);
+		else if (item.bottom > viewport.bottom) list.scrollTop += Math.ceil(item.bottom - viewport.bottom);
+	});
+	useEffect(() => {
+		const list = section.current?.closest<HTMLElement>(".side-scroll");
+		if (!list) return;
+		const cancel = () => { reveal.current.pending = false; };
+		const events = ["scroll", "wheel", "keydown", "pointerdown"] as const;
+		for (const event of events) list.addEventListener(event, cancel, { passive: true });
+		return () => { for (const event of events) list.removeEventListener(event, cancel); };
+	}, []);
 	const allCollapsed = teamIds.length > 0 && teamIds.every((id) => !expandedLeaders.has(id));
-	const collapseAll = () => setExpandedLeaders(saveLeaders(allCollapsed ? new Set(teamIds) : new Set()));
+	const collapseAll = () => {
+		setSavedLeaders(saveLeaders(allCollapsed ? new Set(teamIds) : new Set()));
+		setRevealedLeaders(new Set());
+	};
 	return (
-		<div className="side-section" data-host={host.id} data-backend={kind.source}>
+		<div ref={section} className="side-section" data-host={host.id} data-backend={kind.source}>
 			<div className="side-head">
 				<button className="host-collapse" onClick={() => setFold(saveHostFold(host, !fold.collapsed))} aria-expanded={!fold.collapsed} title={label}>
 					<span className={`dot ${host.status}`} />

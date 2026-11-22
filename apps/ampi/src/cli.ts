@@ -18,8 +18,9 @@ const USAGE = `usage: ampi [command]
                             otherwise it ends with the browser session
   open [--open]             print the link to the running hub, with its access key
   doctor                    check this machine and its hub, and say how to fix problems
-  arc status [--host ID] [--json] | stop (--host ID | --all)
+  arc status [--host ID] [--json] | stop (--host ID [--force-unverified] | --all)
                             Stopping Arc drains Builds for every client. A linked hub restarts it within seconds.
+                            --force-unverified: on macOS, also stop a silent Arc service that AmPi cannot prove holds the lock (no effect on Linux)
                             exit 0: success; 1: bad/unknown Host state; 2: usage
                             --json: smoke checks each Host state; unreachable can be report-only
   version                   print the version and build`;
@@ -47,7 +48,7 @@ switch (command) {
    if (args.op === "stop" && !args.json) console.error("Stopping Arc drains Builds for every client. A linked hub restarts it within seconds.");
    const results = await Promise.all(hosts.map(async host => {
     try {
-     const result = await maintainHost(host, { op: args.op });
+     const result = await maintainHost(host, { op: args.op, ...(args.forceUnverified ? { forceUnverified: true } : {}) });
      if (["error", "unreachable", "cannot-start", "fault", "busy", "invalid-settings", "no-sign-in"].includes(result.state)) process.exitCode = 1;
      return { ...result, host: host.id };
     } catch (error) { process.exitCode = 1; return serviceError(host.id, error); }

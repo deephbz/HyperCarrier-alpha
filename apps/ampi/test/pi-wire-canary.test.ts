@@ -200,6 +200,8 @@ function scanOnce() {
 				"thread.withdraw": [{ threadId: THREAD, submissionId: "canary-none" }],
 				"thread.commands": [{ threadId: THREAD }],
 				"thread.command": [{ threadId: THREAD, name: "model", args: "canary" }],
+				// Check mode stops nothing.
+				"thread.relaunch": [{ threadId: THREAD, requestId: randomUUID(), check: true }],
 				"thread.close": [{ threadId: THREAD }],
 				"thread.create": [{ cwd: "/work/canary", place: { workspace: "new" }, requestId: randomUUID() }],
 			};
@@ -228,7 +230,7 @@ test("wire canary: no frame carries any native-field sentinel", async () => {
 	const { leaks, outcomes, sources } = await scanOnce();
 	assert.deepEqual(leaks, [], `leaks: ${leaks.join("; ")} · sources ${sources.join(", ")} · ops ${JSON.stringify(outcomes)}`);
 	// Every topic and op answered: a source that never sent a frame was not scanned.
-	assert.equal(sources.length, 33, `scanned sources: ${sources.join(", ")}`);
+	assert.equal(sources.length, 34, `scanned sources: ${sources.join(", ")}`);
 });
 
 /** The pre-bump DERIVATION_VERSION: every index row written by a build before A24 step 5 carries it. */

@@ -1,9 +1,10 @@
 import "./bound.ts";
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { AXIS_TIMES, AXIS_MATRIX, calibratedFontSkip, phone, phoneAxisTests, go, overflow, settled, open } from "./phone-axis-fixture.ts";
+import { AXIS_TIMES, AXIS_MATRIX, calibratedFontSkip, phone, go, overflow, settled, open } from "./phone-axis-fixture.ts";
 import { engineSkip } from "./engines.ts";
 import { demoSessions, ENGINES, phoneTimelineFixture } from "./resize-edges-fixture.ts";
 import { shortTick } from "../web/src/views/cos/axis.ts";
@@ -28,6 +29,38 @@ const KNOWN_AXIS_LIMITS = [
 	[375, 1.875, [3, 2], [3, 1]],
 	[375, 2, [3, 2], [3, 2]],
 ] as const;
+const WEB_SRC = fileURLToPath(new URL("../web/src", import.meta.url));
+
+test("the phone breakpoint has one TypeScript source and two matching CSS consumers", () => {
+	const walk = (directory: string): string[] => readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+		const path = join(directory, entry.name);
+		return entry.isDirectory() ? walk(path) : entry.isFile() ? [path] : [];
+	});
+	const sourceFiles = walk(WEB_SRC);
+	const sourcePath = join(WEB_SRC, "phone-breakpoint.ts");
+	const source = readFileSync(sourcePath, "utf8");
+	const declaration = /export const PHONE_BREAKPOINT_PX = (\d+);/.exec(source);
+	assert.ok(declaration, "phone-breakpoint.ts exports the breakpoint in CSS pixels");
+	const width = Number(declaration[1]);
+	const declarations = sourceFiles.flatMap((file) => [...readFileSync(file, "utf8").matchAll(/PHONE_BREAKPOINT_PX\s*=\s*\d+/g)].map(() => relative(WEB_SRC, file)));
+	assert.deepEqual(declarations, [relative(WEB_SRC, sourcePath)], "the shared breakpoint has one declaration");
+	const app = readFileSync(join(WEB_SRC, "App.tsx"), "utf8");
+	assert.match(app, /matchMedia\(`\(max-width: \$\{PHONE_BREAKPOINT_PX\}px\)`\)/, "App builds its query from the shared width");
+	const cssConsumers: { file: string; width: number }[] = [];
+	for (const file of sourceFiles.filter((path) => path.endsWith(".css"))) {
+		const css = readFileSync(file, "utf8");
+		for (const match of css.matchAll(/@media\s*\([^)]*max-width:\s*(\d+)px[^)]*\)/g)) {
+			if (Number(match[1]) === width) cssConsumers.push({ file: relative(WEB_SRC, file), width: Number(match[1]) });
+		}
+	}
+	assert.deepEqual(cssConsumers, [
+		{ file: "styles.css", width },
+		{ file: "views/cos/cos.css", width },
+	], "only the drawer and phone Timeline rules consume the shared width");
+	const literalQueries = sourceFiles.flatMap((file) => [...readFileSync(file, "utf8").matchAll(/max-width\s*:\s*(\d+)px/g)]
+		.filter((match) => Number(match[1]) === width).map(() => relative(WEB_SRC, file)));
+	assert.deepEqual(literalQueries, ["styles.css", "views/cos/cos.css"], "the shared width has no extra literal consumers");
+});
 const PAGES: [string, string, string][] = [
 	["Overview", "#/v/overview", '.main .topbar b:text-is("Overview")'],
 	["Timeline", "#/v/timeline", ".cos-axis time"],
@@ -53,9 +86,12 @@ for (const [engine, type, path] of ENGINES) for (const width of WIDTHS) {
 	test(`phone layout ${engine} ${width} px: no page is wider than the phone, with or without a drawer`, { skip: engineSkip(engine) }, async (t) => {
 		const page = await open(t, engine, type, path(), { route: SESSION, context: phone(width) });
 		for (const [name, route, ready] of PAGES) {
-			if (width === 320 && name === "Session") continue;
 			await go(page, route, ready);
 			assert.deepEqual(await overflow(page), { page: 0, main: 0 }, `${name}: no drawer`);
+			if (width === 320 && name === "Session") {
+				const actions = await page.locator(".composer-actions button").evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().top));
+				assert.equal(new Set(actions).size, 1, "Queue, Steer and Stop share one row at 320 px");
+			}
 			// A page's name in its header shows whole.
 			const title = await page.evaluate(() => { const h1 = document.querySelector<HTMLElement>(".cos-header h1"); return h1 && { text: h1.textContent, cut: h1.scrollWidth > h1.clientWidth }; });
 			if (title) assert.deepEqual(title, { text: name, cut: false }, `${name}: the page name shows whole`);
@@ -187,7 +223,7 @@ for (const [engine, type, path] of ENGINES) for (const width of WIDTHS) {
 	});
 }
 
-phoneAxisTests(AXIS_TIMES);
+// phone-axis.test.ts owns the axis label matrix at every phone width; its own hub keeps this file inside the file bound.
 
 for (const [engine, type, path] of ENGINES) {
 	test(`phone layout ${engine}: CSS keeps tick membership at page and panel breakpoints`, { skip: engineSkip(engine) }, async (t) => {
